@@ -917,9 +917,45 @@ export function Bad() {
   assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
 })
 
-test('a runtime (prop) array stays unsupported — user-authored-colour data, handled by registration, not this capability', () => {
+// R1 (2026-09-20 lead correction): this pin previously asserted a runtime
+// (prop) array's per-element member read stays `ts-colors/unsupported`
+// forever — but "handled by registration, not resolved here" (the comment
+// this test was written against, near resolveStableArrayLiteralElements)
+// only means anything if there is a REGISTRABLE finding to hand the
+// registry: `ts-colors/unsupported` can never be baselined at all (Stage B
+// contract). `agents.map((a) => ...a.color...)` is exactly the
+// user-authored-colour shape the plan's exception ledger §5 names as a
+// permanent governed category (a non-const array's own callback element
+// reading a user-chosen colour field) — receivingSymbol's nearest-named-
+// ancestor widening (R1) now correctly resolves the anonymous `.map()`
+// callback's owner to the enclosing named `Team` component, producing a
+// registrable `ts-colors/extension-boundary`, not a dead-end `unsupported`.
+test('R1: a runtime (prop) array element member read resolves as a registrable runtime paint boundary, not a dead-end unsupported', () => {
   const source = "export function Team({ agents }) { return <>{agents.map((a) => <i style={{ backgroundColor: a.color }} />)}</> }"
+  const findings = scanSource(source)
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  assert.deepEqual(
+    findings.filter((finding) => finding.ruleId === 'ts-colors/extension-boundary').map((finding) => finding.syntax),
+    ['Team#dom-style.backgroundColor<-a.color'],
+  )
+})
+
+// Forbidden control pinning the OTHER half of the same claim: when there is
+// truly no reviewable owner anywhere in the enclosing scope chain (a
+// genuinely anonymous function assigned to nothing, itself the module's
+// default export with no name of its own), the boundary still correctly
+// fails closed — receivingSymbol's widening only ever WIDENS which already-
+// proven runtime read gets a real owner name; it never manufactures one
+// where none exists.
+test('R1 forbidden control: a runtime member read inside a wholly anonymous callback with no named ancestor anywhere stays unsupported', () => {
+  // An IIFE assigned to nothing, exported as nothing, is functionIdentity's
+  // genuine 'anonymous' case at every enclosing level — unlike a default
+  // export (functionIdentity resolves an ExportAssignment parent to the
+  // stable name 'default'), there is no reviewable name anywhere in the
+  // scope chain for nearestNamedAncestorOwner to climb to.
+  const source = ";(function (agents) { return agents.map((a) => ({ backgroundColor: a.color })) })(agentsFromSomewhere)"
   assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
+  assert.deepEqual(findingsFor(source, 'ts-colors/extension-boundary'), [])
 })
 
 // ── W3-colour bullet 4: graph visuals / Object.fromEntries(Object.keys(…).map(…)) records ──
@@ -980,4 +1016,178 @@ export function Node({ status }: { status: string }) {
   return <i style={{ color: OPAQUE_RECORD[status].color }} />
 }`
   assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
+})
+
+// ── R1 — user-authored-colour boundary widening ─────────────────────────────
+//
+// Lane R1 (2026-09-20): the plan's exception ledger (docs/internal/design/
+// design-system-migration-plan.md §5) names user-authored colours (a prop,
+// parameter, store/query result, or a non-const array's own callback
+// element reading a user-chosen colour field) as a permanent governed
+// registrable category — distinct from a value rooted in a finite,
+// module-const palette, which must still resolve (raw-color/token), never
+// become an exception. These tests pin: (1) the runtime-paint-boundary
+// owner resolving through an anonymous render/useMemo callback to its
+// nearest NAMED enclosing component/function (receivingSymbol widening);
+// (2) style={} of a call to a LOCAL helper resolving through the helper's
+// own returned style object(s); (3) Object.keys(<finite record>)[<literal
+// index>] resolving to the key at that position; (4) a body-level
+// destructured local read off a PROVEN parameter (never an arbitrary call)
+// resolving as a runtime paint boundary, including the className-forward
+// variant; (5) a css-mode template tint (`${x}22`) resolving a `??`/`||`
+// mix, a local call to a pure finite-returning helper, and a nested-template
+// return referencing the callee's own parameter under call-frame
+// substitution.
+
+test('R1: a runtime member read inside an anonymous .map() render callback resolves to the nearest named enclosing component', () => {
+  const source = `
+export function AgentList({ agents }) {
+  return <div>{agents.map((agent) => <i key={agent.id} style={{ backgroundColor: agent.color }} />)}</div>
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(
+    findings.filter((finding) => finding.ruleId === 'ts-colors/extension-boundary').map((finding) => finding.syntax),
+    ['AgentList#dom-style.backgroundColor<-agent.color'],
+  )
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('R1: a runtime read inside a useMemo callback body resolves to the enclosing named component, not anonymous', () => {
+  const source = `
+export function AgentProfile({ selectedColor }) {
+  const identity = useMemo(() => ({ color: selectedColor }), [selectedColor])
+  return identity
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(
+    findings.filter((finding) => finding.ruleId === 'ts-colors/extension-boundary').map((finding) => finding.syntax),
+    ['AgentProfile#dom-style.color<-selectedColor'],
+  )
+})
+
+test("R1: style={} of a call to a local helper resolves through the helper's own returned style object(s)", () => {
+  const source = `
+function paint(active, tone) {
+  if (active) return { backgroundColor: tone }
+  return { backgroundColor: 'var(--color-muted)' }
+}
+export function Chip({ active, tone }) {
+  return <i style={paint(active, tone)} />
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/extension-boundary' && finding.syntax === 'paint#dom-style.backgroundColor<-tone'))
+})
+
+test('R1: Object.keys(<finite record>)[<literal index>] resolves to the key at that position', () => {
+  const source = `
+const PALETTE_BY_NAME = { '#22C55E': 'Verdant', '#3B82F6': 'Azure' }
+export function firstHex() {
+  const hex = Object.keys(PALETTE_BY_NAME)[0] as string
+  return { color: hex }
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/raw-color' && finding.syntax === '#22c55e'))
+})
+
+test('R1: a body-level destructured local read off a proven parameter resolves as a runtime paint boundary', () => {
+  const source = `
+export function TaskNode({ data }) {
+  const { agentColor } = data
+  return <i style={{ color: agentColor }} />
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/extension-boundary' && finding.syntax === 'TaskNode#dom-style.color<-agentColor'))
+})
+
+test("R1: a body-destructured className read off a parameter resolves as its own distinct boundary, never colliding with the component's own className parameter", () => {
+  const source = `
+import { cn } from '@/lib/utils'
+export const Table = React.forwardRef(({ className, containerProps = {} }, ref) => {
+  const { className: containerClassName } = containerProps
+  return <div className={cn('base', containerClassName)}><table className={cn('table', className)} /></div>
+})`
+  const findings = scanSource(source)
+  const boundaries = findings.filter((finding) => finding.ruleId === 'ts-colors/extension-boundary').map((finding) => finding.syntax)
+  assert.ok(boundaries.includes('Table#containerProps.className'))
+  assert.ok(boundaries.includes('Table#className'))
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('R1: a ?? mix of a runtime member read and a finite-record value in a template tint resolves both branches independently', () => {
+  const source = `
+const STATUS_COLORS = { done: '#10b981', failed: '#ef4444' }
+export function RollupAvatar({ item, agent }) {
+  const color = (agent?.color ?? STATUS_COLORS[item.status])
+  return <i style={{ backgroundColor: \`\${color}22\` }} />
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/extension-boundary' && finding.syntax === 'RollupAvatar#dom-style.backgroundColor<-agent?.color'))
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/raw-color' && finding.syntax === '#10b981'))
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/raw-color' && finding.syntax === '#ef4444'))
+})
+
+test('R1: a template tint of a call whose returns are all finite/const-derived resolves without an exception', () => {
+  const source = `
+const TASK_CANCELLED_COLOR = '#EAB308'
+const STATUS_COLORS = { done: '#10b981', failed: '#ef4444' }
+function statusColor(status) { return STATUS_COLORS[status] ?? STATUS_COLORS.done }
+function taskDisplayColor(task) { return task.cancelled ? TASK_CANCELLED_COLOR : statusColor(task.status) }
+export function TaskCard({ task }) {
+  return <span style={{ backgroundColor: \`\${taskDisplayColor(task)}1a\` }} />
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/extension-boundary'), [])
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/raw-color' && finding.syntax === '#eab308'))
+})
+
+test("R1: a template tint of a call whose return is itself a template referencing the callee's own parameter resolves through the caller's argument (call-frame substitution)", () => {
+  const source = `
+function toTint(color) { return color.startsWith('#') ? \`\${color}2a\` : 'var(--color-surface-3)' }
+export function TaskNode({ data }) {
+  const { agentColor } = data
+  const avatarColor = agentColor ?? 'var(--color-muted)'
+  return <span style={{ backgroundColor: \`\${toTint(avatarColor)}\` }} />
+}`
+  const findings = scanSource(source)
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/extension-boundary' && finding.syntax === 'TaskNode#dom-style.backgroundColor<-agentColor'))
+})
+
+test('R1: AVATAR_COLORS.map((color) => ...) resolves each finite-array element as raw-color, including inside a template tint', () => {
+  const source = `
+export const AVATAR_COLORS = ['#22C55E', '#3B82F6']
+export function AvatarColorPicker({ value, onChange }) {
+  return (
+    <div>
+      {AVATAR_COLORS.map((color) => (
+        <button
+          key={color}
+          onClick={() => onChange(color)}
+          style={{ backgroundColor: color, boxShadow: value === color ? \`0 0 0 4px \${color}\` : undefined }}
+        />
+      ))}
+    </div>
+  )
+}`
+  // knownClassExportUsesSafe's whole-codebase escape proof requires
+  // ctx.modules to be populated (returns false, unresolved, without it) —
+  // pass the fixture as its own single-file module map so the real
+  // cross-module safety proof actually runs, matching how the audit always
+  // invokes this scanner.
+  const findings = scanSource(source, DEFAULT_PATH, POLICY, { [DEFAULT_PATH]: source })
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'ts-colors/unsupported'), [])
+  // Both read sites (the plain `backgroundColor: color` property and the
+  // template's `${color}`) resolve the array-callback parameter back to the
+  // SAME array-element AST nodes in AVATAR_COLORS' own declaration — findings
+  // dedup by node position (emit()'s ctx.seen key), so each of the two hex
+  // literals reports exactly once despite two independent consuming sites.
+  assert.deepEqual(
+    findings.filter((finding) => finding.ruleId === 'ts-colors/raw-color').map((finding) => finding.syntax).sort(),
+    ['#22c55e', '#3b82f6'],
+  )
 })

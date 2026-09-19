@@ -710,10 +710,27 @@ function classForwardOwner(fn) {
   return { ownerName: functionIdentity(fn), pathPrefix: null }
 }
 
+// R1 user-authored-colour capability: the immediate enclosing function is
+// often itself anonymous even when a real, reviewable owner exists just
+// outside it — a `.map()` render callback (`chatAgents.map((agent) => (...
+// style={{backgroundColor: agent.color}} ...))`) or a `useMemo(() => {...
+// color: selectedColor ...}, deps)` callback are both bodies that execute
+// synchronously INSIDE their enclosing named component's own render, not
+// independent owners of their own. `nearestNamedAncestorOwner` already
+// exists for exactly this climb (parameter/render-prop ownership below) —
+// reusing it here only WIDENS which paint-boundary reads get a real,
+// reviewable owner name instead of falling back to the unregistrable
+// `ts-colors/unsupported`; it never changes what is required to prove the
+// VALUE itself is a runtime read (isDirectRuntimeRead/hookStateLocal/etc.
+// still gate every emission site unchanged) — it only supplies a name for
+// an owner that already, demonstrably, exists.
 function receivingSymbol(node) {
   let current = node
   while (current && !isFunctionLike(current)) current = current.parent
-  return current ? functionIdentity(current) : 'anonymous'
+  if (!current) return 'anonymous'
+  const identity = functionIdentity(current)
+  if (identity !== 'anonymous') return identity
+  return nearestNamedAncestorOwner(current) ?? 'anonymous'
 }
 
 function paintBoundary(node, receiver, property) {
@@ -1180,6 +1197,26 @@ function inspectStyleExpr(node, ctx, stack) {
     inspectStyleExpr(node.whenFalse, ctx, stack)
     return
   }
+  if (ts.isCallExpression(node)) {
+    // MessageItem.tsx's `style={avatarStyle(isUser, agent?.color)}` —
+    // mirrors inspectCssValueExpr's own CallExpression handling (same
+    // withCalleeFrame/collectReturns machinery): a LOCAL helper's own
+    // returned style object(s) are exactly as reviewable as an inline
+    // object literal would be. This never trusts the call's return value
+    // as safe text — it recurses into each returned expression through
+    // this SAME function, so an opaque/unresolvable branch still fails
+    // exactly as closed as it would inline. The callee's own body is
+    // independently walked regardless (the blanket object-literal walk in
+    // inspectNode covers it whether or not it is ever called), so this
+    // only removes a redundant whole-call "unsupported" that duplicated
+    // what the callee's own internal boundary/raw findings already report.
+    const outcome = withCalleeFrame(node, ctx, stack, (returns) => {
+      for (const returned of returns) inspectStyleExpr(returned, ctx, stack)
+      return true
+    })
+    if (outcome !== true) emitUnsupported(ctx, node)
+    return
+  }
   emitUnsupported(ctx, node)
 }
 
@@ -1324,8 +1361,13 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
           // conservative paint sink by construction (it cannot know a
           // consumer won't put a colour in it), but `--app-top` etc. are
           // provably NOT colour-named, unlike the adversarial suite's
-          // `color` sink.
+          // `color` sink. destructuredSourceParameterBinding is the SECOND,
+          // equally narrow exception (R1 user-authored-colour capability):
+          // the destructuring SOURCE itself provably resolves to a runtime
+          // parameter binding (never an arbitrary call — see that function's
+          // own doc comment for why the `fileTypeMeta()` pin stays blocked).
           if (boundary && isRuntimeMeasurementBoundary(boundary)) emitRuntimePaintBoundary(ctx, node, boundary)
+          else if (boundary && boundary.owner !== 'anonymous' && destructuredSourceParameterBinding(node, ctx, stack)) emitRuntimePaintBoundary(ctx, node, boundary)
           else emitUnsupported(ctx, node)
           return
         }
@@ -1496,7 +1538,16 @@ function inspectClassExpr(node, ctx, stack, boundary = null) {
     if (init === LOOKUP_MISSING || init === LOOKUP_UNBOUND || !init) {
       const destructured = resolveDestructuredTargets(node, ctx, stack)
       if (destructured) {
-        if (!destructured.resolved) { emitUnsupported(ctx, node); return }
+        if (!destructured.resolved) {
+          // table.tsx's `const { className: containerClassName } =
+          // containerProps` (R1 user-authored-colour capability, className-
+          // forward variant — see bodyDestructuredClassBoundary's own doc
+          // comment).
+          const bodyBoundary = bodyDestructuredClassBoundary(node, ctx, stack)
+          if (bodyBoundary) { emitExtensionBoundary(ctx, node, bodyBoundary); return }
+          emitUnsupported(ctx, node)
+          return
+        }
         for (const target of destructured.targets) inspectClassExpr(target, ctx, stack)
         return
       }
@@ -1892,6 +1943,25 @@ function knownClassDerivedUsesSafe(declaration, ctx, seen = new Set()) {
       let member = node.parent
       if ((ts.isPropertyAccessExpression(member) || ts.isElementAccessExpression(member)) && member.expression === node) {
         while ((ts.isPropertyAccessExpression(member.parent) || ts.isElementAccessExpression(member.parent)) && member.parent.expression === member) member = member.parent
+        // R1 user-authored-colour capability: a terminal `.length` read, or
+        // a terminal array-enumeration/narrowing CALL (`.map()`, `.filter()`,
+        // `.forEach()`, `.find()`, `.some()`, `.every()`) directly on this
+        // occurrence, is exactly as safe as the `.join()`/`.filter()` receiver
+        // recursion this file already grants class-composing helpers
+        // (ARRAY_RECEIVER_PRESERVING_METHODS) and exactly the shape
+        // resolveStableArrayLiteralElements' own CallExpression branch
+        // already resolves through (AgentFormFields.tsx's
+        // `AVATAR_COLORS.map((color) => ...)`) — `.length` returns a
+        // primitive number that can never carry a mutable reference back to
+        // the array, and none of these methods can manufacture a NEW,
+        // unproven element or hand out a mutable alias of the receiver
+        // itself. Recognizing them here only WIDENS what counts as a safe
+        // terminal read of THIS occurrence (mirrors the JsxExpression/
+        // VariableDeclaration-alias terminal cases below); every other
+        // occurrence of the same exported name still needs its own proof.
+        if (ts.isPropertyAccessExpression(member) && member.name.text === 'length') return
+        if (ts.isPropertyAccessExpression(member) && (ARRAY_ENUMERATION_METHODS.has(member.name.text) || ARRAY_NARROWING_METHODS.has(member.name.text))
+          && ts.isCallExpression(member.parent) && member.parent.expression === member) return
         const resolution = { incomplete: false }
         const targets = resolveMemberTargets(member, ctx, new Set(), resolution)
         // A sibling property's inability to be fully ENUMERATED (e.g. an
@@ -2014,6 +2084,16 @@ function absenceBindingUsesSafe(declaration, factory, indexedReads = false) {
         if (isJsxTagName(node)) return
         if (ts.isVariableDeclaration(parent) && parent.initializer === node && destructuredPatternUsesSafe(parent.name)) return
         if (isReadonlyObjectStaticCallArgument(node)) return
+        // R1 user-authored-colour capability: `for (const x of ARRAY)` reads
+        // ARRAY as a plain iterable — sequential, read-only element access,
+        // exactly as safe as `.forEach()`/`.map()` (which this function's
+        // sibling widening in knownClassDerivedUsesSafe already grants): it
+        // can neither mutate the receiver nor hand out a reference that
+        // could. Not a property/element read at all, so it would otherwise
+        // fall through this function's ordinary "must be a property/element
+        // read" requirement below and mark the whole export unsafe
+        // (AgentFormFields.test.tsx's `for (const color of AVATAR_COLORS)`).
+        if (ts.isForOfStatement(parent) && parent.expression === node) return
         if ((!ts.isPropertyAccessExpression(parent) && !ts.isElementAccessExpression(parent)) || parent.expression !== node) { safe = false; return }
         const property = ts.isPropertyAccessExpression(parent) ? parent.name.text
           : ts.isStringLiteral(unwrap(parent.argumentExpression)) ? unwrap(parent.argumentExpression).text : null
@@ -2025,10 +2105,25 @@ function absenceBindingUsesSafe(declaration, factory, indexedReads = false) {
           || ts.isObjectLiteralExpression(expression.parent) || ts.isArrayLiteralExpression(expression.parent)
           || ts.isPropertyAssignment(expression.parent) || ts.isSpreadElement(expression.parent))) expression = expression.parent
         const use = expression.parent
+        // R1 user-authored-colour capability: a terminal array-enumeration/
+        // narrowing CALL (`.map()`, `.filter()`, `.forEach()`, `.find()`,
+        // `.some()`, `.every()`) directly on THIS property read is exactly
+        // as safe as every other terminal read this function already grants
+        // (a plain property/element read, above) — none of these methods
+        // can manufacture a NEW, unproven element or hand out a mutable
+        // alias of the receiver itself (same reasoning as
+        // knownClassDerivedUsesSafe's matching widening, and the reasoning
+        // resolveStableArrayLiteralElements' own CallExpression branch
+        // already relies on to resolve AVATAR_COLORS.map((color) => ...)).
+        // Gated on THIS exact property name (`.map`/etc, checked above),
+        // never on "any call" — an arbitrary call through this member would
+        // still fail closed exactly as before.
+        const isEnumerationCall = ts.isCallExpression(use) && use.expression === expression
+          && property && (ARRAY_ENUMERATION_METHODS.has(property) || ARRAY_NARROWING_METHODS.has(property))
         if ((ts.isBinaryExpression(use) && use.left === expression && use.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && use.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
           || ((ts.isForOfStatement(use) || ts.isForInStatement(use)) && use.initializer === expression)
           || ts.isDeleteExpression(use) || ts.isPrefixUnaryExpression(use) || ts.isPostfixUnaryExpression(use)
-          || (ts.isCallExpression(use) && use.expression === expression)) { safe = false; return }
+          || (ts.isCallExpression(use) && use.expression === expression && !isEnumerationCall)) { safe = false; return }
       }
     }
     ts.forEachChild(node, visit)
@@ -2281,6 +2376,24 @@ function inspectTemplate(node, ctx, mode, stack, boundary = null) {
       }
       else if (runtimeBoundarySpan) {
         emitRuntimePaintBoundary(ctx, runtimeBoundarySpan, boundary)
+      }
+      // R1 user-authored-colour tint capability: widened css-mode template
+      // span resolution for shapes the three narrow escape hatches above do
+      // not cover — a `??`/`||` mix of a runtime member read and a
+      // finite/const-resolvable branch (RollupBadge's `(agent?.color ??
+      // STATUS_COLORS[item.status])`), a plain local reached through a
+      // resolvable chain (PlansFilterBand's `displayColor`), and a call to a
+      // local/imported pure helper whose return(s) resolve under the SAME
+      // call-frame parameter substitution resolveIdentInit already performs
+      // (TaskCard's taskDisplayColor(task), WorkspaceGraphTab's
+      // planDisplayColor(activePlan), TaskNode's toTint(avatarColor)). See
+      // resolveRuntimeTemplateSpanValue's own doc comment for the full
+      // soundness argument — every leaf is independently emitted through the
+      // exact same analyzeCssValue/emitRuntimePaintBoundary/emitUnsupported
+      // paths this file already uses everywhere else, never spliced as
+      // trusted text.
+      else if (mode === 'css' && resolveRuntimeTemplateSpanValue(span.expression, ctx, stack, boundary)) {
+        // handled — the resolver already emitted whatever findings apply.
       }
       else if (!isDefinitelyNumeric(span.expression, ctx)) unresolved = true
       parts.push('')
@@ -2763,6 +2876,55 @@ function resolveDestructuredTargets(ident, ctx, stack) {
   return { resolved: true, targets }
 }
 
+// R1 user-authored-colour capability: TaskNode.tsx's `const { agentColor }
+// = data` — a BODY-level destructuring of a name straight off a function's
+// OWN parameter (`data` in `function TaskNodeComponent({ data, selected })`)
+// is destructuredBindingElement's exact "resolved, but the source is not a
+// finite const object" case — resolveDestructuredTargets correctly reports
+// `{ resolved: false }` for it (objects.length === 0), because `data` is
+// genuine runtime prop data, not a finite record. That is precisely the
+// user-authored-colour shape (a persisted field read off runtime entity
+// data), not a gap: read the SAME way as `item.agentColor` or `agent?.color`
+// already resolve via isDirectRuntimeRead + a runtime paint boundary — this
+// only recognizes the destructured-LOCAL-NAME form of that identical read.
+// Requires the destructuring SOURCE to be a bare identifier that resolves to
+// a PROVEN, non-reassigned, non-anonymous-owner parameter binding — an
+// arbitrary opaque call (`const { color } = fileTypeMeta(...)`, the
+// adversarial suite's pinned "must stay unsupported forever" case) resolves
+// its source to something OTHER than a parameter binding here (LOOKUP_UNBOUND,
+// or a call expression), so this never touches that proof.
+function destructuredSourceParameterBinding(ident, ctx, stack) {
+  const found = destructuredBindingElement(ident)
+  if (!found) return null
+  const source = unwrap(found.declaration.initializer)
+  if (!source || !ts.isIdentifier(source)) return null
+  const binding = resolveIdentInit(source, ctx, new Set(stack))
+  if (!isParameterBinding(binding) || binding.reassigned || binding.ownerName === 'anonymous') return null
+  return binding
+}
+
+// R1 user-authored-colour capability, className-forward variant: table.tsx's
+// `const { className: containerClassName, ... } = containerProps`, where
+// `containerProps` is itself Table's own top-level destructured parameter
+// element. Ported from typography.mjs's forwardedClassBoundary body-
+// destructuring branch — same "a name bound directly in the function's OWN
+// parameter list carries the identical unchanged-caller-value guarantee"
+// contract, entered through destructuredBindingElement instead of a
+// hand-rolled scope walk. Reports the SOURCE parameter + property path
+// (`containerProps.className`), never the local alias and never the
+// enclosing function's own bare name — `Table#className` already names a
+// DIFFERENT boundary (the table's own direct className parameter) and must
+// not collide with this one (lead directive, 2026-09-20).
+function bodyDestructuredClassBoundary(ident, ctx, stack) {
+  const found = destructuredBindingElement(ident)
+  if (!found || (found.key !== 'className' && found.key !== 'class')) return null
+  const source = unwrap(found.declaration.initializer)
+  if (!source || !ts.isIdentifier(source)) return null
+  const binding = resolveIdentInit(source, ctx, new Set(stack))
+  if (!isParameterBinding(binding) || binding.reassigned || binding.ownerName === 'anonymous') return null
+  return { ownerName: binding.ownerName, name: `${source.text}.${found.key}`, declaration: binding.declaration }
+}
+
 // Only a bare string literal (or no-substitution template) is fixed at
 // build time and therefore safe to splice into a larger css-value template
 // with no runtime-injection surface — see inspectTemplate's css-mode branch.
@@ -2840,6 +3002,117 @@ function runtimeBoundaryTemplateSpan(expression, ctx, stack, boundary) {
   const destructured = resolveDestructuredTargets(node, ctx, stack)
   if (destructured?.resolved) return null
   return node
+}
+
+// R1 user-authored-colour tint capability: a css-mode template-span resolver
+// that mirrors inspectCssValueExpr's OWN dispatch (BinaryExpression ??/||,
+// ConditionalExpression, Identifier resolution incl. resolveIdentInit's
+// call-frame parameter substitution, PropertyAccess/ElementAccess via
+// resolveMemberTargets + the SAME isDirectRuntimeRead boundary fallback,
+// CallExpression via withCalleeFrame/collectReturns) but for the "prove or
+// decline, never splice unproven text" contract a template SPAN requires —
+// see inspectTemplate's own comment on why a compound css-value template
+// must never trust an unresolved value as safe text. Every leaf this
+// reaches is independently EMITTED (a literal through analyzeCssValue at
+// its own node, a runtime-proven read through emitRuntimePaintBoundary, a
+// nested template through inspectTemplate itself) as a side effect; the
+// caller only ever splices an empty placeholder for the span, exactly like
+// runtimeBoundaryTemplateSpan's existing contract. Returns true only when
+// EVERY reachable leaf was independently accounted for this way; any leaf
+// this cannot prove returns false, leaving inspectTemplate's pre-existing
+// unresolved/emitUnsupported fallback in full, unchanged control — this is
+// strictly additive coverage, never a relaxation of an existing pinned
+// shape (a const-rooted, non-runtime value still resolves as raw-color/
+// token exactly as it does outside a template; an opaque call with no
+// local declaration, or a parameter with no boundary, still returns false
+// here exactly as it fails everywhere else in this file).
+function resolveRuntimeTemplateSpanValue(expression, ctx, stack, boundary) {
+  const node = unwrap(expression)
+  if (!node) return false
+  if (isLiteralCssValue(node)) { analyzeCssValue(node.text, ctx, node); return true }
+  if (ts.isTemplateExpression(node)) { inspectTemplate(node, ctx, 'css', stack, boundary); return true }
+  if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+    const left = resolveRuntimeTemplateSpanValue(node.left, ctx, stack, boundary)
+    const right = resolveRuntimeTemplateSpanValue(node.right, ctx, stack, boundary)
+    return left && right
+  }
+  if (ts.isConditionalExpression(node)) {
+    const whenTrue = resolveRuntimeTemplateSpanValue(node.whenTrue, ctx, stack, boundary)
+    const whenFalse = resolveRuntimeTemplateSpanValue(node.whenFalse, ctx, stack, boundary)
+    return whenTrue && whenFalse
+  }
+  if (ts.isIdentifier(node)) {
+    if (isSkipIdent(node.text)) return false
+    const marker = `${node.getSourceFile().fileName}#tplspanval:${node.pos}`
+    if (stack.has(marker)) return false
+    const nextStack = new Set(stack).add(marker)
+    const init = resolveIdentInit(node, ctx, nextStack)
+    if (isParameterBinding(init)) {
+      // Deliberately NEVER resolved here (regression fix, mutation-verified):
+      // a BARE top-level parameter spliced directly into a template must
+      // stay exactly as blocking as the pre-existing pinned adversarial
+      // contract requires ("a template alpha suffix on an unproven
+      // (non-destructured) value stays unsupported, never spliced"; "an
+      // unproven-type numeric template is unaffected by the
+      // destructured-literal escape hatch") — a plain parameter carries no
+      // independent provenance signal here the way a MEMBER read
+      // (`agent.color`), a `??`/`||` mix, or a call return does. The one
+      // capability this file's own real targets need — the finite-const-
+      // array-callback element (AVATAR_COLORS.map((color) => ...) reached
+      // inside its template) — is already fully owned by the pre-existing
+      // arrayElementTemplateTargets escape hatch (checked earlier in
+      // inspectTemplate), so this branch never needs to re-resolve it.
+      return false
+    }
+    if (init === LOOKUP_MISSING || init === LOOKUP_UNBOUND || !init) {
+      const destructured = resolveDestructuredTargets(node, ctx, stack)
+      if (destructured) {
+        if (!destructured.resolved) {
+          if (boundary && isRuntimeMeasurementBoundary(boundary)) { emitRuntimePaintBoundary(ctx, node, boundary); return true }
+          if (boundary && boundary.owner !== 'anonymous' && destructuredSourceParameterBinding(node, ctx, stack)) { emitRuntimePaintBoundary(ctx, node, boundary); return true }
+          return false
+        }
+        // literalDestructuredTemplateTargets (checked earlier in
+        // inspectTemplate, unchanged) already owns the "every resolved
+        // candidate is a plain literal" case for a destructured span — this
+        // point is reached ONLY when that already failed, i.e. at least one
+        // candidate branch is NOT provably literal. Pinned adversarial
+        // contract ("a template alpha suffix on a destructured non-literal
+        // value stays unsupported"): that shape stays wholly unresolved here
+        // too, never a partial per-branch emission — recursing per-target
+        // through this resolver would leak a raw-color finding for the ONE
+        // literal branch while the compound span as a whole is still
+        // unproven, which is exactly the partial-credit splice this file's
+        // template handling refuses everywhere else.
+        return false
+      }
+      if (!boundary || boundary.owner === 'anonymous') return false
+      const hookState = isRuntimeMeasurementBoundary(boundary) ? null : hookStateLocal(node)
+      if (isRuntimeMeasurementBoundary(boundary) || hookState) {
+        if (hookState) scanHookStateLaundering(hookState, ctx)
+        emitRuntimePaintBoundary(ctx, node, boundary)
+        return true
+      }
+      return false
+    }
+    return resolveRuntimeTemplateSpanValue(init, ctx, nextStack, boundary)
+  }
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    const nullAllowed = isProvenNonNullReceiver(node)
+    const resolution = { incomplete: false }
+    const targets = resolveMemberTargets(node, ctx, stack, resolution, nullAllowed)
+    if (targets.length) {
+      if (resolution.incomplete) return false
+      return targets.every((target) => resolveRuntimeTemplateSpanValue(target, ctx, stack, boundary))
+    }
+    if (boundary && isDirectRuntimeRead(node) && boundary.owner !== 'anonymous') { emitRuntimePaintBoundary(ctx, node, boundary); return true }
+    return false
+  }
+  if (ts.isCallExpression(node)) {
+    const outcome = withCalleeFrame(node, ctx, stack, (returns) => returns.every((returned) => resolveRuntimeTemplateSpanValue(returned, ctx, stack, boundary)))
+    return outcome === true
+  }
+  return false
 }
 
 // A parameter is owned by its function; its runtime value comes from the
@@ -3039,6 +3312,47 @@ function isNullOrUndefinedLiteral(node) {
   return node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === 'undefined')
 }
 
+// `Object.keys(<record>)[<literal index>]` (CreateAgentWizard.tsx's
+// `defaultColorHex = Object.keys(AVATAR_COLORS_BY_NAME)[0]`) — resolves to
+// the KEY (not the value) at that literal position, across every
+// statically-resolvable candidate record, when every one of that record's
+// OWN properties is a plain, literal-keyed, non-spread PropertyAssignment
+// in a PROVABLE declaration order — the exact ordering `Object.keys` itself
+// iterates in at runtime. A spread or an unprovable computed key ANYWHERE
+// in the record could shift what actually lands at this index, so any one
+// voids the WHOLE record's proof (never guessed, never partial) — the same
+// completeness standard opaqueObjectMember already enforces for a plain
+// property read. Only a literal NumericLiteral index and a literal
+// `Object.keys(...)` receiver are accepted — the same "provable AST shape
+// or fail closed" standard as everywhere else in this file. Returns the
+// KEY's own name node (itself a StringLiteral for AVATAR_COLORS_BY_NAME's
+// hex-keyed record) so the caller's ordinary literal-value dispatch handles
+// it identically to any other resolved target — never a shorthand or
+// non-PropertyAssignment member, which carries no independent literal key
+// node this function could safely hand back.
+function resolveObjectKeysElementAccess(node, ctx, stack) {
+  if (!ts.isElementAccessExpression(node)) return null
+  const keyExpr = unwrap(node.argumentExpression)
+  if (!ts.isNumericLiteral(keyExpr)) return null
+  const receiver = unwrap(node.expression)
+  if (!ts.isCallExpression(receiver) || receiver.arguments.length !== 1) return null
+  const callee = unwrap(receiver.expression)
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)
+    || callee.expression.text !== 'Object' || callee.name.text !== 'keys') return null
+  const objects = resolveToObjects(receiver.arguments[0], ctx, stack)
+  if (!objects.length) return null
+  const index = Number(keyExpr.text)
+  const names = []
+  for (const obj of objects) {
+    if (obj.properties.some(opaqueObjectMember)) return null
+    if (index < 0 || index >= obj.properties.length) return null
+    const prop = obj.properties[index]
+    if (!ts.isPropertyAssignment(prop) || propertyNameOf(prop.name) === null) return null
+    names.push(prop.name)
+  }
+  return names
+}
+
 function resolveMember(node, ctx, stack) {
   node = unwrap(node)
   if (ts.isPropertyAccessExpression(node)) {
@@ -3074,6 +3388,13 @@ function resolveMemberTargets(node, ctx, stack, resolution = null, nullAllowed =
   // key resolves to on a plain object literal.
   const derivedEntries = resolveObjectFromEntriesRecord(unwrap(node.expression), ctx, stack)
   if (derivedEntries) return derivedEntries
+  // CreateAgentWizard.tsx's `Object.keys(AVATAR_COLORS_BY_NAME)[0]` — the
+  // module-consts-palette capability (R1): resolves to the KEY at that
+  // literal position, never a value this file has any other way to reach
+  // (resolveObjectKeysElementAccess's own doc comment covers the full
+  // soundness argument).
+  const keysIndexEntries = resolveObjectKeysElementAccess(node, ctx, stack)
+  if (keysIndexEntries) return keysIndexEntries
   if (ts.isElementAccessExpression(node)) {
     const arrayResolution = { incomplete: false }
     const arrays = resolveToArrays(unwrap(node.expression), ctx, stack, arrayResolution, nullAllowed)
@@ -3925,20 +4246,30 @@ function classForwardMemberBoundary(node, ctx) {
   if (!ts.isIdentifier(base)) return null
   const binding = lookup(ctx, base.text)
   if (!isParameterBinding(binding) || binding.reassigned) return null
-  // Restricted to a parameter of an ANONYMOUS enclosing function (an
-  // array-callback element: `items.map((item) => ... item.className ...)`)
-  // — matching typography's own parameterMemberBoundary rationale
-  // ("ownerNameFor alone... does not resolve an anonymous callback"). A
-  // parameter of a NAMED component/function (`props` in `Box = (props) =>
-  // <div className={props.className} />`, `iconProps` in a named
-  // `RetryableState({ iconProps }) {...}`) is a DIFFERENT, lower-confidence
-  // shape this file already routes through the existing
-  // hasStableRuntimeParameterRoot -> unverified-governed-value path — a
-  // pinned fixture ("only a proven parameter member at a class sink
-  // becomes unverified governed debt") requires `props.className` to keep
-  // reporting THAT rule, never extension-boundary.
-  if (binding.ownerName !== 'anonymous') return null
-  const ownerName = binding.memberOwnerName
+  // Two provably-unchanged shapes qualify, matching typography's own
+  // parameterMemberBoundary contract exactly: (1) a parameter of an
+  // ANONYMOUS enclosing function (an array-callback element:
+  // `items.map((item) => ... item.className ...)`) — "ownerNameFor alone...
+  // does not resolve an anonymous callback"; (2) a NAMED component/function's
+  // own DESTRUCTURED parameter FIELD (`iconProps` in a named
+  // `RetryableState({ icon, iconProps, ... }) {...}`, WhatsAppPairingBody.tsx
+  // — R1 lead addendum 2026-09-20, matching typography's classification of
+  // this exact site as `RetryableState#iconProps.className`) — proven by
+  // `ts.isBindingElement(binding.declaration)`: `iconProps` is itself ONE
+  // NAMED field of a larger destructuring pattern, the identical contract a
+  // destructured render-prop parameter or a `.map()` element already carries
+  // elsewhere in this file. This does NOT widen to a NAMED function's WHOLE,
+  // undestructured parameter (`props` in `Box = (props) => <div
+  // className={props.className} />`) — `binding.declaration` there is the
+  // bare `ts.ParameterDeclaration` itself, never a BindingElement, so it
+  // stays excluded and keeps routing through the existing
+  // hasStableRuntimeParameterRoot -> unverified-governed-value path exactly
+  // as the pinned `Box#className<-props.className` fixture requires: an
+  // arbitrary whole-props read carries no comparable "this one field is
+  // meant to forward" signal that a dedicated, separately-named destructured
+  // field does.
+  if (binding.ownerName !== 'anonymous' && !ts.isBindingElement(binding.declaration)) return null
+  const ownerName = binding.ownerName === 'anonymous' ? binding.memberOwnerName : binding.ownerName
   if (!ownerName || ownerName === 'anonymous') return null
   return { ownerName, name: `${base.text}.${key}`, declaration: binding.declaration }
 }

@@ -2223,3 +2223,175 @@ test('P10: a composer body that pushes onto its own rest parameter before forwar
   assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'inputs'))
   assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
 })
+
+// ── R1 — user-authored-colour boundary widening: mutation-proof / forbidden controls ──
+//
+// Lane R1 (2026-09-20). Positive PERMITTED cases pin each new capability;
+// each is paired with a FORBIDDEN control that must NOT be swept in by the
+// same widening — proving classification is provenance-based, never
+// identifier-name-based, and that every existing "stays unsupported forever"
+// adversarial pin (an arbitrary opaque call's destructured result, a
+// reassigned parameter, a mutated array) is still exactly as blocking as it
+// was before this lane's changes.
+
+test('R1 permitted: a runtime member read with a non-"color"-suggestive name still resolves as a boundary (classification is never identifier-name-gated)', () => {
+  const source = [
+    "export function Swatch({ agents }) {",
+    "  return <div>{agents.map((entry) => <i key={entry.id} style={{ backgroundColor: entry.hue }} />)}</div>",
+    "}",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/extension-boundary' && f.syntax === 'Swatch#dom-style.backgroundColor<-entry.hue'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('R1 forbidden control: a variable literally named "color" that is a plain build-time literal never becomes an exception (name-only matching must fail)', () => {
+  const source = [
+    "export function Swatch() {",
+    "  const color = '#112233'",
+    "  return <i style={{ backgroundColor: `${color}22` }} />",
+    "}",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+  // A proven build-time literal splices directly (tryString resolves it
+  // before this scanner's template escape hatches even run — never reaches
+  // any R1 capability at all), so the assembled 8-digit hex is analyzed as
+  // one raw-colour value, not the bare 6-digit literal in isolation.
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#11223322'))
+})
+
+test('R1 forbidden control: a literal colour mixed into a ?? tint still reports raw-color on its own branch, never swept into the other branch\'s exception', () => {
+  const source = [
+    "export function Chip({ agent }) {",
+    "  const color = agent?.color ?? '#ff0000'",
+    "  return <i style={{ backgroundColor: `${color}22` }} />",
+    "}",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#ff0000'))
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/extension-boundary' && f.syntax === 'Chip#dom-style.backgroundColor<-agent?.color'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('R1 forbidden control: Object.keys(<opaque call>)[0] stays unsupported — never guessed at a const-rooted-looking shape it cannot prove', () => {
+  const source = [
+    'declare function loadPalette(): Record<string, string>',
+    'const hex = Object.keys(loadPalette())[0] as string',
+    'export function View() { return <i style={{ color: hex }} /> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})
+
+test('R1 forbidden control: Object.keys(<record with a spread>)[<index after the spread>] stays unsupported — a spread of unknown key count could shift what actually lands at that index', () => {
+  // The spread sits BEFORE the target index in the AST, at position 0 — the
+  // property AST node actually AT index 1 ('#3B82F6') is a perfectly
+  // ordinary PropertyAssignment on its own. Only the BLANKET opaqueObjectMember
+  // scan (not a check of the specific resolved index alone) catches that an
+  // unknown-length spread earlier in the same record could shift a LATER
+  // index to a completely different runtime key.
+  const source = [
+    'declare const EXTRA: Record<string, string>',
+    "const PALETTE_BY_NAME = { ...EXTRA, '#22C55E': 'Verdant', '#3B82F6': 'Azure' }",
+    'const hex = Object.keys(PALETTE_BY_NAME)[1] as string',
+    'export function View() { return <i style={{ color: hex }} /> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})
+
+test('R1 forbidden control: a destructured local from an arbitrary opaque call stays unsupported (the fileTypeMeta() pin, unweakened)', () => {
+  const source = [
+    'declare function fileTypeMeta(name: string): { color: string }',
+    'export function Row({ name }) {',
+    '  const { color } = fileTypeMeta(name)',
+    '  return <i style={{ backgroundColor: color }} />',
+    '}',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})
+
+test('R1 forbidden control: a body-destructured className whose source parameter was reassigned before the read stays unsupported', () => {
+  const source = [
+    "import { cn } from '@/lib/utils'",
+    'export function Panel({ containerProps }) {',
+    "  containerProps = { className: 'injected' }",
+    '  const { className: containerClassName } = containerProps',
+    "  return <div className={cn('base', containerClassName)} />",
+    '}',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'containerClassName'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})
+
+// Same reassignment guard, exercised through the CSS-VALUE variant
+// (destructuredSourceParameterBinding, distinct from
+// bodyDestructuredClassBoundary above — a separate function with its own
+// `binding.reassigned` check that the className-context test above does not
+// reach at all).
+test('R1 forbidden control: a body-destructured colour whose source parameter was reassigned before the read stays unsupported (css-value variant)', () => {
+  const source = [
+    'export function TaskNode({ data }) {',
+    "  data = { agentColor: '#ff0000' }",
+    '  const { agentColor } = data',
+    '  return <i style={{ color: agentColor }} />',
+    '}',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'agentColor'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})
+
+test('R1 forbidden control: a mutated exported array still blocks even when read through .map() (the terminal-enumeration widening never overrides the mutation guard)', () => {
+  const source = [
+    "export const PALETTE = ['#22C55E', '#3B82F6']",
+    "PALETTE.push('#000000')",
+    'export function Swatches() {',
+    "  return <div>{PALETTE.map((color) => <i key={color} style={{ backgroundColor: color }} />)}</div>",
+    '}',
+  ].join('\n')
+  const modules = { [path]: source }
+  const findings = scan({ path, source, policy: pass2Policy, modules })
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color'))
+})
+
+test('R1 forbidden control: a call whose callee is not local (imported, declared, or opaque) inside style={} still blocks', () => {
+  const source = [
+    "import { externalPaint } from 'some-ungoverned-package'",
+    'export function Chip({ tone }) {',
+    '  return <i style={externalPaint(tone)} />',
+    '}',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+})
+
+test('R1 permitted: an enumeration-method terminal call on an exported const array is safe across the whole-codebase escape proof even when a DIFFERENT importing module also reads .length', () => {
+  const constantsSource = "export const AVATAR_COLORS = ['#22C55E', '#3B82F6']"
+  const testSource = [
+    "import { AVATAR_COLORS } from './constants'",
+    "expect(x).toHaveLength(AVATAR_COLORS.length)",
+    'for (const color of AVATAR_COLORS) { void color }',
+  ].join('\n')
+  const source = [
+    "import { AVATAR_COLORS } from './constants'",
+    'export function Picker() {',
+    '  return <div>{AVATAR_COLORS.map((color) => <i key={color} style={{ backgroundColor: color }} />)}</div>',
+    '}',
+  ].join('\n')
+  const modules = {
+    [path]: source,
+    'src/components/constants.ts': constantsSource,
+    'src/components/Picker.test.tsx': testSource,
+  }
+  const findings = scan({ path, source, policy: pass2Policy, modules })
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#22c55e'))
+})
