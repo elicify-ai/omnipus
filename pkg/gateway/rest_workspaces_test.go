@@ -1697,6 +1697,12 @@ func TestHandleWorkspacePut_SerializesAgainstWorkspaceLock(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := createWorkspaceViaAPI(t, api, "LockRaceWorkspace", "")
 
+	// The revisioned body is prepared BEFORE the lock is taken: the handler
+	// itself blocks on workspace.LockID while the lock is held, and reading
+	// the state inside the goroutine would serialize the fixture read behind
+	// the very lock this test is holding.
+	putBody := withWorkspaceRevisionJSON(t, api, wsID, `{"name":"LockRaceWorkspace-Renamed"}`)
+
 	// Simulate an in-flight kickoff consume (or any other workspace writer)
 	// holding the per-workspace lock.
 	unlock := workspace.LockID(wsID)
@@ -1705,11 +1711,6 @@ func TestHandleWorkspacePut_SerializesAgainstWorkspaceLock(t *testing.T) {
 		code int
 		body string
 	}
-	// The revisioned body is prepared BEFORE the lock is taken: the handler
-	// itself blocks on workspace.LockID while the lock is held, and reading
-	// the state inside the goroutine would serialize the fixture read behind
-	// the very lock this test is holding.
-	putBody := withWorkspaceRevisionJSON(t, api, wsID, `{"name":"LockRaceWorkspace-Renamed"}`)
 	done := make(chan result, 1)
 	go func() {
 		w := httptest.NewRecorder()
