@@ -54,12 +54,17 @@ export default defineConfig({
   globalTeardown: './tests/touch-in-context/lib/global-teardown.ts',
   outputDir: 'test-results/touch-in-context-artifacts',
   // The "authenticated route sweep" test iterates ~27 routes in one test,
-  // and each route's settle() (tests/touch-in-context/specs/in-context-touch.spec.ts)
-  // rides out up to 5s when a route is still mounting content — observed
-  // sweep durations run 26-54s on this shared, contended machine, occasionally
-  // exceeding a 60s test timeout on the slowest engine (WebKit) under load.
-  // 180s gives that real headroom without masking a genuine hang (a route
-  // that never settles still only costs its own 5s, not the whole budget).
+  // and each route's settle() (tests/touch-in-context/lib/settle.ts) rides
+  // out up to TOUCH_CHECK_SETTLE_TIMEOUT_MS (default 8s — raised from an
+  // earlier 5s to give the route-specific readiness checks' extra network
+  // round trips, e.g. DefaultWorkspaceRedirect's own workspace-list fetch,
+  // headroom on a loaded shared machine) when a route is still mounting
+  // content — observed sweep durations run 26-54s on this shared, contended
+  // machine, occasionally exceeding a 60s test timeout on the slowest
+  // engine (WebKit) under load. 180s gives that real headroom without
+  // masking a genuine hang (a route that never settles still only costs its
+  // own settle deadline, reported as status 'settle-timeout', not the whole
+  // budget).
   timeout: 180_000,
   expect: { timeout: 10_000 },
   // No real LLM latency is in play here — a control either clips/overlaps/

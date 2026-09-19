@@ -3,12 +3,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { discoverDynamicIds, loadRouteSurfaces, resolveRoutes, type ResolvedRoute } from '../lib/routes';
-import { INTERACTIVE_SELECTOR, measurePage, type KeyRowBudget } from '../lib/measure';
+import { measurePage, type KeyRowBudget } from '../lib/measure';
 import { recordResult, type ResultEntry } from '../lib/report';
 import { projectNameToEnvKind } from '../lib/env';
 import { reauthenticate } from '../lib/reauth';
 import { readCredentials } from '../lib/credentials';
 import { RAW_RESULTS_DIR, SCREENSHOTS_DIR } from '../lib/paths';
+import { settle } from '../lib/settle';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -56,55 +57,6 @@ test.beforeAll(async () => {
   }
 });
 
-/**
- * Best-effort settle after navigation. Deliberately NOT `waitForLoadState('networkidle')`:
- * chat routes hold a persistent WebSocket open, and several other routes poll —
- * neither is expected to ever go idle.
- *
- * Two earlier versions of this both undercounted, against this suite's own
- * baseline runs:
- *   - v1: a flat 800ms wait — 33 of 140 route checks (23.6%) reported zero
- *     interactive controls, including routes that unmistakably have some
- *     (`_app/agents` renders agent cards fetched over the network).
- *   - v2: wait for "at least one candidate control exists" — WORSE (83/140
- *     at zero), because AppShell's persistent nav (`a[href]` links in the
- *     sidebar) already matches that condition before any route-specific,
- *     fetched content (the agent cards themselves) has rendered, so it
- *     resolved instantly and measured too early anyway.
- *
- * The persistent-chrome problem means "something exists" can never be the
- * right signal — the sidebar always satisfies it. What actually indicates
- * "this route is done adding controls" is the CONTROL COUNT GOING STABLE:
- * poll it every 300ms and stop once two consecutive polls agree (600ms with
- * no new controls appearing), capped at 5s total. A route that's still
- * growing at 5s settles for whatever it has then — real data about a slow
- * route, not a harness bug to chase further.
- */
-async function settle(page: import('@playwright/test').Page): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  let previousCount = -1;
-  let stableStreak = 0;
-  while (Date.now() < deadline) {
-    const count = await page
-      .evaluate((sel) => document.querySelectorAll(sel).length, INTERACTIVE_SELECTOR)
-      .catch(() => 0);
-    // A plateau AT ZERO never counts as "settled" — this early in a fresh
-    // navigation, zero controls almost always means "React hasn't mounted
-    // yet", not "this route genuinely has none". Two consecutive equal
-    // polls only short-circuits the wait once something real has appeared;
-    // a route that is still at zero when the 5s deadline hits rides out the
-    // full budget and that IS a genuine, reportable data point.
-    if (count > 0 && count === previousCount) {
-      stableStreak++;
-      if (stableStreak >= 2) return;
-    } else {
-      stableStreak = 0;
-    }
-    previousCount = count;
-    await page.waitForTimeout(300);
-  }
-}
-
 async function runRouteCheck(
   page: import('@playwright/test').Page,
   route: ResolvedRoute,
@@ -133,9 +85,16 @@ async function runRouteCheck(
   let entry: ResultEntry;
   try {
     await page.goto(hashUrl, { waitUntil: 'domcontentloaded' });
-    await settle(page);
+    const settleResult = await settle(page, route.id);
     const measurement = await measurePage(page, envKind, budgetsForRoute(route.id));
-    const status = measurement.violations.length > 0 ? 'violations' : 'ok';
+    // A settle timeout is reported as its own status, never silently folded
+    // into 'ok' zero-violations — see report.ts's ResultEntry.status doc
+    // comment and lib/settle.ts's SettleResult doc comment.
+    const status = !settleResult.settled
+      ? 'settle-timeout'
+      : measurement.violations.length > 0
+        ? 'violations'
+        : 'ok';
     entry = {
       ...baseEntry,
       status,
@@ -143,8 +102,10 @@ async function runRouteCheck(
       violations: measurement.violations,
       keyRows: measurement.keyRows,
       resolvedPath: hashUrl,
+      settled: settleResult.settled,
+      settleReason: settleResult.reason,
     };
-    if (status === 'violations') {
+    if (status === 'violations' || status === 'settle-timeout') {
       const shotName = `${route.id.replace(/[^a-zA-Z0-9_.-]/g, '_')}-${projectName}.png`;
       const shotPath = path.join(SCREENSHOTS_DIR, shotName);
       await page.screenshot({ path: shotPath }).catch(() => undefined);

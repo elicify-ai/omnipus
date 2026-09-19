@@ -20,13 +20,26 @@ export interface ResultEntry {
   project: string;
   envKind: EnvKind;
   browserName: string;
-  status: 'ok' | 'violations' | 'skipped' | 'error';
+  // 'settle-timeout' (route-check only): lib/settle.ts's settle() never
+  // observed a busy-indicator-free, stable control count within its
+  // deadline, and the route is not in NO_CONTENT_BY_DESIGN_ROUTE_IDS — a
+  // reportable settle FAILURE, distinct from a genuine "ok, zero controls"
+  // reading (see settle.ts's doc comment). Never silently folded into 'ok'.
+  status: 'ok' | 'violations' | 'skipped' | 'error' | 'settle-timeout';
   skippedReason?: string;
   controlsChecked?: number;
   violations: Violation[];
   keyRows?: KeyRowMeasurement[];
   screenshotPath?: string;
   errorMessage?: string;
+  // Present on route-check entries: whether lib/settle.ts's settle()
+  // confirmed the route's own content had finished rendering (or that the
+  // route is a documented no-content-by-design shell) before measurePage()
+  // ran, and why. Absent on task-flow entries — those settle via explicit
+  // Playwright `expect(...).toBeVisible()` waits on their own selectors,
+  // not this generic route-sweep mechanism.
+  settled?: boolean;
+  settleReason?: string;
   timestamp: string;
 }
 
@@ -44,6 +57,12 @@ export interface AggregateReport {
     routeChecksWithViolations: number;
     routeChecksSkipped: number;
     routeChecksErrored: number;
+    // A route whose content never finished rendering within settle()'s
+    // deadline — see ResultEntry.status's 'settle-timeout' doc comment.
+    // Never counted in routeChecksOk: a timed-out route's controlsChecked/
+    // violations are whatever was on screen at the deadline, not a
+    // confirmed-settled measurement.
+    routeChecksSettleTimedOut: number;
     // "violations" here is DATA, not a harness/test failure — the flow itself
     // completed (e.g. the model picker really did open and offer 3+ options);
     // one of the four D17 assertions found something in the resulting page
@@ -84,6 +103,7 @@ export function aggregate(rawDir: string): AggregateReport {
       routeChecksWithViolations: routeResults.filter((r) => r.status === 'violations').length,
       routeChecksSkipped: routeResults.filter((r) => r.status === 'skipped').length,
       routeChecksErrored: routeResults.filter((r) => r.status === 'error').length,
+      routeChecksSettleTimedOut: routeResults.filter((r) => r.status === 'settle-timeout').length,
       taskFlowsOk: flowResults.filter((r) => r.status === 'ok').length,
       taskFlowsWithViolations: flowResults.filter((r) => r.status === 'violations').length,
       taskFlowsErrored: flowResults.filter((r) => r.status === 'error').length,
