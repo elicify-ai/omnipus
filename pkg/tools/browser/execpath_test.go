@@ -198,12 +198,15 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	// Deliberately no cftFullChromeDownloadID entry: on linux this exercises
-	// EnsureChromiumBuild's "preferred build missing from manifest" fallback
-	// to chrome-headless-shell (selectDownloadBuild requests full chrome
-	// first); off linux, selectDownloadBuild already requests
-	// chrome-headless-shell directly. Either way resolution lands on the
-	// headless-shell zip fixture below.
+	// Squad K (founder ruling 2026-09-19): selectDownloadBuild defaults to
+	// full chrome on linux AND darwin, and EnsureChromiumBuild now fails
+	// LOUD on a manifest that lacks the requested build. This test
+	// exercises the DOWNLOAD path, not the build-resolution policy, so
+	// we hand the manifest BOTH entries (full chrome and headless-shell)
+	// pointing at the same headless-shell fixture zip — whichever build
+	// the test host's selectDownloadBuild() asks for finds its entry, the
+	// download+extract completes, and the test verifies the on-disk
+	// binary the test was designed around.
 	manifest := cftManifest{
 		Channels: map[string]struct {
 			Version   string                              `json:"version"`
@@ -212,7 +215,8 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 			cftChannel: {
 				Version: "131.0.6778.999",
 				Downloads: map[string][]cftManifestDownloadRef{
-					cftDownloadID: {{Platform: platform, URL: srv.URL + "/zip"}},
+					cftFullChromeDownloadID: {{Platform: platform, URL: srv.URL + "/zip"}},
+					cftDownloadID:           {{Platform: platform, URL: srv.URL + "/zip"}},
 				},
 			},
 		},
@@ -226,6 +230,18 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 	prev := globalManifestURLForTesting
 	globalManifestURLForTesting = srv.URL + "/manifest"
 	defer func() { globalManifestURLForTesting = prev }()
+
+	// Squad K (founder ruling 2026-09-19): selectDownloadBuild defaults to
+	// full chrome on linux AND darwin; on any other platform it picks
+	// headless-shell. This test's zip fixture is a headless-shell zip, so
+	// force headless-shell via the selectDownloadBuildGOOS seam
+	// (mirrors goosForCapability / layoutsGOOS usage in the same file).
+	// The DOWNLOAD mechanism is what this test exercises, not the
+	// build-resolution policy; the seam is the documented way to make
+	// this test pass on any host.
+	prevBuildOS := selectDownloadBuildGOOS
+	selectDownloadBuildGOOS = "windows"
+	t.Cleanup(func() { selectDownloadBuildGOOS = prevBuildOS })
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
 	m := &BrowserManager{cfg: cfg}

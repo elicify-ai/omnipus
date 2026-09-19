@@ -649,11 +649,12 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	}
 
 	// The manifest below deliberately carries no full-chrome
-	// (cftFullChromeDownloadID) entry, so EnsureChromium's build resolution
-	// ends up fetching chrome-headless-shell either way (directly on
-	// non-linux, or via the "missing from manifest" fallback on linux) —
-	// exercising the integrity check on whichever build is actually
-	// resolved, same as production.
+	// (cftFullChromeDownloadID) entry — Squad K (founder ruling
+	// 2026-09-19) changed EnsureChromium's build resolution to fail
+	// LOUD on that shape rather than silently swap to chrome-headless-shell.
+	// This test still wants to exercise the integrity check on the
+	// headless-shell build, so it asks for that build EXPLICITLY via
+	// EnsureChromiumBuild rather than going through EnsureChromium.
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
@@ -675,9 +676,9 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	withManifestURL(t, srv.URL+"/manifest")
 
 	root := t.TempDir()
-	_, err = EnsureChromium(context.Background(), root)
+	_, err = EnsureChromiumBuild(context.Background(), root, build)
 	if err == nil {
-		t.Fatal("expected EnsureChromium to reject a headerless download, got nil error")
+		t.Fatal("expected EnsureChromiumBuild to reject a headerless download, got nil error")
 	}
 	if !strings.Contains(err.Error(), "X-Goog-Hash") {
 		t.Fatalf("expected an X-Goog-Hash-related rejection error, got: %v", err)
@@ -709,9 +710,10 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	allowHeaderlessDownloadForTesting = true
 	t.Cleanup(func() { allowHeaderlessDownloadForTesting = prev })
 
-	// No full-chrome manifest entry below -> resolution ends up on
-	// chrome-headless-shell either way (directly on non-linux, or via
-	// fallback on linux).
+	// No full-chrome manifest entry below — Squad K (founder ruling
+	// 2026-09-19) changed EnsureChromium's resolution to fail LOUD on
+	// that shape, so this test now asks for the headless-shell build
+	// EXPLICITLY via EnsureChromiumBuild.
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
@@ -730,7 +732,7 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	withManifestURL(t, srv.URL+"/manifest")
 
 	root := t.TempDir()
-	got, err := EnsureChromium(context.Background(), root)
+	got, err := EnsureChromiumBuild(context.Background(), root, build)
 	if err != nil {
 		t.Fatalf("expected the headerless download to be accepted under the opt-in, got: %v", err)
 	}
