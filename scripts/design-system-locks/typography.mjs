@@ -1092,9 +1092,56 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
     }
     if (fn.body) check(fn.body)
     if (reassigned) return null
-    const ownerName = ownerNameFor(fn)
+    let ownerName = ownerNameFor(fn)
+    let renderPropPath = null
+    if (!ownerName) {
+      // Render-prop shape: `components={{ Chevron: ({ className: alias }) =>
+      // ... }}` (react-day-picker's Calendar#Chevron). `fn` here is the
+      // property's function VALUE, so ownerNameFor's own climb (which only
+      // resolves a named variable declaration or a forwardRef/memo call
+      // wrapper) finds no name and returns null — it is not built to look
+      // past a JSX-attribute object literal. anonymousRegistrationOwner is
+      // no substitute either: its walk requires the object literal to
+      // eventually sit inside a CallExpression argument (e.g. `cva('x', {
+      // variants: {...} })`), never a JsxAttribute. renderPropOwner is
+      // narrowly scoped to exactly this third shape: a function that is the
+      // value of a named (non-computed) property in an object literal that
+      // is itself the direct value of a JSX attribute. The owner is the
+      // nearest NAMED enclosing component (matching parameterMemberBoundary's
+      // nearestNamedAncestorOwner), and the render-prop's own property name
+      // (e.g. `Chevron`) prefixes the boundary name so the finding names the
+      // exact receiving identity, e.g. `Calendar#Chevron.className`.
+      const renderProp = renderPropOwner(fn)
+      if (renderProp) { ownerName = renderProp.owner; renderPropPath = renderProp.property }
+    }
     if (!ownerName) return null
-    return { symbol: ownerName, name: boundaryName, initializer, declaration }
+    return { symbol: ownerName, name: renderPropPath ? `${renderPropPath}.${boundaryName}` : boundaryName, initializer, declaration }
+  }
+
+  // Resolves the owner for `forwardedClassBoundary` when the forwarding
+  // function is a render-prop value inside a JSX attribute's object literal
+  // (`components={{ Chevron: (...) => ... }}`) rather than a named variable
+  // or a forwardRef/memo-wrapped export. Deliberately narrow: every step of
+  // the climb must match exactly, or it returns null and the caller falls
+  // back to unsupported — this only ever ADDS a resolvable owner for a shape
+  // ownerNameFor/anonymousRegistrationOwner cannot reach, never widens what
+  // counts as an unchanged forward (that proof already happened above).
+  function renderPropOwner(fn) {
+    const propertyAssignment = fn.parent
+    if (!propertyAssignment || !ts.isPropertyAssignment(propertyAssignment) || propertyAssignment.initializer !== fn) return null
+    if (ts.isComputedPropertyName(propertyAssignment.name)) return null
+    const propertyName = ts.isIdentifier(propertyAssignment.name) || ts.isStringLiteral(propertyAssignment.name)
+      ? propertyAssignment.name.text : null
+    if (!propertyName) return null
+    const objectLiteral = propertyAssignment.parent
+    if (!objectLiteral || !ts.isObjectLiteralExpression(objectLiteral)) return null
+    const jsxExpression = objectLiteral.parent
+    if (!jsxExpression || !ts.isJsxExpression(jsxExpression)) return null
+    const jsxAttribute = jsxExpression.parent
+    if (!jsxAttribute || !ts.isJsxAttribute(jsxAttribute)) return null
+    const ownerName = nearestNamedAncestorOwner(jsxAttribute)
+    if (!ownerName) return null
+    return { owner: ownerName, property: propertyName }
   }
 
   // Shared by forwardedClassBoundary and parameterMemberBoundary: resolves
@@ -1922,7 +1969,21 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
       // PolicyBadge.tsx `cfg.activeColor`/`cfg.color`, TablePart.tsx
       // `inertProps.className` — real-tree false positives, not real debt).
       const structuralLeaves = classCarryingLeaves(resolved)
-      if (!derivedValueEscapeSafe(declaration, structuralLeaves && structuralLeaves.length > 0 ? structuralLeaves : [resolved])) return []
+      const containers = structuralLeaves && structuralLeaves.length > 0 ? structuralLeaves : [resolved]
+      // LEAD DECISION (false green found post-Stage-B: a record DEFINED and
+      // EXPORTED in the reading file, `export const M = { a: GOOD }`, then
+      // mutated by a DIFFERENT module that imports it — `import { M } from
+      // './P'; M.a = BAD` — reached a className with zero findings, for both
+      // `M.a` and `M[k]` reads). absenceBindingUsesSafe/derivedValueEscapeSafe
+      // above only prove no write reaches `M` from THIS file's own
+      // ts.SourceFile; a write from an IMPORTING module is invisible to both.
+      // exportNeverMutatedByImporters closes exactly that gap (parity with
+      // resolveRecordObjectLiteral's local branch and importedRecordAllValues,
+      // and with ts-colors.mjs's knownClassExportUsesSafe): it is a no-op
+      // (returns true immediately) for a non-exported declaration, so this
+      // only ever ADDS a check for the exported case, never narrows the
+      // non-exported one already proven above.
+      if (!derivedValueEscapeSafe(declaration, containers) || !exportNeverMutatedByImporters(declaration, moduleContext, containers)) return []
       return localCandidates(resolved, seen)
     }
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {

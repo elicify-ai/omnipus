@@ -1138,3 +1138,128 @@ it.each(cases)('scores \${score}', ({ score, colorVar }) => {})
 }`)
   })
 })
+
+describe('capability: render-prop forwarding inside a JSX-attribute object literal (calendar.tsx Chevron — forwardedClassBoundary owner resolution)', () => {
+  // react-day-picker's `Chevron` render prop destructures `className:
+  // chevronClassName` and forwards it, unmodified, to an icon's `className`.
+  // That class is our own `classNames.chevron` literal (calendar.tsx merges
+  // `...classNames` after its own), so a caller CAN override it through the
+  // Calendar's `classNames` prop — a genuine, sound caller pass-through. The
+  // forwarding proof itself (declaration/reassignment/shadow checks) already
+  // covered this shape; what was missing was owner resolution: `Chevron`'s
+  // arrow function is the value of a property inside an object literal that
+  // is itself the value of a JSX attribute (`components={{ Chevron: ... }}`),
+  // a third owner shape neither `ownerNameFor` (named variable / forwardRef /
+  // memo) nor `anonymousRegistrationOwner` (object literal inside a
+  // CallExpression argument, e.g. `cva('x', { variants: {...} })`) resolves.
+  it('PERMITTED: a render-prop function inside a JSX-attribute object literal forwards its renamed className parameter, owner named off the enclosing component and the render-prop key (calendar.tsx Chevron chevronClassName)', () => {
+    expectOne(
+      'function Calendar() { return <DayPicker components={{ Chevron: ({ orientation, className: chevronClassName }) => <CaretRight className={chevronClassName} /> }} /> }',
+      'typography/extension-boundary',
+      'Calendar#Chevron.className',
+    )
+  })
+
+  it('FORBIDDEN: reassigning the renamed render-prop parameter before the read still fails closed (transformed before use, not an unchanged forward)', () => {
+    expectOne(
+      "function Calendar() { return <DayPicker components={{ Chevron: ({ orientation, className: chevronClassName }) => { chevronClassName = chevronClassName + ' extra'; return <CaretRight className={chevronClassName} /> } }} /> }",
+      'typography/unsupported-text-utility',
+      'chevronClassName',
+    )
+  })
+
+  it('FORBIDDEN: a non-class-like destructured render-prop name carries no naming signal and stays unsupported', () => {
+    expectOne(
+      'function Calendar() { return <DayPicker components={{ Chevron: ({ orientation: dir }) => <CaretRight className={dir} /> }} /> }',
+      'typography/unsupported-text-utility',
+      'dir',
+    )
+  })
+
+  it('FORBIDDEN: a render-prop forward whose owner cannot be named stably (no named enclosing component) stays unsupported', () => {
+    expectOne(
+      'export default () => <DayPicker components={{ Chevron: ({ orientation, className: chevronClassName }) => <CaretRight className={chevronClassName} /> }} />',
+      'typography/unsupported-text-utility',
+      'chevronClassName',
+    )
+  })
+})
+
+describe('capability: an exported LOCAL record mutated by a downstream importer must not resolve to its stale declaration-time literal (false green found by the lead, post-Stage-B)', () => {
+  // LEAD DECISION: `export const M = { a: GOOD }` declared and read in the
+  // SAME file (`className={M.a}` / `className={M[k]}`) previously resolved
+  // through localCandidates' identifier branch, which only ever proved no
+  // write reaches `M` from THIS file's own ts.SourceFile
+  // (absenceBindingUsesSafe) — a write from a DIFFERENT module that imports
+  // `M` (`import { M } from './P'; M.a = BAD`) is invisible to that proof and
+  // reached the className sink with zero findings. resolveRecordObjectLiteral's
+  // local branch had the same gap for the `M.a` shape specifically (routed
+  // through it whenever resolveProvenPropertyAccess/importedRecordAllValues
+  // don't apply first). The fix threads exportNeverMutatedByImporters — the
+  // same cross-module proof already used for an IMPORTED record and for
+  // ts-colors.mjs's parity capability — through both paths for the LOCAL
+  // case too. Every variant below reuses this file's own POLICY constant
+  // plus the standard fairness GOOD/BAD pair from COMMON-RULES.
+  const MODULE_POLICY = { tokenCssNames: ['--type-body-compact-size'], resolvedTokens: {} }
+  const GOOD = 'text-[length:var(--type-body-compact-size)]'
+  const BAD = 'text-[10px]'
+  const P_PATH = 'src/fixture.tsx'
+  const Q_PATH = 'src/lib/q.ts'
+
+  function modulesFor(pSource, qSource) {
+    return Object.freeze({ [P_PATH]: pSource, [Q_PATH]: qSource })
+  }
+
+  it('FORBIDDEN: const record, fixed-key read, mutated by a named-import writer', () => {
+    const pSource = `export const M = { a: '${GOOD}' }\nexport function V(){ return <i className={M.a}/> }`
+    const qSource = `import { M } from '../fixture'\nexport function hack(){ M.a = '${BAD}' }`
+    expectOne(pSource, 'typography/unsupported-text-utility', 'M.a', { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('FORBIDDEN: const record, dynamic-key read, mutated by a named-import writer', () => {
+    const pSource = `export const M = { a: '${GOOD}' }\nexport function V({ k }){ return <i className={M[k]}/> }`
+    const qSource = `import { M } from '../fixture'\nexport function hack(){ M.a = '${BAD}' }`
+    expectOne(pSource, 'typography/unsupported-text-utility', 'M[k]', { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('FORBIDDEN: let record (already-mutable) stays blocked through the same cross-module path, fixed key', () => {
+    const pSource = `export let M = { a: '${GOOD}' }\nexport function V(){ return <i className={M.a}/> }`
+    const qSource = `import { M } from '../fixture'\nexport function hack(){ M.a = '${BAD}' }`
+    expectOne(pSource, 'typography/unsupported-text-utility', 'M.a', { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('FORBIDDEN: let record (already-mutable) stays blocked through the same cross-module path, dynamic key', () => {
+    const pSource = `export let M = { a: '${GOOD}' }\nexport function V({ k }){ return <i className={M[k]}/> }`
+    const qSource = `import { M } from '../fixture'\nexport function hack(){ M.a = '${BAD}' }`
+    expectOne(pSource, 'typography/unsupported-text-utility', 'M[k]', { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('FORBIDDEN: a namespace-import writer (`import * as P`) fails closed exactly like a named-import writer', () => {
+    const pSource = `export const M = { a: '${GOOD}' }\nexport function V(){ return <i className={M.a}/> }`
+    const qSource = `import * as P from '../fixture'\nexport function hack(){ P.M.a = '${BAD}' }`
+    expectOne(pSource, 'typography/unsupported-text-utility', 'M.a', { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('FORBIDDEN: any non-type-only re-export of the origin module fails closed regardless of whether the re-export is itself mutated', () => {
+    const pSource = `export const M = { a: '${GOOD}' }\nexport function V(){ return <i className={M.a}/> }`
+    const qSource = `export { M } from '../fixture'`
+    expectOne(pSource, 'typography/unsupported-text-utility', 'M.a', { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('PERMITTED (control): a read-only named-import importer does not turn a genuinely never-mutated exported record unsupported (fixed key)', () => {
+    const pSource = `export const M = { a: '${GOOD}' }\nexport function V(){ return <i className={M.a}/> }`
+    const qSource = `import { M } from '../fixture'\nexport function readOnly(){ return M.a }`
+    expectClean(pSource, { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('PERMITTED (control): a read-only named-import importer does not turn a genuinely never-mutated exported record unsupported (dynamic key)', () => {
+    const pSource = `export const M = { a: '${GOOD}' }\nexport function V({ k }){ return <i className={M[k]}/> }`
+    const qSource = `import { M } from '../fixture'\nexport function readOnly(){ return M.a }`
+    expectClean(pSource, { path: P_PATH, policy: MODULE_POLICY, modules: modulesFor(pSource, qSource) })
+  })
+
+  it('PERMITTED (control): a non-exported local record has no cross-module surface at all and stays resolvable', () => {
+    const pSource = `const M = { a: '${GOOD}' }\nexport function V(){ return <i className={M.a}/> }`
+    expectClean(pSource, { path: P_PATH, policy: MODULE_POLICY, modules: Object.freeze({ [P_PATH]: pSource }) })
+  })
+})
