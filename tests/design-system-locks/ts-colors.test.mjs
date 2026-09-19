@@ -772,3 +772,212 @@ test('two DOM colour assignments retain two occurrences of the same syntax', () 
   assert.equal(findings[0].syntax, '#aabbcc')
   assert.equal(findings[1].syntax, '#aabbcc')
 })
+
+// ── W3-colour bullet 1: renamed class-like parameter forwards ──────────────
+
+test('a class-like-named parameter (not literally "className") is an extension boundary', () => {
+  const source = "export function SmartSelectTrigger({ triggerClassName, className }) { return <button className={cn(triggerClassName, className)} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), ['SmartSelectTrigger#triggerClassName', 'SmartSelectTrigger#className'])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), [])
+})
+
+test('sheet.tsx-style "widthClass" (Class suffix, not ClassName) is an extension boundary', () => {
+  const source = "export function SheetContent({ widthClass, className }) { return <div className={cn(widthClass, className)} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), ['SheetContent#widthClass', 'SheetContent#className'])
+})
+
+test('a destructured rename to a class-like alias reports the SOURCE property name, not the local alias', () => {
+  const source = "export function Calendar({ className, classNames }) { return <DayPicker className={cn('p-3', className)} classNames={{ ...classNames, Chevron: ({ orientation, className: chevronClassName }) => <CaretRight className={chevronClassName} /> }} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), ['Calendar#className', 'Calendar#Chevron.className'])
+})
+
+test('a renamed class-like parameter forwarded member access (item.className) is an extension boundary at the enclosing named component', () => {
+  const source = "export function SmartSelectContent({ items }) { return <div>{items.map((item) => <span key={item.value} className={item.className} />)}</div> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), ['SmartSelectContent#item.className'])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), [])
+})
+
+test('a plain-parameter member forward (props.className on a named component) keeps its existing unverified-governed-value contract, not extension-boundary', () => {
+  const source = 'export const Box = (props) => <div className={props.className} />'
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), [])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unverified-governed-value'), ['Box#className<-props.className'])
+})
+
+test('a transformed renamed class-like parameter stays unsupported', () => {
+  const source = "export function SmartSelectTrigger({ triggerClassName }) { return <button className={triggerClassName.toUpperCase()} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), [])
+  assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
+})
+
+test('a reassigned renamed class-like parameter stays unsupported at the reassignment-shadowed read', () => {
+  const source = "export function SmartSelectTrigger({ triggerClassName }) { let forwarded = triggerClassName; forwarded = computeSomethingElse(); return <button className={forwarded} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), [])
+  assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
+})
+
+test('table.tsx-style "{ className } = containerProps ?? {}" stays unsupported, pinned in typography too', () => {
+  const source = "export function Table({ containerProps }) { const { className: containerClassName, ...rest } = containerProps ?? {}; return <div className={cn('relative', containerClassName)} {...rest} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), [])
+  assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0, 'containerClassName — a `?? {}` fallback on the destructuring source — must stay unsupported')
+})
+
+test('icon-button.tsx-style ${sizes[size]} ${className ?? \'\'}.trim() still resolves the forwarded className through .trim()', () => {
+  const source = "const iconButtonSizes = { default: 'h-9 w-9', sm: 'h-7 w-7' }\nexport function IconButton({ className, size }) { return <span className={`${iconButtonSizes[size]} ${className ?? ''}`.trim()} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), ['IconButton#className'])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), [])
+})
+
+// ── W3-colour bullet 2: null branches ───────────────────────────────────────
+
+const STRENGTH_HELPER = `
+type Strength = { score: number; label: string; color: string }
+function evaluateStrength(pw: string): Strength | null {
+  if (!pw) return null
+  return { score: 1, label: 'Weak', color: 'var(--color-status-done)' }
+}
+`
+
+test('a null candidate excluded by an `x &&` lexical guard does not void the whole read', () => {
+  const source = `${STRENGTH_HELPER}
+export function Field({ password }) {
+  const strength = evaluateStrength(password)
+  return strength && <p style={{ color: strength.color }}>{strength.label}</p>
+}`
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), [])
+})
+
+test('a null candidate excluded by a ternary `x ? x.prop : …` guard does not void the whole read', () => {
+  const source = `
+const STATUS_CONFIG: Record<string, { dotColor: string }> = { running: { dotColor: 'var(--color-status-done)' } }
+export function Card({ status }: { status: string | null }) {
+  const cfg = status ? STATUS_CONFIG[status] : null
+  return cfg ? <span style={{ backgroundColor: cfg.dotColor }} /> : null
+}`
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), [])
+})
+
+test('a null candidate excluded by an `as NonNullable<typeof x>` cast does not void the whole read', () => {
+  const source = `
+function fileTypeMeta(name: string) { return { color: '#0EA5E9' } }
+export function Row({ mount, name }: { mount: { broad: boolean } | null; name: string }) {
+  const containerIcon = mount ? { color: 'var(--color-status-done)' } : null
+  const fileMeta = containerIcon ? null : fileTypeMeta(name)
+  const color = containerIcon?.color ?? (fileMeta as NonNullable<typeof fileMeta>).color
+  return <div style={{ color }} />
+}`
+  const findings = scanSource(source)
+  assert.ok(!findings.some((finding) => finding.ruleId === 'ts-colors/unsupported'))
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/raw-color' && finding.syntax === '#0ea5e9'))
+})
+
+test('an UNGUARDED possibly-null read stays unsupported (the control every guard fixture above is proven against)', () => {
+  const source = `${STRENGTH_HELPER}
+export function Unguarded({ password }) {
+  const strength = evaluateStrength(password)
+  return <p style={{ color: strength.color }}></p>
+}`
+  assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0, 'an unguarded read of a possibly-null dispatcher value must stay unsupported')
+})
+
+// ── W3-colour bullet 3: finite const arrays ─────────────────────────────────
+
+test('AVATAR_COLORS.map((color) => …) resolves the array-callback parameter to every literal element', () => {
+  const source = `
+const AVATAR_COLORS = ['#22C55E', '#3B82F6']
+export function Picker() {
+  return <>{AVATAR_COLORS.map((color) => <button key={color} style={{ backgroundColor: color }} />)}</>
+}`
+  const findings = findingsFor(source, 'ts-colors/raw-color')
+  assert.deepEqual(findings.map((finding) => finding.syntax).sort(), ['#22c55e', '#3b82f6'])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), [])
+})
+
+test('OPTIONS.filter(pred).map((o) => o.color) resolves the array element MEMBER through the .filter() hop', () => {
+  const source = `
+const STATUS_OPTIONS = [
+  { value: 'inbox', color: 'text-[var(--color-status-done)]' },
+  { value: 'next', color: 'text-red-500' },
+]
+export function Select({ current }: { current: string }) {
+  const items = STATUS_OPTIONS.filter((o) => o.value === current || true).map((o) => ({ value: o.value, className: cn('text-xs', o.color) }))
+  return items
+}`
+  const findings = scanSource(source)
+  assert.ok(!findings.some((finding) => finding.ruleId === 'ts-colors/unsupported'))
+  assert.ok(findings.some((finding) => finding.ruleId === 'ts-colors/raw-color' && finding.syntax === 'text-red-500'))
+})
+
+test('a mutated const array ("push") stays unsupported — the escape/mutation guard applies to arrays like it does to records', () => {
+  const source = `
+const MUTABLE_COLORS = ['#111111']
+MUTABLE_COLORS.push('#222222')
+export function Bad() {
+  return <>{MUTABLE_COLORS.map((color) => <i style={{ color }} />)}</>
+}`
+  assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
+})
+
+test('a runtime (prop) array stays unsupported — user-authored-colour data, handled by registration, not this capability', () => {
+  const source = "export function Team({ agents }) { return <>{agents.map((a) => <i style={{ backgroundColor: a.color }} />)}</> }"
+  assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
+})
+
+// ── W3-colour bullet 4: graph visuals / Object.fromEntries(Object.keys(…).map(…)) records ──
+
+const STATUS_VISUALS_HELPER = `
+const STATUS_COLORS = { inbox: 'var(--color-status-done)', next: '#3B82F6' }
+const STATUS_VISUALS = Object.fromEntries(
+  Object.keys(STATUS_COLORS).map((s) => [s, { color: STATUS_COLORS[s] }]),
+) as Record<string, { color: string }>
+export function statusVisual(status: string) {
+  return STATUS_VISUALS[status] ?? STATUS_VISUALS.inbox
+}
+`
+
+test('a dynamic-key read off an Object.fromEntries(Object.keys(X).map(…)) record resolves through the templated entry value', () => {
+  const source = `${STATUS_VISUALS_HELPER}
+export function Node({ status }: { status: string }) {
+  const visual = statusVisual(status)
+  return <i style={{ color: visual.color }} />
+}`
+  const findings = scanSource(source)
+  // Exact-shape assertion, not just "no unsupported": the object literal
+  // STATUS_VISUALS is built from (`{ color: STATUS_COLORS[s] }`) is ALSO
+  // independently reached by this scanner's own blanket "any colour-shaped
+  // object literal, anywhere" walk at its declaration site — so a merely
+  // "no unsupported" check stays green even with THIS capability disabled
+  // (proven by the mutation harness: the disabled recognizer falls to a
+  // DIFFERENT pre-existing fallback, ts-colors/extension-boundary, for
+  // `visual.color` itself, never ts-colors/unsupported). The real signal is
+  // that `visual.color`'s OWN read produces NO extra finding at all — it
+  // resolves onto the exact same node the declaration-site walk already
+  // covers, deduplicated by position, down to exactly one finding total.
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['ts-colors/raw-color'])
+  assert.equal(findings[0].syntax, '#3b82f6')
+})
+
+test('a literal-key read off the same fromEntries record resolves through the same templated entry value', () => {
+  const source = `${STATUS_VISUALS_HELPER}
+export function Home() {
+  return <i style={{ color: STATUS_VISUALS.inbox.color }} />
+}`
+  const findings = scanSource(source)
+  // Same exact-shape reasoning as the dynamic-key test above — a bare
+  // "no unsupported" check also stays green with the recognizer disabled
+  // (it falls to ts-colors/extension-boundary instead, proven by the
+  // mutation harness); the real signal is that STATUS_VISUALS.inbox.color
+  // resolves onto the SAME node the declaration-site blanket walk already
+  // covers, producing exactly one finding total, not an extra one for
+  // this read site.
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['ts-colors/raw-color'])
+})
+
+test('a non-conforming fromEntries shape (opaque key source) stays unsupported', () => {
+  const source = `
+declare function getPairs(): [string, { color: string }][]
+const OPAQUE_RECORD = Object.fromEntries(getPairs())
+export function Node({ status }: { status: string }) {
+  return <i style={{ color: OPAQUE_RECORD[status].color }} />
+}`
+  assert.ok(syntaxes(source, 'ts-colors/unsupported').length > 0)
+})

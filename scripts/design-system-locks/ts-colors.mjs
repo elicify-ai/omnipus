@@ -43,6 +43,16 @@ const LOCAL_CLASS_COMPOSERS = new Set(['classes', 'statusDot'])
 // does not weaken the proof — it is the same array, narrowed or stringified.
 const ARRAY_RECEIVER_PRESERVING_METHODS = new Set(['join', 'filter'])
 
+// String whitespace-trimming methods (bullet 1, icon-button.tsx's
+// `` `${sizes[size]} ${className ?? ''}`.trim() ``) — same "cannot
+// manufacture a NEW, unproven value" reasoning as
+// ARRAY_RECEIVER_PRESERVING_METHODS, one level narrower: `.trim()` /
+// `.trimStart()` / `.trimEnd()` can only ever REMOVE leading/trailing
+// whitespace characters from their string receiver, never introduce a new
+// character (let alone a new class token) — recursing into the receiver
+// template/string is exactly as sound as the existing join/filter handling.
+const STRING_TRIM_METHODS = new Set(['trim', 'trimStart', 'trimEnd'])
+
 const COLOR_FUNCS = new Set(['rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch', 'color'])
 
 const GROUP_FUNCS = new Set([
@@ -483,17 +493,46 @@ function bind(ctx, name, init) {
 
 function bindParams(ctx, parameters, owner) {
   const ownerName = functionIdentity(owner)
-  for (const parameter of parameters) {
+  // Computed ONCE per enclosing function (identical for every parameter of
+  // `owner`), not per parameter: classOwner resolves the render-prop shape
+  // (W3-colour port of typography's renderPropOwner) so a class-like
+  // parameter forwarded through e.g. `classNames={{ Chevron: ({ className:
+  // chevronClassName }) => ... }}` reports the ENCLOSING named component
+  // ("Calendar"), not the render-prop's own property name ("Chevron"), with
+  // the property folded into the boundary NAME instead (`Chevron.className`)
+  // — see classForwardOwner. arrayElements is the W3-colour finite-const-
+  // array-callback capability (bullet 3): when `owner` is itself the
+  // callback argument of `<constArray>.map(...)` (optionally chained
+  // through `.filter(...)`, which only ever narrows, never invents), every
+  // element of that const array stands in the same evidentiary place as a
+  // finite record's property values for the callback's OWN first
+  // parameter — this is what lets `AVATAR_COLORS.map((color) => ...)`
+  // resolve `color` to one of AVATAR_COLORS' own literal hex strings.
+  const classOwner = classForwardOwner(owner)
+  const memberOwnerName = classOwner && classOwner.ownerName !== 'anonymous' ? classOwner.ownerName : nearestNamedAncestorOwner(owner)
+  const arrayElements = resolveEnumerableArrayElements(owner, ctx)
+  parameters.forEach((parameter, index) => {
     // composerForwardParameter is only ever true for the TOP-LEVEL parameter
     // identifier itself (it requires ts.isIdentifier(parameter.name)), never
     // propagated into a destructured sub-pattern — an unrelated same-named
     // field of a destructured options object is never swept in.
-    bindParameterPattern(ctx, parameter.name, parameter, ownerName, composerForwardParameter(parameter, owner))
-  }
+    bindParameterPattern(ctx, parameter.name, parameter, ownerName, composerForwardParameter(parameter, owner), null, classOwner, memberOwnerName, index === 0 ? arrayElements : null)
+  })
 }
 
-function bindParameterPattern(ctx, name, declaration, ownerName, composerForward = false) {
+function bindParameterPattern(ctx, name, declaration, ownerName, composerForward = false, boundaryNameOverride = null, classOwner = null, memberOwnerName = null, arrayElements = null) {
   if (ts.isIdentifier(name)) {
+    // classLikeName: the SOURCE contract name a class-like forward reports
+    // (W3-colour port of typography's forwardedClassBoundary) — for a
+    // top-level parameter this is just its own name (`triggerClassName`,
+    // `widthClass`, ...); for a destructured rename (`{ className:
+    // chevronClassName }`) the caller passes the SOURCE property name
+    // (`className`) down as boundaryNameOverride, never the local alias —
+    // the alias is an implementation detail, the source prop name is the
+    // stable receiving identity the contract requires.
+    const classLikeName = boundaryNameOverride ?? (isClassLikeParameterName(name.text) ? name.text : null)
+    const forwardClassName = Boolean(classLikeName) || composerForward
+    const boundaryLabel = classLikeName ?? name.text
     // forwardStyle mirrors forwardClassName's exact contract for a `style`
     // parameter (P4 review finding): a top-level or destructured parameter
     // literally named `style` is, by React/DOM convention, a CSSProperties
@@ -503,12 +542,47 @@ function bindParameterPattern(ctx, name, declaration, ownerName, composerForward
     // concept — a rest/spread style composer would need its own contract,
     // not this one), so unlike forwardClassName this is never OR'd with
     // composerForward.
-    bind(ctx, name.text, { kind: PARAMETER_BINDING, name: name.text, ownerName, declaration, reassigned: false, boolean: parameterIsBoolean(name.text, declaration, ctx), forwardClassName: name.text === 'className' || composerForward, forwardStyle: name.text === 'style' })
+    bind(ctx, name.text, {
+      kind: PARAMETER_BINDING,
+      name: name.text,
+      ownerName,
+      declaration,
+      reassigned: false,
+      boolean: parameterIsBoolean(name.text, declaration, ctx),
+      forwardClassName,
+      forwardStyle: name.text === 'style',
+      // classBoundaryOwner/classBoundaryName stand in for ownerName/name ONLY
+      // on the extension-boundary emission path (emitExtensionBoundary),
+      // leaving every OTHER consumer of ownerName/name (style forwarding,
+      // the plain-className runtime-paint-boundary check) byte-for-byte
+      // unchanged — this never widens what those other capabilities accept.
+      classBoundaryOwner: forwardClassName ? (classOwner?.ownerName ?? ownerName) : null,
+      classBoundaryName: forwardClassName ? (classOwner?.pathPrefix ? `${classOwner.pathPrefix}.${boundaryLabel}` : boundaryLabel) : null,
+      // memberOwnerName backs classForwardMemberBoundary (`item.className`,
+      // `iconProps?.className`): the nearest reviewable owner for a MEMBER
+      // read off this exact parameter, regardless of whether the parameter's
+      // OWN name is class-like (typography's parameterMemberBoundary
+      // contract — ownerNameFor(fn) ?? nearestNamedAncestorOwner(fn)).
+      memberOwnerName,
+      arrayElements,
+    })
     return
   }
   if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
     for (const element of name.elements) {
-      if (ts.isBindingElement(element)) bindParameterPattern(ctx, element.name, element, ownerName)
+      if (!ts.isBindingElement(element)) continue
+      let nextBoundaryName = null
+      if (ts.isIdentifier(element.name)) {
+        const property = element.propertyName ? propertyNameOf(element.propertyName) : element.name.text
+        if (property && isClassLikeParameterName(property)) nextBoundaryName = property
+      }
+      // arrayElements is deliberately NOT propagated into a destructured
+      // sub-pattern: it identifies "this bare identifier IS the whole
+      // callback-array element" (`.map((color) => ...)`), which is false
+      // for `.map(({ color }) => ...)` — there `color` is a PROPERTY read
+      // off the element, a different (unhandled) shape, not the element
+      // itself.
+      bindParameterPattern(ctx, element.name, element, ownerName, false, nextBoundaryName, classOwner, memberOwnerName, null)
     }
   }
 }
@@ -558,6 +632,82 @@ function functionIdentity(node) {
   if (ts.isPropertyAssignment(parent)) return propertyNameOf(parent.name) ?? 'anonymous'
   if (ts.isExportAssignment(parent)) return 'default'
   return 'anonymous'
+}
+
+// A parameter/property name carries a whole CSS class value, not just the
+// literal `className`/`class` (react-day-picker's `Chevron: ({ className:
+// chevronClassName })`, sheet.tsx's `widthClass`, smart-select's
+// `triggerClassName`, ...). Matched structurally (camelCase `...Class`/
+// `...ClassName` suffix), ported verbatim from the committed typography
+// scanner's isClassLikeParameterName so both scanners cover the exact same
+// forwarding shapes. This only ever WIDENS which identifiers are eligible
+// for the existing unchanged-forwarding proof (still gated by the same
+// reassignment/owner checks below); a false match degrades at worst to an
+// extra blocking extension-boundary finding, never a silent pass.
+function isClassLikeParameterName(name) {
+  return name === 'className' || name === 'class'
+    || /(?:^|[a-z0-9])(?:ClassName|Class)$/.test(name)
+}
+
+// Detects the render-prop shape typography's renderPropOwner exists for:
+// `fn` is the value of a NAMED (non-computed) property inside an object
+// literal that is itself the direct expression of a JSX attribute
+// (`classNames={{ Chevron: ({ className: chevronClassName }) => ... }}`).
+// functionIdentity resolves THIS shape to the property name alone
+// ("Chevron") — not a stable, independently reviewable owner — so a
+// class-like parameter forwarded through such a value needs the ENCLOSING
+// named component instead, with the render-prop's own property name kept as
+// a path prefix on the boundary name.
+function renderPropAssignment(fn) {
+  const propertyAssignment = fn.parent
+  if (!propertyAssignment || !ts.isPropertyAssignment(propertyAssignment) || propertyAssignment.initializer !== fn) return null
+  if (ts.isComputedPropertyName(propertyAssignment.name)) return null
+  const propertyName = propertyNameOf(propertyAssignment.name)
+  if (!propertyName) return null
+  const objectLiteral = propertyAssignment.parent
+  if (!objectLiteral || !ts.isObjectLiteralExpression(objectLiteral)) return null
+  const jsxExpression = objectLiteral.parent
+  if (!jsxExpression || !ts.isJsxExpression(jsxExpression)) return null
+  const jsxAttribute = jsxExpression.parent
+  if (!jsxAttribute || !ts.isJsxAttribute(jsxAttribute)) return null
+  return { jsxAttribute, propertyName }
+}
+
+// Climbs from `node` looking for the nearest ENCLOSING function-like ancestor
+// with a resolvable (non-'anonymous') functionIdentity — the stable owner a
+// render-prop value or an anonymous array-callback (`.map((item) => ...)`)
+// falls back to when it has no name of its own (typography's
+// parameterMemberBoundary: `ownerNameFor(fn) ?? nearestNamedAncestorOwner(fn)`).
+function nearestNamedAncestorOwner(node) {
+  let current = node.parent
+  while (current) {
+    if (isFunctionLike(current)) {
+      const identity = functionIdentity(current)
+      if (identity !== 'anonymous') return identity
+    }
+    current = current.parent
+  }
+  return null
+}
+
+// Resolves the class-forwarding owner for `fn` — the enclosing function a
+// parameter of `fn` forwards a class-like value FROM, for emitExtensionBoundary
+// purposes. Render-prop shapes are checked FIRST and override
+// functionIdentity's own (too-narrow) PropertyAssignment resolution: without
+// this, `Chevron: ({ className: chevronClassName }) => ...` would report
+// owner "Chevron" (the render-prop's own key) instead of the enclosing
+// "Calendar" component, diverging from typography's committed contract.
+// Every other shape defers to functionIdentity unchanged — this never
+// widens what functionIdentity already resolves elsewhere in this file
+// (setPropertyOwnerIdentity, paintBoundary, ...), only ADDS the one render-
+// prop override for THIS capability's own callers.
+function classForwardOwner(fn) {
+  const renderProp = renderPropAssignment(fn)
+  if (renderProp) {
+    const owner = nearestNamedAncestorOwner(renderProp.jsxAttribute)
+    return { ownerName: owner ?? 'anonymous', pathPrefix: owner ? renderProp.propertyName : null }
+  }
+  return { ownerName: functionIdentity(fn), pathPrefix: null }
 }
 
 function receivingSymbol(node) {
@@ -641,6 +791,75 @@ function setPropertyBoundary(call, prop) {
 function isRuntimeMeasurementBoundary(boundary) {
   return boundary.owner !== 'anonymous' && boundary.receiver === 'dom-style'
     && boundary.property.startsWith('--') && !isColorPropertyName(boundary.property)
+}
+
+// ── Bullet 2: null branches ─────────────────────────────────────────────
+
+// True when `expr` (the RAW, not-yet-unwrapped receiver of a member/element
+// access) is a `(x as NonNullable<typeof x>)` cast on the identifier named
+// `identifierText` — LibraryEntryRow.tsx's exact idiom for proving a
+// value non-null after an earlier conditional already established it.
+// Checked on the raw expression (before this file's ordinary `unwrap()`,
+// which strips AsExpression and would erase the signal) so the type
+// annotation itself is still visible.
+function isNonNullableCast(expr, identifierText) {
+  let e = expr
+  while (ts.isParenthesizedExpression(e)) e = e.expression
+  if (!ts.isAsExpression(e)) return false
+  const type = e.type
+  if (!type || !ts.isTypeReferenceNode(type) || !ts.isIdentifier(type.typeName) || type.typeName.text !== 'NonNullable') return false
+  const arg = type.typeArguments?.[0]
+  if (!arg || !ts.isTypeQueryNode(arg)) return false
+  return ts.isIdentifier(arg.exprName) && arg.exprName.text === identifierText
+}
+
+// True when `expr` narrows `name` to non-null/non-undefined — a bare
+// truthy check on the identifier itself, or on ANY conjunct of an `&&`
+// chain (`data && cfg` narrows `cfg` exactly as `cfg` alone would).
+// Deliberately narrow to a PLAIN identifier conjunct — no `!= null` /
+// `typeof` refinements — matching this scanner's existing "provable AST
+// shape or fail closed" standard elsewhere in the file.
+function conditionNarrowsIdentifier(expr, name) {
+  expr = unwrap(expr)
+  if (ts.isIdentifier(expr)) return expr.text === name
+  if (ts.isBinaryExpression(expr) && expr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) {
+    return conditionNarrowsIdentifier(expr.left, name) || conditionNarrowsIdentifier(expr.right, name)
+  }
+  return false
+}
+
+// True when `node` sits lexically inside the truthy branch of a `name &&
+// …` / `name ? … : …` / `if (name) { … }` guard — walked one direct
+// parent-child hop at a time from `node` up to the source file root, so it
+// finds a guard at ANY enclosing depth (e.g. a JSX `{strength && (
+// <div>...<p>{strength.color}</p>...</div>)}` wrapper several levels above
+// the actual read).
+function isIdentifierGuarded(node, name) {
+  let current = node
+  let parent = node.parent
+  while (parent) {
+    if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken
+      && parent.right === current && conditionNarrowsIdentifier(parent.left, name)) return true
+    if (ts.isConditionalExpression(parent) && parent.whenTrue === current && conditionNarrowsIdentifier(parent.condition, name)) return true
+    if (ts.isIfStatement(parent) && parent.thenStatement === current && conditionNarrowsIdentifier(parent.expression, name)) return true
+    current = parent
+    parent = parent.parent
+  }
+  return false
+}
+
+// True when a PropertyAccessExpression/ElementAccessExpression's receiver
+// is PROVEN non-null/non-undefined at this exact read site — optional
+// chaining on the access itself, a `NonNullable<typeof x>` cast, or a
+// lexical `x &&` / `x ?` / `if (x)` guard enclosing it. This is the ONLY
+// thing that permits resolveToObjects/resolveToArrays to drop a literal
+// null/undefined candidate without voiding the whole read — see bullet 2.
+function isProvenNonNullReceiver(node) {
+  if (node.questionDotToken) return true
+  const base = unwrap(node.expression)
+  if (!ts.isIdentifier(base)) return false
+  if (isNonNullableCast(node.expression, base.text)) return true
+  return isIdentifierGuarded(node, base.text)
 }
 
 function assignmentBoundary(node) {
@@ -1030,6 +1249,17 @@ function propertyNameOf(name) {
 // propertyInit's last-match-wins lookup already applies the same
 // left-to-right override order the language uses (P11 review finding).
 function opaqueObjectMember(member) {
+  // A shorthand property (`{ status, ... }`, equivalent to `{ status:
+  // status, ... }`) names itself exactly as unambiguously as a plain
+  // `key: value` PropertyAssignment — nothing about it is dynamic or
+  // unprovable. Recognized here (bullet 3/4: BoardView's COLUMNS =
+  // STATUS_ORDER.map((status) => ({ status, label: ..., headerColor: ...
+  // })) uses this shape for its OWN map-parameter key) so it no longer
+  // voids the whole-object completeness proof for an UNRELATED sibling key
+  // (`headerColor`) being read — propertyInit is extended to match, so a
+  // read that specifically targets the shorthand key itself still resolves
+  // too, never silently drops it.
+  if (ts.isShorthandPropertyAssignment(member)) return false
   if (!ts.isPropertyAssignment(member)) return true
   return ts.isComputedPropertyName(member.name) && propertyNameOf(member.name) === null
 }
@@ -1064,6 +1294,14 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
       return
     }
     if (isParameterBinding(init)) {
+      // Finite-const-array-callback capability (bullet 3): `color` in
+      // `AVATAR_COLORS.map((color) => ({ backgroundColor: color, ... }))` IS
+      // the array element itself; every element already passed
+      // arrayLiteralIsStable's escape/mutation guard at bind time.
+      if (init.arrayElements) {
+        for (const element of init.arrayElements) inspectCssValueExpr(element, ctx, stack, boundary)
+        return
+      }
       if (boundary && init.ownerName !== 'anonymous' && !init.reassigned) emitRuntimePaintBoundary(ctx, node, boundary)
       else emitUnsupported(ctx, node)
       return
@@ -1144,8 +1382,16 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
     // so a call-derived receiver with an opaque spread/computed key would
     // resolve to whatever explicit property happens to exist and be reported
     // clean instead of unsupported.
+    // Null-branch capability (bullet 2): a dispatcher/ternary/record whose
+    // candidate set includes a literal null/undefined must not fail the
+    // WHOLE read closed when the read itself proves the receiver non-null
+    // here (optional chaining, an `as NonNullable<typeof x>` cast, or a
+    // lexical `x && …` / `x ? … : …` / `if (x) { … }` guard) — see
+    // isProvenNonNullReceiver. Only the null candidate is excluded; every
+    // OTHER candidate still has to resolve on its own merits.
+    const nullAllowed = isProvenNonNullReceiver(node)
     const resolution = { incomplete: false }
-    const targets = resolveMemberTargets(node, ctx, stack, resolution)
+    const targets = resolveMemberTargets(node, ctx, stack, resolution, nullAllowed)
     if (targets.length) {
       for (const target of targets) inspectCssValueExpr(target, ctx, stack, boundary)
       if (resolution.incomplete) emitUnsupported(ctx, node)
@@ -1234,7 +1480,16 @@ function inspectClassExpr(node, ctx, stack, boundary = null) {
       return
     }
     if (isParameterBinding(init)) {
-      if (!init.forwardClassName || init.reassigned || init.ownerName === 'anonymous') emitUnsupported(ctx, node)
+      // Finite-const-array-callback capability (bullet 3): `color` in
+      // `AVATAR_COLORS.map((color) => ...)` IS the array element itself —
+      // every element already passed arrayLiteralIsStable's escape/mutation
+      // guard at bind time, so each stands in exactly the same evidentiary
+      // place as a finite record's property value.
+      if (init.arrayElements) {
+        for (const element of init.arrayElements) inspectClassExpr(element, ctx, stack)
+        return
+      }
+      if (!init.forwardClassName || init.reassigned || (init.classBoundaryOwner ?? init.ownerName) === 'anonymous') emitUnsupported(ctx, node)
       else emitExtensionBoundary(ctx, node, init)
       return
     }
@@ -1265,8 +1520,21 @@ function inspectClassExpr(node, ctx, stack, boundary = null) {
     return
   }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    // Renamed class-like parameter member forward (`item.className`,
+    // `badge.className`, `iconProps?.className`) — bullet 1's port of
+    // typography's parameterMemberBoundary. Checked BEFORE the general
+    // member-resolution fallback below: a bare/uniquely-bound parameter's
+    // OWN `.className`/`.class` member, read unchanged, is caller
+    // pass-through exactly like the plain-identifier forward above, not a
+    // value this scanner can further resolve.
+    const memberBoundary = classForwardMemberBoundary(node, ctx, stack)
+    if (memberBoundary) {
+      emitExtensionBoundary(ctx, node, memberBoundary)
+      return
+    }
+    const nullAllowed = isProvenNonNullReceiver(node)
     const resolution = { incomplete: false }
-    const targets = resolveMemberTargets(node, ctx, stack, resolution)
+    const targets = resolveMemberTargets(node, ctx, stack, resolution, nullAllowed)
     if (targets.length) {
       for (const target of targets) inspectClassExpr(target, ctx, stack, boundary)
       if (resolution.incomplete || !knownClassReceiverStable(node.expression, ctx)) emitUnsupported(ctx, node)
@@ -1287,7 +1555,7 @@ function inspectClassExpr(node, ctx, stack, boundary = null) {
     }
   }
   if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(unwrap(node.expression))
-    && ARRAY_RECEIVER_PRESERVING_METHODS.has(unwrap(node.expression).name.text)) {
+    && (ARRAY_RECEIVER_PRESERVING_METHODS.has(unwrap(node.expression).name.text) || STRING_TRIM_METHODS.has(unwrap(node.expression).name.text))) {
     // `.join(sep)` only ever stringifies the array it's called on — never
     // invents new content. `.filter(predicate)` (any predicate, including
     // `Boolean`) can only REMOVE elements from its receiver, never add one:
@@ -1374,6 +1642,17 @@ function knownClassReceiverStable(node, ctx, seen = new Set()) {
     return Boolean(returns?.length && returns.every(value => knownClassReceiverStable(value, ctx, next)))
   }
   if (!ts.isIdentifier(node)) return false
+  // Finite-const-array-callback capability (bullet 3): `o` in
+  // `STATUS_OPTIONS.filter(pred).map((o) => cn('text-xs', o.color))` is a
+  // function PARAMETER, not a `const` variable declaration — absenceLexicalBinding's
+  // own declaration-based proof below can never accept it, even though
+  // arrayLiteralIsStable already proved the ARRAY it enumerates is
+  // stable at bind time. Each candidate element gets the SAME recursive
+  // stability proof any other resolved target does.
+  const binding = lookup(ctx, node.text)
+  if (isParameterBinding(binding) && binding.arrayElements && !binding.reassigned) {
+    return binding.arrayElements.every(element => knownClassReceiverStable(element, ctx, next))
+  }
   let declaration = absenceLexicalBinding(node)
   if (!declaration || !absenceBindingUsesSafe(declaration, false, true) || !knownClassDerivedUsesSafe(declaration, ctx)) return false
   if (ts.isImportSpecifier(declaration)) {
@@ -1986,6 +2265,7 @@ function inspectTemplate(node, ctx, mode, stack, boundary = null) {
       // cannot become an unscanned splice into whatever analyzeCssValue
       // eventually sees.
       const literalTargets = mode === 'css' ? literalDestructuredTemplateTargets(span.expression, ctx, stack) : null
+      const arrayTargets = mode === 'css' && !literalTargets ? arrayElementTemplateTargets(span.expression, ctx, stack) : null
       const runtimeBoundarySpan = mode === 'css' ? runtimeBoundaryTemplateSpan(span.expression, ctx, stack, boundary) : null
       if (mode === 'class') {
         const expression = unwrap(span.expression)
@@ -1995,6 +2275,9 @@ function inspectTemplate(node, ctx, mode, stack, boundary = null) {
       }
       else if (literalTargets) {
         for (const target of literalTargets) analyzeCssValue(target.text, ctx, target)
+      }
+      else if (arrayTargets) {
+        for (const target of arrayTargets) analyzeCssValue(target.text, ctx, target)
       }
       else if (runtimeBoundarySpan) {
         emitRuntimePaintBoundary(ctx, runtimeBoundarySpan, boundary)
@@ -2502,6 +2785,23 @@ function literalDestructuredTemplateTargets(expression, ctx, stack) {
   return destructured.targets
 }
 
+// css-mode template escape hatch for the finite-const-array-callback
+// capability (bullet 3): `` `0 0 0 2px var(--color-primary), 0 0 0 4px
+// ${color}` `` in AgentFormFields.tsx's AvatarColorPicker — `tryString`
+// cannot give ONE static string for an array-element parameter (there are
+// several candidate elements, by design), so this mirrors
+// literalDestructuredTemplateTargets' exact contract for that different
+// (array, not destructured-record) provenance: only literal string targets
+// qualify, everything else falls through to the ordinary unresolved path.
+function arrayElementTemplateTargets(expression, ctx, stack) {
+  const node = unwrap(expression)
+  if (!ts.isIdentifier(node)) return null
+  const init = resolveIdentInit(node, ctx, stack)
+  if (!isParameterBinding(init) || !init.arrayElements || init.reassigned) return null
+  const targets = init.arrayElements.map(unwrap)
+  return targets.every(isLiteralCssValue) ? targets : null
+}
+
 // css-mode template escape hatch for a plain LOCAL identifier span (P6
 // review finding) — deliberately NEVER a parameter or an opaque call: this
 // mirrors inspectCssValueExpr's own unresolved-identifier boundary check
@@ -2731,6 +3031,14 @@ function withCalleeFrame(call, ctx, stack, body) {
   }
 }
 
+// True for the literal `null` keyword or the `undefined` identifier — the
+// two shapes a dispatcher/ternary/record candidate set can legitimately
+// contribute NOTHING to a class/colour read (bullet 2, null branches), never
+// any other unprovable value.
+function isNullOrUndefinedLiteral(node) {
+  return node.kind === ts.SyntaxKind.NullKeyword || (ts.isIdentifier(node) && node.text === 'undefined')
+}
+
 function resolveMember(node, ctx, stack) {
   node = unwrap(node)
   if (ts.isPropertyAccessExpression(node)) {
@@ -2748,14 +3056,27 @@ function resolveMember(node, ctx, stack) {
   return null
 }
 
-function resolveMemberTargets(node, ctx, stack, resolution = null) {
+function resolveMemberTargets(node, ctx, stack, resolution = null, nullAllowed = false) {
   const target = resolution ? null : resolveMember(node, ctx, stack)
   if (target) return [target]
   node = unwrap(node)
   if (!ts.isElementAccessExpression(node) && !ts.isPropertyAccessExpression(node)) return []
+  // Graph-visuals capability (bullet 4): `Object.fromEntries(Object.keys(X)
+  // .map((key) => [key, <templateValue>]))` — the exact shape
+  // `STATUS_VISUALS`/`taskGraph.ts` builds its per-status record with. Every
+  // entry shares the SAME syntactic template value (only the KEY varies at
+  // runtime), so a read at ANY key — literal ("STATUS_VISUALS.inbox") or
+  // dynamic ("STATUS_VISUALS[status]") — resolves to that one template,
+  // exactly like this file's existing unprovable-ELEMENT-ACCESS-key
+  // fallback below already treats every value of an ordinary record as a
+  // candidate regardless of the key requested; recognizing this constructor
+  // shape only ADDS resolvability for it, never changes what an unprovable
+  // key resolves to on a plain object literal.
+  const derivedEntries = resolveObjectFromEntriesRecord(unwrap(node.expression), ctx, stack)
+  if (derivedEntries) return derivedEntries
   if (ts.isElementAccessExpression(node)) {
     const arrayResolution = { incomplete: false }
-    const arrays = resolveToArrays(unwrap(node.expression), ctx, stack, arrayResolution)
+    const arrays = resolveToArrays(unwrap(node.expression), ctx, stack, arrayResolution, nullAllowed)
     if (arrays.length) {
       if (resolution && arrayResolution.incomplete) resolution.incomplete = true
       const keyExpr = unwrap(node.argumentExpression)
@@ -2766,7 +3087,7 @@ function resolveMemberTargets(node, ctx, stack, resolution = null) {
       return arrays.flatMap((array) => [...array.elements].filter((element) => !ts.isOmittedExpression(element)))
     }
   }
-  const objects = resolveToObjects(unwrap(node.expression), ctx, stack, resolution)
+  const objects = resolveToObjects(unwrap(node.expression), ctx, stack, resolution, nullAllowed)
   // See resolveDestructuredTargets' matching comment: a computed key that
   // statically resolves to a literal name is not opaque (P11 review
   // finding) — only a spread/method/getter member, or a computed key with
@@ -2784,9 +3105,13 @@ function resolveMemberTargets(node, ctx, stack, resolution = null) {
   return objects.flatMap((obj) => obj.properties.filter(ts.isPropertyAssignment).map((prop) => prop.initializer))
 }
 
-function resolveToArrays(node, ctx, stack, resolution = null) {
+function resolveToArrays(node, ctx, stack, resolution = null, nullAllowed = false) {
   node = unwrap(node)
   if (ts.isArrayLiteralExpression(node)) return [node]
+  if (isNullOrUndefinedLiteral(node)) {
+    if (!nullAllowed && resolution) resolution.incomplete = true
+    return []
+  }
   if (ts.isIdentifier(node)) {
     // Position-keyed, not text-keyed — see inspectClassExpr's identifier
     // marker for the shadowing rationale (nested-helper parameter-frame fix).
@@ -2794,17 +3119,26 @@ function resolveToArrays(node, ctx, stack, resolution = null) {
     if (!stack.has(marker)) {
       const next = new Set(stack).add(marker)
       const init = resolveIdentInit(node, ctx, next)
-      if (init && init !== LOOKUP_MISSING && init !== LOOKUP_UNBOUND) return resolveToArrays(init, ctx, next, resolution)
+      if (init && init !== LOOKUP_MISSING && init !== LOOKUP_UNBOUND) return resolveToArrays(init, ctx, next, resolution, nullAllowed)
     }
   }
-  if (ts.isConditionalExpression(node)) return [...resolveToArrays(node.whenTrue, ctx, stack, resolution), ...resolveToArrays(node.whenFalse, ctx, stack, resolution)]
+  if (ts.isConditionalExpression(node)) return [...resolveToArrays(node.whenTrue, ctx, stack, resolution, nullAllowed), ...resolveToArrays(node.whenFalse, ctx, stack, resolution, nullAllowed)]
   if (resolution) resolution.incomplete = true
   return []
 }
 
-function resolveToObjects(node, ctx, stack, resolution = null) {
+function resolveToObjects(node, ctx, stack, resolution = null, nullAllowed = false) {
   node = unwrap(node)
   if (ts.isObjectLiteralExpression(node)) return [node]
+  // Null-branch capability (bullet 2): a literal null/undefined candidate in
+  // a dispatcher/ternary/record contributes NOTHING to the read rather than
+  // voiding the whole proof, but ONLY when the caller has already proven the
+  // outer read cannot observe it (isProvenNonNullReceiver at the read site);
+  // otherwise this is exactly as unprovable as any other missing branch.
+  if (isNullOrUndefinedLiteral(node)) {
+    if (!nullAllowed && resolution) resolution.incomplete = true
+    return []
+  }
   if (ts.isIdentifier(node)) {
     // Position-keyed, not text-keyed — see inspectClassExpr's identifier
     // marker for the shadowing rationale (nested-helper parameter-frame fix).
@@ -2812,25 +3146,46 @@ function resolveToObjects(node, ctx, stack, resolution = null) {
     if (!stack.has(marker)) {
       const next = new Set(stack).add(marker)
       const init = resolveIdentInit(node, ctx, next)
-      if (init && init !== LOOKUP_MISSING && init !== LOOKUP_UNBOUND) return resolveToObjects(init, ctx, next, resolution)
+      // Finite-const-array-callback capability (bullet 3): `o` in
+      // `STATUS_OPTIONS.filter(pred).map((o) => ({ ..., color: o.color }))`
+      // — `o`'s candidate objects are STATUS_OPTIONS' own (conservatively
+      // un-filtered) elements, each already an object literal.
+      if (isParameterBinding(init) && init.arrayElements && !init.reassigned) {
+        return init.arrayElements.flatMap(element => resolveToObjects(element, ctx, next, resolution, nullAllowed))
+      }
+      if (init && init !== LOOKUP_MISSING && init !== LOOKUP_UNBOUND) return resolveToObjects(init, ctx, next, resolution, nullAllowed)
     }
   }
-  if (ts.isConditionalExpression(node)) return [...resolveToObjects(node.whenTrue, ctx, stack, resolution), ...resolveToObjects(node.whenFalse, ctx, stack, resolution)]
-  if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken)) return [...resolveToObjects(node.left, ctx, stack, resolution), ...resolveToObjects(node.right, ctx, stack, resolution)]
+  if (ts.isConditionalExpression(node)) return [...resolveToObjects(node.whenTrue, ctx, stack, resolution, nullAllowed), ...resolveToObjects(node.whenFalse, ctx, stack, resolution, nullAllowed)]
+  if (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken)) return [...resolveToObjects(node.left, ctx, stack, resolution, nullAllowed), ...resolveToObjects(node.right, ctx, stack, resolution, nullAllowed)]
   if (ts.isCallExpression(node)) {
     const marker = `${node.getSourceFile().fileName}#object-call:${node.pos}`
     if (!stack.has(marker)) {
       const next = new Set(stack).add(marker)
       const framed = withCalleeFrame(node, ctx, next, (collected) => ({
         collected,
-        resolved: collected.flatMap(value => resolveToObjects(value, ctx, next, resolution)),
+        resolved: collected.flatMap(value => resolveToObjects(value, ctx, next, resolution, nullAllowed)),
       }))
       if (framed?.collected?.length) return framed.resolved
+      // Finite-const-array-.map()-derivation capability (bullet 3/BoardView
+      // col.headerColor): `COLUMNS = STATUS_ORDER.map((status) => ({...}))`
+      // — COLUMNS is not itself a literal array, so withCalleeFrame's
+      // local-FUNCTION-call resolution above never applies to it (its
+      // "callee" is a property access, `.map`, not an identifier). The
+      // candidate objects are exactly the callback's own return
+      // expressions — sound regardless of what the receiver array actually
+      // contains, because any FURTHER read off a returned object (e.g.
+      // `.headerColor` -> `STATUS_COLORS[status]`) independently re-proves
+      // itself through the ordinary resolution chain the moment it is
+      // inspected (the unprovable-dynamic-key enumeration fallback above,
+      // for instance, never needed `status`'s own value to begin with).
+      const derived = resolveDerivedMapElements(node)
+      if (derived) return derived.flatMap(value => resolveToObjects(value, ctx, next, resolution, nullAllowed))
     }
   }
   if (ts.isElementAccessExpression(node) || ts.isPropertyAccessExpression(node)) {
-    const targets = resolveMemberTargets(node, ctx, stack, resolution)
-    if (targets.length) return targets.flatMap(value => resolveToObjects(value, ctx, stack, resolution))
+    const targets = resolveMemberTargets(node, ctx, stack, resolution, nullAllowed)
+    if (targets.length) return targets.flatMap(value => resolveToObjects(value, ctx, stack, resolution, nullAllowed))
   }
   if (resolution) resolution.incomplete = true
   return []
@@ -2858,11 +3213,189 @@ function propertyInit(obj, name) {
   // (safe or unsafe) could silently be missed in either direction.
   let result = null
   for (const prop of obj.properties) {
+    if (ts.isShorthandPropertyAssignment(prop)) {
+      if (prop.name.text === name) result = prop.name
+      continue
+    }
     if (!ts.isPropertyAssignment(prop)) continue
     const key = propertyNameOf(prop.name)
     if (key === name) result = prop.initializer
   }
   return result
+}
+
+// ── Bullet 3: finite const-array callback elements ─────────────────────────
+
+const ARRAY_ENUMERATION_METHODS = new Set(['map', 'forEach', 'find', 'some', 'every'])
+// `.filter(predicate)` (ANY predicate) can only REMOVE elements from its
+// receiver, never add one — the same reasoning ARRAY_RECEIVER_PRESERVING_METHODS
+// already applies for a class-composing helper's own `.filter().join()`
+// chain. Chaining through it before a `.map()`/`.forEach()`/... enumeration
+// (`STATUS_OPTIONS.filter(pred).map((o) => ...)`) still leaves every
+// resulting element a genuine member of the ORIGINAL array — a conservative
+// superset of the filtered subset, safe to prove over in full.
+const ARRAY_NARROWING_METHODS = new Set(['filter'])
+
+// A never-reassigned, never-mutated, never-unsafely-exported `const` array
+// literal — the same escape/mutation guard standard this file already
+// applies to a finite record (knownClassExportUsesSafe), plus an array-
+// specific mutating-method scan mirroring composerParameterIsMutated's
+// (push/pop/splice/...) guard, generalized from a parameter name to a
+// top-level declaration name.
+function arrayLiteralIsStable(declaration, ctx) {
+  if (!knownClassExportUsesSafe(declaration, ctx)) return false
+  const name = declaration.name.text
+  let scope = declaration.parent
+  while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+  if (!scope) return true
+  let mutated = false
+  const visit = node => {
+    if (mutated || !node) return
+    if (ts.isIdentifier(node) && node.text === name && node !== declaration.name) {
+      const parent = node.parent
+      if (ts.isBinaryExpression(parent) && parent.left === node
+        && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) { mutated = true; return }
+      if (ts.isPropertyAccessExpression(parent) && parent.expression === node
+        && ARRAY_MUTATING_METHODS.has(parent.name.text)
+        && ts.isCallExpression(parent.parent) && parent.parent.expression === parent) { mutated = true; return }
+      if (ts.isElementAccessExpression(parent) && parent.expression === node
+        && ts.isBinaryExpression(parent.parent) && parent.parent.left === parent
+        && parent.parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) { mutated = true; return }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(scope)
+  return !mutated
+}
+
+// Resolves `expr` to the elements of a finite, stable const array literal,
+// optionally chained through one or more `.filter(...)` hops (which only
+// ever narrow). Returns null for anything else — runtime data (props,
+// state, a fetched array) is the user-authored-colour category, handled by
+// registration, not resolved here.
+function resolveStableArrayLiteralElements(expr, ctx, stack) {
+  expr = unwrap(expr)
+  if (ts.isIdentifier(expr)) {
+    const marker = `${expr.getSourceFile().fileName}#arraysrc:${expr.pos}`
+    if (stack.has(marker)) return null
+    const next = new Set(stack).add(marker)
+    const init = resolveIdentInit(expr, ctx, next)
+    if (POSITIONAL_UNSTABLE_INITS.has(init)) return null
+    if (!init || init === LOOKUP_MISSING || init === LOOKUP_UNBOUND) return null
+    const resolved = unwrap(init)
+    if (ts.isArrayLiteralExpression(resolved)) {
+      const declaration = resolved.parent
+      if (!ts.isVariableDeclaration(declaration) || declaration.initializer !== resolved) return null
+      if (!(declaration.parent.flags & ts.NodeFlags.Const)) return null
+      if (resolved.elements.some(element => ts.isSpreadElement(element) || ts.isOmittedExpression(element))) return null
+      if (!arrayLiteralIsStable(declaration, ctx)) return null
+      return resolved.elements
+    }
+    // BoardView.tsx's COLUMNS = STATUS_ORDER.map((status) => ({...})): the
+    // identifier's OWN initializer is a `.map()`-derivation, not a literal
+    // array — recurse into the SAME CallExpression handling below rather
+    // than failing closed, so `col` in `COLUMNS.map((col) => ...)` resolves
+    // two derivation hops deep exactly like a direct `X.map(cb)` would.
+    return resolveStableArrayLiteralElements(resolved, ctx, next)
+  }
+  if (ts.isCallExpression(expr)) {
+    const callee = unwrap(expr.expression)
+    if (!ts.isPropertyAccessExpression(callee)) return null
+    if (ARRAY_NARROWING_METHODS.has(callee.name.text)) return resolveStableArrayLiteralElements(callee.expression, ctx, stack)
+    // A `.map()`-derived array element (bullet 3 / BoardView col.headerColor):
+    // no array-literal mutation guard applies here at all — there is no
+    // `const X = [...]` literal to mutate in the first place, each element
+    // is a FRESH object literal the callback constructs; see
+    // resolveDerivedMapElements' own soundness note (mirrored in
+    // resolveToObjects' CallExpression branch) for why no further
+    // verification of the receiver is needed.
+    if (callee.name.text === 'map') return resolveDerivedMapElements(expr)
+    return null
+  }
+  return null
+}
+
+// `fn` is a callback whose FIRST parameter is bound at bindParams time —
+// resolves the finite, stable const-array elements it enumerates when `fn`
+// is passed directly as the sole relevant argument of `<array>.map(...)` /
+// `.forEach(...)` / `.find(...)` / `.some(...)` / `.every(...)`, chained
+// through any number of `.filter(...)` hops first.
+function resolveEnumerableArrayElements(fn, ctx) {
+  const call = fn.parent
+  if (!call || !ts.isCallExpression(call) || call.arguments[0] !== fn) return null
+  const callee = unwrap(call.expression)
+  if (!ts.isPropertyAccessExpression(callee) || !ARRAY_ENUMERATION_METHODS.has(callee.name.text)) return null
+  return resolveStableArrayLiteralElements(callee.expression, ctx, new Set())
+}
+
+// Graph-visuals derivation (bullet 4 / BoardView col.headerColor): `node` is
+// `<expr>.map(callback)` — resolves to the callback's own RETURN
+// expressions, regardless of what `<expr>` itself is. This is sound with no
+// further verification of `<expr>` needed: any read later extracted off one
+// of these returned objects (e.g. `.headerColor` -> `STATUS_COLORS[status]`)
+// independently re-proves itself through the ordinary resolution chain the
+// moment IT is inspected — an unresolvable nested read (e.g. a genuine
+// runtime `.map()` element's OWN parameter used directly) fails exactly as
+// closed as it would anywhere else in this file, because that parameter is
+// simply out of scope by the time a SEPARATE read site inspects it.
+function resolveDerivedMapElements(node) {
+  const callee = unwrap(node.expression)
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== 'map') return null
+  const callback = node.arguments[0]
+  if (!callback || !isFunctionLike(callback) || !callback.body) return null
+  return collectReturns(callback)
+}
+
+// Graph-visuals capability (bullet 4): recognizes `Object.fromEntries(
+// Object.keys(<source>).map((key) => [key, <templateValue>]))` — the exact
+// idiom `taskGraph.ts`'s STATUS_VISUALS uses to project one finite record
+// (STATUS_COLORS) into another, keyed identically. `<source>`'s own
+// identity does not matter (see resolveMemberTargets' call site comment);
+// only the STRUCTURAL shape is checked, and only a single, unambiguous
+// 2-element-tuple return per callback qualifies — anything else (multiple
+// differently-shaped returns, a spread/computed tuple) returns null and the
+// ordinary (unresolvable) path stays in charge.
+function resolveObjectFromEntriesRecord(node, ctx, stack) {
+  node = unwrap(node)
+  if (ts.isIdentifier(node)) {
+    // The receiver is usually an IDENTIFIER bound to the fromEntries call
+    // (`STATUS_VISUALS = Object.fromEntries(...)`), not the call itself —
+    // resolve through it the same way every other member-access receiver in
+    // this file does, one hop at a time (so `STATUS_VISUALS[status]` and,
+    // transitively, `statusVisual(status)`'s OWN `STATUS_VISUALS[...] ??
+    // STATUS_VISUALS.inbox` return both reach this recognizer).
+    const marker = `${node.getSourceFile().fileName}#fromentries:${node.pos}`
+    if (stack.has(marker)) return null
+    const next = new Set(stack).add(marker)
+    const init = resolveIdentInit(node, ctx, next)
+    if (!init || init === LOOKUP_MISSING || init === LOOKUP_UNBOUND || POSITIONAL_UNSTABLE_INITS.has(init)) return null
+    return resolveObjectFromEntriesRecord(init, ctx, next)
+  }
+  if (!ts.isCallExpression(node)) return null
+  const callee = unwrap(node.expression)
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression)
+    || callee.expression.text !== 'Object' || callee.name.text !== 'fromEntries') return null
+  const arg = node.arguments[0] ? unwrap(node.arguments[0]) : null
+  if (!arg || !ts.isCallExpression(arg)) return null
+  const mapCallee = unwrap(arg.expression)
+  if (!ts.isPropertyAccessExpression(mapCallee) || mapCallee.name.text !== 'map') return null
+  const keysReceiver = unwrap(mapCallee.expression)
+  if (!ts.isCallExpression(keysReceiver)) return null
+  const keysCallee = unwrap(keysReceiver.expression)
+  if (!ts.isPropertyAccessExpression(keysCallee) || !ts.isIdentifier(keysCallee.expression)
+    || keysCallee.expression.text !== 'Object' || keysCallee.name.text !== 'keys') return null
+  const entryCallback = arg.arguments[0]
+  if (!entryCallback || !isFunctionLike(entryCallback) || !entryCallback.body) return null
+  const returns = collectReturns(entryCallback)
+  if (!returns.length) return null
+  const values = []
+  for (const ret of returns) {
+    const tuple = unwrap(ret)
+    if (!ts.isArrayLiteralExpression(tuple) || tuple.elements.length < 2
+      || tuple.elements.some(element => ts.isSpreadElement(element) || ts.isOmittedExpression(element))) return null
+    values.push(tuple.elements[1])
+  }
+  return values
 }
 
 function isClassBuilderCall(node, ctx) {
@@ -3360,13 +3893,60 @@ function emitUnsupported(ctx, node) {
 }
 
 function emitExtensionBoundary(ctx, node, binding) {
+  // classBoundaryOwner/classBoundaryName stand in for ownerName/name ONLY
+  // when set (the class-like-parameter-forward and member-forward
+  // capabilities) — every other existing caller (plain className forward,
+  // style forward) passes a binding with neither field set and keeps
+  // reporting ownerName/name exactly as before.
+  const ownerName = binding.classBoundaryOwner ?? binding.ownerName
+  const name = binding.classBoundaryName ?? binding.name
   const start = binding.declaration.getStart(ctx.sourceFile, false)
   const declaration = ctx.sourceFile.getLineAndCharacterOfPosition(start)
   emit(ctx, node, {
     ruleId: 'ts-colors/extension-boundary',
-    syntax: `${binding.ownerName}#${binding.name}`,
-    message: `Unchanged ${binding.name} parameter forwarded from its declaration at ${declaration.line + 1}:${declaration.character + 1}; this remains blocking until its exact extension boundary is centrally reviewed.`,
+    syntax: `${ownerName}#${name}`,
+    message: `Unchanged ${name} parameter forwarded from its declaration at ${declaration.line + 1}:${declaration.character + 1}; this remains blocking until its exact extension boundary is centrally reviewed.`,
   })
+}
+
+// Renamed class-like parameter MEMBER forward (bullet 1): `item.className`,
+// `badge.className`, `iconProps?.className` — a bare/uniquely-bound
+// parameter's OWN `.className`/`.class` member, read unchanged. Distinct
+// from the plain-identifier forward above (which proves the IDENTIFIER
+// itself is an unchanged forwarded value): here only ONE MEMBER of the
+// parameter is read, so only the literal `className`/`class` key qualifies
+// — unlike a same-named parameter, an arbitrary property name carries no
+// naming signal that it is a CSS class at all (typography's
+// parameterMemberBoundary contract, ported verbatim).
+function classForwardMemberBoundary(node, ctx) {
+  const key = ts.isPropertyAccessExpression(node) ? node.name.text : elementAccessStringKey(node)
+  if (key !== 'className' && key !== 'class') return null
+  const base = unwrap(node.expression)
+  if (!ts.isIdentifier(base)) return null
+  const binding = lookup(ctx, base.text)
+  if (!isParameterBinding(binding) || binding.reassigned) return null
+  // Restricted to a parameter of an ANONYMOUS enclosing function (an
+  // array-callback element: `items.map((item) => ... item.className ...)`)
+  // — matching typography's own parameterMemberBoundary rationale
+  // ("ownerNameFor alone... does not resolve an anonymous callback"). A
+  // parameter of a NAMED component/function (`props` in `Box = (props) =>
+  // <div className={props.className} />`, `iconProps` in a named
+  // `RetryableState({ iconProps }) {...}`) is a DIFFERENT, lower-confidence
+  // shape this file already routes through the existing
+  // hasStableRuntimeParameterRoot -> unverified-governed-value path — a
+  // pinned fixture ("only a proven parameter member at a class sink
+  // becomes unverified governed debt") requires `props.className` to keep
+  // reporting THAT rule, never extension-boundary.
+  if (binding.ownerName !== 'anonymous') return null
+  const ownerName = binding.memberOwnerName
+  if (!ownerName || ownerName === 'anonymous') return null
+  return { ownerName, name: `${base.text}.${key}`, declaration: binding.declaration }
+}
+
+function elementAccessStringKey(node) {
+  if (!ts.isElementAccessExpression(node)) return null
+  const key = unwrap(node.argumentExpression)
+  return key && (ts.isStringLiteral(key) || ts.isNoSubstitutionTemplateLiteral(key)) ? key.text : null
 }
 
 function emitRuntimePaintBoundary(ctx, node, boundary) {
