@@ -182,6 +182,100 @@ export function Sheet({ widthClass }: { widthClass?: string }) {
   assert.equal(text, before)
 })
 
+// ── FIX-C regression: classifySpan's ConditionalExpression branch used to
+// treat a ternary as a bare `className` pass-through target without ever
+// checking that its true-branch template's own head/tail text was
+// whitespace-only, and without checking that the true branch referenced
+// `className` at all. Confirmed by review with a reproduction (dist/design-
+// system-baseline/cli-lanes/fanout/FIX-C/). Fixed 2026-09-20. ───────────────
+
+test('REFUSED (template-join): a ternary whose true branch concatenates a non-whitespace prefix onto `className` is never treated as a bare target (base${className ? `icon-${className}` : \'\'} shape)', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/PrefixConcat.tsx', `
+export function PrefixConcat({ className }: { className?: string }) {
+  return <div className={\`base\${className ? \`icon-\${className}\` : ''}\`} />
+}
+`)
+  const before = readFileSync(path, 'utf8')
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  // Before the fix this silently rewrote to clsx("base", className) — the
+  // "icon-" prefix vanished entirely, so className='foo' rendered "base foo"
+  // instead of "base icon-foo". It must now be refused or left unchanged,
+  // never rewritten — and it must not even be PARTIALLY rewritten (a naive
+  // fix that only fixes the ternary itself still lets the codemod's normal
+  // tree-walk descend into the ternary's own true branch and independently
+  // mis-rewrite the inner `` `icon-${className}` `` template on its own).
+  assert.equal(edits.length, 0, 'must not be rewritten at all, not even partially')
+  assert.equal(text, before, 'source must be byte-identical to the input')
+  assert.equal(refusals.length, 1)
+  assert.match(refusals[0].reason, /guarded ternary/)
+})
+
+test('REFUSED (template-join): a ternary whose true branch never references `className` at all is never treated as a target (className ? `fixed-icon` : \'\' shape)', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/NoReference.tsx', `
+export function NoReference({ className }: { className?: string }) {
+  return <div className={\`base \${className ? \`fixed-icon\` : ''}\`} />
+}
+`)
+  const before = readFileSync(path, 'utf8')
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  // Before the fix, `ts.isNoSubstitutionTemplateLiteral(whenTrue)` accepted
+  // ANY no-substitution template as the true branch — including one that
+  // never mentions `className` — so this rewrote to clsx("base",
+  // className), and className='foo' rendered "base foo" instead of the
+  // original "base fixed-icon".
+  assert.equal(edits.length, 0, 'must not be rewritten at all')
+  assert.equal(text, before, 'source must be byte-identical to the input')
+  assert.equal(refusals.length, 1)
+  assert.match(refusals[0].reason, /guarded ternary/)
+})
+
+test('MATCH (template-join): the ChatImage.tsx whitespace-head shape still rewrites (positive control for the FIX-C regression tests above)', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/chat/RealShapeChatImage.tsx', `
+export function RealShapeChatImage({ className }: { className?: string }) {
+  return <div className={\`relative group/chatimg inline-block\${className ? \` \${className}\` : ''}\`} />
+}
+`)
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  assert.equal(refusals.length, 0)
+  assert.ok(edits.some((e) => e.transform === 'template-join'))
+  assert.match(text, /className=\{clsx\("relative group\/chatimg inline-block", className\)\}/)
+  assert.doesNotMatch(text, /\bcn\(/)
+})
+
+test('EQUALITY (FIX-C): the ChatImage.tsx whitespace-head rewrite evaluates to the same class string as the original ternary, for className undefined/\'\'/\'foo\'', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/chat/EqualityChatImage.tsx', `
+export function EqualityChatImage({ className }: { className?: string }) {
+  return <div className={\`relative group/chatimg inline-block\${className ? \` \${className}\` : ''}\`} />
+}
+`)
+  const { edits, after: rewrittenSource } = planFileEdits(root, path)
+  assert.ok(edits.length > 0)
+
+  function original({ className } = {}) {
+    return `relative group/chatimg inline-block${className ? ` ${className}` : ''}`
+  }
+
+  const startIdx = rewrittenSource.indexOf('clsx(')
+  assert.notEqual(startIdx, -1)
+  let depth = 0
+  let endIdx = -1
+  for (let i = startIdx + 'clsx'.length; i < rewrittenSource.length; i++) {
+    if (rewrittenSource[i] === '(') depth++
+    else if (rewrittenSource[i] === ')') { depth--; if (depth === 0) { endIdx = i; break } }
+  }
+  assert.notEqual(endIdx, -1)
+  const rewrittenExprSource = rewrittenSource.slice(startIdx, endIdx + 1)
+
+  for (const className of [undefined, '', 'foo']) {
+    const rewritten = new Function('clsx', 'className', `return ${rewrittenExprSource}`)(clsxImport, className)
+    assert.equal(rewritten, original({ className }), `expected identical output for className=${JSON.stringify(className)}`)
+  }
+})
+
 // ── Transform B: CVA-ARG-SPLIT ──────────────────────────────────────────
 
 test('MATCH (cva-arg-split): className folded into a cva()-produced call inside cn() (button.tsx shape)', () => {

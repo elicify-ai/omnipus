@@ -226,11 +226,47 @@ function classNameParameterProof(identifier, paramName) {
 
 // ── Transform A: TEMPLATE-JOIN ──────────────────────────────────────────
 
+/** True for source text that is empty, or contains only whitespace — the bar
+ * a template's own head/tail literal text must clear before it can be
+ * silently dropped by treating the template as a bare pass-through of its
+ * one interpolated span (see `classifySpan`'s ConditionalExpression branch
+ * and its doc comment below). Non-whitespace head/tail text means the
+ * template is building a COMPOUND token (e.g. `` `icon-${className}` `` ->
+ * "icon-foo"), not a space-joined class list — `clsx` would insert a space
+ * clsx-side that the original concatenation never had, corrupting the class
+ * name. Fix: dist/design-system-baseline/cli-lanes/fanout/FIX-C/. */
+function isWhitespaceOnlyText(text) {
+  return /^\s*$/.test(text)
+}
+
+/** True when `node` is the bare `paramName` identifier — used both for a
+ * ternary's true branch (`className ? className : ''`, degenerate but
+ * legal) and, via the caller, for the plain-reference branch below. */
+function isBareParamIdentifier(node, paramName) {
+  return ts.isIdentifier(node) && node.text === paramName
+}
+
 /** Classifies one template span's expression against `paramName`: returns
  * `{ kind: 'target' }` when it IS (bare / `?? ''` / ternary-guarded) the
  * className reference, else `{ kind: 'other', node, text }` — `node` is the
  * unwrapped expression itself (used by `needsTemplateShell` below to decide
- * whether it must be re-wrapped), `text` its verbatim source text. */
+ * whether it must be re-wrapped), `text` its verbatim source text.
+ *
+ * The ConditionalExpression branch used to accept ANY solo-span template (or
+ * even a bare `` `literal` `` with NO span at all — `whenTrue` never checked
+ * for a `className` reference) as a pass-through target, and never checked
+ * that the template's own head/tail literal text was whitespace-only. That
+ * silently dropped real content: `` `base${className ? `icon-${className}` :
+ * ''}` `` rewrote to `clsx("base", className)` (dropping the "icon-" prefix
+ * entirely — className='foo' rendered "base foo" instead of "base
+ * icon-foo"), and `className ? `fixed-icon` : ''` — whose true branch never
+ * even references `className` — became a target too. Fixed per lead review
+ * 2026-09-20 (dist/design-system-baseline/cli-lanes/fanout/FIX-C/): a
+ * ternary only counts as a target when the true branch is the bare `paramName`
+ * identifier, OR a template whose single span is exactly `paramName` AND
+ * whose head and tail (the span's own trailing literal) are both
+ * whitespace-only — the same standard a plain (non-ternary) solo-span
+ * template must already satisfy to be safely absorbed as one bare argument. */
 function classifySpan(expr, sourceFile, paramName) {
   const unwrapped = unwrapParens(expr)
   if (ts.isIdentifier(unwrapped) && unwrapped.text === paramName) return { kind: 'target', node: unwrapped }
@@ -245,13 +281,34 @@ function classifySpan(expr, sourceFile, paramName) {
     const whenFalse = unwrapParens(unwrapped.whenFalse)
     const conditionIsParam = ts.isIdentifier(condition) && condition.text === paramName
     const falseIsEmpty = ts.isStringLiteralLike(whenFalse) && whenFalse.text === ''
+    const trueIsBareParam = isBareParamIdentifier(whenTrue, paramName)
     const trueIsSoloTemplate = (
-      (ts.isNoSubstitutionTemplateLiteral(whenTrue)) ||
-      (ts.isTemplateExpression(whenTrue) && whenTrue.templateSpans.length === 1 &&
-        ts.isIdentifier(unwrapParens(whenTrue.templateSpans[0].expression)) &&
-        unwrapParens(whenTrue.templateSpans[0].expression).text === paramName)
+      ts.isTemplateExpression(whenTrue) && whenTrue.templateSpans.length === 1 &&
+      ts.isIdentifier(unwrapParens(whenTrue.templateSpans[0].expression)) &&
+      unwrapParens(whenTrue.templateSpans[0].expression).text === paramName &&
+      isWhitespaceOnlyText(whenTrue.head.text) &&
+      isWhitespaceOnlyText(whenTrue.templateSpans[0].literal.text)
     )
-    if (conditionIsParam && falseIsEmpty && trueIsSoloTemplate) return { kind: 'target', node: condition }
+    if (conditionIsParam && falseIsEmpty && (trueIsBareParam || trueIsSoloTemplate)) return { kind: 'target', node: condition }
+    // A ternary that structurally GUARDS `className` (its condition is the
+    // bare identifier and its false branch is empty) but whose true branch
+    // fails the check above must not be silently treated as an ordinary
+    // "other" span: `false-example-1`'s true branch is itself a template
+    // (`` `icon-${className}` ``) that, walked into independently by the
+    // caller's normal tree recursion, would separately satisfy the PLAIN
+    // bare-identifier branch above (its span's expression is a bare
+    // `className` reference) even though its own head text ("icon-") is not
+    // whitespace-only — reproducing the exact corruption this fix exists to
+    // close one recursion level down instead of at the ternary itself. This
+    // distinct `kind` tells the caller (`planTemplateJoinRewrites`) to refuse
+    // outright and NOT descend into this ternary's subtree.
+    if (conditionIsParam && falseIsEmpty) {
+      return {
+        kind: 'ambiguous-guard',
+        node: unwrapped,
+        reason: `\`${paramName}\`-guarded ternary's true branch is neither the bare \`${paramName}\` identifier nor a template whose single span is exactly \`${paramName}\` with whitespace-only head/tail`,
+      }
+    }
   }
   return { kind: 'other', node: unwrapped, text: unwrapped.getText(sourceFile) }
 }
@@ -326,6 +383,18 @@ function planTemplateJoinRewrites(repoRoot, filePath, text, paramName = 'classNa
       const locStr = `${relative(repoRoot, filePath)}:${loc.line + 1}:${loc.character + 1}`
 
       const classified = node.templateSpans.map((span) => classifySpan(span.expression, source, paramName))
+      const ambiguousGuard = classified.find((c) => c.kind === 'ambiguous-guard')
+      if (ambiguousGuard) {
+        // Refuse the WHOLE template and do not recurse into it: an
+        // ambiguous-guard span's own subtree (its true/false branches) can
+        // itself contain a template that would independently, and wrongly,
+        // satisfy a plain target match one recursion level down (see
+        // `classifySpan`'s doc comment) — stopping here, rather than falling
+        // through to the `targets.length === 0` "other" path below, is what
+        // keeps that nested content from being torn out on its own.
+        refusals.push({ file: relative(repoRoot, filePath), loc: locStr, syntax: outer.getText(source), reason: ambiguousGuard.reason })
+        return
+      }
       const targets = classified.filter((c) => c.kind === 'target')
       if (targets.length === 0) { ts.forEachChild(node, visit); return }
       if (targets.length > 1) {
