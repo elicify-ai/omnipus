@@ -1210,3 +1210,138 @@ describe('nested custom-property text utility classification', () => {
     })
   }
 })
+
+// ---------------------------------------------------------------------------
+// Array-callback property read: `ARRAY.filter(...).map((item) => ... item.prop
+// ...)`. Closes TaskDetailPanel.tsx's `STATUS_OPTIONS.filter((o) => ...).map((o)
+// => ({ ..., className: cn('text-xs', o.color) }))` — `o.color` is a property
+// read off a `.map()` callback's own parameter, whose finite set of possible
+// values is exactly the never-mutated const array's own element `.color`
+// values (arrayBindingUsesSafe/resolveArrayCallbackPropertyAccess in
+// typography.mjs). Clean values use the registered `--color-primary` token
+// (parity with the rest of this file); the forbidden value is the same
+// sub-floor `text-[10px]` used throughout.
+describe('capability: array-callback property read (STATUS_OPTIONS.filter(...).map((o) => o.color))', () => {
+  it('PERMITTED: a local never-mutated const array read via .map((item) => item.prop) resolves to its clean element values', () => {
+    expectClean(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }, { id: 'b', color: 'text-[var(--color-primary)]' }]\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+    )
+  })
+
+  it('PERMITTED: the same read through a leading .filter(...) (the real STATUS_OPTIONS shape) resolves clean', () => {
+    expectClean(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }, { id: 'b', color: 'text-[var(--color-primary)]' }]\n" +
+      "export function C({ id }) { return OPTIONS.filter((o) => o.id === id).map((o) => <i key={o.id} className={o.color} />) }",
+    )
+  })
+
+  it('FORBIDDEN: a real sub-floor violation living in one element still surfaces', () => {
+    expectOne(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }, { id: 'b', color: 'text-[10px]' }]\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/arbitrary-text-size',
+      'text-[10px]',
+    )
+  })
+
+  it('PERMITTED: an imported never-mutated const array resolves through the same capability', () => {
+    const modules = {
+      'src/options.ts': "export const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]",
+    }
+    expectClean(
+      "import { OPTIONS } from './options'\nexport function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      { modules },
+    )
+  })
+
+  it('mutation proof: a .push() anywhere on the array keeps the read unsupported', () => {
+    expectOne(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "OPTIONS.push({ id: 'b', color: 'text-[var(--color-primary)]' })\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('mutation proof: .sort() anywhere on the array keeps the read unsupported', () => {
+    expectOne(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "OPTIONS.sort()\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('mutation proof: a direct index assignment keeps the read unsupported', () => {
+    expectOne(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "OPTIONS[0] = { id: 'a', color: 'text-[10px]' }\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('mutation proof: the .map() callback writing through its own parameter keeps the read unsupported', () => {
+    expectOne(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "export function C() { return OPTIONS.map((o) => { o.color = 'text-[10px]'; return <i key={o.id} className={o.color} /> }) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('mutation proof: a .find() result aliased into a const and mutated keeps the array unsupported', () => {
+    expectOne(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "const found = OPTIONS.find((o) => o.id === 'a')\nif (found) found.color = 'text-[10px]'\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('mutation proof: an exported array mutated by a downstream importer keeps the read unsupported', () => {
+    const modules = {
+      'src/options.ts': "export const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]",
+      'src/writer.ts': "import { OPTIONS } from './options'\nOPTIONS.push({ id: 'b', color: 'text-[10px]' })",
+    }
+    expectOne(
+      "import { OPTIONS } from './options'\nexport function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+      { modules },
+    )
+  })
+
+  it('mutation proof: a `let` array is not trusted like a const literal', () => {
+    expectOne(
+      "let OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('mutation proof: a spread element in the array keeps the read unsupported', () => {
+    expectOne(
+      "const BASE = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "const OPTIONS = [...BASE, { id: 'b', color: 'text-[10px]' }]\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('mutation proof: a spread property inside an element keeps the read unsupported', () => {
+    expectOne(
+      "const EXTRA = { color: 'text-[10px]' }\n" +
+      "const OPTIONS = [{ id: 'a', ...EXTRA }]\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it('a .find() result read inline (never aliased) does not itself block the array — parity control for taskStatusConfig.ts\'s statusLabel-style read', () => {
+    expectClean(
+      "const OPTIONS = [{ id: 'a', color: 'text-[var(--color-primary)]' }]\n" +
+      "function label(id) { return OPTIONS.find((o) => o.id === id)?.color ?? id }\n" +
+      "export function C() { return OPTIONS.map((o) => <i key={o.id} className={o.color} />) }",
+    )
+  })
+})

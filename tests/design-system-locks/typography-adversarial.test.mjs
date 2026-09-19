@@ -1263,3 +1263,56 @@ describe('capability: an exported LOCAL record mutated by a downstream importer 
     expectClean(pSource, { path: P_PATH, policy: MODULE_POLICY, modules: Object.freeze({ [P_PATH]: pSource }) })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Array-callback property read, structural edge cases — TaskDetailPanel.tsx's
+// `STATUS_OPTIONS.filter(...).map((o) => o.color)` capability
+// (resolveArrayCallbackPropertyAccess/arrayBindingUsesSafe in typography.mjs).
+// The core PERMITTED/FORBIDDEN/mutation-proof set lives in
+// tests/design-system-locks/typography.test.mjs; these three probe the exact
+// boundary of the structural match itself — deliberately narrow, since
+// ChipListInput.tsx's chipClassName/chipRemoveClassName (same lane) proved a
+// nested `.map()` closure one function deeper than the declaring scope is a
+// real, common shape this capability must NOT silently over-trust.
+// ---------------------------------------------------------------------------
+
+describe('capability: array-callback property read — structural boundary', () => {
+  const ARRAY_POLICY = { tokenCssNames: ['--color-x'], resolvedTokens: {} }
+  const CLEAN = "text-[var(--color-x)]"
+
+  function arrayFindings(source, options) {
+    return scan({ path: 'src/fixture.tsx', source, policy: ARRAY_POLICY, ...options })
+  }
+  function arrayExpectClean(source, options) {
+    assert.deepEqual(arrayFindings(source, options).map((f) => `${f.ruleId} ${f.syntax}`), [])
+  }
+  function arrayExpectOne(source, ruleId, syntax, options) {
+    const found = arrayFindings(source, options)
+    assert.equal(found.length, 1, `expected exactly one finding, got: ${JSON.stringify(found, null, 2)}`)
+    assert.equal(found[0].ruleId, ruleId)
+    assert.equal(found[0].syntax, syntax)
+  }
+
+  it('PERMITTED: a plain function-expression .map() callback resolves exactly like an arrow function', () => {
+    arrayExpectClean(
+      `const OPTIONS = [{ id: 'a', color: '${CLEAN}' }]\n` +
+      "export function C() { return OPTIONS.map(function (o) { return <i key={o.id} className={o.color} /> }) }",
+    )
+  })
+
+  it('FORBIDDEN: the .map() callback parameter reassigned in its own body keeps the read unsupported', () => {
+    arrayExpectOne(
+      `const OPTIONS = [{ id: 'a', color: '${CLEAN}' }]\n` +
+      "export function C() { return OPTIONS.map((o) => { o = { id: o.id, color: o.color }; return <i key={o.id} className={o.color} /> }) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+
+  it("FORBIDDEN: o.color read from a closure NESTED one function deeper than the .map() callback itself stays unsupported (ChipListInput's pre-hoist shape, ported)", () => {
+    arrayExpectOne(
+      `const OPTIONS = [{ id: 'a', color: '${CLEAN}' }]\n` +
+      "export function C() { return OPTIONS.map((o) => (() => <i key={o.id} className={o.color} />)()) }",
+      'typography/unsupported-text-utility', 'o.color',
+    )
+  })
+})

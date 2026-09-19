@@ -1037,8 +1037,22 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
       // fixture: "keeps body-destructured forwarding with unproven
       // provenance unsupported"), `let` bindings and non-class-like
       // properties keep unsupported.
+      // A name bound directly in the function's OWN parameter list — either
+      // a plain parameter (`function f(props)`) or an element destructured
+      // right there (`({ containerProps }, ref) => ...`, table.tsx's Table)
+      // — carries the identical unchanged-caller-value guarantee either way;
+      // only a REST element (`...rest`) is excluded, since it is a freshly
+      // assembled object of whatever properties remain, not itself a single
+      // named caller-supplied value.
       const parameterNames = new Set()
-      for (const parameter of fn.parameters) if (ts.isIdentifier(parameter.name)) parameterNames.add(parameter.name.text)
+      for (const parameter of fn.parameters) {
+        if (ts.isIdentifier(parameter.name)) parameterNames.add(parameter.name.text)
+        else if (ts.isObjectBindingPattern(parameter.name)) {
+          for (const element of parameter.name.elements) {
+            if (ts.isBindingElement(element) && !element.dotDotDotToken && ts.isIdentifier(element.name)) parameterNames.add(element.name.text)
+          }
+        }
+      }
       let scope = identifier.parent
       while (scope && scope !== fn) {
         if (ts.isBlock(scope)) {
@@ -1592,6 +1606,12 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
           walkClassExpression(resolved, sink)
           return
         }
+        const arrayCallback = resolveArrayCallbackPropertyAccess(node)
+        if (arrayCallback) {
+          if (arrayCallback.unprovable) { emitUnsupported(node, sink); return }
+          arrayCallback.values.forEach((value) => walkClassExpression(value, sink))
+          return
+        }
         emitUnsupported(node, sink)
         return
       }
@@ -1886,6 +1906,112 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
       else return null
     }
     return values
+  }
+
+  // Resolves the finite array of object-literal elements a class-carrying
+  // `X.map((item) => ... item.prop ...)` maps over — `X` itself, or `X`
+  // after unwrapping a leading `.filter(predicate)`/`.slice(...)` (neither
+  // changes an element's own shape, only which/how many elements survive) —
+  // to a top-level/lexical const-bound, or imported, ARRAY literal (the
+  // array-shaped counterpart of resolveRecordObjectLiteral above; same
+  // never-mutated/no-spread/derived-value-escape safety discipline, ported
+  // for TaskDetailPanel.tsx's `STATUS_OPTIONS.filter(...).map((o) => ({
+  // ..., className: cn('text-xs', o.color) }))`). Returns null (fail closed)
+  // for anything not provably one of these shapes.
+  function resolveArrayLiteral(node) {
+    const unwrapped = unwrapStatic(node)
+    if (!unwrapped) return null
+    if (ts.isCallExpression(unwrapped) && ts.isPropertyAccessExpression(unwrapped.expression)
+      && (unwrapped.expression.name.text === 'filter' || unwrapped.expression.name.text === 'slice')) {
+      return resolveArrayLiteral(unwrapped.expression.expression)
+    }
+    if (!ts.isIdentifier(unwrapped)) return null
+    if (duplicateBindings.has(unwrapped.text) || hasMultipleVariableDeclarations(sourceFile, unwrapped.text)) return null
+    const lexical = findLexicalBinding(unwrapped, unwrapped.text)
+    const localValue = lexical?.initializer ?? (bindings.has(unwrapped.text) ? bindings.get(unwrapped.text) : null)
+    const local = localValue ? unwrapStatic(localValue) : null
+    if (local && ts.isArrayLiteralExpression(local)) {
+      const localDeclaration = lexical?.declaration ?? topLevelConstDeclaration(unwrapped.text)
+      // Array-specific never-mutated proof (see arrayBindingUsesSafe's own
+      // doc comment) — NOT absenceBindingUsesSafe/derivedValueEscapeSafe,
+      // which are correct for a RECORD but fail on ordinary array reads
+      // (.filter()/.map()/.find()).
+      if (!localDeclaration || !arrayBindingUsesSafe(localDeclaration)) return null
+      return local
+    }
+    const importedDecl = importedDeclaration(unwrapped, moduleContext)
+    if (importedDecl && ts.isVariableDeclaration(importedDecl) && importedDecl.initializer
+      && (importedDecl.parent.flags & ts.NodeFlags.Const) && arrayBindingUsesSafe(importedDecl)) {
+      const imported = unwrapStatic(importedDecl.initializer)
+      if (imported && ts.isArrayLiteralExpression(imported)
+        && exportNeverMutatedByImporters(importedDecl, moduleContext, null, arrayBindingUsesSafe)) return imported
+    }
+    return null
+  }
+
+  // Every value `key` can hold across a finite, never-mutated const array's
+  // elements — rejecting a spread anywhere (the array itself or an element)
+  // and any element that is not a plain object literal, the same
+  // fail-closed discipline as resolveRecordObjectLiteral's record leaves. A
+  // missing key on an element is safe only when absenceValue proves it
+  // (LEAD DECISION parity with resolveProvenPropertyAccess).
+  function arrayElementPropertyValues(arrayLiteral, key) {
+    if (arrayLiteral.elements.some((element) => ts.isSpreadElement(element))) return null
+    const values = []
+    for (const element of arrayLiteral.elements) {
+      const item = unwrapStatic(element)
+      if (!item || !ts.isObjectLiteralExpression(item) || item.properties.some((property) => ts.isSpreadAssignment(property))) return null
+      const property = item.properties.find((candidate) => propertyKeyName(candidate) === key)
+      if (!property) {
+        if (!absenceValue(item, key)) return null
+        continue
+      }
+      if (ts.isPropertyAssignment(property)) values.push(property.initializer)
+      else if (ts.isShorthandPropertyAssignment(property)) values.push(property.name)
+      else return null
+    }
+    return values
+  }
+
+  // `item.prop` (or `item['prop']`) read off the SOLE parameter of an arrow
+  // function that is itself, structurally, the callback argument of a
+  // `.map(...)` call whose receiver resolves via resolveArrayLiteral —
+  // TaskDetailPanel.tsx's `o.color` inside `STATUS_OPTIONS.filter(...).map((o)
+  // => ({ ..., className: cn('text-xs', o.color) }))`. Narrow and
+  // structural, mirroring forwardedClassBoundary's own shape/reassignment
+  // discipline: the identifier must be the callback's own parameter (not a
+  // same-named shadow), the callback must be the literal first argument of
+  // the `.map()` call it is nested in, and the parameter must never be
+  // reassigned in the callback body before this read.
+  function resolveArrayCallbackPropertyAccess(node) {
+    const key = ts.isPropertyAccessExpression(node) ? node.name.text
+      : node.argumentExpression && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
+        ? node.argumentExpression.text : null
+    if (key === null) return null
+    const base = unwrapStatic(node.expression)
+    if (!base || !ts.isIdentifier(base)) return null
+    let fn = base.parent
+    while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+    if (!fn || fn.parameters.length !== 1) return null
+    const parameter = fn.parameters[0]
+    if (!ts.isIdentifier(parameter.name) || parameter.name.text !== base.text) return null
+    if (plainDeclarationShadows(base, fn)) return null
+    const callExpression = fn.parent
+    if (!callExpression || !ts.isCallExpression(callExpression) || callExpression.arguments[0] !== fn) return null
+    if (!ts.isPropertyAccessExpression(callExpression.expression) || callExpression.expression.name.text !== 'map') return null
+    let reassigned = false
+    function check(current) {
+      if (ts.isBinaryExpression(current) && ts.isIdentifier(current.left) && current.left.text === base.text
+        && current.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts.SyntaxKind.LastAssignment) reassigned = true
+      current.forEachChild(check)
+    }
+    if (fn.body) check(fn.body)
+    if (reassigned) return null
+    const array = resolveArrayLiteral(callExpression.expression.expression)
+    if (!array) return null
+    const values = arrayElementPropertyValues(array, key)
+    if (!values) return { unprovable: true }
+    return { unprovable: false, values }
   }
 
   // A body-level destructured local — `const { x } = <expr>` — bound to a
@@ -2763,7 +2889,8 @@ function dynamicImportProvenNotOrigin(modulePath, argument, origin) {
 // never-reassigned import specifier can escape into a container/call/
 // return/reassignment in the IMPORTER's own scope exactly as it can in the
 // exporting module's scope.
-function exportNeverMutatedByImporters(declaration, context, containers = null) {
+function exportNeverMutatedByImporters(declaration, context, containers = null, usesSafeCheck = null) {
+  const usesSafe = usesSafeCheck ?? ((specifier) => absenceBindingUsesSafe(specifier, false, true))
   const statement = declaration.parent?.parent
   if (!statement || !ts.isVariableStatement(statement)) return false
   if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return true
@@ -2786,7 +2913,7 @@ function exportNeverMutatedByImporters(declaration, context, containers = null) 
       if (clause.name || (named && !ts.isNamedImports(named))) return false
       if (named) for (const specifier of named.elements) {
         if (specifier.isTypeOnly || (specifier.propertyName?.text ?? specifier.name.text) !== declaration.name.text) continue
-        if (!absenceBindingUsesSafe(specifier, false, true) || (containers && !derivedValueEscapeSafe(specifier, containers))) return false
+        if (!usesSafe(specifier) || (containers && !derivedValueEscapeSafe(specifier, containers))) return false
       }
     }
     let dynamic = false
@@ -3235,6 +3362,154 @@ function destructuredPatternUsesSafe(pattern) {
     if (!absenceBindingUsesSafe(element, false, true)) return false
   }
   return true
+}
+
+// ---------------------------------------------------------------------------
+// Array never-mutated proof (TaskDetailPanel.tsx's `STATUS_OPTIONS.filter(
+// (o) => ...).map((o) => ({ ..., className: cn('text-xs', o.color) }))`).
+//
+// absenceBindingUsesSafe above treats ANY direct method call on the binding
+// as suspect — sound for a RECORD (a bare object literal calling a method on
+// itself is unusual), but wrong for an ARRAY: `.filter()/.map()/.find()` are
+// the ordinary, constant way to read one, and treating every such call as
+// unproven would make this proof fail on nearly every real array. This is a
+// dedicated, Array.prototype-aware counterpart, not a patch to the shared
+// proof (zero risk to every existing record-shaped caller).
+//
+// Two independent risks, both must be ruled out for every reference to the
+// array binding, across its own declaring module AND every importer
+// (exportNeverMutatedByImporters call sites below thread this in via its
+// usesSafeCheck parameter):
+//   1. A call to a genuinely mutating method (push/pop/shift/unshift/
+//      splice/sort/reverse/fill/copyWithin — ts-colors.mjs's
+//      ARRAY_MUTATING_METHODS documents the same split) or a direct index/
+//      length assignment.
+//   2. A callback-taking method (filter/map/flatMap/find/findIndex/
+//      findLast/findLastIndex/some/every/forEach) whose callback WRITES
+//      through its own element parameter (`o.color = 'x'`) — every element
+//      it receives is the SAME live object the array holds, not a copy.
+//   3. A method that can hand back one of the array's ORIGINAL element
+//      objects by reference (find/findLast/at/slice/concat, or a plain
+//      `arr[i]` read) escaping into a binding this proof no longer tracks
+//      (a `const`/`let`, a call argument, a container literal) rather than
+//      being read-and-discarded in the same expression — mirrors
+//      derivedValueEscapeSafe's "must be aliased into a re-provable const,
+//      or it is unsafe" discipline, but inverted: an array read has nothing
+//      further to prove as long as it is NEVER aliased at all.
+const ARRAY_MUTATING_METHODS = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin'])
+// Never mutates, never returns/leaks an original element reference —
+// findIndex/findLastIndex return an index (number), not the element.
+const ARRAY_NON_EXTRACTING_SAFE_METHODS = new Set(['some', 'every', 'includes', 'indexOf', 'lastIndexOf', 'findIndex', 'findLastIndex', 'join', 'forEach'])
+// Returns (or can return) one or more of the array's ORIGINAL element
+// objects by reference — safe only when never aliased (see risk 3 above).
+const ARRAY_EXTRACTING_SAFE_METHODS = new Set(['filter', 'map', 'flatMap', 'slice', 'concat', 'find', 'findLast', 'at'])
+const ARRAY_CALLBACK_TAKING_METHODS = new Set(['filter', 'map', 'flatMap', 'find', 'findIndex', 'findLast', 'findLastIndex', 'some', 'every', 'forEach'])
+
+// True when `callback` (the method call's first argument) never writes
+// through its own first parameter — the exact same reassignment/member-write
+// discipline forwardedClassBoundary's `check()` already applies to a
+// forwarded className parameter, here guarding an array element instead.
+function arrayCallbackParameterNeverWritten(callback) {
+  if (!callback || !ts.isFunctionLike(callback) || callback.parameters.length === 0) return true
+  const parameter = callback.parameters[0]
+  if (!ts.isIdentifier(parameter.name)) return true // a destructured element param reads only, never mutates the receiver by member-write
+  const name = parameter.name.text
+  let mutated = false
+  function visit(node) {
+    if (mutated || !node) return
+    if (ts.isIdentifier(node) && node.text === name && node !== parameter.name) {
+      const parent = node.parent
+      if (ts.isBinaryExpression(parent) && parent.left === node
+        && parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) { mutated = true; return }
+      if (ts.isDeleteExpression(parent) || ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) { mutated = true; return }
+      if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === node) {
+        const grandparent = parent.parent
+        if (ts.isBinaryExpression(grandparent) && grandparent.left === parent
+          && grandparent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && grandparent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) { mutated = true; return }
+        if (ts.isDeleteExpression(grandparent)) { mutated = true; return }
+      }
+      if (ts.isCallExpression(parent) && parent.expression === node) { mutated = true; return } // calling the element itself — unprovable
+    }
+    node.forEachChild(visit)
+  }
+  if (callback.body) visit(callback.body)
+  return !mutated
+}
+
+// True when `node` (a call/element-access that can return one of the
+// array's original elements) is read-and-discarded in the same expression —
+// never assigned to a `const`/`let`, handed to an arbitrary call as an
+// argument, or folded into a container literal — climbing past `??`/`||`/
+// ternary branches and parens first, since none of those persist a value
+// anywhere on their own.
+function arrayResultConsumedImmediately(node) {
+  let current = node
+  while (current.parent && (
+    (ts.isBinaryExpression(current.parent) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(current.parent.operatorToken.kind) && current.parent.left === current)
+    || (ts.isConditionalExpression(current.parent) && (current.parent.whenTrue === current || current.parent.whenFalse === current))
+    || ts.isParenthesizedExpression(current.parent)
+  )) current = current.parent
+  const consumer = current.parent
+  if (!consumer) return true
+  if (ts.isVariableDeclaration(consumer) && consumer.initializer === current) return false
+  if (ts.isBinaryExpression(consumer) && consumer.left === current
+    && consumer.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && consumer.operatorToken.kind <= ts.SyntaxKind.LastAssignment) return false
+  if (ts.isCallExpression(consumer) && consumer.arguments.includes(current)) return false
+  if (ts.isPropertyAssignment(consumer) || ts.isShorthandPropertyAssignment(consumer) || ts.isSpreadAssignment(consumer) || ts.isSpreadElement(consumer)) return false
+  if (ts.isArrayLiteralExpression(consumer) || ts.isObjectLiteralExpression(consumer)) return false
+  return true
+}
+
+// The array-aware counterpart of absenceBindingUsesSafe: every reference to
+// `declaration`'s name in its enclosing scope must be one of the proven-safe
+// shapes above. Unrecognized syntax (destructuring, spread, `for...of`, a
+// detached method reference never called, calling the array itself) is not
+// chased further and fails closed, same posture as every other proof in
+// this file.
+function arrayBindingUsesSafe(declaration) {
+  if (!declaration.name || !ts.isIdentifier(declaration.name)) return false
+  const name = declaration.name.text
+  let scope = declaration.parent
+  while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+  if (!scope) return false
+  let safe = true
+  function visit(node) {
+    if (!safe) return
+    if (ts.isIdentifier(node) && node.text === name && node !== declaration.name) {
+      const parent = node.parent
+      if (ts.isImportSpecifier(parent) && parent === declaration) return
+      if (isJsxTagName(node)) return
+      if (ts.isPropertyAccessExpression(parent) && parent.expression === node) {
+        const method = parent.name.text
+        if (method === 'length') {
+          const grandparent = parent.parent
+          if (ts.isBinaryExpression(grandparent) && grandparent.left === parent
+            && grandparent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && grandparent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) { safe = false; return }
+          return
+        }
+        const call = parent.parent
+        if (!ts.isCallExpression(call) || call.expression !== parent) { safe = false; return }
+        if (ARRAY_MUTATING_METHODS.has(method)) { safe = false; return }
+        const callback = ARRAY_CALLBACK_TAKING_METHODS.has(method) ? call.arguments[0] : null
+        if (callback && !arrayCallbackParameterNeverWritten(callback)) { safe = false; return }
+        if (ARRAY_NON_EXTRACTING_SAFE_METHODS.has(method)) return
+        if (ARRAY_EXTRACTING_SAFE_METHODS.has(method)) { if (!arrayResultConsumedImmediately(call)) { safe = false; return } return }
+        safe = false
+        return
+      }
+      if (ts.isElementAccessExpression(parent) && parent.expression === node) {
+        const grandparent = parent.parent
+        if (ts.isBinaryExpression(grandparent) && grandparent.left === parent
+          && grandparent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && grandparent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) { safe = false; return }
+        if (!arrayResultConsumedImmediately(parent)) { safe = false; return }
+        return
+      }
+      safe = false
+    }
+    node.forEachChild(visit)
+  }
+  visit(scope)
+  return safe
 }
 
 // A receiver may only be read through properties; a factory may only be
