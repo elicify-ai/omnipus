@@ -1,48 +1,113 @@
 {
   "version": 1,
-  "description": "Lead ownership decisions for the design-system debt ledger builder (scripts/design-system/ledger-build.mjs, loaded by loadDecisions()). Each decision assigns an owner and a repair checkpoint to fingerprints that would otherwise be unresolved — a path with no lane in design-system/surfaces.json, or no matching entry in RULE_CHECKPOINT. Decisions are tried in array order; the first match wins. A path already resolved by lane ownership or classified as a runtime extension-boundary rule never reaches this list. Schema per decision: name (string, required) human-readable label used in reporting and in the ledger entry's \"owner\" string; type (string, required) one of \"catalogClassification\" | \"exactPaths\"; checkpoint (string, required) one of ledger.schema.json's expiryCheckpoint enum (A, B, C1, C2, C3, C4, C5, C6) — the repair batch this decision's entries are due in; owner (string, required) ownership label — a matched ledger entry's \"owner\" field is \"<checkpoint> <owner>\"; classifications (string array, required when type=catalogClassification) matches a finding when design-system/catalog.json has an entry for the finding's path whose \"classification\" field is one of these values; paths (string array, required when type=exactPaths) matches a finding when its path is exactly one of these repo-relative paths.",
+  "description": "Lead ownership decisions for the design-system debt ledger builder (scripts/design-system/ledger-build.mjs, loaded by loadDecisions()). Each decision assigns an owner and a repair checkpoint to fingerprints that would otherwise be unresolved \u2014 a path with no lane in design-system/surfaces.json, or no matching entry in RULE_CHECKPOINT. Decisions are tried in array order; the first match wins. A path already resolved by lane ownership or classified as a runtime extension-boundary rule never reaches this list. Schema per decision: name (string, required) human-readable label used in reporting and in the ledger entry's \"owner\" string; type (string, required) one of \"catalogClassification\" | \"exactPaths\"; checkpoint (string, required) one of ledger.schema.json's expiryCheckpoint enum (A, B, C1, C2, C3, C4, C5, C6) \u2014 the repair batch this decision's entries are due in; owner (string, required) ownership label \u2014 a matched ledger entry's \"owner\" field is \"<checkpoint> <owner>\"; classifications (string array, required when type=catalogClassification) matches a finding when design-system/catalog.json has an entry for the finding's path whose \"classification\" field is one of these values; paths (string array, required when type=exactPaths) matches a finding when its path is exactly one of these repo-relative paths.",
   "decisions": [
     {
       "name": "Shared catalog foundations (foundation/primitive/composite classification)",
       "type": "catalogClassification",
-      "classifications": ["foundation", "foundations", "primitive", "composite"],
+      "classifications": [
+        "foundation",
+        "foundations",
+        "primitive",
+        "composite"
+      ],
       "checkpoint": "C1",
-      "owner": "Lead—shared foundations: Catalog foundation/primitive/composite internals"
+      "owner": "Lead\u2014shared foundations: Catalog foundation/primitive/composite internals"
     },
     {
       "name": "Lane 2: Calendar CSS and eventMapping",
       "type": "exactPaths",
-      "paths": ["src/styles/fullcalendar-theme.css", "src/lib/calendar/eventMapping.ts"],
+      "paths": [
+        "src/styles/fullcalendar-theme.css",
+        "src/lib/calendar/eventMapping.ts"
+      ],
       "checkpoint": "C1",
       "owner": "Lane 2: Calendar and workspace management/team/settings"
     },
     {
       "name": "Lane 1: React Flow theme CSS",
       "type": "exactPaths",
-      "paths": ["src/components/workspaces/reactflow-theme.css"],
+      "paths": [
+        "src/components/workspaces/reactflow-theme.css"
+      ],
       "checkpoint": "C1",
       "owner": "Lane 1: Workspace board, list, graph and task/plan controls"
     },
     {
       "name": "Shared foundations: Global stylesheets",
       "type": "exactPaths",
-      "paths": ["src/styles/globals.css", "src/styles/library.css"],
+      "paths": [
+        "src/styles/globals.css",
+        "src/styles/library.css"
+      ],
       "checkpoint": "C1",
-      "owner": "Lead—shared foundations: Global stylesheets"
+      "owner": "Lead\u2014shared foundations: Global stylesheets"
     },
     {
       "name": "D4 status foundations",
       "type": "exactPaths",
-      "paths": ["src/lib/statusColors.ts", "src/lib/planStateColors.ts"],
+      "paths": [
+        "src/lib/statusColors.ts",
+        "src/lib/planStateColors.ts"
+      ],
       "checkpoint": "C1",
-      "owner": "Lead—shared D4 status foundations: Status colour mappings"
+      "owner": "Lead\u2014shared D4 status foundations: Status colour mappings"
     },
     {
       "name": "Lane 6: Provider model groups",
       "type": "exactPaths",
-      "paths": ["src/lib/providerModelGroups.ts"],
+      "paths": [
+        "src/lib/providerModelGroups.ts"
+      ],
       "checkpoint": "C1",
       "owner": "Lane 6: Settings, providers, connectors and policy controls"
+    },
+    {
+      "name": "Shared foundations: UI feedback and picker primitives outside the catalog classifications",
+      "type": "exactPaths",
+      "paths": [
+        "src/components/ui/AutoSaveIndicator.tsx",
+        "src/components/ui/FormError.tsx",
+        "src/components/ui/error-boundary.tsx",
+        "src/components/ui/model-selector.tsx",
+        "src/components/ui/toast-container.tsx"
+      ],
+      "checkpoint": "C1",
+      "owner": "Lead\u2014shared foundations: UI feedback and picker primitives"
+    },
+    {
+      "name": "Shared foundations: Brand logo assets",
+      "type": "exactPaths",
+      "paths": [
+        "src/assets/brand-logos/p_anthropic.svg",
+        "src/assets/brand-logos/p_deepseek.svg",
+        "src/assets/brand-logos/p_gemini.svg",
+        "src/assets/brand-logos/p_groq.svg",
+        "src/assets/brand-logos/p_kimi.svg",
+        "src/assets/brand-logos/p_minimax.svg",
+        "src/assets/brand-logos/p_mistral.svg",
+        "src/assets/brand-logos/p_moonshot.svg",
+        "src/assets/brand-logos/p_openai.svg",
+        "src/assets/brand-logos/p_openrouter.svg",
+        "src/assets/brand-logos/p_qwen.svg",
+        "src/assets/brand-logos/p_zhipu.svg",
+        "src/assets/logo/omnipus-avatar.svg",
+        "src/assets/logo/omnipus-logo.svg"
+      ],
+      "checkpoint": "C1",
+      "owner": "Lead\u2014shared foundations: Brand logo assets"
+    },
+    {
+      "name": "Shared foundations: Tree depth indentation",
+      "type": "exactPaths",
+      "paths": [
+        "src/components/chat/tools/FileTreeView.tsx",
+        "src/components/layout/Sidebar.tsx",
+        "src/components/library/knowledge/KnowledgeOutline.tsx",
+        "src/components/search/SearchModal.tsx"
+      ],
+      "checkpoint": "C1",
+      "owner": "Lead\u2014shared foundations: Tree depth indentation (one shared indent pattern)"
     }
   ]
 }

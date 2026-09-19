@@ -117,12 +117,14 @@ test('loadDecisions — rejects a catalogClassification decision with no classif
   assert.throws(() => loadDecisions({ decisions: [{ name: 'Bad', type: 'catalogClassification', checkpoint: 'C1', owner: 'X' }] }), /classifications/)
 })
 
-test('the real design-system/enforcement/ledger-decisions.json loads without error and reproduces the six original lead decisions', () => {
+test('the real design-system/enforcement/ledger-decisions.json loads without error and keeps the six original lead decisions first', () => {
   const doc = JSON.parse(readFileSync(`${repoRoot}design-system/enforcement/ledger-decisions.json`, 'utf8'))
   const decisions = loadDecisions(doc)
-  assert.equal(decisions.length, 6)
+  // The six decisions ported from L12 stay first and unchanged (first match
+  // wins, so their order matters); lead decisions added since follow them.
+  assert.ok(decisions.length >= 6)
   assert.deepEqual(
-    decisions.map((d) => d.name),
+    decisions.slice(0, 6).map((d) => d.name),
     [
       'Shared catalog foundations (foundation/primitive/composite classification)',
       'Lane 2: Calendar CSS and eventMapping',
@@ -138,6 +140,15 @@ test('the real design-system/enforcement/ledger-decisions.json loads without err
   assert.ok(applyLeadDecision('src/styles/fullcalendar-theme.css', undefined, decisions))
   assert.ok(applyLeadDecision('src/lib/providerModelGroups.ts', undefined, decisions))
   assert.equal(applyLeadDecision('src/completely/unrelated/File.ts', undefined, decisions), null)
+  // Every later decision is well-formed and names a schema checkpoint.
+  for (const d of decisions.slice(6)) {
+    assert.ok(d.name && d.owner, `decision missing name/owner: ${JSON.stringify(d)}`)
+    assert.match(d.checkpoint, /^C[1-6]$/)
+  }
+  // Wave-4 additions resolve their paths (spot-check one per decision).
+  assert.ok(applyLeadDecision('src/components/ui/model-selector.tsx', undefined, decisions))
+  assert.ok(applyLeadDecision('src/assets/logo/omnipus-logo.svg', undefined, decisions))
+  assert.ok(applyLeadDecision('src/components/layout/Sidebar.tsx', undefined, decisions))
 })
 
 test('buildLedgerProposal — schema validity: output baseline and ledger validate against the real schemas', () => {
