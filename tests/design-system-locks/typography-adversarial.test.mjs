@@ -101,12 +101,21 @@ describe('capability: bare-parameter member access (Capability B — X.className
 })
 
 describe('capability: finite-return call resolution (Capability C1/C2 — switch/if-chain/IIFE helpers)', () => {
-  it('PERMITTED: property access on a switch-based helper call resolves per branch, including a branch that never sets the property (getToolBadgeStatusConfig / statusConfig.textClass style)', () => {
-    // bg-* (not text-*/font-*) deliberately: this lane owns typography only,
-    // so a clean colour utility proves the PROPERTY resolved without also
-    // asserting on the colour lane's own (unrelated) token-registration
-    // findings.
-    expectClean(`
+  // LEAD DECISION (Stage B typography false-green fix, cross-scanner
+  // consistency with ts-colors.mjs's absenceValue standard): a branch that
+  // never sets the read property is NOT provably absent unless every
+  // candidate object literal carries an explicit `__proto__: null` — an
+  // ordinary object literal can gain the property later through application
+  // code or a prototype mutation the static lock cannot see. This fixture's
+  // object literals carry no null-prototype marker, so `config.textClass`
+  // must fail closed as unsupported. This REPLACES the previous PERMITTED
+  // expectation below it (dist/design-system-baseline/cli-lanes/claude-typography/),
+  // which was a false green: it treated "no leaf has this key" as
+  // unconditionally safe. See the two capabilities immediately after this
+  // one for the corrected, PROVEN absence and mixed-branch positive cases.
+  it('FORBIDDEN: property access on a switch-based helper call whose branches never set the property, without a null-prototype proof, fails closed (getToolBadgeStatusConfig / statusConfig.textClass style — corrected false green)', () => {
+    expectOne(
+      `
       function getConfig(status) {
         switch (status) {
           case 'running': return { indicator: 'x' }
@@ -117,6 +126,44 @@ describe('capability: finite-return call resolution (Capability C1/C2 — switch
       export function Badge({ status }) {
         const config = getConfig(status)
         return <span className={cn('base', config.textClass)} />
+      }
+    `,
+      'typography/unsupported-text-utility',
+      'config.textClass',
+    )
+  })
+
+  it('FORBIDDEN: a MIXED leaf set (one branch sets the property, others prove it absent with `__proto__: null`) still fails closed — absenceValue proves absence for the WHOLE call, not per leaf, matching ts-colors\' own scoping (absentClassProperty only applies when NO leaf has the property at all; a branch that DOES set it trivially fails the "lacks property" check for the whole call)', () => {
+    expectOne(
+      `
+      function getConfig(status) {
+        switch (status) {
+          case 'running': return { __proto__: null, indicator: 'x' }
+          case 'success': return { __proto__: null, indicator: 'x', textClass: 'bg-emerald-500' }
+          default: return { __proto__: null, indicator: 'x' }
+        }
+      }
+      export function Badge({ status }) {
+        const config = getConfig(status)
+        return <span className={cn('base', config.textClass)} />
+      }
+    `,
+      'typography/unsupported-text-utility',
+      'config.textClass',
+    )
+  })
+
+  it('PERMITTED: a helper whose branches ALL prove the read property absent resolves as a safe no-op (pure absence proof, no found leaf at all)', () => {
+    expectClean(`
+      function getConfig(status) {
+        switch (status) {
+          case 'a': return { __proto__: null, label: 'A' }
+          default: return { __proto__: null, label: 'B' }
+        }
+      }
+      export function V({ status }) {
+        const cfg = getConfig(status)
+        return <div className={cfg.textClass} />
       }
     `)
   })
@@ -384,5 +431,142 @@ describe('capability A: self-separating conditional template glue (independent r
       'typography/text-size-below-floor',
       'text-xs',
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// LEAD DECISION (Stage B typography false-green fix): a member is provably
+// ABSENT only under the same conditions as ts-colors.mjs's absenceValue —
+// every candidate object literal has an explicit `__proto__: null`, no
+// computed keys, no spreads; the call chain resolves through a safe,
+// non-async/generator TOP-LEVEL factory; and any identifier binding an owner
+// was reached through is used SAFELY everywhere in its enclosing function —
+// read only via property/element access, never reassigned, aliased,
+// deleted, Object.assign-mutated, or called as a method receiver. This
+// standard gates PRESENT branch enumeration too, not only absence. The lead
+// reproduced these as false greens against the prior pass; every FORBIDDEN
+// case below returned `[]` (zero findings) before this fix — see
+// dist/design-system-baseline/cli-lanes/claude-typography-fix/probe-red.log.
+// ---------------------------------------------------------------------------
+
+describe('capability: absence-of-member proof requires the ts-colors absenceValue standard (LEAD DECISION)', () => {
+  const helper = "function getConfig(s){ switch(s){ case 'a': return { label: 'A' }; default: return { label: 'B' } } }\n"
+  const helperNullProto = "function getConfig(s){ switch(s){ case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }\n"
+
+  it('FORBIDDEN: a property written onto the binding AFTER the call, before the read, fails closed (was a false green: the write itself proves the object escapes the leaf enumeration)', () => {
+    expectOne(
+      helper + "export function V({status}){ const cfg = getConfig(status); cfg.textClass = 'text-[10px]'; return <div className={cfg.textClass}/> }",
+      'typography/unsupported-text-utility',
+      'cfg.textClass',
+    )
+  })
+
+  it('FORBIDDEN: a property genuinely absent from every branch, but without an explicit `__proto__: null` proof, fails closed (was a false green)', () => {
+    expectOne(
+      helper + "export function V({status}){ const cfg = getConfig(status); return <div className={cfg.textClass}/> }",
+      'typography/unsupported-text-utility',
+      'cfg.textClass',
+    )
+  })
+
+  it('PERMITTED (positive control): the same absence, with every branch proving `__proto__: null`, resolves as a safe no-op', () => {
+    expectClean(helperNullProto + "export function V({status}){ const cfg = getConfig(status); return <div className={cfg.textClass}/> }")
+  })
+
+  it('FORBIDDEN: Object.assign onto the binding after the call fails closed', () => {
+    expectOne(
+      helper + "export function V({status}){ const cfg = getConfig(status); Object.assign(cfg, { textClass: 'text-[10px]' }); return <div className={cfg.textClass}/> }",
+      'typography/unsupported-text-utility',
+      'cfg.textClass',
+    )
+  })
+
+  it('FORBIDDEN: a delete on ANY member of the binding fails closed (not just a delete of the read property itself)', () => {
+    expectOne(
+      helper + "export function V({status}){ const cfg = getConfig(status); delete cfg.other; return <div className={cfg.textClass}/> }",
+      'typography/unsupported-text-utility',
+      'cfg.textClass',
+    )
+  })
+
+  it('FORBIDDEN: aliasing the binding and writing through the alias fails closed (the alias write is invisible to a check scoped only to the original name)', () => {
+    expectOne(
+      helper + "export function V({status}){ const cfg = getConfig(status); const other = cfg; other.textClass = 'text-[10px]'; return <div className={cfg.textClass}/> }",
+      'typography/unsupported-text-utility',
+      'cfg.textClass',
+    )
+  })
+
+  it('FORBIDDEN: a write inside a nested callback fails closed (the safety scan must not stop at a nested function boundary)', () => {
+    expectOne(
+      helper + "export function V({status}){ const cfg = getConfig(status); [1].forEach(() => { cfg.textClass = 'text-[10px]' }); return <div className={cfg.textClass}/> }",
+      'typography/unsupported-text-utility',
+      'cfg.textClass',
+    )
+  })
+
+  it('FORBIDDEN: PRESENT branch enumeration is gated by the same binding-safety proof — a write to an UNRELATED property still disqualifies the whole binding', () => {
+    expectOne(
+      "function getConfig(s){ switch(s){ case 'a': return { textClass: 'text-sm' }; default: return { textClass: 'text-lg' } } }\nexport function V({status}) { const cfg = getConfig(status); cfg.other = 'z'; return <div className={cfg.textClass}/> }",
+      'typography/unsupported-text-utility',
+      'cfg.textClass',
+    )
+  })
+
+  it('FORBIDDEN: a body-destructured local reached directly off the call is gated by the SAME absence standard (parallel code path, distinct from the property-access proof above)', () => {
+    expectOne(
+      helper + "export function V({status}){ const { textClass } = getConfig(status); return <div className={textClass}/> }",
+      'typography/unsupported-text-utility',
+      'textClass',
+    )
+  })
+
+  it('PERMITTED: the same destructured read resolves cleanly once every branch proves `__proto__: null`', () => {
+    expectClean(helperNullProto + "export function V({status}){ const { textClass } = getConfig(status); return <div className={textClass}/> }")
+  })
+
+  it('regression: a class-like parameter name never turns an unknown value into a silent pass — it only ever chooses between blocking kinds (extension-boundary vs unsupported), matching the capability above; an unknown LOCAL (not a parameter) with a class-like name still reaches unsupported off its own opaque call', () => {
+    expectOne(
+      'export function Comp() { const widthClass = getWidth(); return <div className={widthClass} /> }',
+      'typography/unsupported-text-utility',
+      'getWidth()',
+    )
+  })
+
+  it('FORBIDDEN: a whole-file name reused by an unrelated inner `let` shadow must not resolve the OUTER const binding at a shadowed read site (hasMultipleVariableDeclarations gap: the top-level `bindings` Map fallback previously bypassed this guard)', () => {
+    // Top-level `cfg` is a genuinely SAFE value ('text-base', never below
+    // floor); the shadowed inner `cfg` is a genuine violation
+    // ('text-[8px]'). Before the fix this resolved to the WRONG (outer, safe)
+    // binding and returned zero findings — a false green via wrong-scope
+    // resolution, not merely an unprovable case.
+    expectOne(
+      "const cfg = 'text-base'\nexport function Outer() {\n  function Inner() {\n    let cfg = 'text-[8px]'\n    return <div className={cfg} />\n  }\n  return Inner()\n}",
+      'typography/unsupported-text-utility',
+      'cfg',
+    )
+  })
+
+  it('FORBIDDEN: an exported `let` (mutable) imported record\'s dynamic-key enumeration fails closed (moduleRecord\'s export collection does not itself filter by const, so importedRecordAllValues must)', () => {
+    const source = "import { STATUS_BADGE } from './status'\nexport function Badge({ status }) { return <span className={cn('base', STATUS_BADGE[status])} /> }"
+    expectOne(source, 'typography/unsupported-text-utility', 'STATUS_BADGE[status]', { modules: {
+      'src/fixture.tsx': source,
+      'src/status.ts': "export let STATUS_BADGE = { inbox: 'bg-zinc-500', done: 'bg-emerald-500' }",
+    } })
+  })
+
+  it('FORBIDDEN: an exported const imported record that IS mutated in its own module (never-mutated requirement) fails closed', () => {
+    const source = "import { STATUS_BADGE } from './status'\nexport function Badge({ status }) { return <span className={cn('base', STATUS_BADGE[status])} /> }"
+    expectOne(source, 'typography/unsupported-text-utility', 'STATUS_BADGE[status]', { modules: {
+      'src/fixture.tsx': source,
+      'src/status.ts': "export const STATUS_BADGE = { inbox: 'bg-zinc-500', done: 'bg-emerald-500' }\nSTATUS_BADGE.extra = 'bg-amber-500'",
+    } })
+  })
+
+  it('PERMITTED (positive control): an exported const, never-mutated imported record still enumerates cleanly (no regression from the never-mutated check)', () => {
+    const source = "import { STATUS_BADGE } from './status'\nexport function Badge({ status }) { return <span className={cn('base', STATUS_BADGE[status])} /> }"
+    expectClean(source, { modules: {
+      'src/fixture.tsx': source,
+      'src/status.ts': "export const STATUS_BADGE = { inbox: 'bg-zinc-500', done: 'bg-emerald-500' }",
+    } })
   })
 })

@@ -1352,8 +1352,18 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
           }
         }
         {
-          const lexical = duplicateBindings.has(node.text) || hasMultipleVariableDeclarations(sourceFile, node.text) ? null : findLexicalBinding(node, node.text)
-          const binding = lexical?.initializer ?? (bindings.has(node.text) && !duplicateBindings.has(node.text) ? bindings.get(node.text) : null)
+          // Both the nearest-scope lexical lookup AND the flat top-level
+          // `bindings` Map fallback must respect hasMultipleVariableDeclarations:
+          // the same name reused ANYWHERE else in the file (e.g. a `let`
+          // shadow inside a different, unrelated function) means findLexicalBinding's
+          // const-only scope walk could climb past that shadow to the wrong
+          // (but still textually valid) outer const — the top-level `bindings`
+          // Map fallback must fail closed the same way, not bypass the guard
+          // that disabled the lexical path in the first place (previously a
+          // silent-pass gap: probed and closed).
+          const ambiguousName = duplicateBindings.has(node.text) || hasMultipleVariableDeclarations(sourceFile, node.text)
+          const lexical = ambiguousName ? null : findLexicalBinding(node, node.text)
+          const binding = lexical?.initializer ?? (!ambiguousName && bindings.has(node.text) ? bindings.get(node.text) : null)
           if (binding) {
             if (ts.isBinaryExpression(binding) && binding.operatorToken.kind === ts.SyntaxKind.PlusToken && collectStaticTextForBinding(binding) === null) {
               emitUnsupported(node, sink)
@@ -1376,20 +1386,30 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
           if (destructured) {
             const leaves = classCarryingLeaves(destructured.source)
             if (leaves) {
-              let sawValue = false
+              // Collect first, emit after (rather than walking each found
+              // leaf inline): a missing leaf discovered LATER in the loop
+              // can still fail the whole read closed, and nothing should
+              // have been emitted for the found leaves in that case.
+              const values = []
+              let missingLeaf = false
               let unprovable = false
               for (const leaf of leaves) {
                 const property = leaf.properties.find((candidate) => propertyKeyName(candidate) === destructured.property)
-                if (!property) continue
-                sawValue = true
-                if (ts.isPropertyAssignment(property)) walkClassExpression(property.initializer, sink)
-                else if (ts.isShorthandPropertyAssignment(property)) walkClassExpression(property.name, sink)
-                else unprovable = true
+                if (!property) { missingLeaf = true; continue }
+                if (ts.isPropertyAssignment(property)) values.push(property.initializer)
+                else if (ts.isShorthandPropertyAssignment(property)) values.push(property.name)
+                else { unprovable = true; break }
               }
-              if (unprovable) { emitUnsupported(node, sink); return }
-              if (sawValue) return
+              // Same LEAD DECISION absence standard as resolveProvenPropertyAccess:
+              // a missing leaf is only a safe no-op when absenceValue proves it
+              // (null-prototype, no computed keys/spreads, safe top-level factory).
+              if (unprovable || (missingLeaf && !absenceValue(destructured.source, destructured.property))) {
+                emitUnsupported(node, sink)
+                return
+              }
+              if (values.length > 0) { values.forEach((value) => walkClassExpression(value, sink)); return }
               if (destructured.defaultExpr) { walkClassExpression(destructured.defaultExpr, sink); return }
-              return // proven absent on every branch: no class content, safe no-op
+              return // proven absent on every branch (absenceValue passed above): no class content, safe no-op
             }
           }
         }
@@ -1475,28 +1495,57 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
       || (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken))
   }
 
+  // A top-level `const NAME = <expr>` declaration node, resolved the same way
+  // the `bindings` Map is populated (scanTypeScript's own top-level scan)
+  // but returning the declaration itself, not just its initializer — needed
+  // so callers can run the LEAD DECISION binding-safety proof
+  // (absenceBindingUsesSafe) against it.
+  function topLevelConstDeclaration(name) {
+    for (const statement of sourceFile.statements) {
+      if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name) && declaration.name.text === name && declaration.initializer) return declaration
+      }
+    }
+    return null
+  }
+
   // The owner expression a property-access base resolves to, restricted to
   // the NEW shapes handled by resolveProvenPropertyAccess/classCarryingLeaves
   // below (a call, a conditional, or a `??`/`||` fallback chain of such) —
   // plain object-literal owners keep going through the pre-existing
   // localCandidates path unchanged, so this never re-decides a case that
-  // already worked.
+  // already worked. Returns `{ expr, declaration }`: `declaration` is the
+  // const variable declaration an identifier hop went through (null when the
+  // owner IS the call/conditional directly, e.g. no intermediate variable) —
+  // LEAD DECISION requires that declaration's binding to be proven safe
+  // (absenceBindingUsesSafe) before any conclusion drawn from it is trusted.
   function ownerExpressionFor(expression) {
     const unwrapped = unwrapStatic(expression)
     if (!unwrapped) return null
-    if (isLeafSplittingOwner(unwrapped)) return unwrapped
+    if (isLeafSplittingOwner(unwrapped)) return { expr: unwrapped, declaration: null }
     if (ts.isIdentifier(unwrapped) && !duplicateBindings.has(unwrapped.text) && !hasMultipleVariableDeclarations(sourceFile, unwrapped.text)) {
       const lexical = findLexicalBinding(unwrapped, unwrapped.text)
       const initializer = lexical?.initializer ?? (bindings.has(unwrapped.text) && !duplicateBindings.has(unwrapped.text) ? bindings.get(unwrapped.text) : null)
       const resolved = initializer ? unwrapStatic(initializer) : null
-      return resolved && isLeafSplittingOwner(resolved) ? resolved : null
+      if (!resolved || !isLeafSplittingOwner(resolved)) return null
+      const declaration = lexical?.declaration ?? topLevelConstDeclaration(unwrapped.text)
+      return { expr: resolved, declaration }
     }
     return null
   }
 
   // Resolves a bare identifier to a top-level/lexical const-bound, or
   // imported, object literal — a "record" (STATUS_BADGE/PRIORITY_BADGE
-  // style). Rejects spreads at the call sites below, not here.
+  // style). Rejects spreads at the call sites below, not here. The local
+  // branch is already guaranteed const (findLexicalBinding/the top-level
+  // `bindings` Map only ever collect `const` declarations). The IMPORTED
+  // branch is not — moduleRecord's export collection accepts any
+  // VariableStatement regardless of const/let/var — so it must additionally
+  // require the exporting declaration to be `const` AND never mutated in its
+  // own module (absenceBindingUsesSafe): an exported mutable binding can be
+  // reassigned to an arbitrary value by another importer and stays
+  // unsupported (LEAD DECISION, "never-mutated const literal").
   function resolveRecordObjectLiteral(node) {
     const unwrapped = unwrapStatic(node)
     if (!unwrapped || !ts.isIdentifier(unwrapped)) return null
@@ -1506,7 +1555,8 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     const local = localInitializer ? unwrapStatic(localInitializer) : null
     if (local && ts.isObjectLiteralExpression(local)) return local
     const declaration = importedDeclaration(unwrapped, moduleContext)
-    if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer) {
+    if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+      && (declaration.parent.flags & ts.NodeFlags.Const) && absenceBindingUsesSafe(declaration, false, true)) {
       const imported = unwrapStatic(declaration.initializer)
       if (imported && ts.isObjectLiteralExpression(imported)) return imported
     }
@@ -1592,16 +1642,30 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     if (key === null) return null
     const owner = ownerExpressionFor(node.expression)
     if (!owner) return null
-    const leaves = classCarryingLeaves(owner)
+    // LEAD DECISION: an identifier hop's binding must be proven safe (never
+    // reassigned/aliased/mutated/escaped anywhere in its enclosing block)
+    // BEFORE any leaf — found or missing — is trusted. This gates PRESENT
+    // branch enumeration too, not only the absence proof below (a member
+    // write to a DIFFERENT property after the call still disqualifies the
+    // whole binding, since it proves the object escapes untracked mutation).
+    if (owner.declaration && !absenceBindingUsesSafe(owner.declaration, false, true)) return null
+    const leaves = classCarryingLeaves(owner.expr)
     if (!leaves) return null
+    let missingLeaf = false
     const values = []
     for (const leaf of leaves) {
       const property = leaf.properties.find((candidate) => propertyKeyName(candidate) === key)
-      if (!property) continue
+      if (!property) { missingLeaf = true; continue }
       if (ts.isPropertyAssignment(property)) values.push(property.initializer)
       else if (ts.isShorthandPropertyAssignment(property)) values.push(property.name)
       else return { unprovable: true }
     }
+    // A leaf lacking the key contributes nothing only when its absence is
+    // independently proven (absenceValue — the ts-colors null-prototype
+    // standard). Otherwise a missing static match could be a later member
+    // write, a non-null-prototype object any caller can extend, or an
+    // unsafe factory, and the whole read must fail closed (LEAD DECISION).
+    if (missingLeaf && !absenceValue(owner.expr, key)) return { unprovable: true }
     return { unprovable: false, values }
   }
 
@@ -1619,7 +1683,13 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     const base = unwrapStatic(node.expression)
     if (!ts.isIdentifier(base)) return null
     const declaration = importedDeclaration(base, moduleContext)
-    if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return null
+    // LEAD DECISION ("never-mutated const literal"): moduleRecord's export
+    // collection does not filter by const/let/var, so this must check it
+    // itself — an exported `let`/`var` binding can be reassigned wholesale by
+    // another importer, and a mutated-in-its-own-module binding can hold a
+    // different shape than its initializer shows; both stay unsupported.
+    if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer
+      || !(declaration.parent.flags & ts.NodeFlags.Const) || !absenceBindingUsesSafe(declaration, false, true)) return null
     const object = unwrapStatic(declaration.initializer)
     if (!ts.isObjectLiteralExpression(object) || object.properties.some((property) => ts.isSpreadAssignment(property))) return null
     const values = []
@@ -2589,6 +2659,160 @@ function finiteCallReturns(call, context) {
 function propertyKeyName(property) {
   return property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) || ts.isNumericLiteral(property.name))
     ? property.name.text : null
+}
+
+// ---------------------------------------------------------------------------
+// Absence-of-member proof (LEAD DECISION, cross-scanner consistency with
+// ts-colors.mjs's absenceValue/absenceFactory/absenceBindingUsesSafe/
+// absenceLexicalBinding/absentClassProperty — read there for the reviewed
+// original; ported here, not re-derived, so the two lanes hold the SAME
+// standard). A member is provably ABSENT only when:
+//   - every candidate object literal reachable through the chain below has
+//     an explicit `__proto__: null` and no computed keys or spreads
+//     (an ordinary object can inherit or later gain the property from
+//     application code or a prototype mutation elsewhere — only a null
+//     prototype rules that out without assuming module-graph purity);
+//   - the call chain that produced those literals, if any, resolves through
+//     a safe, non-async, non-generator TOP-LEVEL factory function whose own
+//     identifier is used only as a call callee; and
+//   - any identifier binding (a `const NAME = <call>` an owner was reached
+//     through) is used SAFELY everywhere in its enclosing block: read only
+//     via property/element access, never reassigned, deleted, aliased,
+//     Object.assign-mutated, incremented, or called as a method receiver —
+//     scanning the whole block catches a write AFTER the read site too, not
+//     only before it.
+// Anything less fails closed: a missing static match is never silently "no
+// class content" — it is unprovable and must reach emitUnsupported. This
+// same standard gates PRESENT branch enumeration too (not just absence):
+// the binding-safety leg above is checked before any leaf, found or
+// missing, is trusted.
+// ---------------------------------------------------------------------------
+
+function absenceBindingHasName(binding, name) {
+  if (ts.isIdentifier(binding)) return binding.text === name
+  return (ts.isObjectBindingPattern(binding) || ts.isArrayBindingPattern(binding))
+    && binding.elements.some((element) => ts.isBindingElement(element) && absenceBindingHasName(element.name, name))
+}
+
+// Resolve lexical declarations without falling through a nearer opaque
+// binding. Switch/namespace/class/loop scopes and catch-clause/parameter
+// shadows are deliberately outside this proof — ambiguous, not resolved.
+function absenceLexicalBinding(identifier) {
+  const name = identifier.text
+  for (let scope = identifier.parent; scope; scope = scope.parent) {
+    if (ts.isCaseBlock(scope) || ts.isModuleBlock(scope) || ts.isClassDeclaration(scope)
+      || ts.isClassExpression(scope) || ts.isForStatement(scope) || ts.isForInStatement(scope)
+      || ts.isForOfStatement(scope)) return null
+    if (ts.isFunctionLike(scope) && scope.parameters.some((parameter) => absenceBindingHasName(parameter.name, name))) return null
+    if (ts.isCatchClause(scope) && scope.variableDeclaration && absenceBindingHasName(scope.variableDeclaration.name, name)) return null
+    if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue
+    const matches = []
+    for (const statement of scope.statements) {
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          if (absenceBindingHasName(declaration.name, name)) matches.push(declaration)
+        }
+      } else if (statement.name && ts.isIdentifier(statement.name) && statement.name.text === name) matches.push(statement)
+      else if (ts.isImportDeclaration(statement)) {
+        const clause = statement.importClause
+        if (clause?.name?.text === name) matches.push(clause)
+        const importedBindings = clause?.namedBindings
+        if (importedBindings && ts.isNamedImports(importedBindings)) {
+          for (const element of importedBindings.elements) if (element.name.text === name) matches.push(element)
+        } else if (importedBindings?.name?.text === name) matches.push(importedBindings)
+      }
+    }
+    if (matches.length) return matches.length === 1 ? matches[0] : null
+  }
+  return null
+}
+
+// A receiver may only be read through properties; a factory may only be
+// called. Whole-object references, aliases, writes, deletes, increments and
+// calls through its members escape the proof. Scanning the enclosing block
+// also catches writes AFTER the sink, not just before it.
+function absenceBindingUsesSafe(declaration, factory, indexedReads = false) {
+  if (!declaration.name || !ts.isIdentifier(declaration.name)) return false
+  const name = declaration.name.text
+  let scope = declaration.parent
+  while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+  if (!scope) return false
+  let safe = true
+  const visit = (node) => {
+    if (!safe) return
+    if (ts.isIdentifier(node) && node.text === name && node !== declaration.name) {
+      const parent = node.parent
+      if (ts.isImportSpecifier(parent) && parent === declaration) return
+      if (factory) {
+        if (!ts.isCallExpression(parent) || parent.expression !== node) { safe = false; return }
+      } else {
+        if ((!ts.isPropertyAccessExpression(parent) && !ts.isElementAccessExpression(parent)) || parent.expression !== node) { safe = false; return }
+        const argument = ts.isElementAccessExpression(parent) && parent.argumentExpression ? unwrapStatic(parent.argumentExpression) : null
+        const property = ts.isPropertyAccessExpression(parent) ? parent.name.text
+          : argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) ? argument.text : null
+        if ((!property && !indexedReads) || ['__proto__', 'prototype', 'constructor'].includes(property)) { safe = false; return }
+        let expression = parent
+        while (expression.parent && (ts.isPropertyAccessExpression(expression.parent)
+          || ts.isElementAccessExpression(expression.parent) || ts.isParenthesizedExpression(expression.parent)
+          || ts.isAsExpression(expression.parent) || ts.isNonNullExpression(expression.parent)
+          || ts.isObjectLiteralExpression(expression.parent) || ts.isArrayLiteralExpression(expression.parent)
+          || ts.isPropertyAssignment(expression.parent) || ts.isSpreadElement(expression.parent))) expression = expression.parent
+        const use = expression.parent
+        if ((ts.isBinaryExpression(use) && use.left === expression && use.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && use.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+          || ((ts.isForOfStatement(use) || ts.isForInStatement(use)) && use.initializer === expression)
+          || ts.isDeleteExpression(use) || ts.isPrefixUnaryExpression(use) || ts.isPostfixUnaryExpression(use)
+          || (ts.isCallExpression(use) && use.expression === expression)) { safe = false; return }
+      }
+    }
+    node.forEachChild(visit)
+  }
+  visit(scope)
+  return safe
+}
+
+function absenceFactory(callee) {
+  if (!ts.isIdentifier(callee)) return null
+  const declaration = absenceLexicalBinding(callee)
+  if (!declaration || !absenceBindingUsesSafe(declaration, true)) return null
+  if (!ts.isFunctionDeclaration(declaration) || !ts.isSourceFile(declaration.parent)
+    || !declaration.body || declaration.asteriskToken
+    || declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) return null
+  return declaration
+}
+
+function absenceValue(node, property) {
+  node = unwrapStatic(node)
+  if (ts.isObjectLiteralExpression(node)) {
+    const nullPrototype = node.properties.some((member) => ts.isPropertyAssignment(member)
+      && !ts.isComputedPropertyName(member.name) && propertyKeyName(member) === '__proto__'
+      && unwrapStatic(member.initializer).kind === ts.SyntaxKind.NullKeyword)
+    return nullPrototype && node.properties.every((member) => ts.isPropertyAssignment(member)
+      && !ts.isComputedPropertyName(member.name)
+      && propertyKeyName(member) !== property
+      && (propertyKeyName(member) !== '__proto__' || unwrapStatic(member.initializer).kind === ts.SyntaxKind.NullKeyword))
+  }
+  if (ts.isConditionalExpression(node)) {
+    return absenceValue(node.whenTrue, property) && absenceValue(node.whenFalse, property)
+  }
+  if (!ts.isCallExpression(node)) return false
+  const declaration = absenceFactory(unwrapStatic(node.expression))
+  if (!declaration) return false
+  const returns = []
+  const visit = (child) => {
+    if (ts.isFunctionLike(child) && child !== declaration) return
+    if (ts.isReturnStatement(child)) returns.push(child.expression)
+    else child.forEachChild(visit)
+  }
+  visit(declaration.body)
+  // Returned calls/aliases are opaque, so recursive functions never recurse
+  // through this proof. Direct conditional literals cover every returned arm.
+  const fresh = (value) => {
+    value = value && unwrapStatic(value)
+    if (!value) return false
+    if (ts.isConditionalExpression(value)) return fresh(value.whenTrue) && fresh(value.whenFalse)
+    return ts.isObjectLiteralExpression(value) && absenceValue(value, property)
+  }
+  return returns.length > 0 && returns.every(fresh)
 }
 
 // ---------------------------------------------------------------------------
