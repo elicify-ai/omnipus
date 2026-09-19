@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,6 +24,37 @@ import (
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
+func workspaceRevisionError(id string, err error) *tools.ToolResult {
+	if errors.Is(err, workspacepkg.ErrInvalidRevision) || errors.Is(err, workspacepkg.ErrInvalidWorkspaceID) {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use the revision returned by get_workspace"))
+	}
+	if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "NOT_FOUND") {
+		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id), "Use list_workspaces to see available workspaces"))
+	}
+	if errors.Is(err, workspacepkg.ErrRevisionConflict) {
+		return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Call get_workspace and retry with its current revision"))
+	}
+	if errors.Is(err, workspacepkg.ErrDelegationUnreadable) {
+		return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE", err.Error(),
+			"Inspect $OMNIPUS_HOME/entities/delegation/"+id+".json and restore a readable record; this workspace still exists"))
+	}
+	return tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), "Inspect workspace storage; a revision retry cannot repair unreadable storage"))
+}
+
+func workspaceReadError(id string, err error) *tools.ToolResult {
+	if errors.Is(err, workspacepkg.ErrInvalidWorkspaceID) {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use a workspace id from list_workspaces"))
+	}
+	if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "NOT_FOUND") {
+		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id), "Use list_workspaces to see available workspaces"))
+	}
+	if errors.Is(err, workspacepkg.ErrDelegationUnreadable) {
+		return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE", err.Error(),
+			"Inspect $OMNIPUS_HOME/entities/delegation/"+id+".json and restore a readable record; this workspace still exists"))
+	}
+	return tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), "Inspect the workspace record on disk; this is not a missing workspace"))
+}
+
 // workspace is the canonical on-disk workspace type shared with pkg/gateway.
 // Using the shared type (instead of a local struct) ensures that both write
 // paths — the REST gateway and the update_workspace tool — serialize exactly
@@ -31,6 +63,74 @@ import (
 type workspace = workspacepkg.Workspace
 
 func workspacesDir(home string) string { return filepath.Join(home, "workspaces") }
+
+var (
+	saveWorkspaceDelegation = workspacepkg.SaveDelegation
+	deleteWorkspaceEntity   = deleteEntity
+)
+
+func workspaceChangedFields(before, after workspace) []string {
+	fields := make([]string, 0, 7)
+	if before.Name != after.Name {
+		fields = append(fields, "name")
+	}
+	if before.Description != after.Description {
+		fields = append(fields, "description")
+	}
+	if before.Status != after.Status {
+		fields = append(fields, "status")
+	}
+	if before.Pinned != after.Pinned {
+		fields = append(fields, "pinned")
+	}
+	if before.PinOrder != after.PinOrder {
+		fields = append(fields, "pin_order")
+	}
+	if !slices.Equal(before.CoreTeam, after.CoreTeam) {
+		fields = append(fields, "core_team")
+	}
+	if before.SetupPending != after.SetupPending {
+		fields = append(fields, "setup_pending")
+	}
+	return fields
+}
+
+func workspaceActualState(state workspacepkg.State) map[string]any {
+	edges := append([]workspacepkg.DelegationEdge{}, state.Delegation...)
+	return map[string]any{
+		"exists":      true,
+		"id":          state.Workspace.ID,
+		"name":        state.Workspace.Name,
+		"description": state.Workspace.Description,
+		"status":      state.Workspace.Status,
+		"pinned":      state.Workspace.Pinned,
+		"pin_order":   state.Workspace.PinOrder,
+		"core_team":   state.Workspace.CoreTeam,
+		"delegation":  edges,
+	}
+}
+
+func workspaceMutationError(id, stage, persistence, revision string, changed []string, actual map[string]any) *tools.ToolResult {
+	payload := map[string]any{
+		"success":            false,
+		"id":                 id,
+		"persistence_status": persistence,
+		"activation_status":  "not_attempted",
+		"changed_fields":     changed,
+		"error_stage":        stage,
+		"message":            "Workspace state could not be saved completely. Read the current workspace before retrying.",
+		"actual_state":       actual,
+		"error": map[string]any{
+			"code":       "SAVE_FAILED",
+			"message":    "workspace state could not be saved completely",
+			"suggestion": "Read the current workspace and delegation graph before retrying",
+		},
+	}
+	if revision != "" {
+		payload["revision"] = revision
+	}
+	return tools.ErrorResult(successJSON(payload))
+}
 
 // sanitizeCoreTeam deduplicates (case-sensitive) the raw entries. Empty strings
 // and non-string values are silently dropped.
@@ -48,6 +148,35 @@ func sanitizeCoreTeam(raw []any) []string {
 		}
 	}
 	return out
+}
+
+// firstExcludedTeamMember returns the first team entry whose roster identity
+// is barred from workspace-team membership (coreagent.
+// ExcludedFromWorkspaceTeams — the Admin standalone operator and the hidden
+// System Agents), or "" when the team is clean. ADR-090 FR-006: "Admin and
+// hidden agents cannot be added as ordinary teammates to bypass role
+// boundaries." These tool write paths bypass the REST validator
+// (gateway's validateCoreTeamMembers), so without this check an agent-driven
+// update_workspace could land exactly the membership the API refuses —
+// sanitizeCoreTeam above only dedupes.
+func firstExcludedTeamMember(team []string) string {
+	if i := slices.IndexFunc(team, func(id string) bool {
+		return coreagent.ExcludedFromWorkspaceTeams(coreagent.CoreAgentID(id))
+	}); i >= 0 {
+		return team[i]
+	}
+	return ""
+}
+
+// excludedTeamMemberMessage says WHY the excluded id cannot join a team, in
+// the same vocabulary the REST validator (gateway's validateCoreTeamMembers)
+// already uses, so an operator moving between the Team tab and an
+// agent-driven tool call sees one consistent rejection instead of two.
+func excludedTeamMemberMessage(id string) string {
+	if coreagent.CoreAgentID(id) == coreagent.IDAdmin {
+		return fmt.Sprintf("core_team member %q is the Admin standalone operator and cannot be added to a workspace team roster (ADR-090)", id)
+	}
+	return fmt.Sprintf("core_team member %q is a hidden System Agent and cannot be added to a workspace team roster", id)
 }
 
 // workspaceFromFile reads a workspace JSON into the workspace struct.
@@ -142,6 +271,14 @@ func (t *WorkspaceCreateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "Optional list of agent IDs associated with this workspace",
 			},
+			"delegation": map[string]any{
+				"type": "array", "description": "Complete replacement delegation graph; [] clears it",
+				"items": map[string]any{"type": "object", "properties": map[string]any{
+					"from_agent": map[string]any{"type": "string"}, "to_agent": map[string]any{"type": "string"},
+					"modes": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"direct", "task"}}},
+					"depth": map[string]any{"type": "integer", "minimum": 0},
+				}, "required": []string{"from_agent", "to_agent"}},
+			},
 		},
 		"required": []string{"name"},
 	}
@@ -177,6 +314,19 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if raw, ok := args["core_team"].([]any); ok {
 		w.CoreTeam = sanitizeCoreTeam(raw)
 	}
+	// ADR-090 FR-006 — reject an excluded roster identity (Admin, hidden
+	// System Agents) BEFORE any write. At create time the whole core_team is
+	// newly introduced, so every entry is checked; this mirrors the REST
+	// POST's whole-list validateCoreTeamMembers and closes the tool-side
+	// bypass of it (sanitizeCoreTeam only dedupes).
+	if excluded := firstExcludedTeamMember(w.CoreTeam); excluded != "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
+			"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
+	}
+	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
+	if delegationErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", delegationErr.Error(), "Send a complete valid graph using current team members"))
+	}
 
 	// Serialize this create against the freshly-minted workspace ID
 	// (workspace.LockID), mirroring update_workspace/delete_workspace.
@@ -205,6 +355,9 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 		configPresent := configAgentPresenceSet(t.deps)
 		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent)
 	}
+	if delegationPresent {
+		seeded = explicitDelegation
+	}
 
 	if err := writeEntity(workspacesDir(t.deps.Home), w.ID, w); err != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
@@ -214,9 +367,19 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	// the team — same ordering rationale as update_workspace.
 	var delegationSeedNote string
 	if len(seeded) > 0 {
-		if err := workspacepkg.SaveDelegation(t.deps.Home, w.ID, seeded); err != nil {
-			slog.Warn("sysagent: create_workspace: failed to seed delegation edges",
+		if err := saveWorkspaceDelegation(t.deps.Home, w.ID, seeded); err != nil {
+			slog.Error("sysagent: create_workspace: failed to seed delegation edges",
 				"workspace_id", w.ID, "error", err)
+			if rollbackErr := deleteWorkspaceEntity(workspacesDir(t.deps.Home), w.ID); rollbackErr != nil {
+				slog.Error("sysagent: create_workspace: failed to roll back workspace record", "workspace_id", w.ID, "error", rollbackErr)
+				actual, readErr := workspacepkg.ReadStateLocked(t.deps.Home, w.ID)
+				if readErr != nil {
+					slog.Error("sysagent: create_workspace: failed to read partial state", "workspace_id", w.ID, "error", readErr)
+					return workspaceMutationError(w.ID, "rollback_workspace", "partial", "", []string{"workspace"}, map[string]any{"exists": true, "state_read_failed": true})
+				}
+				return workspaceMutationError(w.ID, "rollback_workspace", "partial", actual.Revision, []string{"workspace"}, workspaceActualState(actual))
+			}
+			return workspaceMutationError(w.ID, "save_delegation", "none", "", []string{}, map[string]any{"exists": false, "delegation": []workspacepkg.DelegationEdge{}})
 		} else {
 			delegationSeedNote = seededEdgesSummary(seeded, w.CoreTeam)
 		}
@@ -241,7 +404,7 @@ func NewWorkspaceUpdateTool(d *Deps) *WorkspaceUpdateTool { return &WorkspaceUpd
 func (t *WorkspaceUpdateTool) Name() string               { return "update_workspace" }
 func (t *WorkspaceUpdateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceUpdateTool) Description() string {
-	return "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated — EXCEPT core_team: sending it REPLACES the entire team list, it does not merge or add to it. WARNING: to add one member without dropping the rest, first call get_workspace, append the new agent id to the existing core_team array, then send that complete array back here. Adding an agent to core_team also grants the default delegation trust edges between it and the existing team — this tool writes real authorization records, bounded to the built-in seed matrix (it can never invent an arbitrary edge or name an off-team agent). Edges among members that were already on the team are never re-added, so a trust edge you previously removed stays removed. The response reports any edges seeded in `delegation_seeded`. If the workspace's delegation record is unreadable the whole update is refused rather than overwriting it with defaults (DELEGATION_STORE_UNREADABLE). Updating core_team on a workspace whose setup was pending also marks setup_completed in the response. name is capped at 200 characters, description at 2000."
+	return "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the entire graph, suppresses implicit seeding, and [] clears it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision."
 }
 
 func (t *WorkspaceUpdateTool) Parameters() map[string]any {
@@ -249,6 +412,7 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
+			"revision":    map[string]any{"type": "string", "description": "Revision returned by get_workspace"},
 			"name":        map[string]any{"type": "string", "description": "New workspace title"},
 			"description": map[string]any{"type": "string", "description": "New description"},
 			"status": map[string]any{
@@ -263,13 +427,22 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "List of agent IDs associated with this workspace",
 			},
+			"delegation": map[string]any{
+				"type": "array", "description": "Complete replacement delegation graph; [] clears it",
+				"items": map[string]any{"type": "object", "properties": map[string]any{
+					"from_agent": map[string]any{"type": "string"}, "to_agent": map[string]any{"type": "string"},
+					"modes": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"direct", "task"}}},
+					"depth": map[string]any{"type": "integer", "minimum": 0},
+				}, "required": []string{"from_agent", "to_agent"}},
+			},
 		},
-		"required": []string{"id"},
+		"required": []string{"id", "revision"},
 	}
 }
 
-func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	id, _ := args["id"].(string)
+	revision, _ := args["revision"].(string)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
@@ -284,11 +457,11 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	unlock := workspacepkg.LockID(id)
 	defer unlock()
 
-	w, err := readWorkspaceFromDisk(t.deps.Home, id)
+	state, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision)
 	if err != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use list_workspaces to see available workspaces"))
+		return workspaceRevisionError(id, err)
 	}
+	w := state.Workspace
 
 	// Snapshot the pre-update core team so a core_team change below can be
 	// diffed for newly added members — see the delegation-edge auto-seed
@@ -325,6 +498,23 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 		w.CoreTeam = sanitizeCoreTeam(raw)
 		coreTeamChanged = true
 	}
+	// ADR-090 FR-006 — reject INTRODUCING an excluded roster identity (Admin,
+	// hidden System Agents) before any write. Deliberately the DELTA rule the
+	// REST PUT applies (loadAndValidateTeam / ADR-054 D6 rule 1): only
+	// newly added members are validated, so an update whose team merely
+	// still contains a (forged, pre-existing) excluded entry is not wedged —
+	// it can heal the record by omitting it, which a whole-list check here
+	// would have made impossible without hand-editing the JSON.
+	if coreTeamChanged {
+		if excluded := firstExcludedTeamMember(teamDiffAdded(oldTeam, w.CoreTeam)); excluded != "" {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
+				"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
+		}
+	}
+	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
+	if delegationErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", delegationErr.Error(), "Send a complete valid graph using current team members"))
+	}
 
 	// Auto-seed default delegation edges for newly added core_team members
 	// (closes an ADR-037 gap). Per ADR-037 the per-workspace Delegation[] edge
@@ -348,7 +538,9 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	// the store at all.
 	var delegationSeedNote string
 	var pendingDelegation []workspacepkg.DelegationEdge
-	if coreTeamChanged {
+	if delegationPresent {
+		pendingDelegation = explicitDelegation
+	} else if coreTeamChanged {
 		added := teamDiffAdded(oldTeam, w.CoreTeam)
 		if len(added) > 0 {
 			existing, storeOK := workspacepkg.LoadDelegation(t.deps.Home, id)
@@ -424,7 +616,7 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	// update that seeds nothing leaves the delegation record untouched, so
 	// there is no write surface to guard and no reason to fail an unrelated
 	// rename over a graph this call never rewrites.
-	if len(pendingDelegation) > 0 {
+	if pendingDelegation != nil {
 		team := workspaceDelegationTeamSet(w, pendingDelegation)
 		ceiling := workspaceDelegationDepthCeiling(t.deps)
 		for i := range pendingDelegation {
@@ -443,9 +635,15 @@ func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *t
 	// leave the store authorizing agents the record does not list on the team.
 	// workspacepkg.LockID(id) is held for this whole function, which is
 	// SaveDelegation's stated caller contract.
-	if len(pendingDelegation) > 0 {
-		if err := workspacepkg.SaveDelegation(t.deps.Home, id, pendingDelegation); err != nil {
-			return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+	if pendingDelegation != nil {
+		if err := saveWorkspaceDelegation(t.deps.Home, id, pendingDelegation); err != nil {
+			slog.Error("sysagent: update_workspace: delegation save failed after workspace write", "workspace_id", id, "error", err)
+			actual, readErr := workspacepkg.ReadStateLocked(t.deps.Home, id)
+			if readErr != nil {
+				slog.Error("sysagent: update_workspace: failed to read partial state", "workspace_id", id, "error", readErr)
+				return workspaceMutationError(id, "save_delegation", "partial", "", workspaceChangedFields(state.Workspace, w), map[string]any{"exists": true, "state_read_failed": true})
+			}
+			return workspaceMutationError(id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(state.Workspace, actual.Workspace), workspaceActualState(actual))
 		}
 	}
 	tc := computeWorkspaceTaskCount(t.deps.Home, id)
@@ -482,6 +680,94 @@ func teamDiffAdded(oldTeam, newTeam []string) []string {
 		}
 	}
 	return added
+}
+
+func parseWorkspaceDelegationArg(args map[string]any, teamIDs []string, ceiling int) ([]workspacepkg.DelegationEdge, bool, error) {
+	raw, present := args["delegation"]
+	if !present {
+		return nil, false, nil
+	}
+	if raw == nil {
+		return nil, true, errors.New("delegation must be an array; null is not allowed")
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, true, errors.New("delegation must be an array")
+	}
+	team := workspacepkg.TeamSet(teamIDs, nil)
+	edges := make([]workspacepkg.DelegationEdge, 0, len(items))
+	seen := make(map[string]int, len(items))
+	for _, item := range items {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return nil, true, errors.New("delegation entries must be objects")
+		}
+		from, _ := row["from_agent"].(string)
+		to, _ := row["to_agent"].(string)
+		edge := workspacepkg.DelegationEdge{FromAgent: strings.TrimSpace(from), ToAgent: strings.TrimSpace(to)}
+		if rawModes, exists := row["modes"]; exists {
+			values, ok := rawModes.([]any)
+			if !ok {
+				return nil, true, errors.New("delegation modes must be an array")
+			}
+			for _, value := range values {
+				mode, ok := value.(string)
+				if !ok {
+					return nil, true, errors.New("delegation modes must be strings")
+				}
+				edge.Modes = append(edge.Modes, workspacepkg.DelegationMode(mode))
+			}
+		}
+		if rawDepth, exists := row["depth"]; exists {
+			value, ok := rawDepth.(float64)
+			if !ok || value != float64(int(value)) {
+				return nil, true, errors.New("delegation depth must be an integer")
+			}
+			depth := int(value)
+			edge.Depth = &depth
+		}
+		if err := edge.Validate(team, ceiling); err != nil {
+			return nil, true, err
+		}
+		key := edge.FromAgent + "\x00" + edge.ToAgent
+		if index, duplicate := seen[key]; duplicate {
+			edges[index] = edge
+		} else {
+			seen[key] = len(edges)
+			edges = append(edges, edge)
+		}
+	}
+	adj := make(map[string][]string)
+	for _, edge := range edges {
+		if edge.FromAgent != edge.ToAgent {
+			adj[edge.FromAgent] = append(adj[edge.FromAgent], edge.ToAgent)
+		}
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var cycle func(string) bool
+	cycle = func(node string) bool {
+		if visiting[node] {
+			return true
+		}
+		if visited[node] {
+			return false
+		}
+		visiting[node] = true
+		for _, next := range adj[node] {
+			if cycle(next) {
+				return true
+			}
+		}
+		visiting[node] = false
+		visited[node] = true
+		return false
+	}
+	for node := range adj {
+		if cycle(node) {
+			return nil, true, errors.New("delegation graph contains a cycle")
+		}
+	}
+	return edges, true, nil
 }
 
 // edgeModeCategory collapses a coreagent seed's 3-value delegate-tool call
@@ -545,7 +831,9 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 // Mirrors pkg/gateway's defaultWorkspaceDelegationEdges: for every agent in
 // newTeam with a compiled-in coreagent.SeedDelegationEdges seed, each seeded
 // target becomes a candidate edge, with modes collapsed/deduped via the
-// local edgeModeCategory and depth copied verbatim.
+// local edgeModeCategory. Non-self depth is copied from the seed policy;
+// permitted self-edges are pinned by coreagent.SeededEdgeDepth to min(3,
+// ceiling) (ADR-090 FR-006).
 //
 // A candidate edge is included iff ALL of:
 //   - both endpoints are members of newTeam (an edge never reaches outside
@@ -641,13 +929,8 @@ func seedDelegationEdgesForNewMembers(
 			seenMode[wm] = true
 			modes = append(modes, wm)
 		}
-		var depth *int
-		if dp.Depth != nil {
-			d := *dp.Depth
-			depth = &d
-		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == from {
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == from && !workspacepkg.PermittedSelfDelegationID(from)) {
 				continue
 			}
 			to := ref.ID
@@ -669,7 +952,7 @@ func seedDelegationEdgesForNewMembers(
 				FromAgent: from,
 				ToAgent:   to,
 				Modes:     append([]workspacepkg.DelegationMode(nil), modes...),
-				Depth:     depth,
+				Depth:     coreagent.SeededEdgeDepth(from, to, dp.Depth, ceiling),
 			}
 			if err := edge.Validate(teamSet, ceiling); err != nil {
 				slog.Warn("sysagent: update_workspace: dropping invalid auto-seeded delegation edge",
@@ -794,25 +1077,27 @@ func NewWorkspaceDeleteTool(d *Deps) *WorkspaceDeleteTool { return &WorkspaceDel
 func (t *WorkspaceDeleteTool) Name() string               { return "delete_workspace" }
 func (t *WorkspaceDeleteTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceDeleteTool) Description() string {
-	return "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: all GTD tasks belonging to the workspace, the mount/folder-grant store (records of which host folders were shared with it), the delegation trust graph (which agents may delegate to which within it), and the workspace's own directory (AGENT.md and its shared memory room) are all permanently removed. Only GTD-status tasks (inbox/next/in_progress/blocked/done/failed) are cascade-deleted — workflow-status tasks that still reference this workspace_id are left in place and become orphans. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion)."
+	return "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: its GTD tasks, mount grants, delegation graph, and workspace directory are permanently removed; workflow-status tasks that still reference it become orphans. Read it with get_workspace first. Parameters: id, revision from that read, and confirm:true are all required."
 }
 
 func (t *WorkspaceDeleteTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id": map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
+			"id":       map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
+			"revision": map[string]any{"type": "string", "description": "Revision returned by get_workspace"},
 			"confirm": map[string]any{
 				"type":        "boolean",
 				"description": "Must be true to confirm irreversible deletion",
 			},
 		},
-		"required": []string{"id", "confirm"},
+		"required": []string{"id", "revision", "confirm"},
 	}
 }
 
-func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	id, _ := args["id"].(string)
+	revision, _ := args["revision"].(string)
 	confirm, _ := args["confirm"].(bool)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
@@ -839,10 +1124,9 @@ func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *t
 	unlock := workspacepkg.LockID(id)
 
 	// Guard: verify the workspace exists before any irreversible mutations.
-	if _, err := readWorkspaceFromDisk(t.deps.Home, id); err != nil {
+	if _, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision); err != nil {
 		unlock()
-		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use list_workspaces to see available workspaces"))
+		return workspaceRevisionError(id, err)
 	}
 
 	// Step 1: cascade-delete tasks
@@ -1054,8 +1338,8 @@ func (t *WorkspaceGetTool) Description() string {
 	// TestVisibility_PreviewedDescriptionsFitWithoutTruncation (internal,
 	// pkg/tools) and TestVisibility_ScopeCoreGetWorkspaceDescriptionFitsWithoutTruncation
 	// (external, pkg/tools/manifest_scopecore_test.go) which both guard this.
-	return "Get a single workspace by ID, including its live task count.\n" +
-		"Use this to refresh workspace data after creating tasks. Returns id, name, description, status, pinned, pin_order, is_default, core_team, task_count, created_at and updated_at. It does NOT return the delegation graph (which agents on this team may delegate to which) — that lives in a separate store; see the workspace's Team tab for it.\nParameters: id (required, from list_workspaces)."
+	return "Get a workspace by ID, including its authoritative team, delegation graph, revision, and live task count.\n" +
+		"Use this before every workspace mutation and for readback. Returns id, name, description, status, pinned, pin_order, is_default, core_team, delegation, revision, task_count, created_at, and updated_at.\nParameters: id (required, from list_workspaces)."
 }
 
 func (t *WorkspaceGetTool) Parameters() map[string]any {
@@ -1073,16 +1357,17 @@ func (t *WorkspaceGetTool) Execute(_ context.Context, args map[string]any) *tool
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	w, err := readWorkspaceFromDisk(t.deps.Home, id)
+	state, err := workspacepkg.ReadState(t.deps.Home, id)
 	if err != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use list_workspaces to see available workspaces"))
+		return workspaceReadError(id, err)
 	}
+	w := state.Workspace
 	tc := computeWorkspaceTaskCount(t.deps.Home, id)
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
 		"is_default": w.IsDefault, "core_team": w.CoreTeam,
 		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
+		"revision": state.Revision, "delegation": state.Delegation,
 	}))
 }

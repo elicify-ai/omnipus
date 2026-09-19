@@ -7,6 +7,7 @@ description: >
   Core (locked) agents suppress soul in list responses and forbid
   identity mutations via PUT.
 required:
+  - revision
   - id
   - name
   - type
@@ -17,6 +18,25 @@ required:
   - max_tool_iterations
   - needs_model
 properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  persistence_status:
+    $ref: './ConfigurationPersistenceStatus.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  changed_fields:
+    type: array
+    items:
+      type: string
+  error_stage:
+    type: string
+  message:
+    type: string
+  editable_fields:
+    type: array
+    items:
+      $ref: './AgentFieldDescriptor.yaml'
+      x-go-type: AgentFieldDescriptor
   id:
     type: string
     description: Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
@@ -36,38 +56,21 @@ properties:
       - Subagent
       - subagent_3p
     description: >
-      Agent lifecycle classification.
-      "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray).
-      "system" = the System Agents category (ADR-049 D3) — seeded, locked,
-      non-privileged internal-LLM agents that run as real agents in a
-      verifier role: same agent loop and ContextBuilder as any agent, own
-      session, but with memory injection off and a narrow read-only tool
-      set (read_file, list_directory, and a scoped inspect_session — no
-      writes, mutations, commits, task-state changes, or delegation)
-      (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is
-      the only creation path: not
-      creatable via POST /agents or the create_agent tool (400), not
-      deletable, and excluded from chat-target/default-fallback/routing-
-      binding/delegation-target/team-roster enumeration — visible only in
-      the Agents screen "System" section. Only `model`/`provider` and
-      `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the
-      Judge's soul IS its judging rubric, editable while the agent stays
-      otherwise locked; the Judge additionally cannot be disabled).
-      Despite historically being described as privileged, `system` agents
-      are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and
-      remain subject to per-agent LLM rate limits and cost caps (SEC-26).
-      "Main" = user-defined chat colleague (the typical Main agent).
-      "Subagent" = user-defined delegation-only worker on the Omnipus engine.
-      "subagent_3p" = user-defined delegation-only worker on an external CLI
-      (claude-code / codex / opencode).
-      Legacy persisted configs with type "worker" are normalized by ToWireType to
-      Subagent or subagent_3p (based on executor) and never appear on the wire.
+      Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and
+      Admin use core; built-in Planner, Researcher and General Purpose use
+      Subagent on the wire. Hidden Judge and Plan Supervisor use system and are
+      excluded from chat/team/delegation selection. Custom creation accepts Main,
+      Subagent and subagent_3p only. Runtime type is immutable after creation.
+      Hidden instructions and supported model tuning remain editable, while
+      hidden capabilities are fixed. Ordinary built-in capabilities are editable
+      within the global policy ceiling. Use editable_fields for the exact rules.
     example: "core"
   locked:
     type: boolean
     description: >
-      When true, name, description, and soul are immutable
-      via the PUT /agents/{id} endpoint. Core agents are always locked.
+      Identity is fixed on built-ins. Ordinary built-in souls are fixed; hidden
+      Judge/Supervisor souls are editable. Use editable_fields for capability
+      and runtime-specific editability.
     example: false
   color:
     type: string

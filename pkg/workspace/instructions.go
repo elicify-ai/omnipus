@@ -5,6 +5,8 @@
 package workspace
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -106,6 +108,13 @@ func instructionsPath(home, id string) string {
 	return filepath.Join(WorkspaceDir(home, id), instructionsFileName)
 }
 
+// RevisionForInstructions is the opaque SHA-256 of the AGENT.md bytes the
+// read path actually returns (empty file and missing file are both "").
+func RevisionForInstructions(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+
 // ReadInstructions returns the content of the workspace's AGENT.md (Project
 // Instructions). It returns "" with a nil error when the file does not exist —
 // an absent instructions file is a valid empty state, not an error. A read error
@@ -145,6 +154,37 @@ func ReadInstructions(home, id string) (string, error) {
 			})
 		data = data[:maxInstructionsBytes]
 		return string(data) + "\n\n[... workspace instructions truncated at 256 KB ...]", nil
+	}
+	return string(data), nil
+}
+
+// ReadInstructionsForManagement returns the exact editable AGENT.md bytes.
+// Unlike ReadInstructions, it rejects an externally-created oversized file
+// instead of returning a truncated synthetic view that could be revised and
+// accidentally used as authority to replace unseen bytes.
+func ReadInstructionsForManagement(home, id string) (string, error) {
+	if !safeID(id) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidWorkspaceID, id)
+	}
+	f, err := os.Open(instructionsPath(home, id))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("workspace: read instructions %q: %w", id, err)
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxInstructionsBytes)+1))
+	if err != nil {
+		return "", fmt.Errorf("workspace: read instructions %q: %w", id, err)
+	}
+	if len(data) > maxInstructionsBytes {
+		return "", fmt.Errorf(
+			"%w: existing file is larger than %d bytes",
+			ErrInstructionsTooLarge,
+			maxInstructionsBytes,
+		)
 	}
 	return string(data), nil
 }

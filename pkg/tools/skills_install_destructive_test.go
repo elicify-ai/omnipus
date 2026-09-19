@@ -2,8 +2,11 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -117,8 +120,10 @@ func TestInstallSkillTool_ForceReinstallStillWorks(t *testing.T) {
 
 	// A force reinstall over an existing skill — the branch that holds the
 	// os.RemoveAll — must still replace exactly that one directory.
+	revision, err := skills.NewSkillWriter(globalSkills).SkillRevision("pdf")
+	require.NoError(t, err)
 	result = tool.Execute(context.Background(), map[string]any{
-		"slug": "pdf", "registry": "fake", "force": true,
+		"slug": "pdf", "registry": "fake", "force": true, "revision": revision,
 	})
 	require.False(t, result.IsError, "force reinstall must succeed, got: %s", result.ForLLM)
 	_, err = os.Stat(filepath.Join(globalSkills, "pdf", "SKILL.md"))
@@ -128,4 +133,57 @@ func TestInstallSkillTool_ForceReinstallStillWorks(t *testing.T) {
 		_, statErr := os.Stat(filepath.Join(globalSkills, name, "SKILL.md"))
 		assert.NoError(t, statErr, "force reinstall must not touch the other skills (%q)", name)
 	}
+}
+
+func TestInstallSkillToolReportsSavedStateWhenBackupCleanupIsIncomplete(t *testing.T) {
+	globalSkills := t.TempDir()
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(fakeSkillRegistry{})
+	tool := NewInstallSkillTool(registryMgr, globalSkills)
+	original := publishInstalledSkill
+	publishInstalledSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{Revision: strings.Repeat("b", 64), PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}, nil
+	}
+	t.Cleanup(func() { publishInstalledSkill = original })
+
+	result := tool.Execute(context.Background(), map[string]any{"slug": "new-skill", "registry": "fake"})
+	require.False(t, result.IsError, "result=%s", result.ForLLM)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &payload))
+	require.Equal(t, strings.Repeat("b", 64), payload["revision"])
+	require.Equal(t, "complete", payload["persistence_status"])
+	require.Equal(t, "active", payload["activation_status"])
+	require.Contains(t, payload["warning"], "cleanup is incomplete")
+}
+
+func TestInstallSkillToolReportsPartialStateWhenPreviousPackageCannotBeRestored(t *testing.T) {
+	globalSkills := t.TempDir()
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(fakeSkillRegistry{})
+	tool := NewInstallSkillTool(registryMgr, globalSkills)
+	original := publishInstalledSkill
+	publishInstalledSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{
+			PersistenceStatus: skills.PersistencePartial,
+			ActivationStatus:  skills.ActivationNotAttempted,
+			ChangedFields:     []string{"installed"},
+			ErrorStage:        skills.PublicationErrorStageRestorePrevious,
+			Message:           "replacement publication failed and the previous package could not be restored; no live package is available",
+		}, errors.New("private publish cause; private restore cause")
+	}
+	t.Cleanup(func() { publishInstalledSkill = original })
+
+	result := tool.Execute(context.Background(), map[string]any{"slug": "new-skill", "registry": "fake"})
+	require.True(t, result.IsError, "partial publication must remain an error")
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &payload), "result=%s", result.ForLLM)
+	require.Equal(t, map[string]any{
+		"activation_status":  "not_attempted",
+		"changed_fields":     []any{"installed"},
+		"error_stage":        "restore_previous",
+		"message":            "replacement publication failed and the previous package could not be restored; no live package is available",
+		"persistence_status": "partial",
+	}, payload)
+	require.NotContains(t, result.ForLLM, "private publish cause")
+	require.NotContains(t, result.ForLLM, "private restore cause")
 }

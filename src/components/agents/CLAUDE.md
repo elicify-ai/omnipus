@@ -7,9 +7,12 @@ this folder holds the profile, form, wizard, and tool-approval pieces.
 
 - Wire taxonomy: `Main` (chat colleague) / `Subagent` (delegation-only worker
   on the Omnipus engine) / `subagent_3p` (delegation-only worker on an external
-  CLI). The built-in roster (Mia/Jim/Ava/Ray) is `type: core, locked: true` —
-  not user-creatable or editable; `CreateAgentWizard` offers only the three
-  user types.
+  CLI). The built-in colleagues (Mia/Jim/Ava/Admin) are `type: core, locked: true`.
+  ADR-090 protects their identity and base instructions while allowing capability
+  configuration. Judge and Plan Supervisor allow instruction edits with fixed
+  capabilities. Use backend editable-field descriptors, including
+  `tool_policy_changes` for the Tools editor; never infer capability locks from
+  `locked` alone. `CreateAgentWizard` offers only the three user types.
 - Worker detection is `src/lib/api/agents.ts::isWorker` (recognises `Subagent`,
   `subagent_3p`, legacy `worker`). One helper — do not inline a second
   type-string check per component.

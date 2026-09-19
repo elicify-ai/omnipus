@@ -2,31 +2,11 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// knowledge_effective_posture_test.go — ADR-068 D15.3 checked as a GRANT
-// rather than as the existence of a map key (superseding ADR-067 D17).
-//
-// # The hole this closes
-//
-// TestKnowledgeTools_EveryRegisteredKnowledgeToolHasAnExplicitPolicyEntry
-// asserts `hasAgentEntry || hasGlobalEntry`. That proves an entry EXISTS. It
-// does not prove the entry GRANTS anything, and the difference is not
-// academic: coreagent's denyAllThenOverride synthesises an explicit `deny` for
-// every name in the static-tool universe before applying the overrides, so a
-// tool added to that universe and never granted satisfies the existence check
-// perfectly while shipping dead. Constraint #6 is satisfied — the entry is
-// explicit, literal and wildcard-free — and the feature does not work.
-//
-// # The oracle
-//
-// ADR-068 D15.3 plus KB-1/KB-2's two additions
-// (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
-// 2026-09-08), transcribed as data below: the read tier (knowledge_describe,
-// knowledge_find, knowledge_read, knowledge_list) `allow` for all four base
-// agents; the write tools (knowledge_edit, knowledge_restructure,
-// knowledge_configure, knowledge_base_create) `allow` for Jim, `ask` for
-// Ava/Mia/Ray. It is NOT read back from pkg/config/defaults.go or
-// pkg/coreagent/core.go — those are the things under test, and a test that
-// asks the seed what the seed says passes for any seed.
+// Verify ADR-090 knowledge permissions through the live registry and policy
+// filter. A policy entry's existence alone does not prove the tool is usable.
+// The expected matrix below comes from the approved role responsibilities,
+// independently of the seed: ordinary roles can read, Mia/Jim/General Purpose
+// ask before writes, and hidden roles have no knowledge access.
 
 package gateway
 
@@ -37,81 +17,40 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// d15Posture is ADR-068 D15.3's seed matrix, transcribed from the design.
-//
-// The value is what an agent's turn must RESOLVE to, not what appears in a
-// config map: "allow" means the model is offered the tool, "ask" means it is
-// offered and every call goes through the approval modal. Either is a working
-// tool. "deny" — or absence from the resolved set — is a dead one.
-var d15Posture = map[string]struct{ read, write string }{
-	string(coreagent.IDMia): {read: "allow", write: "ask"},
-	string(coreagent.IDJim): {read: "allow", write: "allow"},
-	string(coreagent.IDAva): {read: "allow", write: "ask"},
-	string(coreagent.IDRay): {read: "allow", write: "ask"},
+// adr090KnowledgePosture is the founder-approved matrix, independent of the seed.
+var adr090KnowledgePosture = map[string]struct{ read, write string }{
+	"mia": {"allow", "ask"}, "jim": {"allow", "ask"}, "ava": {"allow", "deny"},
+	"admin": {"allow", "deny"}, "planner": {"allow", "deny"}, "researcher": {"allow", "deny"},
+	"worker": {"allow", "ask"}, "judge": {"deny", "deny"}, "plansupervisor": {"deny", "deny"},
 }
 
-// TestKnowledgeTools_D15PostureIsWhatTheTurnActuallyResolves runs every
-// (agent x knowledge tool) pair through tools.FilterToolsByPolicy — the
-// single primitive the turn engine uses to decide what the model is offered
-// and the gateway uses to gate execution — and compares the resolved
-// verdict against ADR-068 D15.3.
-//
-// Resolution is strictest-wins across the global ceiling and the per-agent
-// map, so this also catches the failure the seed-side tests structurally
-// cannot see: a tighter entry in pkg/config/defaults.go silently overruling a
-// correct-looking per-agent grant in pkg/coreagent/core.go.
-func TestKnowledgeTools_D15PostureIsWhatTheTurnActuallyResolves(t *testing.T) {
+// TestKnowledgeTools_ADR090PostureIsWhatTheTurnActuallyResolves verifies the
+// live registry and policy filter, including deliberate denials.
+func TestKnowledgeTools_ADR090PostureIsWhatTheTurnActuallyResolves(t *testing.T) {
 	al, _, _ := kwLoop(t)
-
-	read := map[string]bool{
-		"knowledge_describe": true, "knowledge_find": true, "knowledge_read": true,
-		"knowledge_list": true,
-	}
-
-	for agentID, want := range d15Posture {
-		normalized := routing.NormalizeAgentID(agentID)
-		inst, ok := al.GetRegistry().GetAgent(normalized)
-		require.Truef(t, ok,
-			"D15.3 names agent %q but it is not registered — without it this test measures "+
-				"nothing for that row of the matrix", normalized)
-
-		_, resolved := tools.FilterToolsByPolicy(
-			inst.Tools.GetAll(), inst.AgentType, inst.LoadToolPolicy())
-
-		checked := 0
+	for agentID, want := range adr090KnowledgePosture {
+		inst, ok := al.GetRegistry().GetAgent(routing.NormalizeAgentID(agentID))
+		require.True(t, ok, "role %s must exist", agentID)
+		_, resolved := tools.FilterToolsByPolicy(inst.Tools.GetAll(), inst.AgentType, inst.LoadToolPolicy())
 		for _, name := range knowledgeToolNames {
 			expected := want.write
-			family := "write"
-			if read[name] {
-				expected = want.read
-				family = "read"
+			for _, readName := range knowledgeReadToolNames {
+				if name == readName {
+					expected = want.read
+				}
 			}
-			checked++
-
 			got, survived := resolved[name]
-			assert.Truef(t, survived,
-				"agent %q resolves %q (%s) to DENY or drops it entirely, but ADR-068 D15.3 "+
-					"seeds it %q. The model is never offered the tool, no operator sees a "+
-					"failure, and the seed still reads correctly — an explicit policy entry "+
-					"existing is not the same as it granting anything (Constraint #6)",
-				normalized, name, family, expected)
-			if survived {
-				assert.Equalf(t, expected, got,
-					"agent %q resolves %q (%s) to %q; D15.3 seeds %q. An 'ask' where D15.3 "+
-						"says 'allow' puts an approval modal in front of every call; an 'allow' "+
-						"where D15.3 says 'ask' removes the operator's consent step from a tool "+
-						"that writes to their own notes",
-					normalized, name, family, got, expected)
+			if expected == "deny" {
+				assert.False(t, survived, "%s must not be offered %s", agentID, name)
+				continue
 			}
+			require.True(t, survived, "%s must be offered %s", agentID, name)
+			assert.Equal(t, expected, got, "%s / %s", agentID, name)
 		}
-		require.Equalf(t, len(knowledgeToolNames), checked,
-			"agent %q was checked for %d of the %d seeded knowledge tools",
-			normalized, checked, len(knowledgeToolNames))
 	}
 }
 

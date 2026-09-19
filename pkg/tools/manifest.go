@@ -56,25 +56,15 @@ const (
 // the agent having forgotten. Membership is pinned by TestVisibility_TierArithmetic
 // — do not hand-edit this map without updating that test's literal list too.
 var fullManifestToolNames = map[string]struct{}{
-	"read_file":           {},
-	"write_file":          {},
-	"edit_file":           {},
-	"list_directory":      {},
-	"list_mounts":         {}, // ADR-071 D3: promoted from lazy — addressing primitive, no discovery moment.
-	"search_web":          {},
-	"fetch_url":           {},
-	"send_message":        {},
-	"switch_agent":        {}, // ADR-071 D4: hand_off/return_to_default merged into switch_agent.
-	"send_file":           {}, // ADR-071 D3: promoted from lazy.
-	"message_parent":      {}, // ADR-071 D3: promoted from lazy.
-	"remember":            {},
-	"recall_memory":       {},
-	"recall_conversation": {}, // ADR-071 D3: promoted — recall must not cost a discovery round trip.
-	"set_todos":           {},
-	"list_tasks":          {},
-	"delegate":            {}, // ADR-053: must be at least as visible as the task tools,
-	// otherwise the model reaches for the task route because it is the only
-	// one it can see as a callable def (measured 304s vs 20-80s for delegate).
+	"AskUserQuestion": {}, "Skill": {}, "append_file": {}, "bash": {},
+	"create_plan": {}, "create_task": {}, "delegate": {}, "edit_file": {},
+	"execute_plan": {}, "fetch_url": {}, "get_workspace": {}, "goal_claim": {},
+	"grep": {}, "inspect_session": {}, "library_list": {}, "library_read": {},
+	"list_agents": {}, "list_directory": {}, "list_jobs": {}, "list_mounts": {},
+	"list_tasks": {}, "message_parent": {}, "plan_correct": {}, "read_file": {},
+	"recall_conversation": {}, "recall_memory": {}, "remember": {}, "search_web": {},
+	"send_file": {}, "send_message": {}, "set_goal": {}, "set_todos": {},
+	"stop_plan": {}, "switch_agent": {}, "update_task": {}, "write_file": {},
 }
 
 // infraManifestToolNames is the set of infrastructure tools that are always
@@ -136,37 +126,22 @@ const (
 	ManifestSearchOnly
 )
 
-// previewedLazyToolNames is the exact 9-name Tier 2 set (ADR-071 D3 §4.1,
-// minus navigate's retirement, which held one of the original 8 slots as a
-// total no-op — its callback was nil in every production path and nothing
-// anywhere could receive a navigation event; plus create_plan and
-// execute_plan, moved in from search-only by the 2026-09-14 amendment; see
-// TestVisibility_PreviewedSetIsExactlyNine's doc comment in
-// manifest_test.go): lazy tools that still render a preview line in the
-// compressed manifest block. Everything else lazy resolves to ManifestSearchOnly.
-// Membership is pinned by TestVisibility_PreviewedSetIsExactlyNine — adding
-// a tool here (or removing one) without updating that test's literal list is
-// a build failure by design (FR-034).
+// previewedLazyToolNames is the Tier 2 set: lazy tools that still render a
+// preview line in the compressed manifest block (ADR-071 D3 §4.1 as amended).
+// Under ADR-090's 37-name upfront set the previewed tier has collapsed to
+// serve_web alone; overall cardinality (36 full + 1 previewed + 1 infra) is
+// pinned by TestVisibility_TierArithmetic, and previewed membership itself by
+// TestVisibility_PreviewedSetIsServeWebOnly in manifest_test.go — adding a
+// tool here (or removing one) without updating that test's literal list is
+// a build failure by design (FR-034). Everything else lazy resolves to
+// ManifestSearchOnly.
 //
 // A preview line is never a policy bypass: BuildCompressedManifest renders
 // only the tools its caller passes, and the agent loop passes the
 // policy-filtered slice, so an agent whose policy denies a name here never
 // sees its line.
 var previewedLazyToolNames = map[string]struct{}{
-	"list_agents":   {},
-	"list_jobs":     {},
-	"serve_web":     {},
-	"get_workspace": {},
-	"bash":          {}, // ADR-071 D3: demoted from Full — see fullManifestToolNames doc.
-	"create_task":   {},
-	"update_task":   {},
-	// ADR-071 amendment 2026-09-14 (founder decision): moved from search-only.
-	// UAT A-17/B-7/B-10 showed agents never discovered them and fanned
-	// multi-part parallel work out as raw delegate calls instead — §4.3's
-	// accepted risk (a ToolSearch query the model has no prompt to formulate)
-	// materialised for exactly the tools that work needs.
-	"create_plan":  {},
-	"execute_plan": {},
+	"serve_web": {},
 }
 
 // administrativeToolNames is the exact, drift-tested "destructive-and-
@@ -186,6 +161,12 @@ var previewedLazyToolNames = map[string]struct{}{
 // TestAdministrativeToolNames_Drift — do not hand-edit this map without
 // updating that test's literal list too.
 var administrativeToolNames = map[string]struct{}{
+	// environment_setup (ADR-090 ES-FR-01, review finding GS-22): installs
+	// packages into the shared-scope .omnipus/env subtree — install-wide
+	// state. Classifying it here narrows only ToolSearch's speculative
+	// cross-category promotion; it is NOT a policy mechanism (the tool's
+	// policy is the ordinary two-level ask) and does not make it Admin-only.
+	"environment_setup":        {},
 	"delete_agent":             {},
 	"delete_task":              {},
 	"delete_task_in_workspace": {},

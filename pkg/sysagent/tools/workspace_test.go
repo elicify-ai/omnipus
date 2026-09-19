@@ -32,6 +32,103 @@ func workspaceID(t *testing.T, body string) string {
 	return id
 }
 
+func currentWorkspaceRevision(t *testing.T, home, id string) string {
+	t.Helper()
+	state, err := workspacepkg.ReadState(home, id)
+	if err != nil {
+		return strings.Repeat("0", 64)
+	}
+	return state.Revision
+}
+
+func TestWorkspaceUpdate_StaleRevisionDoesNotWrite(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{"name": "Original"})
+	if created.IsError {
+		t.Fatalf("create failed: %s", created.ForLLM)
+	}
+	id := workspaceID(t, created.ForLLM)
+	before, err := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id": id, "revision": strings.Repeat("0", 64), "name": "Must not persist",
+	})
+	if !result.IsError {
+		t.Fatal("stale revision unexpectedly succeeded")
+	}
+	after, err := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("stale update changed workspace bytes")
+	}
+}
+
+func TestWorkspaceUpdate_ExplicitDelegationReplaceAndClear(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "jim", "ava")
+	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name": "Graph", "core_team": []any{"jim", "ava"},
+	})
+	if created.IsError {
+		t.Fatalf("create failed: %s", created.ForLLM)
+	}
+	id := workspaceID(t, created.ForLLM)
+	tool := systools.NewWorkspaceUpdateTool(deps)
+
+	updated := tool.Execute(context.Background(), map[string]any{
+		"id": id, "revision": currentWorkspaceRevision(t, home, id),
+		"delegation": []any{map[string]any{"from_agent": "jim", "to_agent": "ava", "modes": []any{"direct"}, "depth": float64(1)}},
+	})
+	if updated.IsError {
+		t.Fatalf("replace failed: %s", updated.ForLLM)
+	}
+	edges, ok := workspacepkg.LoadDelegation(home, id)
+	if !ok || len(edges) != 1 || edges[0].FromAgent != "jim" || edges[0].ToAgent != "ava" {
+		t.Fatalf("unexpected replacement: %#v", edges)
+	}
+
+	cleared := tool.Execute(context.Background(), map[string]any{
+		"id": id, "revision": currentWorkspaceRevision(t, home, id), "delegation": []any{},
+	})
+	if cleared.IsError {
+		t.Fatalf("clear failed: %s", cleared.ForLLM)
+	}
+	edges, ok = workspacepkg.LoadDelegation(home, id)
+	if !ok || len(edges) != 0 {
+		t.Fatalf("graph was not cleared: %#v", edges)
+	}
+}
+
+func TestWorkspaceUpdate_ExplicitDelegationRejectsNullOffTeamAndCycleWithoutWrites(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "jim", "ava")
+	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{"name": "Graph", "core_team": []any{"jim", "ava"}})
+	if created.IsError {
+		t.Fatalf("create failed: %s", created.ForLLM)
+	}
+	id := workspaceID(t, created.ForLLM)
+	tool := systools.NewWorkspaceUpdateTool(deps)
+	cases := []any{
+		nil,
+		[]any{map[string]any{"from_agent": "jim", "to_agent": "ghost"}},
+		[]any{map[string]any{"from_agent": "jim", "to_agent": "ava"}, map[string]any{"from_agent": "ava", "to_agent": "jim"}},
+	}
+	for _, graph := range cases {
+		before, _ := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+		result := tool.Execute(context.Background(), map[string]any{"id": id, "revision": currentWorkspaceRevision(t, home, id), "name": "must-not-write", "delegation": graph})
+		if !result.IsError {
+			t.Fatalf("invalid graph %#v succeeded", graph)
+		}
+		after, _ := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+		if string(before) != string(after) {
+			t.Fatalf("invalid graph %#v changed workspace", graph)
+		}
+	}
+}
+
 // newTestDepsWithHomeAndAgents behaves like newTestDepsWithHome but also seeds
 // the live config's Agents.List with the given IDs (ID field only) — required
 // for delegation-edge auto-seed tests now that seedDelegationEdgesForNewMembers
@@ -85,6 +182,7 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 	// Update the workspace exactly as Ava did: add a new agent to core_team.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"mia", "jim", "ava", "ray", "codereview"},
 	})
 	if res.IsError {
@@ -161,8 +259,9 @@ func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 
 	// Perform a minimal update — rename only. All other fields must be unchanged.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":   id,
-		"name": "Renamed Workspace",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"name":     "Renamed Workspace",
 	})
 	if res.IsError {
 		t.Fatalf("update_workspace failed: %s", res.ForLLM)
@@ -413,8 +512,8 @@ func TestWorkspaceCreate_LargeCoreTeamAccepted(t *testing.T) {
 // for newly added members — otherwise, per ADR-037's fail-closed rule (no
 // edge ⇒ deny), no member of a freshly-created team could delegate to any
 // other. Mirrors TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers: team
-// [ava, jim, worker] should seed exactly jim→ava, jim→worker, ava→worker
-// (jim→ray is dropped — ray is not on the team).
+// [ava, jim, worker] seeds Jim→Ava, Jim→Worker, Jim→Jim and Worker→Worker.
+// No retired role may enter the graph.
 func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
 	tool := systools.NewWorkspaceCreateTool(deps)
@@ -439,20 +538,39 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	id := workspaceID(t, result.ForLLM)
 	edges := delegationEdgesFromDisk(t, home, id)
-	if len(edges) != 3 {
-		t.Fatalf("expected exactly 3 seeded edges, got %d: %v", len(edges), edges)
+	// Ratified Jim→Ava delegation joins Jim→Worker and both self-edges.
+	if len(edges) != 4 {
+		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
+	}
+	jimAva := findEdge(edges, "jim", "ava")
+	if jimAva == nil {
+		t.Fatal("Jim must be able to delegate team configuration to Ava")
+	}
+	if _, pinned := jimAva["depth"]; pinned {
+		t.Fatal("Jim→Ava must inherit the global depth ceiling, not the self-edge cap")
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
 	}
-	if findEdge(edges, "jim", "ava") == nil {
-		t.Error("expected jim→ava edge")
+	if findEdge(edges, "jim", "jim") == nil {
+		t.Error("expected Jim self edge")
 	}
 	if findEdge(edges, "jim", "worker") == nil {
 		t.Error("expected jim→worker edge")
 	}
-	if findEdge(edges, "ava", "worker") == nil {
-		t.Error("expected ava→worker edge")
+	if findEdge(edges, "worker", "worker") == nil {
+		t.Error("expected General Purpose self edge")
+	}
+	if d, ok := edgeDepthInt(findEdge(edges, "jim", "jim")); !ok || d != 3 {
+		t.Errorf("jim→jim: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if d, ok := edgeDepthInt(findEdge(edges, "worker", "worker")); !ok || d != 3 {
+		t.Errorf("worker→worker: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if e := findEdge(edges, "jim", "worker"); e != nil {
+		if _, hasDepth := e["depth"]; hasDepth {
+			t.Errorf("jim→worker: depth should be absent (non-self seed inherits the global cap), got %v", e["depth"])
+		}
 	}
 
 	// The edge list must never be copied into the child-writable workspace
@@ -491,6 +609,145 @@ func TestWorkspaceCreate_NoCoreTeam_NoDelegationSeeded(t *testing.T) {
 	delegPath := filepath.Join(home, "entities", "delegation", id+".json")
 	if _, err := os.Stat(delegPath); err == nil {
 		t.Errorf("delegation store file should not exist for a core_team-less create: %s", delegPath)
+	}
+}
+
+// TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3 is the tool-path FR-006
+// matrix: create_workspace seeds jim→jim and worker→worker at min(3,
+// effective ceiling). Non-self Jim edges stay unpinned. Expected depths
+// come from the spec sentence, not from observed output.
+func TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
+	cases := []struct {
+		name     string
+		maxDepth int
+		want     int
+	}{
+		{"unset ceiling pins 3", 0, 3},
+		{"ceiling 2 clamps to 2", 2, 2},
+		{"ceiling 5 still pins 3", 5, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
+			deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = tc.maxDepth
+			result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
+				"name":      "Self Depth",
+				"core_team": []any{"ava", "jim", "worker"},
+			})
+			if result.IsError {
+				t.Fatalf("create_workspace failed: %s", result.ForLLM)
+			}
+			id := workspaceID(t, result.ForLLM)
+			edges := delegationEdgesFromDisk(t, home, id)
+			for _, pair := range [][2]string{{"jim", "jim"}, {"worker", "worker"}} {
+				e := findEdge(edges, pair[0], pair[1])
+				if e == nil {
+					t.Fatalf("expected self-edge %s→%s", pair[0], pair[1])
+				}
+				d, ok := edgeDepthInt(e)
+				if !ok || d != tc.want {
+					t.Errorf("%s→%s depth present=%v value=%d, want %d", pair[0], pair[1], ok, d, tc.want)
+				}
+			}
+			for _, pair := range [][2]string{{"jim", "ava"}, {"jim", "worker"}} {
+				e := findEdge(edges, pair[0], pair[1])
+				if e == nil {
+					t.Fatalf("expected non-self edge %s→%s", pair[0], pair[1])
+				}
+				if _, has := e["depth"]; has {
+					t.Errorf("%s→%s must not carry the self-edge pin, got %v", pair[0], pair[1], e["depth"])
+				}
+			}
+		})
+	}
+}
+
+// TestWorkspaceCreate_ExplicitSelfEdgeIsNotDepthPinned proves an explicit
+// user-authored graph on create_workspace is not rewritten by the fresh-seed
+// pin (FR-006 applies to seeded edges, not supplied ones; no migration).
+func TestWorkspaceCreate_ExplicitSelfEdgeIsNotDepthPinned(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "jim")
+	deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = 5
+	result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name":      "Explicit Self",
+		"core_team": []any{"jim"},
+		"delegation": []any{map[string]any{
+			"from_agent": "jim", "to_agent": "jim",
+			"modes": []any{"direct", "task"},
+		}},
+	})
+	if result.IsError {
+		t.Fatalf("create_workspace failed: %s", result.ForLLM)
+	}
+	id := workspaceID(t, result.ForLLM)
+	e := findEdge(delegationEdgesFromDisk(t, home, id), "jim", "jim")
+	if e == nil {
+		t.Fatal("expected explicit jim→jim edge")
+	}
+	if _, has := e["depth"]; has {
+		t.Errorf("explicit user-authored self-edge must not receive the fresh-seed pin, got %v", e["depth"])
+	}
+}
+
+// TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored covers the
+// update_workspace seed path: a newly added Worker self-edge is pinned at
+// min(3, ceiling), while a user-authored Jim self-edge already on disk
+// keeps its written depth (no migration).
+func TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored(t *testing.T) {
+	cases := []struct {
+		name      string
+		maxDepth  int
+		wantFresh int
+		id        string
+	}{
+		{"ceiling 2 clamps a newly seeded worker self-edge to 2", 2, 2, "01KW60SELFDEPTH00000000002"},
+		{"ceiling 5 still pins a newly seeded worker self-edge to 3", 5, 3, "01KW60SELFDEPTH00000000005"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, home := newTestDepsWithHomeAndAgents(t, "jim", "worker")
+			deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = tc.maxDepth
+			wsPath := filepath.Join(home, "workspaces", tc.id+".json")
+			if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			original := `{
+			"id": "` + tc.id + `",
+			"name": "Preserve Self Depth",
+			"status": "active",
+			"core_team": ["jim"],
+			"created_at": "2026-01-01T00:00:00Z",
+			"updated_at": "2026-01-01T00:00:00Z"
+		}`
+			if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			seedDelegationStoreForTest(t, home, tc.id, `[
+			{"from_agent":"jim","to_agent":"jim","modes":["direct","task"],"depth":1}
+		]`)
+			res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+				"id":        tc.id,
+				"revision":  currentWorkspaceRevision(t, home, tc.id),
+				"core_team": []any{"jim", "worker"},
+			})
+			if res.IsError {
+				t.Fatalf("update_workspace failed: %s", res.ForLLM)
+			}
+			edges := delegationEdgesFromDisk(t, home, tc.id)
+			jimSelf := findEdge(edges, "jim", "jim")
+			if d, ok := edgeDepthInt(jimSelf); !ok || d != 1 {
+				t.Errorf("user-authored jim→jim depth must stay 1, present=%v value=%d", ok, d)
+			}
+			workerSelf := findEdge(edges, "worker", "worker")
+			if d, ok := edgeDepthInt(workerSelf); !ok || d != tc.wantFresh {
+				t.Errorf("fresh worker→worker depth present=%v value=%d, want %d", ok, d, tc.wantFresh)
+			}
+			if e := findEdge(edges, "jim", "worker"); e == nil {
+				t.Error("expected jim→worker to be seeded for the newly added worker")
+			} else if _, has := e["depth"]; has {
+				t.Errorf("jim→worker must not carry the self-edge pin, got %v", e["depth"])
+			}
+		})
 	}
 }
 
@@ -629,7 +886,7 @@ func TestWorkspaceList_Populated(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.10
 func TestWorkspaceList_StatusFilter(t *testing.T) {
-	deps, _ := newTestDepsWithHome(t)
+	deps, home := newTestDepsWithHome(t)
 	ctx := context.Background()
 	createTool := systools.NewWorkspaceCreateTool(deps)
 	updateTool := systools.NewWorkspaceUpdateTool(deps)
@@ -643,7 +900,7 @@ func TestWorkspaceList_StatusFilter(t *testing.T) {
 	id2 := workspaceID(t, r2.ForLLM)
 
 	// Archive the second workspace.
-	if ur := updateTool.Execute(ctx, map[string]any{"id": id2, "status": "archived"}); ur.IsError {
+	if ur := updateTool.Execute(ctx, map[string]any{"id": id2, "revision": currentWorkspaceRevision(t, home, id2), "status": "archived"}); ur.IsError {
 		t.Fatalf("archive failed: %s", ur.ForLLM)
 	}
 
@@ -687,6 +944,7 @@ func TestWorkspaceUpdate_Happy(t *testing.T) {
 
 	ur := systools.NewWorkspaceUpdateTool(deps).Execute(ctx, map[string]any{
 		"id":          id,
+		"revision":    currentWorkspaceRevision(t, home, id),
 		"name":        "New Name",
 		"description": "Updated description",
 		"pinned":      true,
@@ -729,8 +987,9 @@ func TestWorkspaceUpdate_NotFound(t *testing.T) {
 	tool := systools.NewWorkspaceUpdateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
-		"id":   "01JZZZZZZZZZZZZZZZZZZZZZZZ",
-		"name": "Should Not Work",
+		"id":       "01JZZZZZZZZZZZZZZZZZZZZZZZ",
+		"revision": strings.Repeat("0", 64),
+		"name":     "Should Not Work",
 	})
 	if !result.IsError {
 		t.Fatalf("expected error for unknown id, got success: %s", result.ForLLM)
@@ -746,7 +1005,7 @@ func TestWorkspaceUpdate_NotFound(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.10
 func TestWorkspaceUpdate_InvalidStatus(t *testing.T) {
-	deps, _ := newTestDepsWithHome(t)
+	deps, home := newTestDepsWithHome(t)
 	ctx := context.Background()
 
 	cr := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{"name": "Status Test"})
@@ -756,8 +1015,9 @@ func TestWorkspaceUpdate_InvalidStatus(t *testing.T) {
 	id := workspaceID(t, cr.ForLLM)
 
 	result := systools.NewWorkspaceUpdateTool(deps).Execute(ctx, map[string]any{
-		"id":     id,
-		"status": "deleted",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"status":   "deleted",
 	})
 	if !result.IsError {
 		t.Fatalf("expected error for invalid status, got success: %s", result.ForLLM)
@@ -849,6 +1109,26 @@ func findEdge(edges []map[string]any, from, to string) map[string]any {
 	return nil
 }
 
+// edgeDepthInt reads a persisted edge's depth. encoding/json decodes JSON
+// numbers into float64 when the target is map[string]any.
+func edgeDepthInt(edge map[string]any) (int, bool) {
+	if edge == nil {
+		return 0, false
+	}
+	raw, ok := edge["depth"]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
 // modesOf extracts an edge's "modes" field as []string (nil if absent).
 func modesOf(edge map[string]any) []string {
 	raw, _ := edge["modes"].([]any)
@@ -893,6 +1173,7 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim", "worker"},
 	})
 	if res.IsError {
@@ -910,29 +1191,37 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
-	if len(edges) != 3 {
-		t.Fatalf("expected exactly 3 seeded edges, got %d: %v", len(edges), edges)
+	// Ratified Jim→Ava delegation joins Jim→Worker and both self-edges.
+	if len(edges) != 4 {
+		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
+	}
+	jimAva := findEdge(edges, "jim", "ava")
+	if jimAva == nil {
+		t.Fatal("Jim must be able to delegate team configuration to Ava")
+	}
+	if _, pinned := jimAva["depth"]; pinned {
+		t.Fatal("Jim→Ava must inherit the global depth ceiling, not the self-edge cap")
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
 	}
 
-	jimAva := findEdge(edges, "jim", "ava")
-	if jimAva == nil {
-		t.Fatal("expected jim→ava edge")
+	jimSelf := findEdge(edges, "jim", "jim")
+	if jimSelf == nil {
+		t.Fatal("expected Jim self edge")
 	}
 	jimWorker := findEdge(edges, "jim", "worker")
 	if jimWorker == nil {
 		t.Fatal("expected jim→worker edge")
 	}
-	avaWorker := findEdge(edges, "ava", "worker")
-	if avaWorker == nil {
-		t.Fatal("expected ava→worker edge (worker is newly added, even though ava pre-existed)")
+	workerSelf := findEdge(edges, "worker", "worker")
+	if workerSelf == nil {
+		t.Fatal("expected General Purpose self edge")
 	}
 
 	// Jim's seed [task, background, await] must collapse+dedupe to [task, direct].
 	wantModes := map[string]bool{"task": true, "direct": true}
-	for name, edge := range map[string]map[string]any{"jim→ava": jimAva, "jim→worker": jimWorker} {
+	for name, edge := range map[string]map[string]any{"jim→jim": jimSelf, "jim→worker": jimWorker} {
 		modes := modesOf(edge)
 		if len(modes) != 2 {
 			t.Errorf("%s modes = %v, want exactly 2 (task, direct)", name, modes)
@@ -942,9 +1231,17 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 				t.Errorf("%s modes = %v contains unexpected mode %q", name, modes, mo)
 			}
 		}
-		if _, hasDepth := edge["depth"]; hasDepth {
-			t.Errorf("%s: depth should be absent (Jim's seed has no depth), got %v", name, edge["depth"])
-		}
+	}
+	// FR-006: fresh self-edges pin 3 when the ceiling is unset
+	// (DefaultConfig leaves SubTurn.MaxDepth at 0 → fallback 3).
+	if d, ok := edgeDepthInt(jimSelf); !ok || d != 3 {
+		t.Errorf("jim→jim: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if d, ok := edgeDepthInt(workerSelf); !ok || d != 3 {
+		t.Errorf("worker→worker: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if _, hasDepth := jimWorker["depth"]; hasDepth {
+		t.Errorf("jim→worker: depth should be absent (non-self seed inherits the global cap), got %v", jimWorker["depth"])
 	}
 }
 
@@ -977,6 +1274,7 @@ func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim", "worker"},
 	})
 	if res.IsError {
@@ -999,11 +1297,11 @@ func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
 	}
 
 	// The genuinely new edges must still be added.
-	if findEdge(edges, "jim", "ava") == nil {
-		t.Error("expected jim→ava edge to be seeded")
+	if findEdge(edges, "jim", "jim") == nil {
+		t.Error("expected Jim self edge to be seeded")
 	}
-	if findEdge(edges, "ava", "worker") == nil {
-		t.Error("expected ava→worker edge to be seeded")
+	if findEdge(edges, "worker", "worker") == nil {
+		t.Error("expected General Purpose self edge to be seeded")
 	}
 }
 
@@ -1034,6 +1332,7 @@ func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "worker", "ray"},
 	})
 	if res.IsError {
@@ -1047,12 +1346,8 @@ func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
 	if findEdge(edges, "ray", "researcher") != nil {
 		t.Error("ray→researcher must be dropped — researcher is not on the team")
 	}
-	rayWorker := findEdge(edges, "ray", "worker")
-	if rayWorker == nil {
-		t.Fatalf("expected ray→worker edge to be seeded, got edges=%v", edges)
-	}
-	if len(edges) != 1 {
-		t.Errorf("expected exactly 1 seeded edge (ray→worker), got %d: %v", len(edges), edges)
+	if len(edges) != 0 {
+		t.Errorf("Ray has no approved seed edge in ADR-090; got %d: %v", len(edges), edges)
 	}
 }
 
@@ -1083,8 +1378,9 @@ func TestWorkspaceUpdate_NoCoreTeamArg_DelegationUntouched(t *testing.T) {
 
 	// Update only the name — no core_team key present in args at all.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":   id,
-		"name": "Renamed Untouched Test",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"name":     "Renamed Untouched Test",
 	})
 	if res.IsError {
 		t.Fatalf("update_workspace failed: %s", res.ForLLM)
@@ -1141,6 +1437,7 @@ func TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC(t *testing.T) {
 	// Remove "worker" from core_team — no additions.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim"},
 	})
 	if res.IsError {
@@ -1202,6 +1499,7 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim", "worker"},
 	})
 	if res.IsError {
@@ -1209,17 +1507,20 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
+	if findEdge(edges, "jim", "jim") == nil {
+		t.Errorf("expected Jim self edge to be seeded, got %v", edges)
+	}
 	if findEdge(edges, "jim", "ava") == nil {
-		t.Errorf("expected jim→ava edge to be seeded (both endpoints present in config), got %v", edges)
+		t.Errorf("expected Jim→Ava delegation edge to be seeded (ADR-090 §3: Jim delegates configuration proposals to Ava), got %v", edges)
 	}
 	if findEdge(edges, "jim", "worker") != nil {
 		t.Error("jim→worker must NOT be seeded — worker is absent from the live config")
 	}
 	if findEdge(edges, "ava", "worker") != nil {
-		t.Error("ava→worker must NOT be seeded — worker is absent from the live config")
+		t.Error("ava→worker must NOT be seeded — worker is absent from local config")
 	}
-	if len(edges) != 1 {
-		t.Errorf("expected exactly 1 seeded edge (jim→ava), got %d: %v", len(edges), edges)
+	if len(edges) != 2 {
+		t.Errorf("expected exactly 2 seeded edges (Jim self edge + Jim→Ava configuration-delegation edge), got %d: %v", len(edges), edges)
 	}
 }
 
@@ -1269,6 +1570,7 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	// Remove jim, add ray — in one call.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "worker", "ray"},
 	})
 	if res.IsError {
@@ -1276,16 +1578,14 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	}
 
 	m := parseSuccess(t, res.ForLLM)
-	note, _ := m["delegation_seeded"].(string)
-	if !strings.Contains(note, "ray") {
-		t.Errorf("delegation_seeded note = %q, want it to mention ray", note)
+	if note, present := m["delegation_seeded"]; present {
+		t.Errorf("Ray has no approved ADR-090 seed edge; unexpected note %v", note)
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
 
-	// The addition: ray→worker seeded (both endpoints on NEW team + in config).
-	if findEdge(edges, "ray", "worker") == nil {
-		t.Errorf("expected ray→worker edge to be seeded, got %v", edges)
+	if findEdge(edges, "ray", "worker") != nil {
+		t.Errorf("ray→worker is not in the approved ADR-090 matrix, got %v", edges)
 	}
 	// ray→researcher dropped — researcher is not on the team.
 	if findEdge(edges, "ray", "researcher") != nil {
@@ -1309,8 +1609,8 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 		t.Errorf("pre-existing ava→worker edge must be left untouched, got modes=%v", modes)
 	}
 
-	if len(edges) != 4 {
-		t.Errorf("expected exactly 4 edges (3 pre-existing + 1 new ray→worker), got %d: %v", len(edges), edges)
+	if len(edges) != 3 {
+		t.Errorf("expected the 3 pre-existing edges only, got %d: %v", len(edges), edges)
 	}
 }
 
@@ -1345,6 +1645,7 @@ func TestWorkspaceUpdate_InstallingTeamClearsSetupPending(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava"},
 	})
 	if res.IsError {
@@ -1385,8 +1686,9 @@ func TestWorkspaceUpdate_NoCoreTeamArg_SetupPendingUntouched(t *testing.T) {
 	}
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":   id,
-		"name": "Renamed Setup Pending Test",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"name":     "Renamed Setup Pending Test",
 	})
 	if res.IsError {
 		t.Fatalf("update_workspace failed: %s", res.ForLLM)
@@ -1427,6 +1729,7 @@ func TestWorkspaceUpdate_CoreTeamOnNonPending_NoOp(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim"},
 	})
 	if res.IsError {
@@ -1476,8 +1779,9 @@ func TestWorkspaceDelete_ConfirmationGate(t *testing.T) {
 
 	// Without confirm — must reject.
 	noConfirmResult := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      id,
-		"confirm": false,
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"confirm":  false,
 	})
 	if !noConfirmResult.IsError {
 		t.Fatal("expected error when confirm=false, got success")
@@ -1509,8 +1813,9 @@ func TestWorkspaceDelete_Happy(t *testing.T) {
 	id := workspaceID(t, cr.ForLLM)
 
 	delResult := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      id,
-		"confirm": true,
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"confirm":  true,
 	})
 	if delResult.IsError {
 		t.Fatalf("delete failed: %s", delResult.ForLLM)
@@ -1537,8 +1842,9 @@ func TestWorkspaceDelete_Happy(t *testing.T) {
 func TestWorkspaceDelete_NotFound(t *testing.T) {
 	deps, _ := newTestDepsWithHome(t)
 	result := systools.NewWorkspaceDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "01JZZZZZZZZZZZZZZZZZZZZZZZ",
-		"confirm": true,
+		"id":       "01JZZZZZZZZZZZZZZZZZZZZZZZ",
+		"revision": strings.Repeat("0", 64),
+		"confirm":  true,
 	})
 	if !result.IsError {
 		t.Fatalf("expected error for unknown id, got success: %s", result.ForLLM)
@@ -1588,8 +1894,9 @@ func TestWorkspaceDelete_CascadeTasks(t *testing.T) {
 
 	// Delete the workspace with confirm=true.
 	delResult := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      wsID,
-		"confirm": true,
+		"id":       wsID,
+		"revision": currentWorkspaceRevision(t, home, wsID),
+		"confirm":  true,
 	})
 	if delResult.IsError {
 		t.Fatalf("delete failed: %s", delResult.ForLLM)

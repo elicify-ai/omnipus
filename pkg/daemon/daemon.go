@@ -39,8 +39,8 @@
 //   - macOS/non-Linux POSIX: no /proc; the name check falls back to /proc/<pid>/comm
 //     (truncated, 15 chars) or is unavailable — conservatively assumes ours when the
 //     name cannot be read, so Stop will proceed rather than orphan a running gateway.
-//   - Windows: depends on wmic availability. When wmic is missing (Win11 24H2+) or
-//     fails unexpectedly, Stop refuses to act (fail-safe) and returns an error.
+//   - Windows: reads the executable through the process API. When access is denied,
+//     Stop refuses to act (fail-safe) and returns an error.
 package daemon
 
 import (

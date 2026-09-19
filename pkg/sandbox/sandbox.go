@@ -39,6 +39,12 @@ type NetPortRule struct {
 	Port uint16
 }
 
+type UnixSocketRule struct {
+	Path    string
+	Bind    bool
+	Connect bool
+}
+
 // SandboxPolicy describes sandbox restrictions to apply.
 //
 // BindPortRules are honored by the Landlock backend on kernels exposing ABI v4
@@ -73,6 +79,7 @@ type SandboxPolicy struct {
 	FilesystemRules   []PathRule
 	BindPortRules     []NetPortRule
 	ConnectPortRules  []NetPortRule
+	UnixSocketRules   []UnixSocketRule
 	InheritToChildren bool
 
 	// ReadsOpen and ExecOpen carry the FilesystemModel decision down to the
@@ -486,7 +493,7 @@ func DefaultPolicyForModel(
 	bindPorts []uint16,
 ) SandboxPolicy {
 	open := model == FilesystemModelOpen
-	rules := make([]PathRule, 0, 16+len(allowedPaths))
+	rules := make([]PathRule, 0, max(16, len(allowedPaths)))
 
 	// Agent home: full RWX on $OMNIPUS_HOME. This is where agents write
 	// sessions, credentials, config, skills, and state.

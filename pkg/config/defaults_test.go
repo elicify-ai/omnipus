@@ -29,12 +29,12 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	cfg := DefaultConfig()
 
 	destructive := map[string]bool{
-		"delete_agent":             true,
 		"delete_workspace":         true,
 		"delete_task":              true,
 		"delete_task_in_workspace": true,
 		"remove_mcp_server":        true,
-		"remove_skill":             true,
+		// remove_skill and delete_agent are ADR-090 proposal-confirmed writes,
+		// so their fresh ceiling is allow rather than a second Ask gate.
 	}
 
 	// operatorOnly is a SECOND, distinct exception to the allow-by-default
@@ -55,7 +55,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// Security -> Tool Policies, or config.json), never a code branch — CLAUDE.md
 	// hard constraint 6.
 	operatorOnly := map[string]string{
-		"add_mcp_server": "deny",
+		"add_mcp_server": "allow",
 		// request_mount (ADR-063 FR-7.2) belongs to the same class as
 		// add_mcp_server — an agent widening its OWN boundary — but is seeded
 		// "ask" rather than "deny" because the widening is exactly what the
@@ -79,6 +79,17 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		// Listing it here rather than under `destructive` is deliberate: it
 		// destroys nothing. It is consent-gated on the direction of travel.
 		"browser_upload_file": "ask",
+		// environment_setup (ADR-090 §6.5) is the fourth member of this class:
+		// the generic self-service installer an agent drives with its OWN
+		// supplied command, so the approval is exactly where the operator sees
+		// and gates that command before it runs. The ceiling seeds "ask" for
+		// every agent; the role policies then differentiate — Mia/GP/Admin ask,
+		// Jim/Ava/Planner/Researcher deny — and the tool sits OUTSIDE the
+		// ADR-090 §5.4 upfront set, so it reaches the model only through
+		// discovery. An "allow" ceiling would defeat §6.5's approval gate for
+		// every agent at once; "deny" would make the installer inert and push
+		// dependency setup back to the operator by hand.
+		"environment_setup": "ask",
 	}
 
 	for name, want := range operatorOnly {

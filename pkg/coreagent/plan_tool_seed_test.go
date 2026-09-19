@@ -32,58 +32,23 @@ var planExecutionTools = []string{"create_plan", "execute_plan", "run_task"}
 // config missing an entry for these tools is backfilled to explicit "deny"
 // (boots, WARN-logged) rather than aborting.
 func TestToolPolicy_ExecutePlanSeed(t *testing.T) {
-	t.Run("Jim seeded allow", func(t *testing.T) {
-		cfg := &config.Config{}
-		require.True(t, coreagent.SeedConfig(cfg))
-		jim := findSeeded(t, cfg, string(coreagent.IDJim))
-		require.NotNil(t, jim.Tools)
+	cfg := config.DefaultConfig()
+	require.True(t, coreagent.SeedConfig(cfg))
+	for _, tool := range []string{"create_plan", "execute_plan", "stop_plan"} {
+		assert.Equalf(t, "allow", resolveFor(t, cfg, string(coreagent.IDJim), tool, nil),
+			"Jim must resolve allow for ADR-090 plan control %q", tool)
+	}
+	assert.Equal(t, "deny", resolveFor(t, cfg, string(coreagent.IDJim), "run_task", nil),
+		"run_task is engine-facing and is not part of Jim's shipped tool row")
+	for _, id := range []coreagent.CoreAgentID{
+		coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
+	} {
 		for _, tool := range planExecutionTools {
-			assert.Equalf(t, config.ToolPolicyAllow, jim.Tools.Builtin.Policies[tool],
-				"Jim must be seeded allow for %q (R2-06)", tool)
+			assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), tool, nil),
+				"%s must not receive plan execution tool %q by default", id, tool)
 		}
-	})
-
-	t.Run("every other seeded core/subagent-tier agent gets explicit ask, never absent, never deny", func(t *testing.T) {
-		cfg := &config.Config{}
-		require.True(t, coreagent.SeedConfig(cfg))
-		others := []coreagent.CoreAgentID{
-			coreagent.IDMia, coreagent.IDRay, coreagent.IDAva,
-			coreagent.IDPlanner, coreagent.IDExplorer, coreagent.IDResearcher,
-		}
-		for _, id := range others {
-			ac := findSeeded(t, cfg, string(id))
-			require.NotNilf(t, ac.Tools, "agent %q must carry an explicit tools policy", id)
-			for _, tool := range planExecutionTools {
-				p, ok := ac.Tools.Builtin.Policies[tool]
-				require.Truef(t, ok, "agent %q must have an explicit (never absent) entry for %q", id, tool)
-				assert.Equalf(t, config.ToolPolicyAsk, p,
-					"agent %q must resolve ask (never deny) for %q", id, tool)
-			}
-		}
-	})
-
-	t.Run("Worker carries an explicit ask, never absent", func(t *testing.T) {
-		cfg := &config.Config{}
-		require.True(t, coreagent.SeedConfig(cfg))
-		worker := findSeeded(t, cfg, string(coreagent.IDWorker))
-		require.NotNil(t, worker.Tools)
-		for _, tool := range planExecutionTools {
-			p, ok := worker.Tools.Builtin.Policies[tool]
-			// Inverted 2026-07-28. The Worker's map is SPARSE
-			// (tightenGlobalCeiling), so an absent key means "inherit the
-			// ceiling". That was a correct way to get "ask" only while the
-			// ceiling itself was "ask"; once the ceiling was raised to
-			// "allow" (so Jim's seeded allow could resolve at all), absence
-			// here silently GRANTED all three to the Worker. Explicit "ask"
-			// pins the Worker's posture to what it has always been,
-			// independent of where the ceiling moves next.
-			require.Truef(t, ok,
-				"Worker must carry an EXPLICIT entry for %q — its map is sparse, so an absent key "+
-					"inherits the global ceiling, which is now 'allow'", tool)
-			assert.Equalf(t, config.ToolPolicyAsk, p,
-				"Worker must be seeded ask for %q", tool)
-		}
-	})
+	}
 
 	t.Run("global ceiling seeds explicit allow for the three tools and for inspect_session", func(t *testing.T) {
 		cfg := config.DefaultConfig()

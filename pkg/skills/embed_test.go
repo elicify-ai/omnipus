@@ -12,7 +12,13 @@ import (
 //
 // Traces to: Spec-6 BDD "Default skills embedded and seeded on fresh install".
 func TestDefaultSkills_EmbeddedAndSeeded(t *testing.T) {
-	want := []string{"daily-briefing", "define-goal", "plan", "skill-authoring", "summarize"}
+	want := []string{
+		"agent-authoring", "channel-setup", "deep-research", "define-goal",
+		"delegation-graph", "doctor", "elicify-docx", "elicify-pdf", "elicify-pptx", "elicify-xlsx",
+		"handoff", "inbox-triage", "interview",
+		"mcp-install", "orchestrate", "plan", "provider-setup", "skill-authoring",
+		"skill-mapping", "tool-mapping", "verify", "workspace-team",
+	}
 
 	// The embed FS must contain exactly the default set.
 	got := DefaultSkillNames()

@@ -174,12 +174,15 @@ func TestToolsTool_Load_MultiName(t *testing.T) {
 	}
 	m := parseLoadResult(t, r)
 	ln := loadedNames(t, m)
-	if len(ln) != 3 {
-		t.Errorf("expected 3 loaded tools, got %d: %v", len(ln), ln)
+	if len(ln) != 2 {
+		t.Errorf("expected only the two deferred tools to load, got %d: %v", len(ln), ln)
 	}
 	sc := schemas(t, m)
-	if len(sc) != 3 {
-		t.Errorf("expected 3 schemas, got %d", len(sc))
+	if len(sc) != 2 {
+		t.Errorf("expected schemas only for deferred tools, got %d", len(sc))
+	}
+	if _, loaded := sc["list_agents"]; loaded {
+		t.Error("list_agents is ADR-090 upfront and must not be reloaded through ToolSearch")
 	}
 }
 

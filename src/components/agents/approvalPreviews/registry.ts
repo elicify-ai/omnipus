@@ -8,6 +8,10 @@
 
 import { BashApprovalPreview } from './BashApprovalPreview'
 import { RequestMountApprovalPreview } from './RequestMountApprovalPreview'
+import {
+  EnvironmentSetupApprovalPreview,
+  environmentSetupApprovalTitle,
+} from './EnvironmentSetupApprovalPreview'
 import type { ToolApprovalPreviewEntry } from './types'
 
 export const TOOL_APPROVAL_PREVIEWS: Record<string, ToolApprovalPreviewEntry> = {
@@ -21,5 +25,18 @@ export const TOOL_APPROVAL_PREVIEWS: Record<string, ToolApprovalPreviewEntry> = 
     title: (ctx) => `${ctx.agentName} wants to add a folder`,
     primaryLabel: 'Add folder',
     secondaryLabel: "Don't add",
+  },
+  // Generic install (GENERIC-INSTALL-DECISION.md option A; ES spec
+  // ES-FR-01/02): the approval display shows the agent-supplied installation
+  // command/script itself, the purpose, the resolved destination workspace
+  // and the installation scope. 'replace' mode (raw argument names like
+  // target_workspace are jargon the summary translates); NO custom button
+  // labels because a static label like "Install" would be wrong for
+  // action=poll/read/kill calls, so the standard Approve/Deny row stays.
+  // Title varies by action.
+  environment_setup: {
+    mode: 'replace',
+    Body: EnvironmentSetupApprovalPreview,
+    title: environmentSetupApprovalTitle,
   },
 }

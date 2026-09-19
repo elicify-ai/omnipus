@@ -25,6 +25,7 @@ import { Route as AppSettingsRouteImport } from './routes/_app/settings'
 import { Route as AppSkillsRouteImport } from './routes/_app/skills'
 import { Route as AppTasksRouteImport } from './routes/_app/tasks'
 import { Route as AppUsageRouteImport } from './routes/_app/usage'
+import { Route as AppAdminChatRouteImport } from './routes/_app/admin.chat'
 import { Route as AppAgentsIndexRouteImport } from './routes/_app/agents.index'
 import { Route as AppAgentsAgentIdRouteImport } from './routes/_app/agents.$agentId'
 import { Route as AppSessionsSessionIdRouteImport } from './routes/_app/sessions.$sessionId'
@@ -117,6 +118,11 @@ const AppTasksRoute = AppTasksRouteImport.update({
 const AppUsageRoute = AppUsageRouteImport.update({
   id: '/usage',
   path: '/usage',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppAdminChatRoute = AppAdminChatRouteImport.update({
+  id: '/admin/chat',
+  path: '/admin/chat',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAgentsIndexRoute = AppAgentsIndexRouteImport.update({
@@ -216,6 +222,7 @@ export interface FileRoutesByFullPath {
   '/skills': typeof AppSkillsRoute
   '/tasks': typeof AppTasksRoute
   '/usage': typeof AppUsageRoute
+  '/admin/chat': typeof AppAdminChatRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
@@ -246,6 +253,7 @@ export interface FileRoutesByTo {
   '/tasks': typeof AppTasksRoute
   '/usage': typeof AppUsageRoute
   '/': typeof AppIndexRoute
+  '/admin/chat': typeof AppAdminChatRoute
   '/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/agents': typeof AppAgentsIndexRoute
@@ -278,6 +286,7 @@ export interface FileRoutesById {
   '/_app/tasks': typeof AppTasksRoute
   '/_app/usage': typeof AppUsageRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/admin/chat': typeof AppAdminChatRoute
   '/_app/agents/$agentId': typeof AppAgentsAgentIdRoute
   '/_app/sessions/$sessionId': typeof AppSessionsSessionIdRoute
   '/_app/workspaces/$workspaceId': typeof AppWorkspacesWorkspaceIdRouteWithChildren
@@ -311,6 +320,7 @@ export interface FileRouteTypes {
     | '/skills'
     | '/tasks'
     | '/usage'
+    | '/admin/chat'
     | '/agents/$agentId'
     | '/sessions/$sessionId'
     | '/workspaces/$workspaceId'
@@ -341,6 +351,7 @@ export interface FileRouteTypes {
     | '/tasks'
     | '/usage'
     | '/'
+    | '/admin/chat'
     | '/agents/$agentId'
     | '/sessions/$sessionId'
     | '/agents'
@@ -372,6 +383,7 @@ export interface FileRouteTypes {
     | '/_app/tasks'
     | '/_app/usage'
     | '/_app/'
+    | '/_app/admin/chat'
     | '/_app/agents/$agentId'
     | '/_app/sessions/$sessionId'
     | '/_app/workspaces/$workspaceId'
@@ -507,6 +519,13 @@ declare module '@tanstack/react-router' {
       path: '/usage'
       fullPath: '/usage'
       preLoaderRoute: typeof AppUsageRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/admin/chat': {
+      id: '/_app/admin/chat'
+      path: '/admin/chat'
+      fullPath: '/admin/chat'
+      preLoaderRoute: typeof AppAdminChatRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/agents/': {
@@ -669,6 +688,7 @@ interface AppRouteChildren {
   AppTasksRoute: typeof AppTasksRoute
   AppUsageRoute: typeof AppUsageRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppAdminChatRoute: typeof AppAdminChatRoute
   AppSessionsSessionIdRoute: typeof AppSessionsSessionIdRoute
   AppWorkspacesWorkspaceIdRoute: typeof AppWorkspacesWorkspaceIdRouteWithChildren
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
@@ -687,6 +707,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppTasksRoute: AppTasksRoute,
   AppUsageRoute: AppUsageRoute,
   AppIndexRoute: AppIndexRoute,
+  AppAdminChatRoute: AppAdminChatRoute,
   AppSessionsSessionIdRoute: AppSessionsSessionIdRoute,
   AppWorkspacesWorkspaceIdRoute: AppWorkspacesWorkspaceIdRouteWithChildren,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,

@@ -54,9 +54,14 @@ func TestSkillCreateTool_WritesAndVersions(t *testing.T) {
 
 	// Edit it — should snapshot the prior version.
 	edit := systools.NewSkillEditTool(deps)
+	revision, err := deps.SkillWriter.SkillRevision("my-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
 	editRes := edit.Execute(context.Background(), map[string]any{
-		"name":    "my-skill",
-		"content": "---\nname: my-skill\ndescription: Edited description that is also long enough to be valid here.\n---\n\n# my-skill\n\nEdited.\n",
+		"name":     "my-skill",
+		"content":  "---\nname: my-skill\ndescription: Edited description that is also long enough to be valid here.\n---\n\n# my-skill\n\nEdited.\n",
+		"revision": revision,
 	})
 	em := parseSuccess(t, editRes.ForLLM)
 	if em["action"] != "edited" {
@@ -85,10 +90,15 @@ func TestSkillEditTool_BuiltinOverride(t *testing.T) {
 	}
 
 	deps := newAuthoringDeps(t, globalDir, builtinDir)
+	revision, err := skills.NewSkillWriter(builtinDir).SkillRevision("plan")
+	if err != nil {
+		t.Fatal(err)
+	}
 	edit := systools.NewSkillEditTool(deps)
 	res := edit.Execute(context.Background(), map[string]any{
-		"name":    "plan",
-		"content": "---\nname: plan\ndescription: An overridden plan skill customized by the user for this test.\n---\n\n# plan\n\nOverride.\n",
+		"name":     "plan",
+		"content":  "---\nname: plan\ndescription: An overridden plan skill customized by the user for this test.\n---\n\n# plan\n\nOverride.\n",
+		"revision": revision,
 	})
 	m := parseSuccess(t, res.ForLLM)
 	if m["action"] != "override_created" {
@@ -216,6 +226,11 @@ func TestSkillAuthoring_ConsentFlow_DenyBlocksExecute(t *testing.T) {
 				if _, err := deps.SkillWriter.CreateSkill("denied-skill", validSkill("denied-skill")); err != nil {
 					t.Fatalf("setup CreateSkill: %v", err)
 				}
+				revision, err := deps.SkillWriter.SkillRevision("denied-skill")
+				if err != nil {
+					t.Fatalf("setup revision: %v", err)
+				}
+				args["revision"] = revision
 			},
 			exec: func() *tools.ToolResult {
 				return edit.Execute(context.Background(), args)

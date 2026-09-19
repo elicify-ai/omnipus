@@ -109,10 +109,15 @@ func TestSkillRemoveTool_RefusesPathTraversal(t *testing.T) {
 // every name, which would be a broken tool rather than a fixed one.
 func TestSkillRemoveTool_LegitimateRemovalStillWorks(t *testing.T) {
 	tool, workspace, operatorFile, installedSkill := newRemoveSkillFixture(t)
+	revision, err := skills.NewSkillWriter(filepath.Join(workspace, "skills")).SkillRevision("keep-me")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result := tool.Execute(context.Background(), map[string]any{
-		"name":    "keep-me",
-		"confirm": true,
+		"name":     "keep-me",
+		"confirm":  true,
+		"revision": revision,
 	})
 	if result.IsError {
 		t.Fatalf("remove_skill(keep-me) failed: %s", result.ForLLM)

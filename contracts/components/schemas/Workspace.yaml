@@ -4,6 +4,7 @@ description: >
   directories or room topology. task_count is computed at read time and never
   stored. core_team is a default agent roster, not an access gate.
 required:
+  - revision
   - id
   - name
   - status
@@ -13,6 +14,25 @@ required:
   - updated_at
   - task_count
 properties:
+  delegation:
+    type: array
+    description: Authoritative workspace delegation edges; revision covers membership and this graph.
+    items:
+      $ref: './WorkspaceDelegationEdge.yaml'
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  persistence_status:
+    $ref: './ConfigurationPersistenceStatus.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  changed_fields:
+    type: array
+    items:
+      type: string
+  error_stage:
+    type: string
+  message:
+    type: string
   id:
     type: string
     description: UUID workspace identifier

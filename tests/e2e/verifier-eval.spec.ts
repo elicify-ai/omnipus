@@ -575,7 +575,10 @@ test.describe('ADR-052 Test 32 — real-LLM verifier e2e eval (DS-8 anti-pattern
           // but kept descriptive for run-log readability.
           prompt = `(stub worker — prompt content is ignored by the stub CLI) Create and verify a file containing "${token}".`;
         } else {
-          workerAgentId = 'jim';
+          // ADR-090 makes Jim an orchestrator without direct file tools. The
+          // native evidence-producing member is the seeded General Purpose
+          // worker, so the control case must exercise that role.
+          workerAgentId = 'worker';
           prompt = c.nativePrompt!(token);
         }
 

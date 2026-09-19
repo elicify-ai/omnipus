@@ -115,6 +115,11 @@ const STUB_CHANNELS_AFTER_CREATE = [
 // key off these names ("US Sales" -> "us-sales", "EU Sales" -> "eu-sales").
 // Full required-field shapes per contracts/components/schemas/Workspace.yaml
 // so the SPA's runtime zod validation doesn't drop the entries.
+// `revision` is REQUIRED on the Agent and Workspace schemas under ADR-090
+// (ConfigurationRevision, ^[a-f0-9]{64}$) — a stub missing it makes the SPA's
+// zod validation reject the whole GET payload (ApiSchemaError), so pickers
+// render empty and binding titles fall back to raw ids.
+const STUB_REVISION = 'a'.repeat(64)
 const WORKSPACE_US_SALES = {
   id: 'ws-us',
   name: 'US Sales',
@@ -125,6 +130,7 @@ const WORKSPACE_US_SALES = {
   core_team: ['mia'],
   created_at: '2026-06-08T14:22:00Z',
   updated_at: '2026-06-08T14:22:00Z',
+  revision: STUB_REVISION,
 }
 const WORKSPACE_EU_SALES = {
   id: 'ws-eu',
@@ -136,6 +142,7 @@ const WORKSPACE_EU_SALES = {
   core_team: ['mia'],
   created_at: '2026-06-08T14:22:00Z',
   updated_at: '2026-06-08T14:22:00Z',
+  revision: STUB_REVISION,
 }
 const WORKSPACES_FIXTURE = [WORKSPACE_US_SALES, WORKSPACE_EU_SALES]
 
@@ -153,6 +160,7 @@ const AGENT_MIA = {
   // Required by Agent.yaml since 36801b44 (ADR-066/067/068); omitting it makes
   // AgentSchema reject GET /agents. false = healthy (has a usable model).
   needs_model: false,
+  revision: STUB_REVISION,
 }
 const AGENTS_FIXTURE = [AGENT_MIA]
 
@@ -699,6 +707,7 @@ test(
         task_count: 0,
         created_at: '2026-06-08T14:22:00Z',
         updated_at: '2026-06-08T14:22:00Z',
+        revision: STUB_REVISION,
       },
     ])
     await stubAgents(page, [
@@ -714,6 +723,7 @@ test(
         // Required by Agent.yaml since 36801b44 (ADR-066/067/068); omitting it
         // makes AgentSchema reject GET /agents. false = healthy.
         needs_model: false,
+        revision: STUB_REVISION,
       },
     ])
 

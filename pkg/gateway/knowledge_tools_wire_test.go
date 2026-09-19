@@ -4,7 +4,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 //
-// Run: CGO_ENABLED=0 go test -tags goolm,stdjson -count=1 -p 1 ./pkg/gateway/
+// Run the named TestKnowledgeTools tests with the repository build tags.
 //
 // ---------------------------------------------------------------------------
 // WHAT THESE TESTS EXIST TO CATCH, AND WHY THE OBVIOUS ONES ARE NOT ENOUGH
@@ -19,9 +19,9 @@
 // the policy filter that decides what a turn may call, and when they run
 // they see exactly the calling agent's own workspace and nothing else.
 //
-// Every assertion's expected value comes from ADR-067 (D7's tool pair, D17's
-// posture matrix, FR-052/FR-053's isolation rule), never from what the code
-// happens to produce.
+// Tool and isolation requirements originate in ADR-067/068; ADR-090 now
+// defines the role permission matrix. Expected results are independent of
+// the seed and registry output under test.
 // ---------------------------------------------------------------------------
 
 package gateway
@@ -337,109 +337,41 @@ func TestKnowledgeTools_AllEightRegisteredForEveryAgent(t *testing.T) {
 // 3. Reachable at runtime, not merely present in a map (D17).
 // ---------------------------------------------------------------------------
 
-// knowledgeReadToolNames / knowledgeWriteToolNames split the knowledge
-// family by blast radius, matching pkg/coreagent/core.go's actual seed axis
-// — superseding this file's old retrieval/authoring split. Widened by KB-1/
-// KB-2 (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
-// 2026-09-08): knowledge_list joins the read tier (reports only),
-// knowledge_base_create joins the write tier (makes a new collection).
-var (
-	knowledgeReadToolNames  = []string{"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
-	knowledgeWriteToolNames = []string{"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create"}
-)
+// knowledgeReadToolNames names the read tier of the knowledge family, which
+// the tests below split by blast radius via the adr090KnowledgePosture map,
+// matching pkg/coreagent/core.go's actual seed axis — superseding this
+// file's old retrieval/authoring split. Widened by KB-1/KB-2
+// (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+// 2026-09-08): knowledge_list joins the read tier (reports only);
+// knowledge_base_create stays in the write tier (makes a new collection).
+var knowledgeReadToolNames = []string{"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
 
-// d15AllBaseAgents is every base agent — the read tier is "allow" for all
-// four under ADR-068 D15.3.
-var d15AllBaseAgents = []string{
-	string(coreagent.IDMia),
-	string(coreagent.IDJim),
-	string(coreagent.IDAva),
-	string(coreagent.IDRay),
-}
-
-// TestKnowledgeTools_SurviveTheTurnsPolicyFilter is the difference between
-// "in a registry" and "callable".
-//
-// tools.FilterToolsByPolicy is the single primitive the turn engine uses to
-// decide which tools are sent to the model and the gateway uses to gate
-// execution (pkg/tools/compositor.go). A registered tool that this function
-// drops is invisible to the model forever, and nothing logs it.
-//
-// Three halves:
-//
-//   - POSITIVE (read): D15.3 seeds the read tier "allow" for all four base
-//     agents, so all four read tools (including KB-2a's knowledge_list) must
-//     come through for each of them.
-//   - POSITIVE (write, Jim only): Jim is the one agent seeded "allow" on the
-//     four write tools (including KB-1's knowledge_base_create) — his
-//     deliberate exception (see pkg/coreagent/core.go's IDJim case).
-//   - NEGATIVE CONTROL: the Worker is seeded an explicit deny on all eight, so
-//     every one of them must be REGISTERED for it and FILTERED OUT. Without
-//     this half the positive halves would still pass against a filter that
-//     returns its input unchanged — i.e. against no filtering at all.
+// TestKnowledgeTools_SurviveTheTurnsPolicyFilter checks the actual offered
+// tool definitions, with denied writes as a control against a no-op filter.
 func TestKnowledgeTools_SurviveTheTurnsPolicyFilter(t *testing.T) {
 	al, _, _ := kwLoop(t)
-
-	filtered := func(agentID string) map[string]bool {
+	for agentID, want := range adr090KnowledgePosture {
 		inst, ok := al.GetRegistry().GetAgent(agentID)
-		require.Truef(t, ok, "agent %q must be registered", agentID)
-		kept, _ := tools.FilterToolsByPolicy(
-			inst.Tools.GetAll(), inst.AgentType, inst.LoadToolPolicy())
-		out := make(map[string]bool, len(kept))
+		require.True(t, ok, "role %s must exist", agentID)
+		kept, _ := tools.FilterToolsByPolicy(inst.Tools.GetAll(), inst.AgentType, inst.LoadToolPolicy())
+		offered := make(map[string]bool, len(kept))
 		for _, tool := range kept {
-			out[tool.Name()] = true
+			offered[tool.Name()] = true
 		}
-		return out
-	}
-
-	t.Run("D15.3 read allow: every base agent can call all three", func(t *testing.T) {
-		for _, agentID := range d15AllBaseAgents {
-			survivors := filtered(agentID)
-			for _, name := range knowledgeReadToolNames {
-				assert.Truef(t, survivors[name],
-					"agent %q registers %q but the turn's policy filter drops it, so the model "+
-						"is never offered it. ADR-068 D15.3 seeds the read tier \"allow\" for all "+
-						"four base agents; under strictest-wins a tighter global ceiling in "+
-						"pkg/config/defaults.go overrules the per-agent seed and the grant is "+
-						"dead on every install while the seed still reads correctly",
-					agentID, name)
+		for _, name := range knowledgeToolNames {
+			expected := want.write
+			for _, readName := range knowledgeReadToolNames {
+				if name == readName {
+					expected = want.read
+				}
 			}
+			if agentID != "judge" && agentID != "plansupervisor" {
+				_, registered := inst.Tools.Get(name)
+				require.True(t, registered, "ordinary role %s must register %s", agentID, name)
+			}
+			assert.Equal(t, expected != "deny", offered[name], "%s / %s offered tools", agentID, name)
 		}
-	})
-
-	t.Run("D15.3 write allow: Jim's deliberate exception actually resolves", func(t *testing.T) {
-		survivors := filtered(string(coreagent.IDJim))
-		for _, name := range knowledgeWriteToolNames {
-			assert.Truef(t, survivors[name],
-				"Jim registers %q but the turn's policy filter drops it. He is seeded \"allow\" "+
-					"on the three write tools (pkg/coreagent/core.go's IDJim case) precisely "+
-					"because an \"ask\" gate would protect nothing for an agent who already holds "+
-					"unprompted bash — if this fails, that deliberate exception is dead", name)
-		}
-	})
-
-	t.Run("negative control: the Worker's seeded deny actually bites", func(t *testing.T) {
-		workerID := routing.NormalizeAgentID(string(coreagent.IDWorker))
-		inst, ok := al.GetRegistry().GetAgent(workerID)
-		require.Truef(t, ok,
-			"the seeded Worker (%q) must exist — without it this control measures nothing",
-			workerID)
-
-		for _, name := range knowledgeToolNames {
-			_, registered := inst.Tools.Get(name)
-			require.Truef(t, registered,
-				"%q must still be REGISTERED for the Worker — Constraint #6 decides access by "+
-					"policy, never by conditional registration", name)
-		}
-
-		survivors := filtered(workerID)
-		for _, name := range knowledgeToolNames {
-			assert.Falsef(t, survivors[name],
-				"the Worker's D15.3 deny for %q did not remove it from the filtered set. If "+
-					"this fails while the positive halves above pass, the filter is not "+
-					"filtering and those halves prove nothing", name)
-		}
-	})
+	}
 }
 
 // TestKnowledgeTools_EveryRegisteredKnowledgeToolHasAnExplicitPolicyEntry is

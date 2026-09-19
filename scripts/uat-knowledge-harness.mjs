@@ -11,6 +11,14 @@
 // run must not look green:
 //   * `done.stats.turn_failed` is checked on EVERY turn. Without it a failed
 //     turn is byte-identical to a successful one at this layer.
+//   * A post-auth `error` frame marks the turn FAILED, not ignored. The
+//     errored turn's `done` frame carries NO stats at all (the non-streamed
+//     webchatChannel.Send fallback path — pkg/gateway/webchat_channel.go),
+//     so `done.stats.turn_failed` alone reads undefined and a dead turn is
+//     byte-identical to a healthy non-streamed one. The gateway also re-emits
+//     the user-facing error text as a `token` frame, so the accumulated text
+//     cannot be trusted either: run sc003-glm-20260918-01 recorded the SPA's
+//     "This turn didn't finish" message as a hashable proposal this way.
 //   * A `tool_approval_required` frame is a HARNESS ERROR by default, not
 //     something to auto-approve silently: it means a policy resolved to `ask`
 //     and the run would otherwise hang. Auto-approval is opt-in.
@@ -131,6 +139,42 @@ export async function createWorkspace(base, token, { name, agentID }) {
 // the turn loop
 // --------------------------------------------------------------------------
 
+/**
+ * Machine verdict for one finished turn: did it complete on a real model
+ * response, or on the engine's error fallback?
+ *
+ * Failure signals, in order:
+ *  1. Any post-auth `error` frame. The internal-loop producers relevant to
+ *     this harness emit these for terminal turn failures (typed turn exits,
+ *     aborts, LLM-call failures — pkg/agent/loop.go::emitTurnErrorFrame and
+ *     its siblings); a mid-turn provider fallback that recovered emits no
+ *     error frame. Other producers can emit non-fatal errors (for example an
+ *     external-CLI child session), but the gateway's chat/session matching
+ *     keeps those frames off this harness connection.
+ *  2. `done.stats.turn_failed === true` (the pre-existing check, kept).
+ *
+ * Deliberately NOT a failure signal: a `done` frame with no `stats` object.
+ * Providers that do not stream (the Anthropic Messages transport implements
+ * no ChatStream) deliver HEALTHY turns through webchatChannel.Send, whose
+ * done frame carries only session_id — identical in shape to the errored
+ * turn's done frame. The error FRAME is the only wire-level discriminator
+ * for that case, which is why rule 1 exists.
+ */
+export function turnVerdict(errors, doneFrame) {
+  if (errors.length > 0) {
+    const first = errors[0];
+    const code = first.code ?? 'unknown';
+    return {
+      failed: true,
+      reason: `error frame (${code}): ${first.message ?? '(no message)'}`,
+    };
+  }
+  if (doneFrame?.stats?.turn_failed === true) {
+    return { failed: true, reason: 'done.stats.turn_failed=true' };
+  }
+  return { failed: false, reason: null };
+}
+
 export class Turn {
   constructor({ base, token, agentID, workspaceID, autoApprove = false }) {
     Object.assign(this, { base, token, agentID, workspaceID, autoApprove });
@@ -147,6 +191,7 @@ export class Turn {
     const url = this.base.replace(/^http/, 'ws') + '/api/v1/chat/ws';
     const ws = new WebSocket(url);
     const frames = [];
+    const errors = [];
     let text = '';
     const toolCalls = [];
     let authed = false;
@@ -224,23 +269,38 @@ export class Turn {
             if (!authed) {
               finish(() => reject(new Error(`auth rejected: ${f.message ?? JSON.stringify(f)}`)));
             }
-            // A post-auth error does not close the socket; `done` still comes.
+            // A post-auth error does not close the socket; `done` still comes
+            // — WITHOUT stats, and with the user-facing error text re-emitted
+            // as a token frame above. Record it; turnVerdict turns it into
+            // turnFailed at the done frame. Silently ignoring it here is how
+            // a dead turn once graded as a successful one.
+            errors.push({
+              message: f.message ?? null,
+              code: f.payload?.llm_error?.code ?? null,
+              retryable: f.payload?.llm_error?.retryable ?? null,
+            });
             break;
-          case 'done':
+          case 'done': {
+            // The verdict folds in BOTH wire-level failure signals: the error
+            // frames collected above and this frame's own stats flag.
+            const verdict = turnVerdict(errors, f);
             finish(() => resolve({
               text,
               toolCalls,
               frames,
+              errors,
               sessionID: this.sessionID,
               ms: Date.now() - started,
               // The plan requires this to be checked on every turn: set when
               // the engine used its error/limit fallback rather than a real
               // model response. Ignoring it makes a failed turn look identical
               // to a successful one.
-              turnFailed: Boolean(f.stats?.turn_failed),
+              turnFailed: verdict.failed,
+              failureReason: verdict.reason,
               stats: f.stats ?? null,
             }));
             break;
+          }
         }
       };
 

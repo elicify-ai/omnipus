@@ -10,10 +10,27 @@ CI is the authority for full-suite results.
 ## Fresh installs carry embedded skills
 
 `embed.go` compiles a default skill set into the binary
-(`//go:embed all:embedded`: daily-briefing, define-goal, plan,
-skill-authoring, summarize) so a fresh install works offline. Adding a default
+(`//go:embed all:embedded`), including the ADR-090 role workflows and four
+Elicify document packages, so a fresh install has their instructions offline.
+Document execution still requires the separately probed runtime dependencies. Adding a default
 skill means adding it under `embedded/` — shipping it only to a marketplace
 leaves fresh installs without it.
+
+## Skill naming is split from display naming
+
+Follow the Agent Skills standard for identity. The directory name is the
+stable ID, and frontmatter `name:` must be the same lowercase slug: letters,
+numbers, and single hyphens only, with no leading, trailing, or repeated
+hyphens, and at most 64 characters. The ID is what policies, assignments,
+activation, uninstall, and prompts address; never make a UI rename change it.
+
+Keep human-readable text separate. Prefer `metadata.display_name` (for
+example, `metadata: { display_name: Define Goal }`) for the label shown to
+operators. If it is absent, the loader falls back to the Markdown H1, then to
+the stable slug. Do not put spaces or capitals in frontmatter `name:` merely
+to make a display label; that breaks portability with the Agent Skills
+standard. The four pinned Elicify document packages intentionally remain
+byte-identical to their imported source and use their H1 labels.
 
 ## The per-turn menu cap is removed — do not reintroduce it
 

@@ -33,8 +33,12 @@ func (m *BrowserManager) ensureStartedContext(ctx context.Context) error {
 
 	if m.cfg.CDPURL != "" {
 		// US-6: Remote CDP mode — connect to external Chromium (operator
-		// override; the coordinator is bypassed entirely here).
-		allocCtx, cancel := chromedp.NewRemoteAllocator(context.Background(), m.cfg.CDPURL)
+		// override; the coordinator is bypassed entirely here). CDPURL is a
+		// browser WebSocket endpoint, so chromedp must not turn it into an
+		// HTTP-discovery exercise: default URL discovery can miss a direct
+		// /devtools/browser endpoint and turn attachment into a timeout.
+		allocCtx, cancel := chromedp.NewRemoteAllocator(
+			context.Background(), m.cfg.CDPURL, chromedp.NoModifyURL)
 		m.allocCtx = allocCtx
 		m.allocCancel = cancel
 		m.started = true

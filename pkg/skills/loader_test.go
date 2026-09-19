@@ -173,19 +173,19 @@ func TestListSkillsParsesAuthorAndVersion(t *testing.T) {
 	assert.Equal(t, "2.4.1", skills[0].Version)
 }
 
-// TestListSkillsSeparatesIDFromDisplayName verifies that a skill whose
-// frontmatter name is a proper English display name (with spaces/capitals) is
-// loaded successfully — its ID stays the directory slug while Name carries the
-// display name. The display name must NOT be slug-validated (spaces are legal),
-// but the slug ID still gates validation.
+// TestListSkillsSeparatesIDFromDisplayName verifies the Anthropic-compatible
+// identity model: frontmatter `name` remains the portable slug, while
+// `metadata.display_name` carries the user-facing label.
 func TestListSkillsSeparatesIDFromDisplayName(t *testing.T) {
 	tmp := t.TempDir()
 	builtin := filepath.Join(tmp, "builtin")
 	dir := filepath.Join(builtin, "daily-briefing")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	content := "---\n" +
-		"name: Daily Briefing\n" +
+		"name: daily-briefing\n" +
 		"description: Assemble a concise daily briefing.\n" +
+		"metadata:\n" +
+		"  display_name: Daily Briefing\n" +
 		"---\n\n# Daily Briefing\n\nProduce a short briefing.\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644))
 
@@ -194,12 +194,12 @@ func TestListSkillsSeparatesIDFromDisplayName(t *testing.T) {
 
 	require.Len(t, skills, 1, "a skill with a spaced display name must still load")
 	assert.Equal(t, "daily-briefing", skills[0].ID, "ID must be the directory slug")
-	assert.Equal(t, "Daily Briefing", skills[0].Name, "Name must be the frontmatter display name")
+	assert.Equal(t, "Daily Briefing", skills[0].Name, "Name must be the metadata display name")
 	assert.Equal(t, "builtin", skills[0].Source)
 }
 
-// TestEmbeddedDefaultsHaveProperDisplayNames verifies the four embedded default
-// skills ship with proper English display names while keeping their slug IDs.
+// TestEmbeddedDefaultsHaveProperDisplayNames verifies every embedded default
+// skill ships with a user-facing label while keeping its stable slug ID.
 func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 	tmp := t.TempDir()
 	dest := filepath.Join(tmp, "skills")
@@ -213,10 +213,28 @@ func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"daily-briefing":  "Daily Briefing",
-		"plan":            "Plan",
-		"skill-authoring": "Skill Authoring",
-		"summarize":       "Summarize",
+		"agent-authoring":  "Agent Authoring",
+		"channel-setup":    "Channel Setup",
+		"deep-research":    "Deep Research",
+		"define-goal":      "Define Goal",
+		"delegation-graph": "Delegation Graph",
+		"doctor":           "Doctor",
+		"elicify-docx":     "DOCX",
+		"elicify-pdf":      "PDF",
+		"elicify-pptx":     "PPTX",
+		"elicify-xlsx":     "XLSX",
+		"handoff":          "Handoff",
+		"inbox-triage":     "Inbox Triage",
+		"interview":        "Interview",
+		"mcp-install":      "MCP Install",
+		"orchestrate":      "Orchestrate",
+		"plan":             "Plan",
+		"provider-setup":   "Provider Setup",
+		"skill-authoring":  "Skill Authoring",
+		"skill-mapping":    "Skill Mapping",
+		"tool-mapping":     "Tool Mapping",
+		"verify":           "Verify",
+		"workspace-team":   "Workspace Team",
 	}
 	for slug, display := range want {
 		got, ok := bySlug[slug]

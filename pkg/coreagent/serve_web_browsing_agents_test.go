@@ -35,7 +35,7 @@ import (
 //     the set. Otherwise an agent whose only browser entry was the ask would
 //     be pulled in and the test would start asserting a grant nobody argued
 //     for.
-func TestCoreAgentSeed_BrowsingAgentsCanCallServeWeb(t *testing.T) {
+func TestCoreAgentSeed_ServeWebIsGeneralPurposeOnly(t *testing.T) {
 	browserTools := []string{}
 	for _, name := range coreagent.AllStaticToolNames() {
 		if strings.HasPrefix(name, "browser_") {
@@ -47,28 +47,12 @@ func TestCoreAgentSeed_BrowsingAgentsCanCallServeWeb(t *testing.T) {
 			"nobody and this test would pass while asserting nothing")
 	}
 
-	var computed []coreagent.CoreAgentID
-	for _, agent := range coreagent.All() {
-		id := agent.ID
-		for _, tool := range browserTools {
-			if d2Resolve(t, id, tool) == "allow" {
-				computed = append(computed, id)
-				break
-			}
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin, coreagent.IDPlanner, coreagent.IDResearcher} {
+		if got := d2Resolve(t, id, "serve_web"); got != "deny" {
+			t.Errorf("%s serve_web resolves %q, want deny", id, got)
 		}
 	}
-	if len(computed) == 0 {
-		t.Fatal("no seeded agent resolves allow for any browser_* tool. Either the browser surface " +
-			"has been revoked wholesale or the resolution helper is broken; either way the " +
-			"serve_web assertion below would be vacuous")
-	}
-
-	for _, id := range computed {
-		if got := d2Resolve(t, id, "serve_web"); got != "allow" {
-			t.Errorf("%s can drive the browser but resolves serve_web: %q. browser_navigate's "+
-				"file:// refusal tells the agent to serve the file with serve_web and open the "+
-				"resulting /preview/ URL — a pointer this agent cannot follow is #242's dead end "+
-				"relocated one failed tool call further away, not fixed", id, got)
-		}
+	if got := d2Resolve(t, coreagent.IDWorker, "serve_web"); got != "allow" {
+		t.Errorf("General Purpose serve_web resolves %q, want allow", got)
 	}
 }

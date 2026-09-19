@@ -48,15 +48,17 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
-// coreAgentIDs mirrors pkg/coreagent's CoreAgentID roster — the four base
-// agents (IDMia/IDJim/IDAva/IDRay) plus the System Agents (IDJudge,
-// IDPlanSupervisor) in pkg/coreagent/core.go. pkg/coreagent imports pkg/config
-// (coreagent.SeedConfig operates on *config.Config), so pkg/config cannot
-// import pkg/coreagent's constants without creating an import cycle — these
-// literal IDs are deliberately mirrored here instead. Keep this set in sync
-// with pkg/coreagent/core.go's roster whenever it is extended: a seeded ID
-// missing from this map is reported to the operator with the alarming
-// custom-ID data-loss WARN instead of the benign core-ID one.
+// coreAgentIDs mirrors pkg/coreagent's seeded roster — ADR-090 §2.0's nine
+// identities: mia/jim/ava/admin (chat), planner/researcher/worker (staff),
+// judge/plansupervisor (hidden). Ray, Max and Explorer are not seeded.
+// pkg/coreagent imports pkg/config (coreagent.SeedConfig operates on
+// *config.Config), so pkg/config cannot import pkg/coreagent's constants
+// without creating an import cycle — these literal IDs are deliberately
+// mirrored here instead. Keep this set in sync with pkg/coreagent/core.go's
+// roster whenever it is extended: a seeded ID missing from this map is
+// reported to the operator with the alarming custom-ID data-loss WARN
+// instead of the benign core-ID one. A leftover retired ID in this map
+// does the opposite: it logs a false "auto-reseeded" promise.
 //
 // Why the distinction matters: a dropped core ID needs ZERO operator action
 // — coreagent.SeedConfig re-creates any missing core agent (Locked=true)
@@ -72,7 +74,10 @@ var coreAgentIDs = map[string]bool{
 	"mia":            true,
 	"jim":            true,
 	"ava":            true,
-	"ray":            true,
+	"admin":          true,
+	"planner":        true,
+	"researcher":     true,
+	"worker":         true,
 	"judge":          true,
 	"plansupervisor": true,
 }
@@ -121,8 +126,8 @@ func stripLegacyAgentsList(cfg *Config, cfgPath string, onSelfHeal SelfHealWrite
 
 	if len(coreIDs) > 0 {
 		logger.WarnF("config: dropping legacy agents.list entries for core agent IDs from "+
-			"config.json — no operator action needed: core agents (mia/jim/ava/ray) and System "+
-			"Agents (judge/plansupervisor) are "+
+			"config.json — no operator action needed: seeded agents (mia/jim/ava/admin, "+
+			"planner/researcher/worker) and System Agents (judge/plansupervisor) are "+
 			"auto-reseeded moments after boot by coreagent.SeedConfig, and cannot be created via "+
 			"POST /api/v1/agents anyway (locked, core-agent IDs are rejected there)", map[string]any{
 			"dropped_core_agent_ids": coreIDs,

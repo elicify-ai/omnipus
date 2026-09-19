@@ -61,11 +61,11 @@ func TestHandleWorkspaceDelete_ActorAttribution(t *testing.T) {
 	_, _, uploadErr := lib.Upload("note.txt", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("bytes"))
 	require.NoError(t, uploadErr)
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "alice"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	events := readAuditEventsForTest(t, auditDir)
 	var cascadeEvent map[string]any
@@ -125,7 +125,7 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 		logger.SetLevel(prevLevel)
 	})
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "bob"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
@@ -133,9 +133,10 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 	// Before the fix this was an unconditional 204 with no way for the
 	// caller to know the media cascade never ran.
 	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
-	var errResp gen.ErrorResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
-	assert.NotEmpty(t, errResp.Error)
+	var state gen.ConfigurationMutationState
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &state))
+	assert.Equal(t, gen.ConfigurationMutationStatePersistenceStatusPartial, state.PersistenceStatus)
+	assert.Equal(t, gen.ConfigurationMutationStateActivationStatusNotAttempted, state.ActivationStatus)
 
 	// The authoritative delete (the workspace JSON file) already happened
 	// before the best-effort media cascade ran — the workspace itself is
@@ -148,7 +149,7 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 	)
 
 	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	getR := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	api.handleWorkspaceGet(getW, getR, id)
 	assert.Equal(
 		t,
@@ -198,20 +199,23 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 	assert.Contains(t, string(logged), id)
 }
 
-// TestHandleWorkspaceDelete_MediaCascadeSuccess_StillReturns204 is a
+// TestHandleWorkspaceDelete_MediaCascadeSuccess_ReturnsCompleteState is a
 // happy-path guard: a workspace with no media library at all (never
-// uploaded to) must still delete cleanly with 204, proving FIX-4 did not
+// uploaded to) must still delete cleanly with confirmed complete state, proving FIX-4 did not
 // turn the common case into a false failure.
-func TestHandleWorkspaceDelete_MediaCascadeSuccess_StillReturns204(t *testing.T) {
+func TestHandleWorkspaceDelete_MediaCascadeSuccess_ReturnsCompleteState(t *testing.T) {
 	api, auditDir := newTestAPIWithAuditor(t)
 	id := createWorkspaceViaAPI(t, api, "NoMediaAtAll", "")
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
 
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
-	assert.Empty(t, w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var saved gen.ConfigurationMutationState
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &saved))
+	assert.Equal(t, gen.ConfigurationMutationStatePersistenceStatusComplete, saved.PersistenceStatus)
+	assert.Equal(t, gen.ConfigurationMutationStateActivationStatusActive, saved.ActivationStatus)
 
 	events := readAuditEventsForTest(t, auditDir)
 	var deleteEvent map[string]any
@@ -264,7 +268,7 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
 		_ = os.RemoveAll(wsDir)
 	})
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "carol"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
@@ -272,9 +276,13 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
 	// Before the fix this was an unconditional 204 even though wsDir was
 	// still (partially) on disk.
 	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
-	var errResp gen.ErrorResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
-	assert.NotEmpty(t, errResp.Error)
+	var state gen.ConfigurationMutationState
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &state))
+	assert.Equal(t, gen.ConfigurationMutationStatePersistenceStatusPartial, state.PersistenceStatus)
+	require.NotNil(t, state.ErrorStage)
+	assert.Equal(t, "remove_directory", *state.ErrorStage)
+	require.NotNil(t, state.Message)
+	assert.NotEmpty(t, *state.Message)
 
 	// The leftover file must genuinely still be on disk — proving the 500
 	// reflects reality, not a spurious failure.
@@ -284,7 +292,7 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
 	// The authoritative workspace record delete is unaffected by the
 	// directory-wipe failure — a follow-up GET must still 404.
 	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	getR := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	api.handleWorkspaceGet(getW, getR, id)
 	assert.Equal(t, http.StatusNotFound, getW.Code,
 		"workspace record must be confirmed gone via GET despite the directory-removal 500")
@@ -321,20 +329,24 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Injected(t *testing.T) {
 	removeAllFn = func(string) error { return sentinel }
 	t.Cleanup(func() { removeAllFn = orig })
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "carol"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
 
 	require.Equal(t, http.StatusInternalServerError, w.Code,
 		"a RemoveAll failure must surface as 500, not a silent 204; body: %s", w.Body.String())
-	var errResp gen.ErrorResponse
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
-	assert.NotEmpty(t, errResp.Error)
+	var state gen.ConfigurationMutationState
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &state))
+	assert.Equal(t, gen.ConfigurationMutationStatePersistenceStatusPartial, state.PersistenceStatus)
+	require.NotNil(t, state.ErrorStage)
+	assert.Equal(t, "remove_directory", *state.ErrorStage)
+	require.NotNil(t, state.Message)
+	assert.NotEmpty(t, *state.Message)
 
 	// The workspace record delete is independent of the directory wipe.
 	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	getR := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	api.handleWorkspaceGet(getW, getR, id)
 	assert.Equal(t, http.StatusNotFound, getW.Code,
 		"workspace record must still be gone despite the directory-removal 500")

@@ -742,6 +742,7 @@ func FixtureAgent_Populated() Agent {
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
 	return Agent{
+		Revision:          repeatStr("a", 64),
 		Id:                "jim",
 		Name:              "Jim",
 		Type:              AgentTypeCore,
@@ -763,6 +764,7 @@ func FixtureAgent_ZeroValue() Agent {
 
 func FixtureAgent_Edge() Agent {
 	return Agent{
+		Revision:          repeatStr("a", 64),
 		Id:                "custom-" + repeatStr("y", 36),
 		Name:              "Unicode Agent 🤖",
 		Type:              AgentTypeMain,
@@ -1898,16 +1900,15 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 	toolCfgAllow := AgentToolsResponseToolsConfiguredPolicyAllow
 	toolEffAllow := AgentToolsResponseToolsEffectivePolicyAllow
 	return AgentToolsResponse{
-		AgentType: &agentType,
+		Revision:      repeatStr("a", 64),
+		OverrideNames: []string{"bash"},
+		AgentType:     &agentType,
 		Config: struct {
 			Builtin *struct {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -1942,16 +1943,15 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 	toolCfgDeny := AgentToolsResponseToolsConfiguredPolicyDeny
 	toolEffAsk := AgentToolsResponseToolsEffectivePolicyAsk
 	return AgentToolsResponse{
-		AgentType: &agentType,
+		Revision:      repeatStr("a", 64),
+		OverrideNames: []string{"delete_agent"},
+		AgentType:     &agentType,
 		Config: struct {
 			Builtin *struct {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2390,6 +2390,7 @@ func FixturePlanListResponse_ZeroValue() PlanListResponse {
 
 func FixtureWorkspace_Populated() Workspace {
 	return Workspace{
+		Revision:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Id:          "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Name:        "website-api",
 		Description: strPtr("Main REST API service"),
@@ -2503,17 +2504,14 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
+	enabled := true
 	color := "#D4AF37"
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
-	enabled := true
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	description := "Focused research assistant"
 	temperature := 0.7
 	maxTokens := 4096
-	maxCost := 5.0
-	maxCalls := 100
-	maxTools := 60
 	maxToolIterations := 60
 	voice := "alloy"
 
@@ -2538,17 +2536,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,
 		},
-		RateLimits: &struct {
-			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
-			MaxLlmCallsPerHour    *int     `json:"max_llm_calls_per_hour,omitempty"`
-			MaxToolCallsPerMinute *int     `json:"max_tool_calls_per_minute,omitempty"`
-			UseGlobalDefaults     *bool    `json:"use_global_defaults,omitempty"`
-		}{
-			UseGlobalDefaults:     &enabled,
-			MaxCostPerDay:         &maxCost,
-			MaxLlmCallsPerHour:    &maxCalls,
-			MaxToolCallsPerMinute: &maxTools,
-		},
 		ShellPolicy: &struct {
 			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
 			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
@@ -2561,10 +2548,7 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 				Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2575,15 +2559,9 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 				},
 			},
 			Mcp: &struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			}{
-				Servers: &[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				}{{Id: "my-mcp"}},
+				Servers: &[]AgentToolsMcpServerBinding{{Id: "my-mcp"}},
 			},
 		},
 	}
@@ -2625,10 +2603,7 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 				Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2754,13 +2729,12 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	temperature := 0.5
 	maxTokens := 2048
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
-	heartbeat := "Check queue every hour."
 	soul := "You are a helpful assistant."
 	voice := "alloy"
-	updatedAt := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 
 	vDefault := true
 	return AgentUpdateRequest{
+		Revision:    repeatStr("a", 64),
 		Name:        &name,
 		Description: &description,
 		Model:       &model,
@@ -2768,7 +2742,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		Icon:        &icon,
 		Default:     &vDefault,
 		Soul:        &soul,
-		Heartbeat:   &heartbeat,
 		Voice:       &voice,
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
@@ -2782,10 +2755,7 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 				Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2796,17 +2766,13 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 				},
 			},
 		},
-		UpdatedAt: &updatedAt,
 	}
 }
 
-// FixtureAgentUpdateRequest_UpdatedAt returns a minimal patch whose only field
-// is a valid RFC3339 updated_at. JSON Schema validation must accept it.
-func FixtureAgentUpdateRequest_UpdatedAt() AgentUpdateRequest {
-	updatedAt := time.Date(2026, 6, 19, 12, 34, 56, 0, time.UTC)
-	return AgentUpdateRequest{
-		UpdatedAt: &updatedAt,
-	}
+// FixtureAgentUpdateRequest_Revision carries the required write precondition
+// and one changed field, as specified by ADR-090 FR-007.
+func FixtureAgentUpdateRequest_Revision() AgentUpdateRequest {
+	return AgentUpdateRequest{Revision: repeatStr("a", 64), Model: strPtr("fixture-model")}
 }
 
 // ── ChannelRouting ────────────────────────────────────────────────────────────

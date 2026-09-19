@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -132,7 +135,7 @@ type AgentInstance struct {
 	// this instance via TriggerReload → NewAgentRegistry (not an in-place swap),
 	// so the fresh snapshot carries the new GlobalPolicies. The turn assembly
 	// Load()s the pointer on each tool call so a stale policy is never seen
-	// mid-turn. The zero value (nil pointer) defaults to allow-all.
+	// mid-turn. A nil policy snapshot denies tools.
 	toolPolicy atomic.Pointer[tools.ToolPolicyCfg]
 
 	// Router is non-nil when model routing is configured and the light model
@@ -145,6 +148,11 @@ type AgentInstance struct {
 	// LightProvider is the concrete provider instance for the configured light model.
 	// It is only used when routing selects the light tier for a turn.
 	LightProvider providers.LLMProvider
+	// sourceConfigJSON is the immutable configuration snapshot used to build
+	// this particular registered instance. It proves publication independently
+	// of AgentLoop's mutable config pointer.
+	sourceConfigJSON []byte
+	DocumentRuntime  *documentruntime.Layout
 }
 
 // newAgentInstance carries the shared state of NewAgentInstance across its stages.
@@ -181,6 +189,7 @@ type newAgentInstance struct {
 	lightCandidates     []providers.FallbackCandidate
 	lightProvider       providers.LLMProvider
 	timeoutSeconds      int
+	documentRuntime     *documentruntime.Layout
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -235,7 +244,9 @@ func (nai *newAgentInstance) registerTools() {
 	// All file-system and exec tools register unconditionally. Policy
 	// (allow / ask / deny) decides whether an agent can actually invoke them.
 	maxReadFileSize := nai.cfg.Tools.ReadFile.MaxReadFileSize
-	nai.toolsRegistry.Register(tools.NewReadFileTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths))
+	readFileTool := tools.NewReadFileTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths)
+	readFileTool.SetMaxInspectionImageBytes(nai.cfg.Agents.Defaults.GetMaxMediaSize())
+	nai.toolsRegistry.Register(readFileTool)
 	nai.toolsRegistry.Register(tools.NewWriteFileTool(nai.workspace, nai.restrict, nai.allowWritePaths))
 	nai.toolsRegistry.Register(tools.NewListDirTool(nai.workspace, nai.readRestrict, nai.allowReadPaths))
 	// library_list / library_read (D3, library-spec): scoped facades over
@@ -246,13 +257,45 @@ func (nai *newAgentInstance) registerTools() {
 	// deny), not conditional registration, decides who can actually invoke
 	// them (CLAUDE.md Constraint #6).
 	nai.toolsRegistry.Register(tools.NewLibraryListTool(nai.workspace, nai.readRestrict, nai.allowReadPaths))
-	nai.toolsRegistry.Register(tools.NewLibraryReadTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths))
+	libraryReadTool := tools.NewLibraryReadTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths)
+	libraryReadTool.SetMaxInspectionImageBytes(nai.cfg.Agents.Defaults.GetMaxMediaSize())
+	nai.toolsRegistry.Register(libraryReadTool)
 
 	execTool, err := tools.NewExecToolWithConfig(nai.workspace, nai.restrict, nai.cfg, nai.allowReadPaths)
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 			map[string]any{"error": err.Error()})
 	} else {
+		// ADR-090 environment-setup (ES-FR-04): context-based runtime
+		// availability — EVERY native agent gets the managed document runtime
+		// view. The old Mia/worker/Admin ID gate is retired: per-turn writable
+		// state (cache) and generic prefixes resolve inside the turn's
+		// authorized root by the exec tool itself, so no role has a different
+		// runtime view and no role is excluded by construction. Policy — not
+		// registration — decides who can invoke what.
+		layout, layoutErr := documentruntime.ResolveLayout(config.OmnipusHomeDir(), documentruntime.ManifestRevision, "shared")
+		if layoutErr != nil {
+			logger.ErrorCF("agent", "Failed to resolve document runtime", map[string]any{"error": layoutErr.Error()})
+		} else if _, provisionErr := documentruntime.ProvisionFirstParty(layout); provisionErr != nil {
+			logger.ErrorCF("agent", "Failed to provision document runtime", map[string]any{"error": provisionErr.Error()})
+		} else {
+			nai.documentRuntime = &layout
+			execTool.SetDocumentRuntime(layout)
+		}
+
+		// ADR-090 environment_setup (ES-FR-01): registered unconditionally
+		// like every sibling tool — its Ask policy (the founder-confirmed
+		// matrix in pkg/coreagent's role policies) decides who may call it.
+		// Admin's cross-workspace setup authority is a wiring-time identity
+		// fact derived server-side from the agent ID; never caller-supplied.
+		nai.toolsRegistry.Register(tools.NewEnvironmentSetupTool(tools.EnvironmentSetupToolDeps{
+			Home:            config.OmnipusHomeDir(),
+			AgentWorkDir:    nai.workspace,
+			Admin:           nai.agentCfg != nil && routing.NormalizeAgentID(nai.agentCfg.ID) == "admin",
+			GodMode:         GodModeActive(nai.cfg),
+			AuditFailClosed: resolveBoolWithDefault(nai.cfg.Sandbox.PathGuardAuditFailClosed, nai.cfg.Sandbox.AuditLog),
+		}))
+
 		nai.toolsRegistry.Register(execTool)
 	}
 
@@ -553,8 +596,12 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		Router:              nai.router,
 		LightCandidates:     nai.lightCandidates,
 		LightProvider:       nai.lightProvider,
+		DocumentRuntime:     nai.documentRuntime,
 		TimeoutSeconds:      nai.timeoutSeconds,
 		AgentType:           resolvedAgentType,
+	}
+	if nai.agentCfg != nil {
+		inst.sourceConfigJSON, _ = json.Marshal(nai.agentCfg)
 	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
@@ -570,6 +617,18 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 	}
 	inst.toolPolicy.Store(agentToolsCfgToPolicy(nai.cfg, agentToolsCfg))
 	return inst
+}
+
+// MatchesSourceConfig reports whether candidate is the configuration used to
+// construct this exact instance. SOUL.md is deliberately outside this check:
+// ContextBuilder reads that file dynamically, so a soul-only revision does not
+// require replacing the registered instance.
+func (a *AgentInstance) MatchesSourceConfig(candidate *config.AgentConfig) bool {
+	if a == nil || candidate == nil || len(a.sourceConfigJSON) == 0 {
+		return false
+	}
+	candidateJSON, err := json.Marshal(candidate)
+	return err == nil && bytes.Equal(a.sourceConfigJSON, candidateJSON)
 }
 
 // LoadToolPolicy returns the current tool policy snapshot for this agent.
@@ -737,6 +796,7 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		Router:          a.Router,
 		LightCandidates: a.LightCandidates,
 		LightProvider:   a.LightProvider,
+		DocumentRuntime: a.DocumentRuntime,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)
@@ -1013,6 +1073,9 @@ func GodModeActive(globalCfg *config.Config) bool {
 // a hardcoded "allow" here.
 func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 	out := &tools.ToolPolicyCfg{}
+	if cfg != nil {
+		out.MCPServers = tools.CloneMCPBindings(cfg.MCP.Servers)
+	}
 	// O14 god-mode: when the global switch is active, floor every tool's
 	// effective policy at "allow" (no prompts, no deny) and skip the admin-ask
 	// fence. Set the flag and return early — the per-agent and global policy

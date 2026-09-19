@@ -1,0 +1,41 @@
+{
+  "skill_name": "elicify-docx",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create an editable Word proposal for a two-week onboarding pilot. Include an executive summary, scope, an owner/due-date table, and risks. The fixed price is USD 8,000. Use A4 paper. Do not invent client names. Render and inspect every page if the tools are available.",
+      "expected_output": "An editable .docx with accurate fixed price, real table, clear headings and explicit visual QA evidence or an honest blocker.",
+      "files": [],
+      "assertions": [
+        "The artifact reopens as DOCX and contains USD 8,000 exactly.",
+        "Scope, owners/dates, and risks are present without invented client identity.",
+        "The owner/due-date content is a real Word table.",
+        "The receipt identifies rendering and actual page-image inspection, or explicitly states it was not verified."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "In the attached quarterly-review.docx, change only the approved plain-text budget from USD 80,000 to USD 84,000. Preserve existing tracked changes, comments, headers, links, tables, and images; save a new copy. If you cannot establish preservation, explain the limitation and give a proposed edit rather than flattening the file.",
+      "expected_output": "A narrowly edited copy with preservation evidence, or a clear proposed edit when the revision-bearing source cannot be safely edited.",
+      "files": [],
+      "fixture_contract": "Provide quarterly-review.docx with a whole-run budget, mixed formatting, a header, link, image, table, comment, and inserted/deleted text. Harness must generate or supply this original fixture.",
+      "assertions": [
+        "The source bytes remain unchanged.",
+        "Any edited copy changes the budget once and retains the enumerated source features.",
+        "The answer does not falsely equate reopening the document with tracked-change preservation."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Use the attached letterhead.dotx to create a Word letter for Jordan Lee about the meeting on 18 October 2026. Keep the letterhead and page footer. The template has placeholders in the header and a body token split across formatting runs. Do not rename the extension as conversion.",
+      "expected_output": "A new DOCX from a valid template route with correct placeholders and preserved letterhead/footer, or an explicit conversion dependency blocker.",
+      "files": [],
+      "fixture_contract": "Provide an original .dotx with header/footer branding and a body placeholder split across two runs.",
+      "assertions": [
+        "No unresolved placeholder remains in a delivered final document.",
+        "The template is not passed off as converted by extension rename alone.",
+        "Header/footer and mixed-run substitution are explicitly verified."
+      ]
+    }
+  ]
+}

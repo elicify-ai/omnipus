@@ -56,6 +56,7 @@ function renderScreen() {
 }
 
 const grantedNeverInvoked: Skill = {
+  revision: '0'.repeat(64),
   id: 'release-notes',
   name: 'Release Notes',
   version: '1.0.0',
@@ -67,6 +68,7 @@ const grantedNeverInvoked: Skill = {
 }
 
 const invokedRecently: Skill = {
+  revision: '0'.repeat(64),
   id: 'daily-briefing',
   name: 'Daily Briefing',
   version: '2.0.0',

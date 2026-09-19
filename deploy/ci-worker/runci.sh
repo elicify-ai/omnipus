@@ -312,7 +312,7 @@ run_gorace() {
     echo "testing the intended packages. (Mirrors the same guard in .github/workflows/pr.yml.)" >&2
     return 1
   fi
-  out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 900s \
+  out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 2700s \
     "${race_pkgs[@]}" 2>&1)
   local code=$?
   echo "$out"
@@ -401,7 +401,7 @@ run_gorace() {
     # re-run must measure the SAME thing, or a package that only "fails" here
     # because it launched a real Chrome would be re-run without one and
     # stamped a flake — or vice versa.
-    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
        && ! grep -aq "DATA RACE" "$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log"; then
       # Excused — but say WHAT was excused. After the `--- FAIL` carve-out
       # above, reaching this point means the contended run produced a bare
@@ -443,17 +443,17 @@ run_gotest() {
   # refused to excuse it (it failed both runs), which is exactly why the gate
   # must not measure something GitHub does not.
   #
-  # -timeout 1800s is REQUIRED: go test's default is 10m PER PACKAGE TEST
+  # -timeout 2700s is REQUIRED: go test's default is 10m PER PACKAGE TEST
   # BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s) on
   # an UNCONTENDED machine — this gate runs it under -p 2 (two package
   # binaries sharing CPU/disk), which is worse. Without an explicit override
   # the 10m default fires first and panics naming whatever test happened to
   # be in flight at that instant, not the actual slow package — observed on
   # this worker as a false lead that sent an investigation chasing an
-  # innocent test with nothing to do with the real timing. 1800s matches
-  # run_gorace's 900s with the extra margin plain (non-race) execution
-  # doesn't strictly need but a loaded shared worker does.
-  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 2 ./... 2>&1)
+  # innocent test with nothing to do with the real timing. 2700s matches
+  # run_gorace's 45-minute package budget so a loaded shared worker measures
+  # the same finite ceiling as GitHub CI.
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -536,12 +536,12 @@ run_gotest() {
     # CI=true here too: the isolated re-run must measure the same thing as the
     # contended run, or a package that only failed because it launched a real
     # Chrome would be re-run without one and stamped a flake (or vice versa).
-    # -timeout 1800s: same reasoning as the contended run above — an
+    # -timeout 2700s: same reasoning as the contended run above — an
     # isolated -p 1 re-run of a slow package (e.g. pkg/agent, ~19min
     # uncontended) is just as exposed to go test's 10m-per-binary default,
     # and this IS the exact re-run that would otherwise stamp such a package
     # a REAL FAILURE on a timeout artifact rather than a genuine repeat.
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >"$TMPDIR/rr.log" 2>&1; then
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr.log" 2>&1; then
       # Excused — but say WHAT was excused. Reaching this point means the
       # contended run produced a bare `FAIL <pkg>` with no named test failure,
       # i.e. the hang/timeout signature, and the package passed alone.
@@ -1030,17 +1030,46 @@ run_e2e() {
     # actually running. Closing fd 9 in the child means an orphaned Xvfb can no
     # longer hold the worker hostage. Any other long-lived background child
     # added here needs the same treatment.
-    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 9>&- &
-    _XVFB_PID=$!
-    export DISPLAY=:99
-    # Give the server a moment, then confirm it is actually up rather than
-    # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
-    sleep 2
-    if kill -0 "$_XVFB_PID" 2>/dev/null; then
-      log "e2e: virtual display :99 up (pid $_XVFB_PID)"
-    else
-      echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See $TMPDIR/xvfb.log" >&2
-      unset DISPLAY _XVFB_PID
+    # An Xvfb ORPHANED by a killed run keeps display :99 and its /tmp/.X99-lock,
+    # and every later run then dies with "Server is already active for display
+    # 99" — one ungraceful shutdown wedges the preview-headed shard until the
+    # machine is rebuilt. Observed 2026-09-17/18: a stray Xvfb from a killed run
+    # failed every subsequent shard at browserType.launch in 2ms.
+    #
+    # So: ADOPT a healthy existing display rather than failing, and only clear
+    # a lock whose owner is genuinely gone. Never pkill-by-pattern on this box.
+    _xvfb_display_ok() { command -v xdpyinfo >/dev/null 2>&1 && xdpyinfo -display :99 >/dev/null 2>&1; }
+    _XVFB_PID=""
+    if [ -f /tmp/.X99-lock ]; then
+      _owner=$(tr -dc '0-9' < /tmp/.X99-lock 2>/dev/null)
+      if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+        # Live owner. Adopt it if it actually serves; do NOT record a pid we did
+        # not start, or the RETURN trap would kill another run's display.
+        export DISPLAY=:99
+        if _xvfb_display_ok || [ ! -x "$(command -v xdpyinfo 2>/dev/null)" ]; then
+          log "e2e: adopting existing virtual display :99 (owner pid $_owner, not started by this run — will not be reaped)"
+        else
+          echo "WARNING: display :99 is held by pid $_owner but does not answer; leaving it alone and continuing without a display" >&2
+          unset DISPLAY
+        fi
+      else
+        log "e2e: clearing a stale X99 lock (owner ${_owner:-unknown} is gone)"
+        rm -f /tmp/.X99-lock "/tmp/.X11-unix/X99" 2>/dev/null || true
+      fi
+    fi
+    if [ -z "${DISPLAY:-}" ]; then
+      Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 9>&- &
+      _XVFB_PID=$!
+      export DISPLAY=:99
+      # Give the server a moment, then confirm it is actually up rather than
+      # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
+      sleep 2
+      if kill -0 "$_XVFB_PID" 2>/dev/null; then
+        log "e2e: virtual display :99 up (pid $_XVFB_PID)"
+      else
+        echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See $TMPDIR/xvfb.log" >&2
+        unset DISPLAY _XVFB_PID
+      fi
     fi
   elif [ -z "${DISPLAY:-}" ]; then
     echo "WARNING: no Xvfb on this box — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect" >&2

@@ -36,6 +36,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     installSkillBySlug: vi.fn(),
     searchSkills: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
+    fetchSkills: vi.fn(),
   }
 })
 
@@ -44,6 +45,7 @@ import {
   installSkillBySlug,
   searchSkills,
   fetchSkillMarketplaceStatus,
+  fetchSkills,
   ApiError,
 } from '@/lib/api'
 import type { SkillSearchResult, SkillMarketplaceStatus } from '@/lib/api'
@@ -123,17 +125,38 @@ function makeFile(name: string, content: string): File {
   return new File([content], name, { type: 'text/markdown' })
 }
 
+function installedSkill(id: string, skillRevision = 'a'.repeat(64)) {
+  return {
+    revision: skillRevision,
+    id,
+    name: id,
+    version: '1.0.0',
+    status: 'active' as const,
+    verified: false,
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   queryClient = makeQueryClient()
-  vi.mocked(installSkillFromFile).mockResolvedValue(undefined as never)
+  vi.mocked(installSkillFromFile).mockResolvedValue({
+    ...installedSkill('my-skill', 'b'.repeat(64)),
+    persistence_status: 'complete',
+    activation_status: 'active',
+    changed_fields: ['skill'],
+  })
   vi.mocked(installSkillBySlug).mockResolvedValue({
+    revision: 'b'.repeat(64),
+    persistence_status: 'complete',
+    activation_status: 'active',
+    changed_fields: ['skill'],
     id: 'web-search',
     name: 'web-search',
     version: '1.4.0',
     status: 'active',
     verified: false,
-  } as never)
+  })
+  vi.mocked(fetchSkills).mockResolvedValue([])
   vi.mocked(searchSkills).mockResolvedValue(RESULTS)
   // Default: a marketplace is enabled so the existing search tests render the
   // browse UI. Gating tests override this per-case.
@@ -174,7 +197,7 @@ describe('SkillBrowser — ClawHub search', () => {
     await userEvent.click(screen.getByTestId('skill-install-web-search'))
 
     await waitFor(() => {
-      expect(vi.mocked(installSkillBySlug)).toHaveBeenCalledWith('web-search', '1.4.0')
+      expect(vi.mocked(installSkillBySlug)).toHaveBeenCalledWith('web-search', '1.4.0', undefined)
     })
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['skills'] })
@@ -182,6 +205,22 @@ describe('SkillBrowser — ClawHub search', () => {
     // success toast + row marked Installed
     expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'success' }))
     expect(await screen.findByText('Installed')).toBeInTheDocument()
+  })
+
+  it('carries the reviewed revision when replacing an installed skill', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([{
+      revision: 'a'.repeat(64), id: 'web-search', name: 'Web Search', version: '1.3.0',
+      status: 'active', verified: true,
+    }])
+    renderBrowser()
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')
+    await screen.findByText('Web Search')
+    await userEvent.click(screen.getByTestId('skill-install-web-search'))
+    await waitFor(() => {
+      expect(vi.mocked(installSkillBySlug)).toHaveBeenCalledWith(
+        'web-search', '1.4.0', 'a'.repeat(64),
+      )
+    })
   })
 
   it('shows the "registry unavailable" message on a 502 search error (no crash)', async () => {
@@ -280,7 +319,7 @@ describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
     })
   })
 
-  it('confirming the dialog calls installSkillFromFile', async () => {
+  it('confirming Markdown uploads the original File with a generated upload context', async () => {
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
     await screen.findByText(/Install from file/i)
@@ -289,8 +328,111 @@ describe('SkillBrowser — install confirm flow (US-E4, #340)', () => {
     await waitFor(() => screen.getByTestId('skill-install-confirm-dialog'))
     await userEvent.click(screen.getByTestId('confirm-install-btn'))
     await waitFor(() => {
-      expect(vi.mocked(installSkillFromFile)).toHaveBeenCalledWith(SKILL_MD_WITH_CAPS, 'my-skill.md')
+      expect(vi.mocked(installSkillFromFile)).toHaveBeenCalledWith(
+        file,
+        expect.any(String),
+        undefined,
+        expect.any(AbortSignal),
+      )
     })
+  })
+
+  it('preserves ZIP binary without calling File.text()', async () => {
+    renderBrowser()
+    const file = new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0xff])], 'archive.zip', {
+      type: 'application/zip',
+    })
+    const textSpy = vi.spyOn(file, 'text')
+    await screen.findByText(/Install from file/i)
+    fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    })
+
+    expect(await screen.findByTestId('skill-install-confirm-dialog')).toBeInTheDocument()
+    expect(screen.getByText(/Capabilities will be inspected by the server/i)).toBeInTheDocument()
+    expect(textSpy).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByTestId('confirm-install-btn'))
+    await waitFor(() => expect(vi.mocked(installSkillFromFile)).toHaveBeenCalledWith(
+      file, expect.any(String), undefined, expect.any(AbortSignal),
+    ))
+  })
+
+  it('rejects unsupported JSON clearly without opening confirmation or installing', async () => {
+    renderBrowser()
+    const file = new File(['{}'], 'legacy.json', { type: 'application/json' })
+    await screen.findByText(/Install from file/i)
+    fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    })
+
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith({
+      message: 'Unsupported skill file. Choose a Markdown (.md) or ZIP (.zip) package.',
+      variant: 'error',
+    }))
+    expect(screen.queryByTestId('skill-install-confirm-dialog')).not.toBeInTheDocument()
+    expect(vi.mocked(installSkillFromFile)).not.toHaveBeenCalled()
+  })
+
+  it('uses the revision of the reviewed installed skill with the exact filename identity', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([installedSkill('my-skill')])
+    renderBrowser()
+    const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
+    fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    })
+    const confirm = await screen.findByTestId('confirm-install-btn')
+    queryClient.setQueryData(['skills'], [installedSkill('my-skill', 'c'.repeat(64))])
+    await userEvent.click(confirm)
+
+    await waitFor(() => expect(vi.mocked(installSkillFromFile)).toHaveBeenCalledWith(
+      file, expect.any(String), 'a'.repeat(64), expect.any(AbortSignal),
+    ))
+  })
+
+  it('keeps the latest file selection when an earlier Markdown read finishes late', async () => {
+    renderBrowser()
+    let resolveFirstRead: (text: string) => void = () => {}
+    const first = makeFile('first.md', SKILL_MD_WITH_CAPS)
+    vi.spyOn(first, 'text').mockReturnValue(new Promise((resolve) => { resolveFirstRead = resolve }))
+    const second = new File([new Uint8Array([0x50, 0x4b])], 'second.zip', { type: 'application/zip' })
+    await screen.findByText(/Install from file/i)
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [first] } })
+    fireEvent.change(input, { target: { files: [second] } })
+
+    expect(await screen.findByText('second.zip')).toBeInTheDocument()
+    resolveFirstRead(SKILL_MD_WITH_CAPS)
+    await Promise.resolve()
+    expect(screen.getByText('second.zip')).toBeInTheDocument()
+    expect(screen.queryByText('first.md')).not.toBeInTheDocument()
+  })
+
+  it('aborts an in-flight install and ignores its stale success after cancellation', async () => {
+    let resolveInstall: (value: Awaited<ReturnType<typeof installSkillFromFile>>) => void = () => {}
+    vi.mocked(installSkillFromFile).mockImplementation((_file, _context, _revision, signal) => (
+      new Promise((resolve) => {
+        resolveInstall = resolve
+        signal?.addEventListener('abort', () => {})
+      })
+    ))
+    renderBrowser()
+    const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
+    await screen.findByText(/Install from file/i)
+    fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, {
+      target: { files: [file] },
+    })
+    await userEvent.click(await screen.findByTestId('confirm-install-btn'))
+    const signal = vi.mocked(installSkillFromFile).mock.calls[0][3]
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(signal?.aborted).toBe(true)
+
+    resolveInstall({
+      ...installedSkill('my-skill', 'b'.repeat(64)),
+      persistence_status: 'complete', activation_status: 'active', changed_fields: ['skill'],
+    })
+    await Promise.resolve()
+    expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'success' }))
   })
 
   it('shows a success toast after successful file install', async () => {
@@ -327,13 +469,12 @@ describe('SkillBrowser — file install error handling (US-E4, #340)', () => {
     })
   })
 
-  it('shows the hash-mismatch dialog (not a toast) for a 409 ApiError with body', async () => {
-    const hashError = new ApiError(
+  it('reports a 409 as a stale reviewed replacement without claiming success', async () => {
+    const conflict = new ApiError(
       409,
       'This conflicts with the current state. Please refresh and try again.',
-      { body: '{"expected":"abc123","got":"def456"}' },
     )
-    vi.mocked(installSkillFromFile).mockRejectedValue(hashError)
+    vi.mocked(installSkillFromFile).mockRejectedValue(conflict)
     renderBrowser()
     const file = makeFile('my-skill.md', SKILL_MD_WITH_CAPS)
     await screen.findByText(/Install from file/i)
@@ -342,11 +483,12 @@ describe('SkillBrowser — file install error handling (US-E4, #340)', () => {
     await waitFor(() => screen.getByTestId('skill-install-confirm-dialog'))
     await userEvent.click(screen.getByTestId('confirm-install-btn'))
     await waitFor(() => {
-      expect(screen.getByTestId('skill-hash-mismatch-dialog')).toBeInTheDocument()
-      expect(screen.getByText('abc123')).toBeInTheDocument()
-      expect(screen.getByText('def456')).toBeInTheDocument()
-      expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
+      expect(addToast).toHaveBeenCalledWith({
+        message: 'This installed skill changed after you reviewed it. Close and reopen the browser before replacing it.',
+        variant: 'error',
+      })
     })
+    expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'success' }))
   })
 })
 

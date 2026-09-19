@@ -2,10 +2,13 @@ title: WorkspaceInstructionsRequest
 description: >
   Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire
   content of the workspace's AGENT.md (Workspace / Project Instructions) at
-  workspaces/<id>/AGENT.md. Passing an empty string clears the file.
+  workspaces/<id>/AGENT.md. Passing an empty string clears the file. revision is
+  the opaque SHA-256 returned by GET and is required; a mismatch is 409 with
+  zero writes (ADR-090 FR-007).
 type: object
 required:
   - content
+  - revision
 additionalProperties: false
 properties:
   content:
@@ -17,3 +20,5 @@ properties:
       write via fileutil.WriteFileAtomic provides the physical limit; this
       schema constraint enforces a reasonable upper bound at the API layer.
     example: "Use TypeScript. Prefer functional components. Ship small PRs."
+  revision:
+    $ref: './ConfigurationRevision.yaml'

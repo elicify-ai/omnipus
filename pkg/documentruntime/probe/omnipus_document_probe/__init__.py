@@ -1,0 +1,1 @@
+"""Omnipus document runtime probe."""

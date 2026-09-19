@@ -6,6 +6,7 @@ import { fetchSessionDetail, fetchWorkspaces, workspacesQueryKeys, isApiError } 
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useChatStore } from '@/store/chat'
 
 // A just-deleted session (confirmed 404, not merely still loading) previously
 // fell through to a bare <ChatScreen /> — the loader caught the 404 and
@@ -38,7 +39,15 @@ function SessionRoute() {
   const setAttachedContext = useSessionStore((s) => s.setAttachedContext)
   const setWorkspaceSessionDescriptor = useSessionStore((s) => s.setWorkspaceSessionDescriptor)
   const setActiveWorkspaceId = useWorkspacesStore((s) => s.setActiveWorkspaceId)
+  const isConnected = useConnectionStore((s) => s.isConnected)
+  const isReplaying = useChatStore((s) => s.isReplaying)
   const attachedRef = useRef<string | null>(null)
+  // An offline mount records the target session so WsLifecycle can reattach
+  // it on connect. If that lifecycle callback ran just before the route wrote
+  // the session, it has nothing to attach; retain this bit so the route sends
+  // the deferred attach when connection state changes instead of mistaking an
+  // active id for a completed attach.
+  const pendingAttachRef = useRef(false)
   const redirectedRef = useRef(false)
 
   const loaderData = Route.useLoaderData()
@@ -105,17 +114,30 @@ function SessionRoute() {
       // "connection dropped" banner for a socket that is merely still
       // CONNECTING. A non-open socket takes the offline branch instead —
       // reattachActiveSession sends the frame on connect.
-      // The activeSessionId check guards against re-attaching an already-active
-      // session id — mirrors enterWorkspaceChat's no-op guard (session.ts) —
-      // so re-mounting this route for a session already attached this tab
-      // doesn't fire a redundant attach_session + bucket wipe.
-      const wsOpen = !!connection?.isConnected
-      if (
+      // An already-active session normally needs no second attach. The one
+      // exception is this route's own offline record, identified by
+      // pendingAttachRef: that record may have missed WsLifecycle's connect
+      // callback and must be attached now.
+      const wsOpen = isConnected && !!connection?.isConnected
+      const lifecycleAlreadyAttached =
+        wsOpen &&
+        pendingAttachRef.current &&
+        useSessionStore.getState().activeSessionId === session.id &&
+        isReplaying
+      if (lifecycleAlreadyAttached) {
+        // WsLifecycle's onConnected callback sends attach_session synchronously
+        // after publishing isConnected. React observes that store update only
+        // after the callback returns, so its replay marker is the existing
+        // acknowledgement that this route's offline record has been attached.
+        pendingAttachRef.current = false
+        attachedRef.current = session.id
+      } else if (
         wsOpen &&
         attachedRef.current !== session.id &&
-        useSessionStore.getState().activeSessionId !== session.id
+        (useSessionStore.getState().activeSessionId !== session.id || pendingAttachRef.current)
       ) {
         attachedRef.current = session.id
+        pendingAttachRef.current = false
         const attached = attachToSession(session.id, session.type, session.title ?? undefined, headerAgentId)
         if (!attached) {
           // connection.send() itself failed (e.g. mid reconnect-backoff) —
@@ -129,6 +151,7 @@ function SessionRoute() {
         // Offline / still-connecting: setActiveSession records the session so
         // reattachActiveSession can send the frame once the WS connects
         // (WsLifecycle.onConnected path).
+        pendingAttachRef.current = true
         setActiveSession(session.id, headerAgentId, null)
       }
 
@@ -164,20 +187,29 @@ function SessionRoute() {
     // with the session's REAL type/title (not a hardcoded 'chat'/undefined —
     // that clobbered channel/scheduled/heartbeat sessions' labelling and, when
     // useSelectSession also attached before navigating here, wiped the real
-    // values a second time). The activeSessionId check guards against
-    // re-attaching an already-active session id — mirrors enterWorkspaceChat's
-    // no-op guard (session.ts) — since useSelectSession no longer attaches for
-    // Unfiled sessions, this route is now the SOLE attacher for them.
+    // values a second time). An active id normally avoids redundant attaches;
+    // pendingAttachRef is the explicit exception for this route's earlier
+    // offline record. Since useSelectSession no longer attaches for Unfiled
+    // sessions, this route owns that deferred attach.
     // Same isConnected gate as the workspace branch above: a CONNECTING
     // socket must take the offline path, not a doomed send that flashes a
     // spurious global error banner on every fresh-tab deep link.
-    const wsOpenInline = !!connection?.isConnected
-    if (
+    const wsOpenInline = isConnected && !!connection?.isConnected
+    const lifecycleAlreadyAttachedInline =
+      wsOpenInline &&
+      pendingAttachRef.current &&
+      useSessionStore.getState().activeSessionId === session.id &&
+      isReplaying
+    if (lifecycleAlreadyAttachedInline) {
+      pendingAttachRef.current = false
+      attachedRef.current = session.id
+    } else if (
       wsOpenInline &&
       attachedRef.current !== session.id &&
-      useSessionStore.getState().activeSessionId !== session.id
+      (useSessionStore.getState().activeSessionId !== session.id || pendingAttachRef.current)
     ) {
       attachedRef.current = session.id
+      pendingAttachRef.current = false
       const attached = attachToSession(session.id, session.type, session.title ?? undefined, headerAgentId)
       if (!attached) {
         // connection.send() itself failed — attachToSession left state
@@ -187,6 +219,7 @@ function SessionRoute() {
         setActiveSession(session.id, headerAgentId, null)
       }
     } else if (!wsOpenInline) {
+      pendingAttachRef.current = true
       setActiveSession(session.id, headerAgentId, null)
     }
 
@@ -207,6 +240,8 @@ function SessionRoute() {
     setWorkspaceSessionDescriptor,
     setActiveWorkspaceId,
     navigate,
+    isConnected,
+    isReplaying,
   ])
 
   // Confirmed 404 (loader caught it and returned null, then the client-side

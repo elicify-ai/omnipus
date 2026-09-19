@@ -77,27 +77,19 @@ func TestSkill_ResolvedAllow_FreshCustomAgent(t *testing.T) {
 		"a freshly created custom agent must resolve Skill allow from its own seeded policy")
 }
 
-// TestSkill_Worker_InheritsGlobalCeiling_NoRedundantEntry pins the same
-// deliberate exception ToolSearch carries: the Worker's sparse
-// tightenGlobalCeiling map does NOT name Skill explicitly — it inherits the
-// tool from the global ceiling (pkg/config/defaults.go seeds "Skill":
-// "allow" there), matching the Worker's whole design principle ("sparse map,
-// inherit the ceiling for everything not deliberately tightened"). This
-// asserts BOTH halves: the seed literal has no Skill key, and the RESOLVED
-// policy is still allow — so an operator lowering the global ceiling
-// controls the Worker's Skill access, not a redundant per-agent entry that
-// would silently stop tracking the ceiling.
+// TestSkill_Worker_InheritsGlobalCeiling_NoRedundantEntry verifies that the
+// Worker seed records an explicit Allow entry for Skill, as required by the
+// ADR-090 discovery/skill-loading floor. The historical test name is retained.
 func TestSkill_Worker_InheritsGlobalCeiling_NoRedundantEntry(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
 	require.NotNil(t, worker.Tools, "Worker must carry an explicit tools policy")
-	_, hasExplicitEntry := worker.Tools.Builtin.Policies["Skill"]
-	assert.False(t, hasExplicitEntry,
-		"Worker's sparse map must NOT name Skill explicitly — it is meant to inherit "+
-			"the global ceiling like every other untightened tool")
+	p, hasExplicitEntry := worker.Tools.Builtin.Policies["Skill"]
+	assert.True(t, hasExplicitEntry, "ADR-090 records the every-seat Skill floor explicitly")
+	assert.Equal(t, config.ToolPolicyAllow, p)
 
 	assert.Equal(t, "allow", resolveFor(t, cfg, string(coreagent.IDWorker), "Skill", nil),
-		"(Worker, Skill) must still RESOLVE allow, purely via ceiling inheritance")
+		"(Worker, Skill) must resolve allow")
 }

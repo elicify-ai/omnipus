@@ -219,8 +219,9 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 
 	// With confirm=true — must succeed and remove agent.
 	resultConfirmed := tool.Execute(context.Background(), map[string]any{
-		"id":      "my-agent",
-		"confirm": true,
+		"id":       "my-agent",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "my-agent"),
 	})
 	if resultConfirmed.IsError {
 		t.Fatalf("expected success with confirm=true, got error: %s", resultConfirmed.ForLLM)
@@ -251,8 +252,9 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 
 	tool := systools.NewAgentUpdateTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
-		"id":   "my-agent",
-		"name": "New Name",
+		"id":       "my-agent",
+		"revision": currentAgentRevision(t, deps, "my-agent"),
+		"name":     "New Name",
 	})
 
 	if result.IsError {
@@ -350,8 +352,9 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "locked-core",
-		"confirm": true,
+		"id":       "locked-core",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "locked-core"),
 	})
 	if !result.IsError {
 		t.Fatal("expected error when deleting locked agent, got success")
@@ -377,7 +380,7 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 		t.Errorf("expected error code AGENT_LOCKED, got %v", errBlock["code"])
 	}
 	msg, _ := errBlock["message"].(string)
-	if !strings.Contains(msg, "locked core agent") {
+	if !strings.Contains(msg, "locked seeded agent") {
 		t.Errorf("expected message naming the locked-core-agent rejection, got %q", msg)
 	}
 	// The agent must still exist — the locked check must run BEFORE delete.
@@ -434,9 +437,14 @@ func TestAgentCreate_RejectsInvalidIcon(t *testing.T) {
 func TestAgentUpdate_RejectsInvalidColor(t *testing.T) {
 	deps, cfg := newTestDeps()
 	cfg.Agents.List = []config.AgentConfig{{ID: "my-agent", Name: "My Agent"}}
+	store := agentstore.New(deps.Home)
+	if err := store.Create("my-agent", &config.AgentConfig{ID: "my-agent", Name: "My Agent"}); err != nil {
+		t.Fatal(err)
+	}
 	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":    "my-agent",
-		"color": "not-a-color",
+		"id":       "my-agent",
+		"revision": currentAgentRevision(t, deps, "my-agent"),
+		"color":    "not-a-color",
 	})
 	if !result.IsError {
 		t.Fatal("update with invalid color should fail")
@@ -742,8 +750,9 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	newSoul := "You are now an expert in data analysis."
 	updateTool := systools.NewAgentUpdateTool(deps)
 	updateResult := updateTool.Execute(context.Background(), map[string]any{
-		"id":   "content-only-bot",
-		"soul": newSoul,
+		"id":       "content-only-bot",
+		"revision": currentAgentRevision(t, deps, "content-only-bot"),
+		"soul":     newSoul,
 	})
 	if updateResult.IsError {
 		t.Fatalf("update failed: %s", updateResult.ForLLM)
@@ -1189,8 +1198,9 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 
 	// Delete the agent — the fix under test.
 	deleteResult := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      agentID,
-		"confirm": true,
+		"id":       agentID,
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, agentID),
 	})
 	if deleteResult.IsError {
 		t.Fatalf("delete_agent failed: %s", deleteResult.ForLLM)

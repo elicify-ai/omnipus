@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func sortedPolicyNames(policies map[string]config.ToolPolicy) []string {
+	names := make([]string, 0, len(policies))
+	for name := range policies {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // --- moved from rest.go tests 2026-09-15 ---
 
@@ -96,13 +106,21 @@ func TestUpdateAgentTools_RegistryReloadCompletesBeforeResponse(t *testing.T) {
 	wireAsyncReload(t, api, 30*time.Millisecond)
 
 	policies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	for name := range buildKnownBuiltinToolNames() {
+		if _, ok := policies[name]; !ok {
+			policies[name] = config.ToolPolicyDeny
+		}
+	}
+	state, err := agentstore.New(api.homePath).ReadState("test-agent")
+	require.NoError(t, err)
 	reqBody := map[string]any{
-		"builtin": map[string]any{"policies": policies},
+		"builtin":  map[string]any{"policies": policies},
+		"revision": state.Revision, "override_names": sortedPolicyNames(policies),
 	}
 	raw, err := json.Marshal(reqBody)
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent/tools", bytes.NewReader(raw))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent/tools", bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
 	r = withAdminRole(r)
 	api.updateAgentTools(w, r, "test-agent")
@@ -149,18 +167,26 @@ func TestUpdateAgentTools_ReloadTimeout_Returns503NotSilent200(t *testing.T) {
 	t.Cleanup(func() { api.agentLoop.ClearReloadPending() })
 
 	policies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	for name := range buildKnownBuiltinToolNames() {
+		if _, ok := policies[name]; !ok {
+			policies[name] = config.ToolPolicyDeny
+		}
+	}
+	state, err := agentstore.New(api.homePath).ReadState("test-agent")
+	require.NoError(t, err)
 	reqBody := map[string]any{
-		"builtin": map[string]any{"policies": policies},
+		"builtin":  map[string]any{"policies": policies},
+		"revision": state.Revision, "override_names": sortedPolicyNames(policies),
 	}
 	raw, err := json.Marshal(reqBody)
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent/tools", bytes.NewReader(raw))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent/tools", bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
 	r = withAdminRole(r)
 	api.updateAgentTools(w, r, "test-agent")
 
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+	assert.Equal(t, http.StatusOK, w.Code,
 		"an unconfirmed reload must NOT be reported as a plain 200 success — the caller cannot tell "+
 			"whether the tightened tool policy is actually enforced yet: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "did not confirm",
@@ -195,6 +221,7 @@ func TestUpdateAgentTools_ReloadTimeout_Returns503NotSilent200(t *testing.T) {
 func TestUpdateAgentTools_PolicyOnlyUpdatePreservesMCPBindings(t *testing.T) {
 	const agentID = "01JXTESTAGENTSTARTTEST001"
 	api := newTestRestAPIWithAgent(t)
+	seedGlobalCeiling(t, api)
 
 	// Seed a REAL entity record carrying MCP bindings — the persist step does
 	// a read-modify-write against the agent store, so an in-memory-only agent
@@ -223,11 +250,12 @@ func TestUpdateAgentTools_PolicyOnlyUpdatePreservesMCPBindings(t *testing.T) {
 	for name := range known {
 		policies[name] = "allow"
 	}
+	policies["bash"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)
-	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
+	body := `{"override_names":["bash"],"builtin":{"policies":` + string(policiesJSON) + `}}`
 
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools",
 		strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
@@ -254,6 +282,7 @@ func TestUpdateAgentTools_PolicyOnlyUpdatePreservesMCPBindings(t *testing.T) {
 	// And the update itself still landed — preservation must not come at the
 	// cost of the write the caller actually asked for.
 	require.NotEmpty(t, got.Tools.Builtin.Policies, "the policy update must still persist")
+	require.Equal(t, map[string]config.ToolPolicy{"bash": config.ToolPolicyDeny}, got.Tools.Builtin.Policies)
 }
 
 // TestUpdateAgentTools_ExplicitMCPServersStillReplace is the other half of the
@@ -263,6 +292,7 @@ func TestUpdateAgentTools_PolicyOnlyUpdatePreservesMCPBindings(t *testing.T) {
 func TestUpdateAgentTools_ExplicitMCPServersStillReplace(t *testing.T) {
 	const agentID = "01JXTESTAGENTSTARTTEST001"
 	api := newTestRestAPIWithAgent(t)
+	seedGlobalCeiling(t, api)
 
 	// The handler 422s on a binding to an MCP server that is not configured
 	// globally, so register one for the replacement to target.
@@ -290,12 +320,13 @@ func TestUpdateAgentTools_ExplicitMCPServersStillReplace(t *testing.T) {
 	for name := range known {
 		policies[name] = "allow"
 	}
+	policies["bash"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)
-	body := `{"builtin":{"policies":` + string(policiesJSON) +
+	body := `{"override_names":["bash"],"builtin":{"policies":` + string(policiesJSON) +
 		`},"mcp":{"servers":[{"id":"playwright","tools":["navigate"]}]}}`
 
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools",
 		strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
@@ -358,7 +389,7 @@ func TestUpdateAgentTools_D86_GetBodyRoundTripsThroughPut(t *testing.T) {
 	putBody, err := json.Marshal(echo)
 	require.NoError(t, err)
 
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(string(putBody)))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(string(putBody)))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
@@ -384,7 +415,7 @@ func TestUpdateAgentTools_D86_NeitherShapeStillRejected400(t *testing.T) {
 		"tools and type only":    `{"tools":[],"agent_type":"Main"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
+			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
 			r.Header.Set("Content-Type", "application/json")
 			r = withReAuthAdmin(t, api, r)
 			w := httptest.NewRecorder()
@@ -444,7 +475,7 @@ func TestUpdateAgentTools_LockedAgentForbidden(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
 
-	body := `{"builtin":{"mode":"explicit","visible":["read_file"]}}`
+	body := `{"revision":"` + strings.Repeat("0", 64) + `","builtin":{"mode":"explicit","visible":["read_file"]}}`
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/omnipus-system/tools", strings.NewReader(body))
 	api.HandleAgents(w, r)
@@ -471,7 +502,7 @@ func TestUpdateAgentTools_Subagent3pRejected(t *testing.T) {
 	// exists on the wire (CLAUDE.md hard constraint 6).
 	body := `{"builtin":{"policies":{"bash":"deny"}}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id+"/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -513,6 +544,7 @@ func TestUpdateAgentTools_InvalidPolicyValue(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -535,11 +567,12 @@ func TestUpdateAgentTools_InvalidPolicyValue(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedGlobalCeiling(t, api)
 
 	// Invalid per-tool policy value should be rejected.
 	body := `{"builtin":{"policies":{"bash":"bogus"}}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
@@ -587,6 +620,7 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	require.NoError(t, os.WriteFile(cfgPath, []byte(cfgJSON), 0o600))
 
 	cfg := &config.Config{
+		Version: config.CurrentVersion,
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
@@ -607,22 +641,24 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedGlobalCeiling(t, api)
+	require.NoError(t, os.WriteFile(cfgPath, marshalConfigForDisk(t, cfg), 0o600))
+	api.agentLoop.SetReloadFunc(func() error { return api.refreshConfigAndRewireServices(cfgPath) })
 
 	// Build a complete, explicit policies map: every known static builtin
 	// tool denied, except read_file/search_web which are allowed.
 	known := buildKnownBuiltinToolNames()
 	policies := make(map[string]string, len(known))
 	for name := range known {
-		policies[name] = "deny"
+		policies[name] = "allow"
 	}
-	policies["read_file"] = "allow"
-	policies["search_web"] = "allow"
+	policies["bash"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)
-	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
+	body := `{"override_names":["bash"],"builtin":{"policies":` + string(policiesJSON) + `}}`
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/update-agent/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
@@ -661,8 +697,7 @@ func TestUpdateAgentTools_Success(t *testing.T) {
 	require.NoError(t, err, "agent must exist as a real entity-store record")
 	require.NotNil(t, savedAgent.Tools, "tools config must be persisted")
 	persistedPolicies := savedAgent.Tools.Builtin.Policies
-	assert.Equal(t, config.ToolPolicyAllow, persistedPolicies["read_file"])
-	assert.Equal(t, config.ToolPolicyAllow, persistedPolicies["search_web"])
+	assert.NotContains(t, persistedPolicies, "read_file", "inherited ceiling values must not be persisted as local overrides")
 	assert.Equal(t, config.ToolPolicyDeny, persistedPolicies["bash"])
 
 	// config.json itself must carry no agents.list content.
@@ -719,7 +754,7 @@ func TestUpdateAgentTools_LegacyModeAloneCoverageGapRejected(t *testing.T) {
 
 	body := `{"builtin":{"mode":"explicit","visible":["read_file","search_web"]}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent-legacy/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/update-agent-legacy/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
@@ -783,14 +818,15 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedGlobalCeiling(t, api)
 
 	// A complete, real policies map: everything denied except read_file.
 	known := buildKnownBuiltinToolNames()
 	policies := make(map[string]string, len(known))
 	for name := range known {
-		policies[name] = "deny"
+		policies[name] = "allow"
 	}
-	policies["read_file"] = "allow"
+	policies["read_file"] = "deny"
 	policiesJSON, err := json.Marshal(policies)
 	require.NoError(t, err)
 
@@ -799,11 +835,11 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 	// incorrectly won, search_web would end up "allow" and read_file would
 	// be dropped entirely (the legacy conversion only ever sets `visible`
 	// names to "allow" — it never carries `policies` forward).
-	body := `{"builtin":{"policies":` + string(policiesJSON) +
+	body := `{"override_names":["read_file"],"builtin":{"policies":` + string(policiesJSON) +
 		`,"mode":"explicit","visible":["search_web"]}}`
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/update-agent-both/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/update-agent-both/tools", strings.NewReader(body))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
@@ -819,11 +855,8 @@ func TestUpdateAgentTools_PoliciesWinsOverLegacyModeVisible(t *testing.T) {
 	require.NotNil(t, savedAgent.Tools, "policies must be persisted")
 	persisted := savedAgent.Tools.Builtin.Policies
 
-	assert.Equal(t, config.ToolPolicyAllow, persisted["read_file"], "the caller's real policies value must survive")
-	assert.Equal(t, config.ToolPolicyDeny, persisted["bash"], "the caller's real policies value must survive")
-	assert.Equal(t, config.ToolPolicyDeny, persisted["search_web"],
-		"mode/visible must have NO effect when policies is present — search_web must keep its "+
-			"real 'deny' value from the policies map, not become 'allow' from visible[]")
+	assert.Equal(t, map[string]config.ToolPolicy{"read_file": config.ToolPolicyDeny}, persisted,
+		"mode/visible must not replace sparse explicit override intent")
 }
 
 // TestUpdateAgentTools_ReloadFailure_Returns503 verifies that if TriggerReload fails
@@ -897,23 +930,29 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 		policies[name] = "deny"
 	}
 	policies["read_file"] = "allow"
-	policiesJSON, err := json.Marshal(policies)
+	state, err := agentstore.New(tmpDir).ReadState("reload-test-agent")
 	require.NoError(t, err)
-	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
+	overrides := make([]string, 0, len(known))
+	for name := range known {
+		overrides = append(overrides, name)
+	}
+	bodyBytes, err := json.Marshal(map[string]any{"revision": state.Revision, "override_names": overrides, "builtin": map[string]any{"policies": policies}})
+	require.NoError(t, err)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/reload-test-agent/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/reload-test-agent/tools", bytes.NewReader(bodyBytes))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
-	// Then: HTTP 503 (reload failed).
-	require.Equal(t, http.StatusServiceUnavailable, w.Code,
-		"updateAgentTools must return 503 when TriggerReload fails with a non-ErrReloadNotConfigured error")
+	// The saved state is returned as 200 with explicit failed activation.
+	require.Equal(t, http.StatusOK, w.Code)
 
 	// Then: response must contain the human-readable reload failure message.
-	var errResp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
-	assert.Contains(t, errResp["error"], "in-memory reload failed",
-		"503 response must mention in-memory reload failure")
+	var mutationResp gen.AgentToolsResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &mutationResp))
+	require.NotNil(t, mutationResp.ActivationStatus)
+	assert.Equal(t, gen.AgentToolsResponseActivationStatus("failed"), *mutationResp.ActivationStatus)
+	require.NotNil(t, mutationResp.Message)
+	assert.Contains(t, *mutationResp.Message, "in-memory reload failed")
 
 	// Then: the agent entity record was still updated (the agent-store
 	// persist step runs BEFORE the handler's separate TriggerReload call —
@@ -969,7 +1008,7 @@ func TestUpdateAgentTools_BodyMissingBuiltinWrapper_Rejected400(t *testing.T) {
 	store := seedAgentWithFullPolicy(t, api, agentID)
 
 	body := `{"policies":` + mustPolicyJSON(t, map[string]string{"list_skills": "allow"}) + `}`
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
@@ -1002,7 +1041,7 @@ func TestUpdateAgentTools_IncompletePolicyMap_Rejected400(t *testing.T) {
 	delete(policies, "bash")
 	body := `{"builtin":{"policies":` + mustPolicyJSON(t, policies) + `}}`
 
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
@@ -1034,7 +1073,7 @@ func TestUpdateAgentTools_WildcardKey_Rejected400(t *testing.T) {
 	policies["*"] = "allow"
 	body := `{"builtin":{"policies":` + mustPolicyJSON(t, policies) + `}}`
 
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()
@@ -1056,9 +1095,9 @@ func TestUpdateAgentTools_CompleteMapStillAccepted(t *testing.T) {
 	policies := fullBuiltinPolicyMap("allow")
 	policies["bash"] = "deny"
 	policies["mcp_context7_*"] = "ask" // the documented MCP carve-out must pass
-	body := `{"builtin":{"policies":` + mustPolicyJSON(t, policies) + `}}`
+	body := `{"override_names":["bash","mcp_context7_*"],"builtin":{"policies":` + mustPolicyJSON(t, policies) + `}}`
 
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID+"/tools", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withReAuthAdmin(t, api, r)
 	w := httptest.NewRecorder()

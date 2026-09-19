@@ -18,6 +18,13 @@ import (
 // protocol endpoint is held. No Chrome process or internal registry is mocked.
 func TestBrowserAttachReplacementCancelsPendingCDP(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	// This test owns the CDP connection lifecycle. Pin the separate host-memory
+	// admission gate open so a busy host cannot short-circuit the controlled
+	// endpoint before the cancellation under test occurs.
+	t.Cleanup(config.SetMemoryProviderForTest(
+		func() (bool, bool) { return false, true },
+		func() (uint64, bool) { return 8 << 30, true },
+	))
 	connections := make(chan *websocket.Conn, 1)
 	requested := make(chan struct{})
 	drained := make(chan struct{})

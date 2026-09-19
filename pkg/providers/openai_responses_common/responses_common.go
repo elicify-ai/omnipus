@@ -83,12 +83,20 @@ func TranslateMessages(messages []protocoltypes.Message) (input responses.Respon
 				})
 			}
 		case "tool":
+			output := responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfString: openai.Opt(msg.Content)}
+			if len(msg.Media) > 0 {
+				items := responses.ResponseFunctionCallOutputItemListParam{{OfInputText: &responses.ResponseInputTextContentParam{Text: msg.Content}}}
+				for _, mediaURL := range msg.Media {
+					if strings.HasPrefix(mediaURL, "data:image/") {
+						items = append(items, responses.ResponseFunctionCallOutputItemUnionParam{OfInputImage: &responses.ResponseInputImageContentParam{ImageURL: openai.Opt(mediaURL), Detail: responses.ResponseInputImageContentDetailAuto}})
+					}
+				}
+				output = responses.ResponseInputItemFunctionCallOutputOutputUnionParam{OfResponseFunctionCallOutputItemArray: items}
+			}
 			input = append(input, responses.ResponseInputItemUnionParam{
 				OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
 					CallID: msg.ToolCallID,
-					Output: responses.ResponseInputItemFunctionCallOutputOutputUnionParam{
-						OfString: openai.Opt(msg.Content),
-					},
+					Output: output,
 				},
 			})
 		}

@@ -98,6 +98,25 @@ func SeedDefaults(destDir string) (SeedResult, error) {
 	return res, nil
 }
 
+// ExportEmbeddedPackage materializes one compiled-in skill package at destDir.
+// It is the runtime bridge for helpers and knowledge files that the ordinary
+// SKILL.md resolver deliberately does not expose by host path.
+func ExportEmbeddedPackage(name, destDir string) error {
+	if !ValidSlug(name) {
+		return fmt.Errorf("export embedded skill: invalid name %q", name)
+	}
+	info, err := fs.Stat(embeddedSkills, embeddedRoot+"/"+name)
+	if err != nil || !info.IsDir() {
+		return fmt.Errorf("export embedded skill %q: not found", name)
+	}
+	if _, err := os.Lstat(destDir); err == nil {
+		return fmt.Errorf("export embedded skill %q: destination exists", name)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return copyEmbeddedSkill(name, destDir)
+}
+
 // copyEmbeddedSkill copies every file under embedded/<name>/ into destSkillDir.
 // The copy is staged into a temporary sibling directory and renamed into place
 // so a partial copy is never observable as a real skill directory.

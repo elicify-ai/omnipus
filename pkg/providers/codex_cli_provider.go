@@ -30,6 +30,11 @@ func NewCodexCliProvider(workspace string) *CodexCliProvider {
 func (p *CodexCliProvider) Chat(
 	ctx context.Context, messages []Message, tools []ToolDefinition, model string, options map[string]any,
 ) (*LLMResponse, error) {
+	for _, msg := range messages {
+		if len(msg.Media) > 0 {
+			return nil, fmt.Errorf("codex CLI transport does not support image input; choose a native vision-capable provider")
+		}
+	}
 	if p.command == "" {
 		return nil, fmt.Errorf("codex command not configured")
 	}

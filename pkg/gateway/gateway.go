@@ -1226,7 +1226,7 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	)
 	if rc.err != nil {
 		slog.Warn("gateway: could not create skill installer; remove_skill unavailable",
-			"error", rc.err)
+			"error_type", fmt.Sprintf("%T", rc.err))
 		rc.sysSkillInstaller = nil
 	}
 }
@@ -1314,6 +1314,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
 		// comment.
 		ResolveBashPolicy: rc.agentLoop.NewSysagentBashPolicyResolver(),
+		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
 		// Founder decision 2026-09-15: create/update_task_in_workspace refuse an
 		// assignee that cannot finish the task — the same answer as the plain
 		// task tools and the task run's pre-run check.
@@ -1332,6 +1333,15 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// reach the central/per-agent registries until the next hot reload or process restart.
 		ReconcileMCP: rc.agentLoop.ReconcileMCP,
 		MCPStatus:    rc.agentLoop.MCPServerStatus,
+		AgentConfigInventory: func() systools.AgentConfigInventory {
+			return sysagentAgentConfigInventory(rc)
+		},
+		AgentIsLive: func(id string) bool {
+			return sysagentAgentIsLive(rc, id)
+		},
+		AgentActiveRevision: func(id string) string {
+			return sysagentAgentActiveRevision(rc.agentLoop, rc.homePath, id)
+		},
 	}
 	rc.agentLoop.WireSysagentDeps(sysAgentDeps)
 
@@ -1392,8 +1402,14 @@ func (rc *runContextWithOptions) startBackgroundServices() {
 					"panic", r, "stack", string(stack))
 				// Append to the panic log file so ops can find the crash.
 				if f, openErr := os.OpenFile(rc.panicPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600); openErr == nil {
-					fmt.Fprintf(f, "\n\nagent loop panic: %v\n%s\n", r, stack)
-					f.Close()
+					_, writeErr := fmt.Fprintf(f, "\n\nagent loop panic: %v\n%s\n", r, stack)
+					closeErr := f.Close()
+					if writeErr == nil {
+						writeErr = closeErr
+					}
+					if writeErr != nil {
+						slog.Error("agent loop panic log write failed", "error_type", fmt.Sprintf("%T", writeErr))
+					}
 				}
 				rc.agentLoopDead.Store(true)
 			}

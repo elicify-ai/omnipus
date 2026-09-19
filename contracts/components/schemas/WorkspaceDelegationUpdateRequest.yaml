@@ -3,11 +3,15 @@ description: >
   Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's
   delegation edge set wholesale (full replace, not a merge) so the Team-tab graph
   editor can persist the exact graph the operator drew. Every from_agent / to_agent
-  must resolve to a known agent; self-edges and depths above the global subturn
-  ceiling are rejected.
+  must resolve to an eligible member of the candidate team. Only explicit Jim and
+  General Purpose self-edges are permitted, bounded by the global and edge depth.
+  Revision covers both membership and the authoritative graph.
 required:
+  - revision
   - edges
 properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
   edges:
     type: array
     description: >

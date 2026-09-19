@@ -448,6 +448,19 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
       title: 'bootsweep conformance plan',
       owner_agent_id: workerId,
       goal: 'reply with the literal word done',
+      // SD-A7 tiered DoD gate (rest_plans.go handlePlanApprove): a plan whose
+      // CreatedBy resolves to a KNOWN AGENT is agent-authored and is rejected
+      // 400 at approval with an empty DoD. Supply a REAL one (never strip the
+      // guard): the plan is done when its single member finished and its
+      // result is on the record — met exactly when the bootsweep scenario
+      // succeeds, so it cannot force a spurious extra judging round.
+      dod: [
+        proseCriterion(
+          'The plan is done when its single member task has run to completion and left its reply ' +
+            'on the task record, with the member\'s acceptance criterion met. No member needs ' +
+            'replacing, retrying, or extending beyond that completion.',
+        ),
+      ],
       bounds: { plan_judge_max_rounds: 5 },
     })
     expect(planRes.ok, `bootsweep: POST /plans failed ${planRes.status}: ${planRes.raw}`).toBe(true)

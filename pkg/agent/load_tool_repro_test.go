@@ -73,28 +73,23 @@ func TestLoadTool_FullTierReturnsNoopSuccess(t *testing.T) {
 // ToolSearch{names:["create_task"]} for Ava currently says
 // "unknown or not available" instead of "denied by … policy".
 //
-// Note: we use create_task (ManifestLazy, registered for all agents via
-// registerSharedTools, NOT in Ava's deny-by-default allow-list) — NOT
-// read_file (ManifestFull). Full-tier tools return a no-op success (C2
-// behavior) regardless of policy, so they are not the right subject here.
-//
-// send_file was the original fixture here, but ADR-071 D3 promoted it (along
-// with list_mounts, message_parent, recall_conversation) into ManifestFull
-// (see pkg/tools/manifest.go's fullManifestToolNames) as a conversational
-// addressing primitive with no natural discovery moment — it is no longer
-// ManifestLazy, so it can't exercise this policy-denial path. create_task
-// stays ManifestLazy under ADR-071 D3 (moved to the previewed lazy tier
-// alongside bash/navigate/update_task) and is still absent from Ava's
-// deny-by-default allow-list, so it reproduces the same policy-denied
-// scenario the test is meant to cover.
+// Note on the subject: create_task was chosen when it was ManifestLazy under
+// ADR-071 D3's split. ADR-090 §5.4 promoted it into the global upfront set
+// (ManifestFull), and Ava's ADR-090 role policy deliberately does NOT grant
+// it — which makes it an even stronger subject: it now exercises the
+// policy-denied FULL-tier path in execLoad (pkg/tools/tools_tool.go), where
+// canLoad returns a "denied…" reason for a denied full-tier name exactly as
+// it does for a denied lazy one. The denial message assertions below are
+// unchanged; only the tier expectation moved with the spec.
 func TestLoadTool_PolicyDeniedCarriesReason(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	// create_task is lazy-tier and NOT in Ava's explicit allow-list.
-	require.Equal(t, tools.ManifestLazy, tools.ToolManifestTier("create_task"),
-		"create_task must be ManifestLazy for this test to be meaningful")
+	// create_task is upfront (ADR-090 §5.4) and NOT in Ava's role-policy
+	// allow set.
+	require.Equal(t, tools.ManifestFull, tools.ToolManifestTier("create_task"),
+		"create_task must be ManifestFull (ADR-090 §5.4 upfront set) for this test to be meaningful")
 
 	// Structural guarantee: create_task must NOT be in Ava's policy-filtered set.
 	avaAgent, ok := al.registry.GetAgent("ava")

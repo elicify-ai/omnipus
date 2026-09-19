@@ -15,7 +15,6 @@
 package gateway
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -60,7 +59,7 @@ func newContextWindowAgentAPI(t *testing.T) *restAPI {
 func putAgentJSON(t *testing.T, api *restAPI, id, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	return w

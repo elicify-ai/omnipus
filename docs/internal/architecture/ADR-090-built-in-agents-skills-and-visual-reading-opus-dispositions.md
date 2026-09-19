@@ -1,5 +1,7 @@
 # Claude Code Opus review dispositions — ADR-090
 
+> Decision update (2026-09-18): the founder superseded M-3's owner-session-only/proposal-only resolution. Ava may apply user-confirmed changes in a delegated run, with the user’s answer relayed through Jim. There is no Ava-specific session-type write gate. The current ADR and configuration specification govern; the original review below is retained as historical evidence.
+
 The [original report](ADR-090-built-in-agents-skills-and-visual-reading-opus-review.md) is preserved as a historical snapshot. This register describes the author corrections submitted for independent closure review. It does not claim runtime implementation or executed tests.
 
 | Finding | Correction / disposition |

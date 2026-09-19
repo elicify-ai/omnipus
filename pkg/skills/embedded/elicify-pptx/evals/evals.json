@@ -1,0 +1,44 @@
+{
+  "skill_name": "elicify-pptx",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create an editable three-slide board update: decision requested, performance, and next steps. Performance data: Q1 72%, Q2 81%, Q3 88% on-time delivery. Use a native editable chart with a 0\u2013100% axis and add speaker notes explaining the metric. Render and inspect all slides if tools permit.",
+      "expected_output": "A three-slide PPTX with editable text and chart, accurate values and visible labels, notes, and honest visual QA evidence.",
+      "files": [],
+      "assertions": [
+        "The PPTX contains exactly three slides.",
+        "A native chart contains 72, 81, 88 (or consistently scaled fractions) and correctly formatted percentage labels.",
+        "The chart axis and the data scale agree.",
+        "Speaker notes explain the metric.",
+        "Every slide was visually inspected or the answer explicitly identifies the unverified check."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Update the attached investor-update.pptx: replace the ARR figure on slide 2 with USD 1.4 million and update its speaker note. Preserve slide order, masters, existing chart workbooks, hyperlinks, and the other slides. Save a new file and show what was checked.",
+      "expected_output": "A focused editable update retaining the source structure and unmodified content, with preservation checks and any unsupported feature limitation.",
+      "files": [],
+      "fixture_contract": "Provide an original deck with at least four slides, custom layout, native chart workbook, slide-2 ARR figure and note, and a hyperlink.",
+      "assertions": [
+        "The original file is unchanged.",
+        "Only the requested ARR content and note change semantically.",
+        "Chart workbook, hyperlink targets and master/layout relationships remain present.",
+        "No whole-slide rasterization replaces editable content."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Repair the attached training-deck.pptx. Slide 1 has a long paragraph clipped inside a box; slide 2 has a rotated label outside the slide; slide 3 has overlapping table and footer. Keep all facts and editable content. Do not just shrink everything. Render and inspect every slide.",
+      "expected_output": "A repaired editable deck, or an honest visual-tool blocker; no claim that the bounding-box script alone found every defect.",
+      "files": [],
+      "fixture_contract": "Provide a three-slide original deck with the stated internal overflow, rotated extents, and overlap defects.",
+      "assertions": [
+        "All original facts remain in slides or appropriate speaker notes.",
+        "The answer recognizes that top-level geometry checks cannot certify text fit or overlap.",
+        "Rendered images are actually viewed before claiming visual repairs are verified.",
+        "The output remains editable and does not solve all overflow by unreadable text shrinking."
+      ]
+    }
+  ]
+}

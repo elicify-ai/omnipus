@@ -153,6 +153,21 @@ type Deps struct {
 	//
 	// The gateway wires this to AgentLoop.MCPServerStatus.
 	MCPStatus func(name string) (status string, toolCount int, errMsg string)
+	// AgentConfigInventory returns a snapshot of installed skill IDs and
+	// live connector inventory. Captured before agentstore locks so
+	// registry/config mutexes never nest under MutateState. Nil means skill
+	// inventory is unavailable (explicit skill IDs are rejected). A wired
+	// listing that returns no skills is a known-empty set, not a skip.
+	AgentConfigInventory func() AgentConfigInventory
+	// AgentIsLive reports whether id is present in the live agent registry.
+	// Registry membership alone does not prove which persisted revision is
+	// active; get_agent therefore uses AgentActiveRevision below.
+	AgentIsLive func(agentID string) bool
+	// AgentActiveRevision returns the persisted revision represented by the
+	// currently published agent instance. Empty means publication cannot be
+	// proved. get_agent compares this value with the state it just read so an
+	// older instance left behind after a failed publish is never reported active.
+	AgentActiveRevision func(agentID string) string
 	// UpsertAgentFastFunc publishes a single agent create/update into the
 	// live AgentRegistry without restarting channels/cron/schedulers/the plan
 	// engine (issue #571's sysagent-facing half — the agent-facing
@@ -231,6 +246,10 @@ type Deps struct {
 	// constructed.
 	ResolveBashPolicy func(assigneeAgentID string) (policy string, ok bool)
 
+	// ResolveToolPolicy returns the live compositor verdict for a registered
+	// caller. ok is false when the identity is absent or no longer registered.
+	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)
+
 	// AssigneeCannotFinish answers whether an assignee can finish a task at all
 	// (founder decision 2026-09-15) — the SAME answer the plain create_task /
 	// update_task tools and the task run's pre-run check use (pkg/agent
@@ -272,44 +291,64 @@ type Deps struct {
 	PlanStore *plan.Store
 }
 
-// clearMaps recursively walks v and zeros every map field it finds. Called
-// before json.Unmarshal in restoreConfig because Unmarshal into a non-nil map
-// merges rather than replaces — so a fn that added a map key would leave that
-// key present after rollback if the map were not cleared first.
-func clearMaps(v reflect.Value) {
-	for v.Kind() == reflect.Pointer || v.Kind() == reflect.Interface {
+func isSyncMutex(t reflect.Type) bool {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.PkgPath() == "sync" && (t.Name() == "Mutex" || t.Name() == "RWMutex")
+}
+
+func jsonFieldName(tag string) string {
+	name, _, _ := strings.Cut(tag, ",")
+	return name
+}
+
+// zeroJSONSerialized zeros exported JSON-serialized fields so a later
+// Unmarshal replaces them. encoding/json omits empty omitempty values from the
+// snapshot, so Unmarshal into an already-mutated struct would leave those
+// scalars/slices/pointers in place. json:"-" fields and sync mutexes are left
+// untouched (runtime roster, skipped IDs, credential scrubber lock).
+func zeroJSONSerialized(v reflect.Value) {
+	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return
 		}
 		v = v.Elem()
 	}
-	switch v.Kind() {
-	case reflect.Struct:
-		t := v.Type()
-		for i := 0; i < v.NumField(); i++ {
-			if !t.Field(i).IsExported() {
-				continue
-			}
-			clearMaps(v.Field(i))
+	if v.Kind() != reflect.Struct {
+		return
+	}
+	t := v.Type()
+	if isSyncMutex(t) {
+		return
+	}
+	for i := 0; i < v.NumField(); i++ {
+		sf := t.Field(i)
+		if !sf.IsExported() {
+			continue
 		}
-	case reflect.Slice, reflect.Array:
-		for i := 0; i < v.Len(); i++ {
-			clearMaps(v.Index(i))
+		if jsonFieldName(sf.Tag.Get("json")) == "-" {
+			continue
 		}
-	case reflect.Map:
-		// Replace the map with a fresh empty one of the same type.
-		// Unmarshal will populate it from the snapshot.
-		v.Set(reflect.MakeMap(v.Type()))
+		fv := v.Field(i)
+		if !fv.CanSet() || isSyncMutex(fv.Type()) {
+			continue
+		}
+		switch fv.Kind() {
+		case reflect.Struct:
+			zeroJSONSerialized(fv)
+		default:
+			fv.Set(reflect.Zero(fv.Type()))
+		}
 	}
 }
 
-// restoreConfig clears all map fields on cfg and then unmarshals snapshotJSON
-// into it. Clearing maps first ensures that map entries added by fn are fully
-// removed rather than leaving orphaned keys (stdlib json.Unmarshal into a
-// non-nil map merges, not replaces). Returns an error if unmarshal fails so
-// callers can surface the divergence rather than silently serving corrupt state.
+// restoreConfig resets JSON-serialized fields on cfg and unmarshals snapshotJSON
+// into it. Maps, omitempty scalars, slices and pointers all revert; json:"-"
+// runtime state is preserved. Returns an error if unmarshal fails so callers
+// can surface the divergence rather than silently serving corrupt state.
 func restoreConfig(cfg *config.Config, snapshotJSON []byte) error {
-	clearMaps(reflect.ValueOf(cfg))
+	zeroJSONSerialized(reflect.ValueOf(cfg))
 	if err := json.Unmarshal(snapshotJSON, cfg); err != nil {
 		slog.Error("sysagent: restoreConfig failed — config in-memory may diverge from snapshot",
 			"error", err, "snapshot_bytes", len(snapshotJSON))
@@ -329,8 +368,8 @@ func restoreConfig(cfg *config.Config, snapshotJSON []byte) error {
 // cfg.Agents.List reported in Blocker 1.
 //
 // Rollback: a JSON-encoded snapshot is taken before fn runs. On failure,
-// clearMaps zeroes all map fields before Unmarshal so that map entries added
-// by fn are fully removed rather than leaving orphaned keys.
+// restoreConfig zeroes JSON-serialized fields then Unmarshals so omitempty
+// scalars (e.g. default_agent_id) and maps both revert.
 //
 // Use this for all sysagent tool paths that mutate any part of the config.
 func (d *Deps) WithConfig(fn func(*config.Config) error) error {
@@ -356,6 +395,9 @@ func (d *Deps) WithConfig(fn func(*config.Config) error) error {
 		// Returning an error here surfaces the misconfiguration loudly
 		// rather than silently no-op'ing the write.
 		if d.SaveConfigLocked == nil {
+			if restoreErr := restoreConfig(cfg, snapshotJSON); restoreErr != nil {
+				return fmt.Errorf("sysagent: SaveConfigLocked not wired; also: restore failed: %w", restoreErr)
+			}
 			return fmt.Errorf("sysagent: SaveConfigLocked not wired on Deps — gateway must call WithDeps() at boot")
 		}
 		saveErr := d.SaveConfigLocked(cfg)

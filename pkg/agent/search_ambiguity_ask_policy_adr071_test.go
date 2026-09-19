@@ -37,19 +37,19 @@ func TestCanLoad_AskPolicyToolStillLoadable(t *testing.T) {
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	defer al.Close()
 
-	rayAgent, ok := al.registry.GetAgent("ray")
+	adminAgent, ok := al.registry.GetAgent("admin")
 	require.True(t, ok)
 
-	allTools := rayAgent.Tools.GetAll()
-	_, policyVerdicts := tools.FilterToolsByPolicy(allTools, rayAgent.AgentType, rayAgent.LoadToolPolicy())
+	allTools := adminAgent.Tools.GetAll()
+	_, policyVerdicts := tools.FilterToolsByPolicy(allTools, adminAgent.AgentType, adminAgent.LoadToolPolicy())
 	require.Equal(t, "ask", policyVerdicts["request_mount"],
-		"fixture defect: request_mount must resolve 'ask' for ray (coreAgentSeed) for this test to be meaningful")
+		"fixture defect: request_mount must resolve 'ask' for Admin (coreAgentSeed) for this test to be meaningful")
 
-	ctx := tools.WithAgentID(context.Background(), "ray")
+	ctx := tools.WithAgentID(context.Background(), "admin")
 	ctx = tools.WithTranscriptSessionID(ctx, "sess-ask-policy")
 
-	toolsToolRaw, ok := rayAgent.Tools.Get("ToolSearch")
-	require.True(t, ok, "ToolSearch infra tool must be registered for ray in compressed mode")
+	toolsToolRaw, ok := adminAgent.Tools.Get("ToolSearch")
+	require.True(t, ok, "ToolSearch infra tool must be registered for Admin in compressed mode")
 	tt, ok := toolsToolRaw.(*tools.ToolsTool)
 	require.True(t, ok, "ToolSearch infra tool must be *tools.ToolsTool")
 
@@ -57,7 +57,7 @@ func TestCanLoad_AskPolicyToolStillLoadable(t *testing.T) {
 	// unaffected by the sentinel.
 	loadResult := tt.Execute(ctx, map[string]any{"names": []any{"request_mount"}})
 	assert.False(t, loadResult.IsError,
-		"request_mount must be loadable by ray despite its 'ask' policy; got error: %s", loadResult.ForLLM)
+		"request_mount must be loadable by Admin despite its 'ask' policy; got error: %s", loadResult.ForLLM)
 
 	// By query, ranked uniquely: the confident-band clause (§3.2 rule 1) is
 	// unrestricted, so a lone/dominant "ask"-policy hit is still auto-loaded

@@ -227,7 +227,8 @@ export function BehaviorFields({
             </div>
             <p className="text-xs text-[var(--color-muted)]">
               Per-agent persona voice identifier (e.g. <span className="font-mono text-[11px]">alloy</span>).
-              Used by v0.2.0 TTS to pick a voice when this agent speaks. Leave empty for the engine default.
+              Saved now, but voice playback is inactive in this release (planned for v0.2.0).
+              Leave empty for the engine default.
             </p>
             <VoiceProviderSub
               value={voice ?? ''}

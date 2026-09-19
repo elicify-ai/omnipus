@@ -1,24 +1,24 @@
 type: object
 description: >
-  Body for PUT /agents/{id}. All fields are optional — only provided fields are updated.
-  Locked (core) agents reject mutations to name, description, and soul. Exception
-  (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul`
-  mutations — soul/rubric unification means the Judge's soul is its judging rubric,
-  editable while the agent stays otherwise locked.
-  model, timeout_seconds, and max_tool_iterations may be updated on locked agents.
-  heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents
-  (heartbeat is workspace-scoped, ADR-027).
-  At least one field must be present (minProperties: 1) — empty patches are rejected 400.
-  Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400
-  with code field_not_applicable_to_type.
-minProperties: 1
+  Partial agent update. Revision and at least one changed field are required.
+  Ordinary built-in identity and soul are fixed; tool policies, connector assignments
+  and skills are editable. Hidden Judge/Supervisor instructions are editable while
+  their identity and capabilities remain fixed. Runtime applicability is validated
+  before any mutation. Protected same-value echoes are still rejected.
+minProperties: 2
 additionalProperties: false
+required:
+  - revision
 properties:
-  updated_at:
-    type: string
-    format: date-time
-    description: ISO 8601 timestamp from the last GET /agents/{id} response. When provided, the request is rejected with 409 Conflict if it does not match the current server value.
-    example: "2026-06-19T12:34:56Z"
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  mcp_servers:
+    type: array
+    description: Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
+    items:
+      $ref: './AgentMCPBinding.yaml'
+  tool_policy_changes:
+    $ref: './ToolPolicyChanges.yaml'
   name:
     type: string
     minLength: 1
@@ -66,29 +66,10 @@ properties:
       locked System Agent accepts. Writing this triggers a config reload.
       Whitespace-only is rejected as minLength violation.
     example: "You are a helpful assistant..."
-  heartbeat:
-    type: string
-    description: >
-      Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-    example: "Check queue every hour."
-  timeout_seconds:
-    type: integer
-    description: New timeout in seconds per turn. Allowed on all agents.
-    example: 600
   max_tool_iterations:
     type: integer
     description: New maximum tool calls per turn. Allowed on all agents.
     example: 100
-  heartbeat_enabled:
-    type: boolean
-    description: >
-      Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-    example: false
-  heartbeat_interval:
-    type: integer
-    description: >
-      Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-    example: 1800
   shell_policy:
     type: object
     description: >
@@ -145,27 +126,6 @@ properties:
         type: integer
         description: Maximum tokens to generate per turn.
         example: 4096
-  rate_limits:
-    type: object
-    description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-    properties:
-      use_global_defaults:
-        type: boolean
-        description: When true, global rate limits are used and per-agent overrides are ignored.
-        example: true
-      max_llm_calls_per_hour:
-        type: integer
-        description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-        example: 100
-      max_tool_calls_per_minute:
-        type: integer
-        description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-        example: 60
-      max_cost_per_day:
-        type: number
-        format: double
-        description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
-        example: 5.0
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
   default:
@@ -176,8 +136,8 @@ properties:
       previously held it. Send false to clear the default, which only has an
       effect if this agent currently holds it (sending false for an agent
       that isn't the current default is a no-op). Omitting this field leaves
-      the default unchanged. Main only — workers never default (rejected with
-      400 if attempted).
+      the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external
+      agents cannot be defaults. This does not change workspace membership.
     example: false
   skills:
     type: array
@@ -204,6 +164,5 @@ properties:
     type: boolean
     description: >
       New value for the memory-injection gate (ADR-052 FR-039). When false,
-      ContextBuilder skips memory injection for this agent's turns. Allowed
-      on all agents.
+      ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
     example: true
