@@ -152,7 +152,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           <span className="text-[var(--color-secondary)] font-medium">
             {humanizeToolName(toolCall.tool)}
           </span>
-          <span className={cn('text-[var(--color-muted)]', config.textClass)}>{config.label}</span>
+          <span className={cn('text-[var(--color-muted)]')}>{config.label}</span>
           {/* Caret lives inside the toggle button (not a split-out sibling
               control) — there is no other independently-clickable action on
               this row to justify splitting the row, so the whole row stays

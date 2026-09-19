@@ -135,7 +135,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
         </span>
 
         {/* Status text — muted, per the flat text-line spec */}
-        <span className={cn('text-[var(--color-muted)] shrink-0', config.textClass)}>
+        <span className={cn('text-[var(--color-muted)] shrink-0')}>
           {config.label}
           {/* W1-9: show interrupt reason as a muted inline label when available */}
           {span.status === 'interrupted' && terminal?.reason && (

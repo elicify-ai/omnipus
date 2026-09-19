@@ -153,7 +153,7 @@ export function BrowserNavigateBlock({
               {pageTitle}
             </span>
           )}
-          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
           {screenshotData && <Camera size={11} className="text-[var(--color-muted)] shrink-0" />}

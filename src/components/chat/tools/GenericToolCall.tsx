@@ -489,7 +489,7 @@ export function GenericToolCall({
           <span className="text-[var(--color-secondary)] font-medium">
             {humanizeToolName(toolName)}
           </span>
-          <span className={cn('text-[var(--color-muted)]', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)]')}>
             {statusConfig.label}
           </span>
           {hasDetail && (

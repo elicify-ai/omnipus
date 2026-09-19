@@ -89,7 +89,7 @@ function FileReadBlock({
         {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{name}</span>
         <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
-          <span className={cn(statusConfig.textClass)}>{countOrStatusLabel}</span>
+          <span className={cn()}>{countOrStatusLabel}</span>
           {!isRunning && (
             <span className="ml-1">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}

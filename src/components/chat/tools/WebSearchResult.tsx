@@ -124,7 +124,7 @@ function WebSearchBlock({
         <span className="text-[var(--color-muted)] shrink-0">web_search</span>
         <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0 italic">{query}</span>
         <span className="flex items-center gap-1.5 shrink-0">
-          <span className={cn('text-[var(--color-muted)]', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)]')}>
             {countOrStatusLabel}
           </span>
           {hasDetail && (

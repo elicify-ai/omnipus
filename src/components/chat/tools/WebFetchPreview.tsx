@@ -107,7 +107,7 @@ function WebFetchBlock({
           <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
             {displayUrl(url)}
           </span>
-          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
         </button>

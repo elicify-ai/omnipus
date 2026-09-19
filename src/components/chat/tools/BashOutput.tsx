@@ -147,7 +147,7 @@ function BashOutputBlock({
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{label}</span>
           <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0">{command}</span>
-          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
           <span className="ml-auto shrink-0 text-[var(--color-muted)]">
