@@ -234,14 +234,20 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
   if (ts.isIdentifier(expr) || ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
     const boundary = directForwardedParameter(expr, 'className')
     if (boundary) {
-      pushFinding(ctx, RULE.extensionBoundary, `${boundary.symbol}#${boundary.name}`, 'Spacing extension boundary; caller-provided className is forwarded unchanged and requires exact central review.', location)
+      pushFinding(ctx, RULE.extensionBoundary, `${boundary.symbol}#${boundary.name}`, 'Spacing extension boundary; caller-provided className is forwarded unchanged and requires exact central review.', withOrigin(location, expr))
       if (boundary.initializer) visitClassBuilderArg(boundary.initializer, ctx, sourceFile)
+      return
+    }
+    const dispatcher = resolveDispatcherMember(expr, ctx)
+    if (dispatcher) {
+      if (dispatcher.allAbsent) return
+      for (const value of dispatcher.values) visitClassBuilderArg(value, ctx, value.getSourceFile(), location)
       return
     }
     const resolved = resolveExpr(expr, ctx)
     if (resolved === UNRESOLVED_EXPR) {
       if (isCssModuleClassReference(expr, sourceFile)) return
-      pushFinding(ctx, RULE.unsupported, `className: ${expr.getText(sourceFile)}`, 'Unsupported spacing expression; dynamic or cyclic class aliases cannot be verified against the D10 scale.', location)
+      pushFinding(ctx, RULE.unsupported, `className: ${expr.getText(sourceFile)}`, 'Unsupported spacing expression; dynamic or cyclic class aliases cannot be verified against the D10 scale.', withOrigin(location, expr))
       return
     }
     if (ts.isIdentifier(expr) && authenticatedBuilderAlias(expr, resolved, ctx)) return
@@ -252,11 +258,11 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     return
   }
   if (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr)) {
-    analyzeClassList(expr.text, ctx, location)
+    analyzeClassList(expr.text, ctx, withOrigin(location, expr))
     return
   }
   if (ts.isTemplateExpression(expr)) {
-    analyzeClassTemplate(expr, ctx, sourceFile, location)
+    analyzeClassTemplate(expr, ctx, sourceFile, withOrigin(location, expr))
     return
   }
   if (ts.isArrayLiteralExpression(expr)) {
@@ -284,7 +290,7 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
       for (const returned of returns) visitClassBuilderArg(returned, ctx, returned.getSourceFile(), location)
       return
     }
-    pushFinding(ctx, RULE.unsupported, `className: ${expr.getText(expr.getSourceFile())}`, 'Unsupported spacing expression; dynamic or impure class helpers cannot be verified against the D10 scale.', location)
+    pushFinding(ctx, RULE.unsupported, `className: ${expr.getText(expr.getSourceFile())}`, 'Unsupported spacing expression; dynamic or impure class helpers cannot be verified against the D10 scale.', withOrigin(location, expr))
     return
   }
   if (ts.isBinaryExpression(expr) && isConcatOrLogic(expr.operatorToken.kind)) {
@@ -298,7 +304,7 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     return
   }
   if ([ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword, ts.SyntaxKind.OmittedExpression].includes(expr.kind) || ts.isNumericLiteral(expr)) return
-  pushFinding(ctx, RULE.unsupported, `className: ${expr.getText(expr.getSourceFile())}`, 'Unsupported spacing expression; this class expression requires explicit analysis.', location)
+  pushFinding(ctx, RULE.unsupported, `className: ${expr.getText(expr.getSourceFile())}`, 'Unsupported spacing expression; this class expression requires explicit analysis.', withOrigin(location, expr))
 }
 
 // An authenticated builder call in a non-top-level position (conditional
@@ -554,6 +560,160 @@ function isCssModuleClassReference(expr, sourceFile) {
     if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings) && clause.namedBindings.name.text === bindingName) return true
   }
   return false
+}
+
+// finite-dispatcher member resolution: `identifier.prop` where identifier is
+// a single, unreassigned const/let binding whose initializer resolves
+// (through ternary chains and calls to "finite dispatcher" functions — see
+// collectFiniteDispatcherReturns) to a closed set of object literals. Two
+// provable outcomes:
+//   - ABSENCE: every literal omits `prop` — the read is PROVEN to always be
+//     `undefined`. An unshadowed `undefined` already contributes nothing to
+//     a class-builder argument (see the identifier-`undefined` branch
+//     above); this extends the same absence proof to a member read whose
+//     value is provably always undefined rather than the literal identifier
+//     `undefined` itself.
+//   - PRESENCE: every literal either omits `prop` (contributes nothing, same
+//     as the absence case) or sets it to a plain initializer expression —
+//     each present initializer is then visited exactly like an array
+//     literal's elements (own node identity via withOrigin at the eventual
+//     leaf, so distinct declared values are never conflated, and repeat
+//     consumption of the identical literal collapses as usual).
+// Any branch this cannot classify (a spread, a computed key, a call to a
+// non-dispatcher function, a genuinely dynamic source, a getter/setter) or
+// that classifies to a value we cannot statically enumerate this way aborts
+// the whole proof and falls through to the ordinary unsupported path — this
+// never trusts a partial/best-effort subset of branches.
+function resolveDispatcherMember(expr, ctx) {
+  if (!ts.isPropertyAccessExpression(expr)) return null
+  const propertyName = staticPropertyName(expr.name)
+  if (propertyName === null) return null
+  const target = unwrap(expr.expression)
+  if (!target) return null
+  let source = target
+  if (ts.isIdentifier(target)) {
+    const binding = findLexicalBinding(target, target.text)
+    if (!binding || !binding.initializer || isReassignedWithin(target.getSourceFile(), target.text)) return null
+    source = binding.initializer
+  } else if (!ts.isCallExpression(target) && !ts.isConditionalExpression(target)) {
+    return null
+  }
+  const objects = collectDispatchedObjectLiterals(source, ctx, new Set())
+  if (!objects || objects.length === 0) return null
+  const values = []
+  for (const obj of objects) {
+    const classified = classifyDispatcherProperty(obj, propertyName)
+    if (classified.kind === 'unknown') return null
+    if (classified.kind === 'present') values.push(classified.initializer)
+  }
+  return { allAbsent: values.length === 0, values }
+}
+
+// Classifies how `name` behaves in one candidate object-literal branch:
+// 'absent' (provably omitted — safe to treat as undefined and contribute
+// nothing), 'present' (an ordinary PropertyAssignment or shorthand with a
+// concrete initializer node), or 'unknown' (a spread, method, getter/setter,
+// or computed key that could shadow the name — this branch can never
+// contribute to either proof, so the caller must abort entirely).
+function classifyDispatcherProperty(obj, name) {
+  let initializer = null
+  for (const prop of obj.properties) {
+    if (ts.isShorthandPropertyAssignment(prop)) {
+      if (prop.name.text === name) initializer = prop.name
+      continue
+    }
+    if (!ts.isPropertyAssignment(prop)) return { kind: 'unknown' }
+    const key = staticPropertyName(prop.name)
+    if (key === null) return { kind: 'unknown' }
+    if (key === name) initializer = prop.initializer
+  }
+  return initializer ? { kind: 'present', initializer } : { kind: 'absent' }
+}
+
+// Resolves `node` to the closed set of object literals it could evaluate to,
+// following conditional (ternary) chains and calls into finite-dispatcher
+// functions. Returns null the instant any branch cannot be classified this
+// way — the caller (isProvenAbsentDispatcherMember) requires every branch to
+// be accounted for, never a partial/best-effort subset.
+function collectDispatchedObjectLiterals(node, ctx, seen) {
+  const expr = unwrap(node)
+  if (!expr) return null
+  if (ts.isObjectLiteralExpression(expr)) return [expr]
+  if (ts.isConditionalExpression(expr)) {
+    const whenTrue = collectDispatchedObjectLiterals(expr.whenTrue, ctx, seen)
+    if (!whenTrue) return null
+    const whenFalse = collectDispatchedObjectLiterals(expr.whenFalse, ctx, seen)
+    if (!whenFalse) return null
+    return [...whenTrue, ...whenFalse]
+  }
+  if (ts.isCallExpression(expr)) return collectFiniteDispatcherReturns(expr, ctx, seen)
+  return null
+}
+
+// A "finite dispatcher" function: a block body of zero or more plain
+// variable statements followed by exactly one switch statement as the final
+// statement, every case/default clause containing exactly one return
+// statement. Each clause's returned expression is resolved the same way
+// (ternary chains, nested dispatcher calls), so a switch clause that itself
+// delegates to another finite dispatcher is supported too. `seen` guards
+// against a genuine call cycle (A dispatches into B which dispatches back
+// into A) without penalizing the same function being called from two
+// independent sibling branches — each recursive descent gets its own copy
+// rather than mutating a shared set, so siblings never see each other's
+// visited functions.
+function collectFiniteDispatcherReturns(call, ctx, seen) {
+  const declaration = functionDeclarationFor(call.expression, ctx)
+  if (!declaration || !declaration.body || !ts.isBlock(declaration.body)) return null
+  if (seen.has(declaration)) return null
+  const nextSeen = new Set(seen)
+  nextSeen.add(declaration)
+  const statements = declaration.body.statements
+  const last = statements[statements.length - 1]
+  if (!last || !ts.isSwitchStatement(last)) return null
+  for (let i = 0; i < statements.length - 1; i += 1) {
+    if (!ts.isVariableStatement(statements[i])) return null
+  }
+  const results = []
+  for (const clause of last.caseBlock.clauses) {
+    const returned = clauseReturnExpression(clause)
+    if (returned === null) return null
+    if (returned === CLAUSE_NEVER_RETURNS) continue // e.g. an exhaustiveness-guard `default: throw ...` — contributes no value
+    const branch = collectDispatchedObjectLiterals(returned, ctx, nextSeen)
+    if (!branch) return null
+    results.push(...branch)
+  }
+  if (results.length === 0) return null
+  return results
+}
+
+// Sentinel: a clause that provably never returns a value (an
+// exhaustiveness-guard `default: throw new Error(...)`) is not a value
+// source at all, so it is skipped rather than aborting the whole dispatcher
+// proof — distinct from `null`, which means "this shape is not recognized,
+// abort".
+const CLAUSE_NEVER_RETURNS = Symbol('clause never returns a value')
+
+// A case/default clause's statement list, or — for the common exhaustiveness-
+// guard shape (`default: { const _x: never = status; return {...} }` or
+// `default: { const _x: never = status; throw new Error(...) }`) — a single
+// wrapping block's statement list. Only VariableStatement and
+// ExpressionStatement are allowed before the final return/throw (matches the
+// `const _exhaustive: never = status; void _exhaustive` pattern); anything
+// else (loops, nested control flow) is not this shape and aborts.
+function clauseReturnExpression(clause) {
+  let statements = clause.statements
+  if (statements.length === 1 && ts.isBlock(statements[0])) statements = statements[0].statements
+  const last = statements[statements.length - 1]
+  if (!last) return null
+  const leadingStatementsAreSafe = () => {
+    for (let i = 0; i < statements.length - 1; i += 1) {
+      if (!ts.isVariableStatement(statements[i]) && !ts.isExpressionStatement(statements[i])) return false
+    }
+    return true
+  }
+  if (ts.isThrowStatement(last)) return leadingStatementsAreSafe() ? CLAUSE_NEVER_RETURNS : null
+  if (!ts.isReturnStatement(last) || !last.expression) return null
+  return leadingStatementsAreSafe() ? last.expression : null
 }
 
 function visitClassObject(expr, ctx, sourceFile) {
@@ -1287,7 +1447,11 @@ function resolveExpr(expr, ctx, seen = new Set()) {
   }
   if (ts.isElementAccessExpression(node)) {
     const keyExpr = unwrap(node.argumentExpression)
-    const key = keyExpr && (ts.isStringLiteral(keyExpr) || ts.isNoSubstitutionTemplateLiteral(keyExpr))
+    // A numeric literal key (`RECORD[3]`) is a static key on an object
+    // literal exactly as much as a string key is; Record<number, string> is
+    // the common shape for a finite class/style lookup table (see
+    // resolveClosedRecordValues below for the dynamic-key sibling of this).
+    const key = keyExpr && (ts.isStringLiteral(keyExpr) || ts.isNoSubstitutionTemplateLiteral(keyExpr) || ts.isNumericLiteral(keyExpr))
       ? keyExpr.text
       : null
     const obj = resolveExpr(node.expression, ctx, seen)
@@ -1554,6 +1718,26 @@ function locFromTs(node, sourceFile) {
   return { line: line + 1, column: character + 1 }
 }
 
+// Source-occurrence identity, independent of the display location. The class
+// path deliberately displays findings at the point of use (useLoc forcing —
+// see visitClassBuilderArg), so a pure helper's single literal reported from
+// two call sites, or an array's two elements reported from one shared call
+// site, both collapse onto identical (line, column) pairs under display-only
+// dedupe. originKey instead identifies the actual terminal AST node (its own
+// file + start offset): two references that resolve to the SAME literal node
+// (repeat consumption via aliases or multiple calls to one pure helper) still
+// dedupe to one finding, while two DISTINCT literal nodes (two elements of a
+// helper-returned array, two branches of a conditional, ...) — even with
+// identical text — are never collapsed. withOrigin tags a loc object without
+// disturbing the (line, column) any downstream code reads for display.
+function nodeKey(node) {
+  return `${node.getSourceFile().fileName}#${node.getStart()}`
+}
+
+function withOrigin(loc, node) {
+  return { ...loc, originKey: nodeKey(node) }
+}
+
 function formatPx(px) {
   const rounded = Math.round(px * 1000) / 1000
   if (Number.isInteger(rounded)) return `${rounded}px`
@@ -1562,17 +1746,34 @@ function formatPx(px) {
 
 function pushFinding(ctx, ruleId, syntax, message, loc) {
   const line = loc?.line
-  // Dedupe is per source occurrence: a revisit of the same occurrence carries
-  // an identical (line, column), while two distinct occurrences of one syntax
-  // on a single line differ by column and must both count — fingerprint
-  // occurrence counts are explicit Stage B requirements. Line and column stay
-  // display-only on the finding; the orchestrator fingerprint ignores them.
+  // Dedupe is per source occurrence: a revisit of the same occurrence must
+  // collapse, while two distinct occurrences of one syntax must both count —
+  // fingerprint occurrence counts are explicit Stage B requirements. Line and
+  // column stay display-only on the finding; the orchestrator fingerprint
+  // ignores them.
+  //
+  // Callers that carry an originKey (see withOrigin/nodeKey) identify the
+  // occurrence by the actual terminal AST node reached, independent of the
+  // display location. This matters because the class-builder path reports
+  // some findings at the point of use rather than the node's own position
+  // (see "reports imported spacing at the consumer use site" and pure-helper
+  // resolution): without originKey, two DISTINCT array elements returned by
+  // one pure helper call would display at the identical forced call-site
+  // location and silently dedupe to one (undercount); with it, they carry
+  // distinct node identities and both count, while two references that
+  // resolve to the SAME literal (repeat consumption via aliasing, or two call
+  // sites of one single-value pure helper) still collapse to one. Callers
+  // without an originKey keep the prior (line, column) behavior unchanged.
   const column = Number.isInteger(loc?.column) && loc.column > 0 ? loc.column : undefined
+  const originKey = typeof loc?.originKey === 'string' ? loc.originKey : undefined
   const exists = ctx.findings.some((finding) => finding.ruleId === ruleId && finding.syntax === syntax
-    && finding.line === line && finding.column === column)
+    && (originKey !== undefined || finding.__originKey !== undefined
+      ? finding.__originKey === originKey
+      : finding.line === line && finding.column === column))
   if (exists) return
   const finding = { ruleId, path: ctx.path, syntax, message }
   if (Number.isInteger(line) && line > 0) finding.line = line
   if (column !== undefined) finding.column = column
+  if (originKey !== undefined) Object.defineProperty(finding, '__originKey', { value: originKey, enumerable: false })
   ctx.findings.push(finding)
 }

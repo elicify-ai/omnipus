@@ -980,3 +980,223 @@ describe('independent-review follow-up repairs', () => {
     assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[7px]'])
   })
 })
+
+describe('helper-array occurrence undercount repair (Stage B blocker)', () => {
+  // A pure local function returning an array assigns ONE forced (point-of-use)
+  // source location to every element it visits, so two textually identical
+  // off-scale elements collapsed onto the (ruleId, syntax, line, column)
+  // dedupe key in pushFinding and were undercounted to one finding. Stage B
+  // rejects an increased occurrence count per fingerprint at audit time, so a
+  // scanner that undercounts on the way in can never regain the true count
+  // later — a genuinely new second occurrence of an already-seen fingerprint
+  // would silently vanish into the same undercounted total. originKey (see
+  // withOrigin/nodeKey in spacing.mjs) fixes this by keying the in-run dedupe
+  // on the actual terminal AST node reached, not the display location.
+  const fixturePath = 'src/components/Fixture.tsx'
+
+  function runWith(source) {
+    return run(fixturePath, source, policy, { [fixturePath]: source })
+  }
+
+  it('counts two distinct elements of a helper-returned array as two findings, not one (repro)', () => {
+    const source = "function pick(){return ['p-[7px]','p-[7px]']} export const X = () => <div className={pick()}/>"
+    const findings = runWith(source)
+    const occurrences = byRule(findings, RULE.offScale)
+    assert.equal(occurrences.length, 2, `two distinct array literals must not dedupe to one, got ${JSON.stringify(occurrences)}`)
+    assert.ok(occurrences.every((finding) => finding.syntax === 'p-[7px]'))
+    // The bug is specifically that both elements display at the SAME forced
+    // call-site location — proving the fix cannot rely on (line, column).
+    assert.equal(occurrences[0].line, occurrences[1].line)
+    assert.equal(occurrences[0].column, occurrences[1].column)
+  })
+
+  it('counts two distinct elements inside a nested array return as two findings', () => {
+    const source = "function pick(){return [['p-[7px]'],['p-[7px]']]} export const X = () => <div className={pick()}/>"
+    const findings = runWith(source)
+    const occurrences = byRule(findings, RULE.offScale)
+    assert.equal(occurrences.length, 2, `nested array elements must not dedupe to one, got ${JSON.stringify(occurrences)}`)
+    assert.equal(occurrences[0].column, occurrences[1].column, 'both still display at the shared call site')
+  })
+
+  it('counts two same-line, same-display-location conditional branches with an identical value as two findings', () => {
+    const source = "function pick(cond){return cond ? 'p-[7px]' : 'p-[7px]'} export const X = ({t}:{t:boolean}) => <div className={pick(t)}/>"
+    const findings = runWith(source)
+    const occurrences = byRule(findings, RULE.offScale)
+    assert.equal(occurrences.length, 2, `distinct whenTrue/whenFalse literal nodes must not dedupe to one, got ${JSON.stringify(occurrences)}`)
+    assert.equal(occurrences[0].column, occurrences[1].column)
+  })
+
+  it('reports one source occurrence exactly once when a single-value pure helper is called from two sites (repeat consumption)', () => {
+    const source = "function pick(){return 'p-[7px]'} export const X = () => <><div className={pick()}/><div className={pick()}/></>"
+    const findings = runWith(source)
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[7px]'], 'both calls trace back to the one literal in pick(); this is repeat consumption, not two occurrences')
+  })
+
+  it('keeps an impure array-returning helper unsupported (fail-closed), never exploding into off-scale findings', () => {
+    const source = "function pick(){log(); return ['p-[7px]','p-[7px]']} export const X = () => <div className={pick()}/>"
+    const findings = runWith(source)
+    assert.deepEqual(syntaxes(findings, RULE.offScale), [], 'an impure helper must never be trusted as an off-scale findings source')
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: pick()'])
+  })
+
+  it('counts two call sites of an unknown/impure helper as two unsupported findings, not one (fail-closed occurrence tracking)', () => {
+    const source = "function pick(){log(); return 'p-[7px]'} export const X = () => <><div className={pick()}/><div className={pick()}/></>"
+    const findings = runWith(source)
+    const occurrences = byRule(findings, RULE.unsupported)
+    assert.equal(occurrences.length, 2, `two distinct impure call sites must not dedupe to one, got ${JSON.stringify(occurrences)}`)
+    assert.notEqual(occurrences[0].column, occurrences[1].column, 'each call site is its own node with its own natural position')
+  })
+
+  it('regression: a renamed clsx import consumed through a const alias still reports its off-scale literal (prior HIGH bypass)', () => {
+    // Prior frozen review confirmed this fixed; kept as a permanent guard so a
+    // future change to alias/authentication handling cannot silently regress
+    // the HIGH bypass fixed at 1577aee7 (see spacing.mjs visitNode comment).
+    const source = "import { clsx as formatClasses } from 'clsx'; const s = formatClasses('p-[7px]'); const styles = s; export const X = () => <button className={styles}/>"
+    const findings = runWith(source)
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[7px]'], 'renamed-builder value consumed through a const alias must not scan clean')
+  })
+})
+
+describe('finite-dispatcher member resolution (closes statusConfig.textClass-shaped unsupported debt)', () => {
+  // The Stage B worklist's largest single unsupported group (11 occurrences)
+  // was `className: statusConfig.textClass`-shaped member reads on the
+  // result of a status→render-config switch helper (getToolBadgeStatusConfig
+  // / getSpanStatusDot in src/lib/toolStatusConfig.tsx and local equivalents
+  // in GoalIndicator.tsx/GoalPillTray.tsx). resolveExpr never dereferences a
+  // CallExpression, so these were unconditionally unsupported regardless of
+  // whether the helper could ever actually produce an off-scale value.
+  // resolveDispatcherMember (spacing.mjs) proves two outcomes: ABSENCE (the
+  // property is omitted from every branch — contributes nothing, same as an
+  // unshadowed `undefined`) and PRESENCE (every branch either omits it or
+  // sets it to a plain value, each visited like an array literal's
+  // elements). Any branch this cannot classify — spread, computed key,
+  // non-switch control flow, a reassigned binding, a call cycle — aborts the
+  // whole proof and falls through to the ordinary unsupported path.
+  const fixturePath = 'src/components/Fixture.tsx'
+
+  function runWith(source) {
+    return run(fixturePath, source, policy, { [fixturePath]: source })
+  }
+
+  it('proves absence when every switch branch (including an exhaustiveness-guard default block) omits the property', () => {
+    const source = `
+      function describeStatus(status) {
+        switch (status) {
+          case 'a': return { label: 'A' }
+          case 'b': return { label: 'B' }
+          default: { const x = 0; void x; return { label: 'C' } }
+        }
+      }
+      const config = describeStatus(status)
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(runWith(source), [], 'a provably always-undefined member must not block or produce a false finding')
+  })
+
+  it('resolves every present branch value when the property is set (not omitted) in every branch', () => {
+    const source = `
+      function describeStatus(status) {
+        switch (status) {
+          case 'a': return { label: 'A', textClass: 'p-[7px]' }
+          case 'b': return { label: 'B', textClass: 'p-[9px]' }
+          default: return { label: 'C', textClass: 'p-[8px]' }
+        }
+      }
+      const config = describeStatus(status)
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    const findings = runWith(source)
+    assert.deepEqual(syntaxes(findings, RULE.offScale).sort(), ['p-[7px]', 'p-[9px]'], 'on-scale p-[8px] must not be reported; both off-scale branches must be')
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [])
+  })
+
+  it('follows a ternary chain of dispatcher calls to prove absence', () => {
+    const source = `
+      function describeStatus(status) {
+        switch (status) { case 'a': return { label: 'A' }; default: return { label: 'B' } }
+      }
+      const config = isRunning ? describeStatus('a') : isDone ? describeStatus('b') : { label: 'z' }
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(runWith(source), [])
+  })
+
+  it('follows one dispatcher delegating to another (nested finite dispatch)', () => {
+    const source = `
+      function inner(s) {
+        switch (s) { case 'x': return { label: 'X' }; default: return { label: 'Y' } }
+      }
+      function outer(status) {
+        switch (status) { case 'a': return inner('x'); default: return inner('y') }
+      }
+      const config = outer(status)
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(runWith(source), [])
+  })
+
+  it('resolves the real getToolBadgeStatusConfig/getSpanStatusDot shapes from src/lib/toolStatusConfig.tsx (absence proof)', () => {
+    const toolStatusConfigSource = readFileSync(resolve(ROOT, 'src/lib/toolStatusConfig.tsx'), 'utf8')
+    const source = "import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'; export const X = ({status}) => { const statusConfig = getToolBadgeStatusConfig(status); return <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}/> }"
+    const findings = run(fixturePath, source, policy, { [fixturePath]: source, 'src/lib/toolStatusConfig.tsx': toolStatusConfigSource })
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [], 'no branch of getToolBadgeStatusConfig ever sets textClass; the member read must resolve, not block')
+  })
+
+  it('keeps a spread branch unsupported (cannot rule out an injected property)', () => {
+    const source = `
+      function describeStatus(status) {
+        const base = { label: 'base' }
+        switch (status) { case 'a': return { ...base }; default: return { label: 'C' } }
+      }
+      const config = describeStatus(status)
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: config.textClass'])
+  })
+
+  it('keeps a computed property key unsupported (cannot rule out a match)', () => {
+    const source = `
+      function describeStatus(status) {
+        const key = 'textClass'
+        switch (status) { case 'a': return { [key]: 'p-[7px]' }; default: return { label: 'C' } }
+      }
+      const config = describeStatus(status)
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: config.textClass'])
+  })
+
+  it('keeps a reassigned dispatcher-result binding unsupported', () => {
+    const source = `
+      function describeStatus(status) {
+        switch (status) { case 'a': return { label: 'A' }; default: return { label: 'B' } }
+      }
+      let config = describeStatus(status)
+      config = other
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: config.textClass'])
+  })
+
+  it('keeps a non-switch dispatcher (if/else control flow) unsupported', () => {
+    const source = `
+      function describeStatus(status) {
+        if (status === 'a') return { label: 'A' }
+        return { label: 'B' }
+      }
+      const config = describeStatus(status)
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: config.textClass'])
+  })
+
+  it('keeps a cyclic pair of dispatcher functions unsupported (cycle guard aborts, never infinite-loops)', () => {
+    const source = `
+      function a(s) { switch (s) { case 'x': return b('y'); default: return { label: 'A' } } }
+      function b(s) { switch (s) { case 'y': return a('x'); default: return { label: 'B' } } }
+      const config = a('x')
+      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+    `
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: config.textClass'])
+  })
+})
