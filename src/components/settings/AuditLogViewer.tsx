@@ -55,14 +55,14 @@ const BADGE_FALLBACK = 'border-zinc-700 bg-zinc-800 text-zinc-400'
 const BADGE_BASE = 'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium'
 
 function EventBadge({ event }: { event: string }) {
-  const style = EVENT_STYLES[event] ?? BADGE_FALLBACK
-  return <span className={`${BADGE_BASE} ${style}`}>{event}</span>
+  const eventStyle = EVENT_STYLES[event] ?? BADGE_FALLBACK
+  return <span className={`${BADGE_BASE} ${eventStyle}`}>{event}</span>
 }
 
 function DecisionBadge({ decision }: { decision?: string }) {
   if (!decision) return <span className="text-xs text-[var(--color-muted)]">&mdash;</span>
-  const style = DECISION_STYLES[decision] ?? BADGE_FALLBACK
-  return <span className={`${BADGE_BASE} ${style}`}>{decision}</span>
+  const decisionStyle = DECISION_STYLES[decision] ?? BADGE_FALLBACK
+  return <span className={`${BADGE_BASE} ${decisionStyle}`}>{decision}</span>
 }
 
 // ChainStatusBadge surfaces the HMAC tamper-evident chain verification result (G4)

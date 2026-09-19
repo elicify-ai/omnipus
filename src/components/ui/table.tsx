@@ -8,8 +8,8 @@ export interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
 const TABLE_KEYBOARD_SCROLL_STEP = 40
 
 const Table = React.forwardRef<HTMLTableElement, TableProps>(
-  ({ className, containerProps, ...props }, ref) => {
-    const { className: containerClassName, onKeyDown, ...restContainerProps } = containerProps ?? {}
+  ({ className, containerProps = {}, ...props }, ref) => {
+    const { className: containerClassName, onKeyDown, ...restContainerProps } = containerProps
     const handleContainerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
       onKeyDown?.(event)
       if (event.defaultPrevented || event.target !== event.currentTarget) return
