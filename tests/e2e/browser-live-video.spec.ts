@@ -59,6 +59,10 @@ import {
   waitForLiveSink,
 } from "./fixtures/selectors";
 import { createBrowserProbeAgent } from "./fixtures/browser-input-probe";
+import {
+  installWebrtcDebug,
+  logWebrtcDebug,
+} from "./fixtures/webrtc-debug";
 
 const OMNIPUS_HOME =
   process.env.OMNIPUS_HOME ||
@@ -324,6 +328,9 @@ function dataUrlToPngBuffer(dataUrl: string): Buffer {
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
+  // Squad J instrumentation — patch RTCPeerConnection so the first oracle
+  // failure in this spec can dump pc/track/stats state. Idempotent.
+  await installWebrtcDebug(page);
 });
 
 test("live browser view streams genuinely playing video with real audio and realtime input", async ({
@@ -645,6 +652,10 @@ test("live browser view streams genuinely playing video with real audio and real
     ).toBeGreaterThan(NEAR_BLACK_FLOOR);
     // Not a uniform white wash either (defense-in-depth against a
     // different kind of degenerate "frame").
+    // Squad J — at the first oracle failure (white-wash: 255 vs <250),
+    // dump the four debug values the brief asks for so the cause is
+    // recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'browser-live-video:white-wash');
     expect(sampleA.top.r).toBeLessThan(250);
     expect(sampleB.top.r).toBeLessThan(250);
 
