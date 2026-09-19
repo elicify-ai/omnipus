@@ -2343,11 +2343,65 @@ jobs:
           # The preview-headed project pins headless:false — the browser's
           # own PDF viewer (ADR-067 §13.4 item 4) is what's measured, and
           # headless Chromium has none. Runners have no X server, so launch
-          # under xvfb-run: a real headed browser on a virtual display. Do
+          # on a real headed Chromium backed by an in-memory X server. Do
           # NOT flip the project to headless — that replaces the thing
           # under test.
+          #
+          # Display-provisioning history for this shard:
+          #
+          #   * Run 35346106208 (on commit e875f001e) failed with the bare
+          #     ui/aura/env.cc:246 death because the shard had NO display
+          #     provisioning at all — Chromium launched with DISPLAY unset.
+          #     The xvfb-run -a wiring arrived later in eaa6a3210 and was
+          #     never executed on that run, so the run does not, by itself,
+          #     implicate xauth.
+          #
+          #   * eaa6a3210 then added `xvfb-run -a`. xvfb-run shells out to
+          #     `xauth` to write the X server cookie, and the ci-worker
+          #     (commit 871b8885e, Sep 11) proved that path fails on a
+          #     runner image without xauth — "xauth command not found",
+          #     gate exit 3, before Xvfb ever starts. Whether the GitHub-
+          #     hosted ubuntu-latest image (Ubuntu 24.04/26.04) ships
+          #     xauth is not verified here; the dependency is fragile
+          #     either way.
+          #
+          # Xvfb itself has no xauth dependency. Start it directly on :99
+          # and verify the server is answering before handing off — that
+          # removes the dependency class entirely rather than relying on
+          # xauth being present.
+          #
+          # The verify is a bounded poll for /tmp/.X11-unix/X99 (the
+          # canonical "Xvfb is accepting connections" signal) rather than
+          # a fixed sleep — a blind sleep races Xvfb's own startup and
+          # reads as a code regression when it loses.
           if [ "${{ matrix.group }}" = "preview-headed" ]; then
-            xvfb-run -a npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+            if ! command -v Xvfb >/dev/null 2>&1; then
+              echo "::error::Xvfb not on PATH — the preview-headed shard WILL fail at browserType.launch; this is an environment failure, not a code defect" >&2
+              exit 1
+            fi
+            XLOG="${RUNNER_TEMP:-/tmp}/xvfb.log"
+            Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$XLOG" 2>&1 &
+            _XVFB_PID=$!
+            export DISPLAY=:99
+            _xvfb_ready=0
+            for _ in $(seq 1 50); do
+              if [ -S /tmp/.X11-unix/X99 ] && kill -0 "$_XVFB_PID" 2>/dev/null; then
+                _xvfb_ready=1
+                break
+              fi
+              sleep 0.1
+            done
+            if [ "$_xvfb_ready" -ne 1 ]; then
+              echo "::error::Xvfb did not become reachable on :99 — preview-headed will fail at browserType.launch; this is an environment failure, not a code defect. See $XLOG" >&2
+              cat "$XLOG" >&2 || true
+              kill "$_XVFB_PID" 2>/dev/null || true
+              exit 1
+            fi
+            echo "Xvfb up on :99 (pid $_XVFB_PID)"
+            # Reap on script exit; the run step is its own shell, so EXIT is
+            # the right hook here (RETURN would fire on every function return).
+            trap 'kill "$_XVFB_PID" 2>/dev/null || true' EXIT
+            npx playwright test ${{ matrix.specs }} --reporter=html,list,json
           else
             npx playwright test ${{ matrix.specs }} --reporter=html,list,json
           fi
