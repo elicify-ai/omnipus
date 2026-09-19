@@ -2,17 +2,16 @@ package gateway
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
 
-func TestSafeLogArgsQuotesUserDerivedStringsAndErrors(t *testing.T) {
+func TestSafeLogArgsEscapesUserDerivedStringsAndErrors(t *testing.T) {
 	args := safeLogArgs("id\nspoofed", errors.New("secret\rvalue"), 42)
 
-	assert.Equal(t, `"id\nspoofed"`, args[0], "strings must stay on one structured-log record")
-	assert.Equal(t, `"secret\rvalue"`, args[1], "errors must stay on one structured-log record")
+	assert.Equal(t, `id\nspoofed`, args[0], "strings must stay on one structured-log record")
+	assert.Equal(t, `secret\rvalue`, args[1], "errors must stay on one structured-log record")
 	assert.Equal(t, 42, args[2], "non-string values remain machine readable")
 }
 
@@ -23,7 +22,7 @@ func TestSafeLogArgsPreservesNilAndTypedValues(t *testing.T) {
 	assert.Equal(t, []string{"a"}, args[1])
 }
 
-func TestQuotedStringsContainNoRawLineBreaks(t *testing.T) {
+func TestEscapedStringsContainNoRawLineBreaks(t *testing.T) {
 	for _, raw := range safeLogArgs("line\nbreak", errors.New("line\rbreak")) {
 		value, ok := raw.(string)
 		if !ok {
@@ -31,7 +30,5 @@ func TestQuotedStringsContainNoRawLineBreaks(t *testing.T) {
 		}
 		assert.NotContains(t, value, "\n")
 		assert.NotContains(t, value, "\r")
-		assert.True(t, strings.HasPrefix(value, `"`))
-		assert.True(t, strings.HasSuffix(value, `"`))
 	}
 }

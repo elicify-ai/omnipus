@@ -1226,7 +1226,7 @@ func (rc *runContextWithOptions) prepareSkillServices() {
 	)
 	if rc.err != nil {
 		slog.Warn("gateway: could not create skill installer; remove_skill unavailable",
-			"error", rc.err)
+			"error_type", fmt.Sprintf("%T", rc.err))
 		rc.sysSkillInstaller = nil
 	}
 }

@@ -1,22 +1,28 @@
 package gateway
 
 import (
-	"fmt"
 	"log/slog"
+	"strings"
 )
 
-// logsafe makes request-derived strings and errors safe for structured logs by
-// encoding them as quoted Go strings. This preserves diagnostic content while
-// preventing spoofed log endings and keeps non-string values (IDs, counts,
-// booleans) machine-readable.
+// safeLogString removes line breaks that could forge new structured-log
+// records while preserving their escaped diagnostic content.
+func safeLogString(value string) string {
+	value = strings.ReplaceAll(value, "\n", "\\n")
+	return strings.ReplaceAll(value, "\r", "\\r")
+}
+
+// logsafe makes request-derived strings and errors safe for structured logs.
+// This preserves diagnostic content while preventing spoofed log endings and
+// keeps non-string values (IDs, counts, booleans) machine-readable.
 func safeLogArgs(args ...any) []any {
 	safe := make([]any, 0, len(args))
 	for _, arg := range args {
 		switch value := arg.(type) {
 		case string:
-			safe = append(safe, fmt.Sprintf("%q", value))
+			safe = append(safe, safeLogString(value))
 		case error:
-			safe = append(safe, fmt.Sprintf("%q", value.Error()))
+			safe = append(safe, safeLogString(value.Error()))
 		default:
 			safe = append(safe, value)
 		}

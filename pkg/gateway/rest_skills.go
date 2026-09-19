@@ -447,7 +447,8 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	if slug != "" {
 		err = os.MkdirAll(stagingRoot, 0o755)
 		if err == nil {
-			stageDir, err = os.MkdirTemp(stagingRoot, slug+".install-")
+			const tempPrefix = "skill-install-"
+			stageDir, err = os.MkdirTemp(stagingRoot, tempPrefix)
 		}
 		if err == nil {
 			result, err = a.skillRegistry.DownloadAndInstall(r.Context(), slug, version, stageDir)
