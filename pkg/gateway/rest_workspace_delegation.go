@@ -6,7 +6,6 @@ package gateway
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -235,7 +234,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 	// Persist to the delegation store. LockID(id) is already held above, which
 	// is SaveDelegation's stated caller contract.
 	if err := workspaceSaveDelegationFn(a.homePath, id, edges); err != nil {
-		slog.Error("rest: update workspace delegation", "error", err, "id", id)
+		logsafeError("rest: update workspace delegation", "error", err, "id", id)
 		stage := "delegation"
 		message := "delegation graph was not saved; read the workspace again before retrying"
 		writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationState{
@@ -257,7 +256,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 			Decision: audit.DecisionAllow,
 			Details:  map[string]any{"id": ws.ID, "edge_count": len(edges)},
 		}); err != nil {
-			slog.Warn("audit write failed", "event", "workspace.delegation.update", "id", ws.ID, "error", err)
+			logsafeWarn("audit write failed", "event", "workspace.delegation.update", "id", ws.ID, "error", err)
 		}
 	}
 
@@ -453,7 +452,7 @@ func seedEdgesForTeam(edges []storedDelegationEdge, team []string) []storedDeleg
 			out = append(out, e)
 			continue
 		}
-		slog.Debug("seedEdgesForTeam: dropping default delegation edge — endpoint not on team",
+		logsafeDebug("seedEdgesForTeam: dropping default delegation edge — endpoint not on team",
 			"from_agent", e.FromAgent, "to_agent", e.ToAgent,
 			"from_on_team", member[e.FromAgent], "to_on_team", member[e.ToAgent])
 	}

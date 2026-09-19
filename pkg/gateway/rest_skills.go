@@ -5,7 +5,6 @@ package gateway
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,6 +15,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
 // --- Skills ---
@@ -86,7 +86,7 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 		}
 		revision, revisionErr := readListedSkillRevision(filepath.Dir(filepath.Dir(s.Path)), id)
 		if revisionErr != nil {
-			slog.Warn("rest: compute skill revision", "skill", id, "error", revisionErr)
+			logsafeWarn("rest: compute skill revision", "skill", id, "error", revisionErr)
 			jsonErr(w, http.StatusInternalServerError, "could not read installed skill state")
 			return
 		}
@@ -344,14 +344,14 @@ func (a *restAPI) searchSkills(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if a.skillRegistry == nil {
-		slog.Warn("rest: skill search requested but no registry configured")
+		logsafeWarn("rest: skill search requested but no registry configured")
 		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
 		return
 	}
 
 	results, err := a.skillRegistry.Search(r.Context(), q, limit)
 	if err != nil {
-		slog.Warn("rest: skill search failed", "query", q, "error", err)
+		logsafeWarn("rest: skill search failed", "query", q, "error", err)
 		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
 		return
 	}
@@ -411,8 +411,10 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusBadRequest, "exactly one of slug or upload_id is required")
 		return
 	}
-	// Path-traversal / identity guard: the slug becomes a directory name.
-	if slug != "" && validateEntityID(slug) != nil {
+	// Path-traversal / identity guard: the slug becomes a directory name and
+	// the prefix for a staged temporary directory. Use the strict canonical
+	// slug allowlist, not merely the broader entity-ID denylist.
+	if slug != "" && utils.ValidateSkillIdentifier(slug) != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid skill slug")
 		return
 	}
@@ -427,7 +429,7 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if slug != "" && a.skillRegistry == nil {
-		slog.Warn("rest: skill install requested but no registry configured", "slug", slug)
+		logsafeWarn("rest: skill install requested but no registry configured", "slug", slug)
 		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
 		return
 	}
@@ -480,7 +482,7 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		defer os.RemoveAll(stageDir)
 	}
 	if err != nil {
-		slog.Warn("rest: skill install failed", "slug", slug, "version", version, "error", err)
+		logsafeWarn("rest: skill install failed", "slug", slug, "version", version, "error", err)
 		jsonErr(w, http.StatusBadGateway, fmt.Sprintf("could not stage skill: %v", err))
 		return
 	}
@@ -500,7 +502,7 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, skills.ErrRevisionConflict) {
 			jsonErr(w, http.StatusConflict, err.Error())
 		} else {
-			slog.Error("rest: publish skill", "skill", slug, "error", err)
+			logsafeError("rest: publish skill", "skill", slug, "error", err)
 			if publish.PersistenceStatus.Valid() && publish.ActivationStatus.Valid() {
 				payload := gen.ConfigurationMutationFailureState{
 					PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatus(publish.PersistenceStatus),
@@ -586,7 +588,7 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name strin
 	// accepts nil and falls back to a plain HTTP client in that case.
 	installer, err := skills.NewSkillInstallerWithSSRF(a.homePath, "", "", a.ssrfChecker)
 	if err != nil {
-		slog.Error("rest: create skill installer for delete", "error", err)
+		logsafeError("rest: create skill installer for delete", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not initialize skill installer")
 		return
 	}
@@ -599,7 +601,7 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name strin
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("skill %q not found", name))
 			return
 		}
-		slog.Error("rest: delete skill", "name", name, "error", err)
+		logsafeError("rest: delete skill", "name", name, "error", err)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not remove skill: %v", err))
 		return
 	}

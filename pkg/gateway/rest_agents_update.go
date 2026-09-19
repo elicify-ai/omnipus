@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -293,7 +292,7 @@ func (uf *restAPIUpdateAgentFlow) rejectSystemAgentDisable() bool {
 		// Unreachable by construction — the caller has already verified that
 		// this exact body is JSON. Logged rather than discarded so a future
 		// reordering that makes it reachable cannot silently disarm this guard.
-		slog.Warn("gateway: could not peek enabled/disabled on System Agent update; disable guard not evaluated",
+		logsafeWarn("gateway: could not peek enabled/disabled on System Agent update; disable guard not evaluated",
 			"agent_id", uf.foundAgent.ID, "error", peekErr)
 	}
 	if (statePeek.Enabled != nil && !*statePeek.Enabled) ||
@@ -626,7 +625,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	var wsErr error
 	uf.workspace, wsErr = agentWorkspacePath(uf.cfg, uf.ru.id, capturedWorkspace, uf.ru.a.homePath)
 	if wsErr != nil {
-		slog.Error("rest: agentWorkspacePath for update", "agent_id", uf.ru.id, "error", wsErr)
+		logsafeError("rest: agentWorkspacePath for update", "agent_id", uf.ru.id, "error", wsErr)
 		jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
 		return true
 	}
@@ -720,7 +719,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 		// updateConfigJSONLocked does when config is written but the in-memory
 		// refresh fails.
 		if rebuildErr := uf.ru.a.fastAgentUpsert(uf.ru.id); rebuildErr != "" {
-			slog.Error("updateAgent: change saved but the running agent could not be rebuilt",
+			logsafeError("updateAgent: change saved but the running agent could not be rebuilt",
 				"agent_id", uf.ru.id, "error", rebuildErr)
 			uf.ru.activationFailed = rebuildErr
 		}

@@ -493,7 +493,7 @@ func DefaultPolicyForModel(
 	bindPorts []uint16,
 ) SandboxPolicy {
 	open := model == FilesystemModelOpen
-	rules := make([]PathRule, 0, 16+len(allowedPaths))
+	rules := make([]PathRule, 0, max(16, len(allowedPaths)))
 
 	// Agent home: full RWX on $OMNIPUS_HOME. This is where agents write
 	// sessions, credentials, config, skills, and state.

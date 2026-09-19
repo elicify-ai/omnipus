@@ -1402,8 +1402,14 @@ func (rc *runContextWithOptions) startBackgroundServices() {
 					"panic", r, "stack", string(stack))
 				// Append to the panic log file so ops can find the crash.
 				if f, openErr := os.OpenFile(rc.panicPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600); openErr == nil {
-					fmt.Fprintf(f, "\n\nagent loop panic: %v\n%s\n", r, stack)
-					f.Close()
+					_, writeErr := fmt.Fprintf(f, "\n\nagent loop panic: %v\n%s\n", r, stack)
+					closeErr := f.Close()
+					if writeErr == nil {
+						writeErr = closeErr
+					}
+					if writeErr != nil {
+						slog.Error("agent loop panic log write failed", "error_type", fmt.Sprintf("%T", writeErr))
+					}
 				}
 				rc.agentLoopDead.Store(true)
 			}

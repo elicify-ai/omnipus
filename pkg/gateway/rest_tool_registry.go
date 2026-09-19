@@ -14,7 +14,6 @@ package gateway
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -195,7 +194,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	registry := a.agentLoop.GetRegistry()
 	agentInstance, ok := registry.GetAgent(agentID)
 	if !ok {
-		slog.Warn("rest: agent not found in registry for tool view", "agent_id", agentID)
+		logsafeWarn("rest: agent not found in registry for tool view", "agent_id", agentID)
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
 		return
 	}
@@ -519,7 +518,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	resolved, gone := a.approvalReg.resolve(approvalID, action)
 	if gone {
 		// Entry already in terminal state — FR-018.
-		slog.Warn("tool-approval: late action on resolved approval",
+		logsafeWarn("tool-approval: late action on resolved approval",
 			"approval_id", approvalID, "action", string(body.Action))
 		jsonErr(w, http.StatusGone, "approval already resolved")
 		return
@@ -552,13 +551,13 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if recordGrant {
 		recorded := a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName, entry.Args)
 		if recorded {
-			slog.Info("tool-approval: recorded session Always-Allow grant",
+			logsafeInfo("tool-approval: recorded session Always-Allow grant",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
 				"agent_id", entry.AgentID,
 				"tool", entry.ToolName)
 		} else {
-			slog.Warn("tool-approval: 'always' action approved this call but the grant was NOT recorded "+
+			logsafeWarn("tool-approval: 'always' action approved this call but the grant was NOT recorded "+
 				"(missing session_id/agent_id/tool identity on the approval entry) — the next matching call will prompt again",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
@@ -666,7 +665,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 	// second component is entry.AgentID (see doc comment above).
 	parentAgent, err := a.agentLoop.AgentForSession(meta.ParentSessionID)
 	if err != nil || parentAgent == nil {
-		slog.Warn("tool-approval: could not resolve the delegating parent's agent for grant inheritance; "+
+		logsafeWarn("tool-approval: could not resolve the delegating parent's agent for grant inheritance; "+
 			"the grant recorded above will not survive this delegation's own teardown",
 			"approval_id", approvalID,
 			"child_session_id", entry.SessionID,
@@ -675,7 +674,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 		return false
 	}
 	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, entry.AgentID, entry.ToolName, entry.Args) {
-		slog.Info("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
+		logsafeInfo("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
 			"scoped to the SAME agent identity the approval modal named, so it survives this delegation's "+
 			"own teardown without crossing into the parent's own agent identity",
 			"approval_id", approvalID,
@@ -686,7 +685,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"tool", entry.ToolName)
 		return true
 	}
-	slog.Warn("tool-approval: parent Always-Allow grant was NOT recorded "+
+	logsafeWarn("tool-approval: parent Always-Allow grant was NOT recorded "+
 		"(missing parent session, agent, or tool identity) — this delegation's teardown will drop the child grant",
 		"approval_id", approvalID,
 		"child_session_id", entry.SessionID,

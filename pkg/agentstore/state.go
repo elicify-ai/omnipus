@@ -20,7 +20,20 @@ var (
 	ErrInvalidRevision  = errors.New("agentstore: invalid revision")
 	ErrRevisionConflict = errors.New("agentstore: revision conflict")
 	revisionPattern     = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	agentIDPattern      = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$`)
+
+	ErrInvalidAgentID = errors.New("agentstore: invalid agent id")
 )
+
+// ValidateAgentID allowlists the externally supplied ID before callers derive
+// entity and SOUL paths from it. The bounded single-component form also rejects
+// traversal and separators by construction.
+func ValidateAgentID(id string) error {
+	if len(id) == 0 || len(id) > 128 || !agentIDPattern.MatchString(id) {
+		return fmt.Errorf("%w: must be 1-128 alphanumeric path-component characters", ErrInvalidAgentID)
+	}
+	return nil
+}
 
 func ValidateRevision(revision string) error {
 	if !revisionPattern.MatchString(revision) {
@@ -103,6 +116,9 @@ func (s *Store) soulPath(id string) string {
 }
 
 func (s *Store) ReadState(id string) (state *State, err error) {
+	if validateErr := ValidateAgentID(id); validateErr != nil {
+		return nil, validateErr
+	}
 	err = s.inner.WithLock(id, func(entityPath string) error {
 		var readErr error
 		state, _, _, readErr = readStateFiles(entityPath, s.soulPath(id))
@@ -149,6 +165,9 @@ func replace(staged, target string) error {
 
 func (s *Store) MutateState(id, expectedRevision string, mutate func(*config.AgentConfig) error, soul *string) (result MutationResult, err error) {
 	result.ActivationStatus = ActivationNotAttempted
+	if validateErr := ValidateAgentID(id); validateErr != nil {
+		return result, validateErr
+	}
 	if validateErr := ValidateRevision(expectedRevision); validateErr != nil {
 		return result, validateErr
 	}
@@ -316,6 +335,9 @@ func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (
 func (s *Store) DeleteState(id, expectedRevision string) (result MutationResult, err error) {
 	result.PersistenceStatus = PersistenceNone
 	result.ActivationStatus = ActivationNotAttempted
+	if err = ValidateAgentID(id); err != nil {
+		return result, err
+	}
 	if err = ValidateRevision(expectedRevision); err != nil {
 		return result, err
 	}

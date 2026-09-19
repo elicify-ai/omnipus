@@ -41,7 +41,7 @@ func ApplyToolPolicyChanges(current map[string]config.ToolPolicy, patch ToolPoli
 			return nil, &FieldError{Code: InvalidInput, Fields: []string{"tool_policy_changes.set"}, Reason: fmt.Sprintf("invalid policy %q for %s", policy, name)}
 		}
 	}
-	out := make(map[string]config.ToolPolicy, len(current)+len(patch.Set))
+	out := make(map[string]config.ToolPolicy, max(len(current), len(patch.Set)))
 	for name, policy := range current {
 		out[name] = policy
 	}

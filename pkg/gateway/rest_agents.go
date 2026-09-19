@@ -5,7 +5,6 @@ package gateway
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -368,7 +367,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 			// See the escalation check after both scans: ANY store error now
 			// aborts with 500 rather than risk a caller trusting an
 			// incomplete list as complete.
-			slog.Warn("rest: list agent sessions: shared store", "agent_id", agentID, "error", err)
+			logsafeWarn("rest: list agent sessions: shared store", "agent_id", agentID, "error", err)
 			errs = append(errs, fmt.Errorf("shared: %w", err))
 		}
 		for _, m := range sharedMetas {
@@ -385,7 +384,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	if legacy := a.agentLoop.GetAgentStore(agentID); legacy != nil {
 		legacyMetas, err := legacy.ListSessions()
 		if err != nil {
-			slog.Warn("rest: list agent sessions: legacy store", "agent_id", agentID, "error", err)
+			logsafeWarn("rest: list agent sessions: legacy store", "agent_id", agentID, "error", err)
 			errs = append(errs, fmt.Errorf("legacy: %w", err))
 		}
 		for _, m := range legacyMetas {
@@ -413,7 +412,7 @@ func (a *restAPI) listAgentSessions(w http.ResponseWriter, agentID string) {
 	// explicit partial/degraded flag is a legitimate alternative but requires
 	// a coordinated SPA update, not a decision to make unilaterally here.
 	if len(errs) > 0 {
-		slog.Error("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errs)
+		logsafeError("rest: list agent sessions: store read failed", "agent_id", agentID, "errors", errs)
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not list sessions: %v", errors.Join(errs...)))
 		return
 	}
@@ -473,7 +472,7 @@ func agentWorkspacePath(cfg interface {
 		if len(agentWorkspace) > 0 && agentWorkspace[0] == '~' {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				slog.Error("rest: agentWorkspacePath: UserHomeDir failed", "error", err)
+				logsafeError("rest: agentWorkspacePath: UserHomeDir failed", "error", err)
 				return agentWorkspace, fmt.Errorf("UserHomeDir: %w", err)
 			}
 			if len(agentWorkspace) > 1 && (agentWorkspace[1] == '/' || agentWorkspace[1] == filepath.Separator) {
@@ -491,7 +490,7 @@ func agentWorkspacePath(cfg interface {
 			// Fallback to ~/.omnipus if homePath not provided.
 			home, err := os.UserHomeDir()
 			if err != nil {
-				slog.Error("rest: agentWorkspacePath: UserHomeDir failed", "error", err)
+				logsafeError("rest: agentWorkspacePath: UserHomeDir failed", "error", err)
 				return cfg.AgentHomeBasePath(), fmt.Errorf("UserHomeDir: %w", err)
 			}
 			base = filepath.Join(home, ".omnipus")
@@ -503,7 +502,7 @@ func agentWorkspacePath(cfg interface {
 			return "", fmt.Errorf("agent workspace path escapes omnipus home: %s", cleaned)
 		}
 		if err := os.MkdirAll(cleaned, 0o755); err != nil {
-			slog.Error("rest: agentWorkspacePath: MkdirAll failed", "path", cleaned, "error", err)
+			logsafeError("rest: agentWorkspacePath: MkdirAll failed", "path", cleaned, "error", err)
 			return cleaned, fmt.Errorf("MkdirAll %s: %w", cleaned, err)
 		}
 		return cleaned, nil
@@ -517,7 +516,7 @@ func readSoulMD(workspace string) string {
 	data, err := os.ReadFile(filepath.Join(workspace, "SOUL.md"))
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("rest: readSoulMD: cannot read SOUL.md", "workspace", workspace, "error", err)
+			logsafeWarn("rest: readSoulMD: cannot read SOUL.md", "workspace", workspace, "error", err)
 		}
 		return ""
 	}
@@ -531,14 +530,14 @@ func readSoulMD(workspace string) string {
 func readAgentFiles(workspace string) (soul, heartbeat string) {
 	if data, err := os.ReadFile(filepath.Join(workspace, "SOUL.md")); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("rest: readAgentFiles: cannot read SOUL.md", "workspace", workspace, "error", err)
+			logsafeWarn("rest: readAgentFiles: cannot read SOUL.md", "workspace", workspace, "error", err)
 		}
 	} else {
 		soul = string(data)
 	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "HEARTBEAT.md")); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("rest: readAgentFiles: cannot read HEARTBEAT.md", "workspace", workspace, "error", err)
+			logsafeWarn("rest: readAgentFiles: cannot read HEARTBEAT.md", "workspace", workspace, "error", err)
 		}
 	} else {
 		heartbeat = string(data)
@@ -700,7 +699,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		}
 		workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Home, a.homePath)
 		if wsErr != nil {
-			slog.Warn("rest: listAgents: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
+			logsafeWarn("rest: listAgents: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 		}
 		// M2: listAgents only needs SOUL.md to determine draft status — avoid reading
 		// HEARTBEAT.md and AGENT.md unnecessarily in the list endpoint.
@@ -762,7 +761,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		if state, stateErr := agentstore.New(a.homePath).ReadState(ac.ID); stateErr == nil {
 			ag.Revision = state.Revision
 		} else {
-			slog.Warn("rest: listAgents: could not compute revision", "agent_id", ac.ID, "error", stateErr)
+			logsafeWarn("rest: listAgents: could not compute revision", "agent_id", ac.ID, "error", stateErr)
 		}
 		agents = append(agents, ag)
 	}
@@ -783,7 +782,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			}
 			workspace, wsErr := agentWorkspacePath(cfg, ac.ID, ac.Home, a.homePath)
 			if wsErr != nil {
-				slog.Warn("rest: getAgent: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
+				logsafeWarn("rest: getAgent: could not resolve workspace", "agent_id", ac.ID, "error", wsErr)
 			}
 			soul, _ := readAgentFiles(workspace)
 			// Core agents have compiled prompts — do not expose them.
@@ -960,8 +959,8 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 			jsonErr(w, http.StatusNotFound, err.Error())
 			return false
 		}
-		slog.Error(persistErrLogMsg, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		logsafeError(persistErrLogMsg, "error_type", fmt.Sprintf("%T", err))
+		jsonErr(w, http.StatusInternalServerError, "could not save config")
 		return false
 	}
 	return true
@@ -976,7 +975,7 @@ func (e *configurationMutationError) Error() string { return e.Err.Error() }
 func (e *configurationMutationError) Unwrap() error { return e.Err }
 
 func writeConfigurationMutationFailure(w http.ResponseWriter, result agentstore.MutationResult) {
-	slog.Error("configuration mutation persistence failed", "stage", result.ErrorStage, "error", result.Message)
+	logsafeError("configuration mutation persistence failed", "stage", result.ErrorStage, "error", result.Message)
 	state := gen.ConfigurationMutationFailureState{
 		PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatus(result.PersistenceStatus),
 		ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatusNotAttempted,
@@ -1038,7 +1037,7 @@ func (a *restAPI) fastAgentUpsert(agentID string) string {
 		_, err = a.agentLoop.UpsertAgentFast(cfg, agentID)
 	}
 	if err != nil {
-		slog.Error("rest: fast agent upsert failed; falling back to full reload",
+		logsafeError("rest: fast agent upsert failed; falling back to full reload",
 			"agent_id", agentID, "error", err)
 		return a.fallbackFullReload()
 	}
@@ -1167,7 +1166,7 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
 		hasActive, err := pe.HasActivePlansOwnedBy(id)
 		if err != nil {
-			slog.Error("delete agent: could not verify active plan ownership", "agent_id", id, "error", err)
+			logsafeError("delete agent: could not verify active plan ownership", "agent_id", id, "error", err)
 			jsonErr(w, http.StatusServiceUnavailable,
 				"could not verify plan ownership; try again")
 			return
@@ -1202,7 +1201,7 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 			jsonErr(w, http.StatusConflict, err.Error())
 			return
 		}
-		slog.Error("rest: deleteAgent: delete agent entity record failed", "agent_id", id, "error", err)
+		logsafeError("rest: deleteAgent: delete agent entity record failed", "agent_id", id, "error", err)
 		writeConfigurationMutationFailure(w, deletion)
 		return
 	}
@@ -1223,10 +1222,10 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// request; goals that could not be ended stay active and are named in the
 	// error.
 	if ended, gerr := a.agentLoop.EndGoalsOfDeletedAgent(id, deletedName); gerr != nil {
-		slog.Error("rest: deleteAgent: could not end every active goal the deleted agent was working",
+		logsafeError("rest: deleteAgent: could not end every active goal the deleted agent was working",
 			"agent_id", id, "goals_ended", ended, "error", gerr)
 	} else if ended > 0 {
-		slog.Info("rest: deleteAgent: ended the deleted agent's active goals", "agent_id", id, "goals_ended", ended)
+		logsafeInfo("rest: deleteAgent: ended the deleted agent's active goals", "agent_id", id, "goals_ended", ended)
 	}
 	// Reload the live config so the deleted agent is no longer in memory.
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
@@ -1235,11 +1234,11 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	activation := agentstore.ActivationActive
 	var activationMessage string
 	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
-		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
+		logsafeError("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
 		activation = agentstore.ActivationFailed
 		activationMessage = "agent was deleted from storage but runtime activation failed; retry reload before treating it as inactive"
 	} else if !confirmed {
-		slog.Warn("rest: deleteAgent: reload did not confirm within the poll window; "+
+		logsafeWarn("rest: deleteAgent: reload did not confirm within the poll window; "+
 			"deleted agent may still be resolvable in the runtime registry", "agent_id", id)
 		activation = agentstore.ActivationFailed
 		activationMessage = "agent was deleted from storage but runtime activation was not confirmed"
@@ -1268,7 +1267,7 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 				"agent_name": deletedName,
 			},
 		}); err != nil {
-			slog.Warn("audit write failed", "event", "agent.delete", "agent_id", id, "error", err)
+			logsafeWarn("audit write failed", "event", "agent.delete", "agent_id", id, "error", err)
 		}
 	}
 	// O6 — drop any heartbeat schedule the deleted agent owned (the reconciler

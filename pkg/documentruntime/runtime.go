@@ -21,7 +21,10 @@ import (
 const ManifestRevision = "687242a67612744c88aa1c6b4ac0a56a5537cde3"
 const FinalizeCommand = "omnipus-document-runtime finalize"
 
-var revisionPattern = regexp.MustCompile(`^[a-f0-9]{40,64}$`)
+var (
+	revisionPattern = regexp.MustCompile(`^[a-f0-9]{40,64}$`)
+	workerIDPattern = regexp.MustCompile(`^[a-z0-9]+(?:[-_.][a-z0-9]+)*$`)
+)
 
 //go:embed probe/omnipus_document_probe/*.py
 var probeFiles embed.FS
@@ -54,8 +57,8 @@ func ResolveLayout(dataRoot, revision, workerID string) (Layout, error) {
 	if !revisionPattern.MatchString(revision) {
 		return Layout{}, errors.New("document manifest revision must be an immutable lowercase hex digest")
 	}
-	if workerID == "" || strings.ContainsAny(workerID, `/\\`) {
-		return Layout{}, errors.New("document worker ID must be a single path component")
+	if len(workerID) == 0 || len(workerID) > 128 || !workerIDPattern.MatchString(workerID) {
+		return Layout{}, errors.New("document worker ID must be a bounded path-safe identifier")
 	}
 	prefix := filepath.Join(filepath.Clean(dataRoot), "toolchains", "documents", revision)
 	return Layout{Prefix: prefix, Bin: filepath.Join(prefix, "bin"), Lib: filepath.Join(prefix, "lib"), Skills: filepath.Join(prefix, "skills"), Manifest: filepath.Join(prefix, "manifest.json"), Cache: filepath.Join(filepath.Clean(dataRoot), "cache", "documents", workerID)}, nil
@@ -66,7 +69,7 @@ func WorkerSandboxRules(layout Layout) (readExec []string, writable []string) {
 }
 
 func ChildEnvironment(base []string, layout Layout) []string {
-	out := make([]string, 0, len(base)+6)
+	out := make([]string, 0, max(len(base), 6))
 	for _, kv := range base {
 		key, _, ok := strings.Cut(kv, "=")
 		if !ok {

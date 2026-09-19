@@ -6,7 +6,6 @@ package gateway
 
 import (
 	"errors"
-	"log/slog"
 	"net/http"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -52,7 +51,7 @@ func (a *restAPI) handleWorkspaceInstructionsGet(w http.ResponseWriter, _ *http.
 	}
 	content, err := workspace.ReadInstructionsForManagement(a.homePath, id)
 	if err != nil {
-		slog.Error("rest: read workspace instructions", "error", err, "id", id)
+		logsafeError("rest: read workspace instructions", "error", err, "id", id)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -93,7 +92,7 @@ func (a *restAPI) handleWorkspaceInstructionsPut(w http.ResponseWriter, r *http.
 
 	current, err := workspace.ReadInstructionsForManagement(a.homePath, id)
 	if err != nil {
-		slog.Error("rest: read workspace instructions before write", "error", err, "id", id)
+		logsafeError("rest: read workspace instructions before write", "error", err, "id", id)
 		writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationFailureState{
 			PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatusNone,
 			ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatusNotAttempted,
@@ -114,7 +113,7 @@ func (a *restAPI) handleWorkspaceInstructionsPut(w http.ResponseWriter, r *http.
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		slog.Error("rest: write workspace instructions", "error", err, "id", id)
+		logsafeError("rest: write workspace instructions", "error", err, "id", id)
 		writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationFailureState{
 			PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatusNone,
 			ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatusNotAttempted,
@@ -128,7 +127,7 @@ func (a *restAPI) handleWorkspaceInstructionsPut(w http.ResponseWriter, r *http.
 
 	actual, err := readWorkspaceInstructionsAfterWrite(a.homePath, id)
 	if err != nil {
-		slog.Error("rest: read workspace instructions after write", "error", err, "id", id)
+		logsafeError("rest: read workspace instructions after write", "error", err, "id", id)
 		writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationFailureState{
 			PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatusPartial,
 			ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatusNotAttempted,
