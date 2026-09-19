@@ -141,14 +141,264 @@ test('raw fallbacks and unknown CSSOM properties remain independently visible', 
   assert.ok(dynamicFindings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/raw-color' && syntax === '#ffffff'))
 })
 
-test('whole style forwarding and transformed paint values are coverage gaps rather than baselineable debt', () => {
+test('an unchanged whole-style parameter forwarded to JSX is an exact blocking boundary, not a coverage gap', () => {
+  // P4 review finding: `style`, forwarded UNCHANGED straight into a
+  // `style={…}` JSX attribute, is caller pass-through with the exact same
+  // contract as a forwarded `className` parameter (already an
+  // extension-boundary a few tests up) — the caller's own argument was
+  // already validated at ITS call site. This used to be a coverage gap
+  // (permanently unsupported, never registrable); it now gets the same
+  // exact, reviewable identity className gets.
   const style = `export function Card({ style }) { return <i style={style}/> }`
+  const findings = paintFindings(style)
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax), ['Card#style'])
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/unsupported'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/unverified-governed-value'))
+})
+
+test('a transformed paint value is still an opaque call, not a forwarded parameter — stays a coverage gap', () => {
+  // Unlike the bare-forward case above, `tint(data.color)` is a NEW value
+  // this scanner cannot see through (an opaque call, not a pass-through
+  // parameter) — it must keep failing exactly as before the P4 fix.
   const transformed = `export function Card({ data }) { return <i style={{ color: tint(data.color) }}/> }`
-  for (const source of [style, transformed]) {
-    const findings = paintFindings(source)
-    assert.ok(findings.some(({ ruleId }) => ruleId === 'ts-colors/unsupported'))
-    assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/unverified-governed-value'))
-  }
+  const findings = paintFindings(transformed)
+  assert.ok(findings.some(({ ruleId }) => ruleId === 'ts-colors/unsupported'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/unverified-governed-value'))
+})
+
+// P17 review finding: a React state local (`const [x] = useState(...)`)
+// reaching a KNOWN colour sink is a genuinely runtime value — a fixed,
+// provable React API, not an arbitrary opaque call — so it gets the same
+// registrable extension-boundary treatment as a forwarded parameter. The
+// fairness pair matters here: a raw literal reaching the SAME sink the same
+// way must still report raw-color (never silently swallowed by the new
+// path), and an identically-shaped array destructuring from anything OTHER
+// than useState must keep failing exactly as before (the adversarial suite's
+// own "array-destructured bindings stay unsupported" case, reused as the
+// opaque-call control below).
+test('a useState local reaching a dom-style colour property is an exact runtime paint boundary', () => {
+  const source = `export function Avatar() { const [selectedColor] = useState(undefined); return <i style={{ backgroundColor: selectedColor }}/> }`
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['Avatar#dom-style.backgroundColor<-selectedColor'],
+  )
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/unsupported'))
+})
+
+test('a useState local reaching an SVG colour attribute is an exact runtime paint boundary', () => {
+  const source = `export function Avatar() { const [selectedColor] = useState(undefined); return <svg><path color={selectedColor}/></svg> }`
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['Avatar#svg-attribute.color<-selectedColor'],
+  )
+})
+
+test('a raw colour literal at the same dom-style sink still reports raw-color, unaffected by the useState boundary', () => {
+  const source = `export function Avatar() { return <i style={{ backgroundColor: '#ffffff' }}/> }`
+  const findings = paintFindings(source)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/raw-color', path, syntax: '#ffffff' }])
+})
+
+// Lead review, 2026-09-19: a laundering leak — once a useState read site is
+// registered as a permanent extension-boundary exception, a raw colour
+// literal fed to it through the initial value or a later setter call would
+// otherwise pass completely silently (the read-site boundary is the ONLY
+// finding, never independently scanned). scanHookStateLaundering closes
+// this: whenever hookStateLocal grants the boundary, it ALSO scans the
+// useState(...) initializer argument and every direct setter call's
+// argument (including functional-update return values) as static values —
+// a raw literal there reports ts-colors/raw-color IN ADDITION to the
+// unchanged extension-boundary at the read site.
+test('a raw colour literal in the useState initial value is independently reported, not laundered by the boundary', () => {
+  const source = "import { useState } from 'react'\nexport function Avatar() { const [c] = useState('#ff0000'); return <i style={{ color: c }}/> }"
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['Avatar#dom-style.color<-c'],
+  )
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/raw-color').map(({ syntax }) => syntax),
+    ['#ff0000'],
+  )
+})
+
+test('a raw colour literal passed to the paired setter is independently reported, not laundered by the boundary', () => {
+  const source = "import { useState } from 'react'\nexport function V() { const [c, setC] = useState(undefined); return <i onClick={() => setC('#00ff00')} style={{ color: c }}/> }"
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['V#dom-style.color<-c'],
+  )
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/raw-color').map(({ syntax }) => syntax),
+    ['#00ff00'],
+  )
+})
+
+test('a raw colour literal returned from a functional-update setter call is independently reported', () => {
+  const source = "import { useState } from 'react'\nexport function V() { const [c, setC] = useState(undefined); return <i onClick={() => setC((prev) => '#f00')} style={{ color: c }}/> }"
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['V#dom-style.color<-c'],
+  )
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/raw-color').map(({ syntax }) => syntax),
+    ['#f00'],
+  )
+})
+
+test('an opaque setter argument (a parameter, a property access) adds nothing extra beyond the boundary', () => {
+  const source = "import { useState } from 'react'\nexport function V({ agent }) { const [c, setC] = useState(undefined); return <i onClick={() => setC(agent.color)} style={{ color: c }}/> }"
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['V#dom-style.color<-c'],
+  )
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/raw-color'), [])
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('a setter passed to another component (escapes) voids the boundary — the read stays unsupported', () => {
+  // `onSave={setC}` hands the setter to ANOTHER component; this file can
+  // never see every future call ColorPicker makes with it, so the whole
+  // useState exception must be voided, not just the one visible reference.
+  const source = "import { useState } from 'react'\nexport function V() { const [c, setC] = useState(undefined); return <ColorPicker onSave={setC}><i style={{ color: c }}/></ColorPicker> }"
+  const findings = paintFindings(source)
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'), [])
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'c'))
+})
+
+test('a setter returned from the component (escapes) voids the boundary — the read stays unsupported', () => {
+  const source = "import { useState } from 'react'\nexport function useColor() { const [c, setC] = useState(undefined); const el = <i style={{ color: c }}/>; return { el, setC } }"
+  const findings = paintFindings(source)
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'), [])
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'c'))
+})
+
+test('a setter aliased to another variable (escapes) voids the boundary — the read stays unsupported', () => {
+  const source = "import { useState } from 'react'\nexport function V() { const [c, setC] = useState(undefined); const alias = setC; alias('#ff0000'); return <i style={{ color: c }}/> }"
+  const findings = paintFindings(source)
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'), [])
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'c'))
+})
+
+test('the real AgentProfile shape — undefined initial, opaque setter calls only — still classifies as extension-boundary with no extra raw findings', () => {
+  const source = [
+    "import { useState } from 'react'",
+    "export function AgentProfile({ agent }) {",
+    "  const [selectedColor, setSelectedColor] = useState(undefined)",
+    "  setSelectedColor(agent.color)",
+    "  return (",
+    "    <>",
+    "      <i style={{ backgroundColor: selectedColor }}/>",
+    "      <svg><path color={selectedColor} onChange={(color) => setSelectedColor(color)}/></svg>",
+    "    </>",
+    "  )",
+    "}",
+  ].join('\n')
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax).sort(),
+    ['AgentProfile#dom-style.backgroundColor<-selectedColor', 'AgentProfile#svg-attribute.color<-selectedColor'].sort(),
+  )
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/raw-color'), [])
+  assert.deepEqual(findings.filter(({ ruleId }) => ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('an array-destructured local from a NON-useState call reaching the same colour sink stays unsupported', () => {
+  const source = `export function Avatar() { const [selectedColor] = pickColor(); return <i style={{ backgroundColor: selectedColor }}/> }`
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'selectedColor'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'))
+})
+
+test('a useState local aliased through an intermediate variable still resolves through the existing alias-following proof', () => {
+  // This is NOT a hookStateLocal-specific capability — the ordinary
+  // resolveIdentInit chain already follows a plain `const alias = x` alias
+  // to its source for EVERY identifier (see "follows a const alias into a
+  // style colour" above); it bottoms out at `selectedColor`, which
+  // hookStateLocal then recognizes exactly as if it had been used bare.
+  const source = `export function Avatar() { const [selectedColor] = useState(undefined); const alias = selectedColor; return <i style={{ backgroundColor: alias }}/> }`
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['Avatar#dom-style.backgroundColor<-selectedColor'],
+  )
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/unsupported'))
+})
+
+test('a useState local inside a genuinely anonymous-owner IIFE stays unsupported — no stable identity to register', () => {
+  // Deliberately an IIFE whose CALL RESULT (not the function itself) is
+  // assigned to Avatar — functionIdentity walks past a call wrapper only
+  // for forwardRef/memo (isComponentWrapper), so an ordinary invoked
+  // function expression gets no borrowed name from its call site, unlike a
+  // function bound directly to a variable or object property.
+  const source = `export const Avatar = (() => { const [selectedColor] = useState(undefined); return <i style={{ backgroundColor: selectedColor }}/> })()`
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'selectedColor'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'))
+})
+
+// P18/P6 review finding: `.style.setProperty('--custom-prop', value)` never
+// constructed a boundary at all, so an unresolved custom-property write
+// could only ever be permanently unsupported — even when the property name
+// itself proves it is not a colour (a live layout measurement, an
+// adjustable root font size). isRuntimeMeasurementBoundary is the exact,
+// narrow gate: non-colour custom property name AND a resolvable (non-
+// anonymous, or hook-derived) owner.
+test('an unresolved non-colour custom property set through a NAMED function is an exact runtime paint boundary', () => {
+  const source = `export function AppShell() { function applyMetrics() { const { appTop } = computeAppMetrics(); document.documentElement.style.setProperty('--app-top', appTop) } }`
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['applyMetrics#dom-style.--app-top<-appTop'],
+  )
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/unsupported'))
+})
+
+test('the same custom-property write inside a NAMED function\'s anonymous useEffect callback derives owner#hook identity', () => {
+  const source = `export function ProfileSection() { useEffect(() => { document.documentElement.style.setProperty('--user-font-size', \`\${fontSize}px\`) }, [fontSize]) }`
+  const findings = paintFindings(source)
+  assert.deepEqual(
+    findings.filter(({ ruleId }) => ruleId === 'ts-colors/extension-boundary').map(({ syntax }) => syntax),
+    ['ProfileSection#useEffect#dom-style.--user-font-size<-fontSize'],
+  )
+})
+
+test('an unresolved custom-property write inside a genuinely anonymous callback with NO hook wrapper stays unsupported', () => {
+  // The IIFE's inner arrow is never bound to a name or property (same shape
+  // as the useState anonymous-owner case above) AND is not a direct
+  // useEffect/useLayoutEffect/useInsertionEffect callback argument, so
+  // neither functionIdentity nor directHookCallbackName can derive anything
+  // — setPropertyOwnerIdentity must fall all the way through to 'anonymous'.
+  const source = `export function AppShell() { (() => { document.documentElement.style.setProperty('--app-top', appTop) })() }`
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'appTop'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'))
+})
+
+test('an anonymous useEffect callback with no NAMED outer function to anchor to stays unsupported', () => {
+  const source = `(() => { useEffect(() => { document.documentElement.style.setProperty('--app-top', appTop) }, []) })()`
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'appTop'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'))
+})
+
+test('a custom property whose OWN name reads as a colour gets no measurement exception and stays unsupported', () => {
+  const source = `export function AppShell() { function applyAccent() { document.documentElement.style.setProperty('--accent-color', dynamicAccent) } }`
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/unsupported' && syntax === 'dynamicAccent'))
+  assert.ok(!findings.some(({ ruleId }) => ruleId === 'ts-colors/extension-boundary'))
+})
+
+test('a raw literal set through the same custom-property sink still reports raw-color, unaffected by the boundary fix', () => {
+  const source = `function applyMetrics() { document.documentElement.style.setProperty('--app-top', '#ffffff') }`
+  const findings = paintFindings(source)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/raw-color', path, syntax: '#ffffff' }])
 })
 
 test('proven boolean operands and schema objects are non-paint while unknown selectors remain unsupported', () => {

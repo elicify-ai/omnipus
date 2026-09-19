@@ -447,6 +447,39 @@ test('reassigned className parameters remain unsupported', () => {
   assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), ['className'])
 })
 
+// P4 review finding: `style` parameters passed through JSX mirror
+// className's exact forwardClassName → extension-boundary contract
+// (forwardStyle), including the same reassignment/anonymous-owner
+// fallbacks to unsupported.
+test('style parameters passed through JSX are classified as extension boundaries', () => {
+  const source = 'export const Box = ({ style }) => <div style={style} />'
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), ['Box#style'])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), [])
+})
+
+test('named function style parameters use the receiving symbol in canonical boundary syntax', () => {
+  const source = 'export function Panel({ style }) { return <section style={style} /> }'
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), ['Panel#style'])
+})
+
+test('anonymous callback style parameters are unsupported rather than registry candidates', () => {
+  const source = 'export const nodes = values.map((style) => <div style={style} />)'
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), [])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), ['style'])
+})
+
+test('reassigned style parameters remain unsupported', () => {
+  const source = "export const Box = ({ style }) => { style = { color: 'red' }; return <div style={style} /> }"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), [])
+  assert.deepEqual(syntaxes(source, 'ts-colors/unsupported'), ['style'])
+})
+
+test('a raw style object at the same JSX attribute still reports raw findings, unaffected by forwardStyle', () => {
+  const source = "export const Box = () => <div style={{ color: '#ffffff' }} />"
+  assert.deepEqual(syntaxes(source, 'ts-colors/extension-boundary'), [])
+  assert.deepEqual(syntaxes(source, 'ts-colors/raw-color'), ['#ffffff'])
+})
+
 test('only a proven parameter member at a class sink becomes unverified governed debt', () => {
   const fixtures = [
     "const className = getClass(); export const Box = () => <div className={className} />",

@@ -238,6 +238,12 @@ export function scan(input = {}) {
     modules,
     moduleCache,
     sourceRecords: new Map(),
+    // scanHookStateLaundering's independent, silent scan of a useState
+    // initializer/setter argument — never emit ts-colors/unsupported for
+    // the opaque/runtime case there (the read-site boundary already covers
+    // it); a raw literal still reports normally through analyzeCssValue,
+    // which does not consult this flag at all.
+    silentUnsupported: false,
   }
   ctx.sourceRecords.set(sourceFile, indexModuleRecord(path, sourceFile))
 
@@ -488,7 +494,16 @@ function bindParams(ctx, parameters, owner) {
 
 function bindParameterPattern(ctx, name, declaration, ownerName, composerForward = false) {
   if (ts.isIdentifier(name)) {
-    bind(ctx, name.text, { kind: PARAMETER_BINDING, name: name.text, ownerName, declaration, reassigned: false, boolean: parameterIsBoolean(name.text, declaration, ctx), forwardClassName: name.text === 'className' || composerForward })
+    // forwardStyle mirrors forwardClassName's exact contract for a `style`
+    // parameter (P4 review finding): a top-level or destructured parameter
+    // literally named `style` is, by React/DOM convention, a CSSProperties
+    // value the caller already owns — forwarded UNCHANGED into a `style={…}`
+    // JSX attribute, never read or merged here. There is no composer
+    // equivalent for style (composerForward is a className/cn-specific
+    // concept — a rest/spread style composer would need its own contract,
+    // not this one), so unlike forwardClassName this is never OR'd with
+    // composerForward.
+    bind(ctx, name.text, { kind: PARAMETER_BINDING, name: name.text, ownerName, declaration, reassigned: false, boolean: parameterIsBoolean(name.text, declaration, ctx), forwardClassName: name.text === 'className' || composerForward, forwardStyle: name.text === 'style' })
     return
   }
   if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
@@ -553,6 +568,79 @@ function receivingSymbol(node) {
 
 function paintBoundary(node, receiver, property) {
   return { owner: receivingSymbol(node), receiver, property }
+}
+
+// React hook whose sole first argument is a callback the hook itself
+// invokes later (an effect body) rather than something the CALLER'S render
+// output depends on synchronously. Deliberately narrow: only the three
+// hooks that share this exact "runs a side-effecting callback" contract —
+// broadening to e.g. useMemo/useCallback would misattribute a value the
+// render path actually depends on.
+const REACT_EFFECT_HOOKS = new Set(['useEffect', 'useLayoutEffect', 'useInsertionEffect'])
+
+// True only when `fn` is passed as the literal first argument of a call to
+// one of REACT_EFFECT_HOOKS — the exact shape `useEffect(() => {…})` /
+// `useEffect(function () {…}, deps)` / `React.useEffect(() => {…})`.
+// Anything indirect (the callback held in a variable first, a custom hook
+// wrapping one of these) is not provable from the AST alone and returns
+// null, same as any other unprovable shape in this file.
+function directHookCallbackName(fn) {
+  const call = fn.parent
+  if (!call || !ts.isCallExpression(call) || call.arguments[0] !== fn) return null
+  const callee = unwrap(call.expression)
+  if (ts.isIdentifier(callee) && REACT_EFFECT_HOOKS.has(callee.text)) return callee.text
+  if (ts.isPropertyAccessExpression(callee) && REACT_EFFECT_HOOKS.has(callee.name.text)) return callee.name.text
+  return null
+}
+
+// A `.style.setProperty(...)` call's owner identity (P18/P6 review finding).
+// functionIdentity already gives a stable, non-anonymous identity to any
+// NAMED enclosing function — a local helper like an AppShell `applyMetrics`
+// resolves through it unchanged, no different from any other paint sink.
+// The one shape functionIdentity legitimately refuses is a truly anonymous
+// function — most commonly a React effect callback with no name of its own.
+// Only in that specific, provable case, derive a stable identity by
+// combining the nearest NAMED enclosing function with the effect hook that
+// scheduled it (`<namedAncestor>#<hookName>`, e.g. "ProfileSection#useEffect").
+// Any other shape — anonymous with no hook wrapper, or no named ancestor to
+// anchor to at all — returns 'anonymous', unchanged from today: the caller
+// must keep treating the write as unsupported.
+function setPropertyOwnerIdentity(call) {
+  let node = call
+  while (node && !isFunctionLike(node)) node = node.parent
+  if (!node) return 'anonymous'
+  const identity = functionIdentity(node)
+  if (identity !== 'anonymous') return identity
+  const hookName = directHookCallbackName(node)
+  if (!hookName) return 'anonymous'
+  let outer = node.parent
+  while (outer && !isFunctionLike(outer)) outer = outer.parent
+  if (!outer) return 'anonymous'
+  const outerIdentity = functionIdentity(outer)
+  return outerIdentity === 'anonymous' ? 'anonymous' : `${outerIdentity}#${hookName}`
+}
+
+function setPropertyBoundary(call, prop) {
+  return { owner: setPropertyOwnerIdentity(call), receiver: 'dom-style', property: prop }
+}
+
+// The one narrow, provable escape for an otherwise-unresolvable value
+// reaching a `.style.setProperty(...)` sink (P18/P6 review finding): a
+// custom property (`--*`) that is demonstrably NOT a recognized colour name.
+// isColorPropertyName gates every OTHER paint sink in this file before a
+// boundary is even constructed (inspectStyleObject only builds one for a
+// colour-named key) — setProperty is the one sink that treats EVERY custom
+// property as conservatively paint-relevant, because it cannot know a
+// consumer won't put a colour in it. A property whose own name proves it is
+// not a colour (`--app-top`, `--user-font-size`) is a live
+// measurement/adjustable-value carrier, not colour-enforcement debt; a
+// property that DOES read as a colour (`--accent-color`) gets no exception
+// here and keeps the ordinary unsupported/opaque-call treatment. Requires
+// `owner` to be resolved too (never 'anonymous') — an anonymous owner still
+// has no stable, reviewable identity to register.
+function isRuntimeMeasurementBoundary(boundary) {
+  return boundary.owner !== 'anonymous' && boundary.receiver === 'dom-style'
+    && boundary.property.startsWith('--') && !isColorPropertyName(boundary.property)
 }
 
 function assignmentBoundary(node) {
@@ -822,7 +910,13 @@ function inspectSetPropertyCall(call, ctx) {
     return
   }
   if (prop.startsWith('--') || isColorPropertyName(prop) || isCanvasPaintName(prop)) {
-    inspectCssValueExpr(valueNode, ctx, new Set())
+    // P18/P6 review finding: unlike every other paint sink in this file
+    // (inspectStyleObject, inspectPaintAssignment, the JSX colour-attribute
+    // branch), this call never constructed a boundary at all — so a
+    // genuinely runtime custom-property write (a live layout measurement,
+    // an adjustable root font size) had no way to ever become anything but
+    // permanently-unsupported, even once fully proven unresolvable.
+    inspectCssValueExpr(valueNode, ctx, new Set(), setPropertyBoundary(call, prop))
   }
 }
 
@@ -845,7 +939,14 @@ function inspectStyleExpr(node, ctx, stack) {
     if (isSkipIdent(node.text)) return
     const init = resolveIdentInit(node, ctx, stack)
     if (isParameterBinding(init)) {
-      emitUnsupported(ctx, node)
+      // Mirror of inspectClassExpr's forwardClassName → emitExtensionBoundary
+      // path (P4 review finding): a `style` parameter, UNCHANGED and passed
+      // straight into a `style={…}` JSX attribute, is caller pass-through —
+      // the caller's own argument was already validated at ITS call site.
+      // Reassigned or anonymous-owner bindings keep the conservative
+      // unsupported fallback, same as className.
+      if (init.forwardStyle && !init.reassigned && init.ownerName !== 'anonymous') emitExtensionBoundary(ctx, node, init)
+      else emitUnsupported(ctx, node)
       return
     }
     if (init === LOOKUP_MISSING || init === LOOKUP_UNBOUND || !init) {
@@ -952,7 +1053,7 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
     return
   }
   if (ts.isTemplateExpression(node)) {
-    inspectTemplate(node, ctx, 'css', stack)
+    inspectTemplate(node, ctx, 'css', stack, boundary)
     return
   }
   if (ts.isIdentifier(node)) {
@@ -970,11 +1071,53 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
     if (init === LOOKUP_MISSING || init === LOOKUP_UNBOUND || !init) {
       const destructured = resolveDestructuredTargets(node, ctx, stack)
       if (destructured) {
-        if (!destructured.resolved) { emitUnsupported(ctx, node); return }
+        if (!destructured.resolved) {
+          // Deliberately NOT a blanket "any boundary" escape (would break
+          // the adversarial suite's opaque-destructuring invariant: e.g.
+          // `const { color } = fileTypeMeta(...)` must stay unsupported
+          // forever, regardless of any boundary, because the SOURCE is an
+          // arbitrary unprovable call — that is exactly what "stays
+          // unsupported" means). isRuntimeMeasurementBoundary is the one
+          // narrow, provable exception (P18 review finding): a live
+          // layout/geometry measurement surfaced ONLY through
+          // `.style.setProperty('--custom-prop', …)` on a property that is
+          // demonstrably not a colour name at all (isColorPropertyName
+          // false) — the scanner treats every `--*` custom property as a
+          // conservative paint sink by construction (it cannot know a
+          // consumer won't put a colour in it), but `--app-top` etc. are
+          // provably NOT colour-named, unlike the adversarial suite's
+          // `color` sink.
+          if (boundary && isRuntimeMeasurementBoundary(boundary)) emitRuntimePaintBoundary(ctx, node, boundary)
+          else emitUnsupported(ctx, node)
+          return
+        }
         for (const target of destructured.targets) inspectCssValueExpr(target, ctx, stack, boundary)
         return
       }
-      emitUnsupported(ctx, node)
+      // Same "not a blanket escape" reasoning as above, for the plain case:
+      // not a destructuring binding at all. isRuntimeMeasurementBoundary
+      // covers P18/P6's non-colour custom-property shape; hookStateLocal is
+      // the OTHER narrow, provable exception (P17/P6 review finding) for a
+      // REAL colour property — `const [selectedColor] = useState(...)` is
+      // not an arbitrary opaque call the way `const [color] =
+      // fileTypeMeta()` is (the adversarial suite's "array-destructured
+      // bindings stay unsupported" case, which must keep failing): useState
+      // guarantees the bound identifier holds exactly whatever its OWN
+      // setter last wrote, nothing else, ever — PROVIDED every write is
+      // visible (hookStateLocal itself voids the proof, returning null, the
+      // moment the setter escapes to somewhere this file cannot see every
+      // call of). scanHookStateLaundering closes the laundering gap a lead
+      // review caught (2026-09-19): a registered exception at THIS read site
+      // must never become a free pass for a raw colour literal smuggled in
+      // through the initial value or a later setter call — those are
+      // independently scanned every time this exact exception is reached,
+      // so a raw literal there still reports ts-colors/raw-color.
+      const hookState = boundary && boundary.owner !== 'anonymous' && !isRuntimeMeasurementBoundary(boundary) ? hookStateLocal(node) : null
+      if (boundary && boundary.owner !== 'anonymous' && (isRuntimeMeasurementBoundary(boundary) || hookState)) {
+        if (hookState) scanHookStateLaundering(hookState, ctx)
+        emitRuntimePaintBoundary(ctx, node, boundary)
+      }
+      else emitUnsupported(ctx, node)
       return
     }
     // Marker keyed by this identifier occurrence's own source position, not
@@ -1814,7 +1957,7 @@ function isDefinitelyBoolean(node, ctx) {
     || new RegExp(`\\b${node.text}\\s*\\??\\s*:\\s*boolean\\b`).test(type.getText())
 }
 
-function inspectTemplate(node, ctx, mode, stack) {
+function inspectTemplate(node, ctx, mode, stack, boundary = null) {
   const parts = [node.head.text]
   let unresolved = false
   for (const span of node.templateSpans) {
@@ -1824,18 +1967,26 @@ function inspectTemplate(node, ctx, mode, stack) {
       // class mode's per-span fan-out below: a css-value template can
       // assemble a compound functional value (e.g. linear-gradient(...)), so
       // an unverified RUNTIME value (parameter, opaque call, extension
-      // boundary) must never be spliced into it — that would be genuine
-      // CSS-syntax-injection surface, unlike a whitespace-separated Tailwind
-      // class list. Only a destructured member whose every resolved source
-      // object is provably fixed at build time (a plain string literal in
-      // every branch of a local/imported pure factory — the fileTypeMeta
-      // shape: `const { color } = fileTypeMeta(...)`) counts as "the base
-      // value is proven"; a bare `${value}` reaching a parameter/boundary
-      // keeps the unconditional numeric-proof requirement below untouched
-      // (named numeric proof adversarial suite). css-decl and css-text also
-      // stay untouched: a template there can span multiple declarations or
-      // property names, which this literal-only proof does not model.
+      // boundary) must never be spliced into it AS SAFE — that would be
+      // genuine CSS-syntax-injection surface, unlike a whitespace-separated
+      // Tailwind class list. Only a destructured member whose every resolved
+      // source object is provably fixed at build time (a plain string
+      // literal in every branch of a local/imported pure factory — the
+      // fileTypeMeta shape: `const { color } = fileTypeMeta(...)`) counts as
+      // "the base value is proven"; a bare `${value}` reaching a
+      // parameter/boundary keeps the unconditional numeric-proof requirement
+      // below untouched (named numeric proof adversarial suite). css-decl
+      // and css-text also stay untouched: a template there can span
+      // multiple declarations or property names, which this literal-only
+      // proof does not model. runtimeBoundarySpan below is not a THIRD
+      // "treat as safe" escape — it stays exactly as blocking as unresolved
+      // (a real, registrable extension-boundary finding is emitted for the
+      // span instead of a whole-template unsupported); it never contributes
+      // its unproven text to `combined` (still pushes '' below), so it
+      // cannot become an unscanned splice into whatever analyzeCssValue
+      // eventually sees.
       const literalTargets = mode === 'css' ? literalDestructuredTemplateTargets(span.expression, ctx, stack) : null
+      const runtimeBoundarySpan = mode === 'css' ? runtimeBoundaryTemplateSpan(span.expression, ctx, stack, boundary) : null
       if (mode === 'class') {
         const expression = unwrap(span.expression)
         const binding = ts.isIdentifier(expression) ? resolveIdentInit(expression, ctx, stack) : null
@@ -1844,6 +1995,9 @@ function inspectTemplate(node, ctx, mode, stack) {
       }
       else if (literalTargets) {
         for (const target of literalTargets) analyzeCssValue(target.text, ctx, target)
+      }
+      else if (runtimeBoundarySpan) {
+        emitRuntimePaintBoundary(ctx, runtimeBoundarySpan, boundary)
       }
       else if (!isDefinitelyNumeric(span.expression, ctx)) unresolved = true
       parts.push('')
@@ -2102,6 +2256,143 @@ function destructuredBindingElement(ident) {
   return null
 }
 
+// The one narrow, provable exception for an ARRAY-destructured local (P17/P6
+// review finding): `const [x] = useState(...)` / `React.useState(...)`.
+// Array patterns are otherwise never proven here at all — destructuredElementOf
+// deliberately refuses them ("index is not a stable key": a sibling helper
+// swapping return order would silently rebind every existing consumer, and
+// the adversarial suite's "array-destructured bindings stay unsupported"
+// case exists specifically to keep an ARBITRARY `const [x] = someCall()`
+// blocked forever). useState is not arbitrary: it is a fixed, single-purpose
+// React API whose contract guarantees the bound identifier holds exactly
+// whatever value its OWN paired setter last wrote — never anything from
+// another source — so this checks the exact literal callee shape, nothing
+// broader (no aliasing through an intermediate variable, no custom hook
+// wrapping useState, no `React.useState` behind a renamed import — all of
+// those stay unresolved, matching how narrowly composerForwardParameter and
+// forwardClassName are drawn elsewhere in this file).
+// Returns a descriptor — { declaration, initializer, setterCalls, owner } —
+// only when EVERY write this state could ever receive is visible and
+// accounted for; returns null otherwise (not a useState local at all, OR a
+// useState local whose setter escapes — see setterUsage below). The
+// descriptor's setterCalls (every direct `setX(...)` call site within the
+// owning component) and initializer are what scanHookStateLaundering scans
+// afterwards (2026-09-19 lead review: a registered read-site exception must
+// never become a free pass for a raw colour literal smuggled in through
+// EITHER the initial value or a later setter call — closing that gap is
+// THIS function's escape proof plus scanHookStateLaundering's independent
+// scan of exactly the two places a literal could hide).
+function hookStateLocal(ident) {
+  const name = ident.text
+  for (let scope = ident.parent; scope; scope = scope.parent) {
+    if (ts.isCaseBlock(scope) || ts.isModuleBlock(scope) || ts.isClassDeclaration(scope)
+      || ts.isClassExpression(scope) || ts.isForStatement(scope) || ts.isForInStatement(scope)
+      || ts.isForOfStatement(scope)) return null
+    if (isFunctionLike(scope) && scope.parameters.some(parameter => absenceBindingHasName(parameter.name, name))) return null
+    if (ts.isCatchClause(scope) && scope.variableDeclaration && absenceBindingHasName(scope.variableDeclaration.name, name)) return null
+    if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue
+    const matches = []
+    for (const statement of scope.statements) {
+      if (!ts.isVariableStatement(statement)) continue
+      for (const declaration of statement.declarationList.declarations) {
+        if (absenceBindingHasName(declaration.name, name)) matches.push(declaration)
+      }
+    }
+    if (!matches.length) continue
+    if (matches.length !== 1) return null
+    const declaration = matches[0]
+    const pattern = declaration.name
+    if (!ts.isArrayBindingPattern(pattern)) return null
+    const bound = pattern.elements.some(element =>
+      ts.isBindingElement(element) && !element.dotDotDotToken && !element.initializer
+      && ts.isIdentifier(element.name) && element.name.text === name)
+    if (!bound) return null
+    const initializer = unwrap(declaration.initializer)
+    if (!initializer || !ts.isCallExpression(initializer)) return null
+    const callee = unwrap(initializer.expression)
+    const isUseState = (ts.isIdentifier(callee) && callee.text === 'useState')
+      || (ts.isPropertyAccessExpression(callee) && callee.name.text === 'useState')
+    if (!isUseState) return null
+    let owner = declaration.parent
+    while (owner && !isFunctionLike(owner)) owner = owner.parent
+    if (!owner) return null
+    // The setter is always array position 1 (array destructuring has no
+    // renaming concept — position IS the binding). Anything other than a
+    // plain, simple identifier there (missing entirely, a rest element, a
+    // default, a nested pattern — none of these are realistic React code)
+    // means no NAME ever reaches anywhere this file could call it from, so
+    // there is nothing to scan and nothing that could escape either.
+    const setterElement = pattern.elements[1]
+    const setterIsNamed = setterElement && ts.isBindingElement(setterElement)
+      && !setterElement.dotDotDotToken && !setterElement.initializer && ts.isIdentifier(setterElement.name)
+    if (!setterIsNamed) return { declaration, initializer, setterCalls: [], owner }
+    const usage = setterUsage(owner, setterElement.name.text, setterElement.name)
+    if (usage === null) return null // the setter escapes — void the whole proof, not just one argument
+    return { declaration, initializer, setterCalls: usage, owner }
+  }
+  return null
+}
+
+// Walks the owning component for every reference to a state setter's name,
+// classifying each as either a direct call (`setX(...)`, collected so
+// scanHookStateLaundering can inspect its argument) or an ESCAPE — passed to
+// another function/component, returned, assigned to another variable,
+// spread, or anything else that is not literally the callee of a call
+// expression. An escape means a write could originate somewhere this file
+// never sees, so the caller must void the entire useState exception (return
+// null), not merely skip counting that one reference — this is the fix for
+// the exact gap the lead's bcc-setter-probe and a hypothetical
+// `onSave={setColor}` prop-forward would otherwise both fall through.
+// `declaredNameNode` (the setter's OWN binding-element identifier) is
+// excluded from the walk so the declaration site itself is never mistaken
+// for a use.
+function setterUsage(owner, setterName, declaredNameNode) {
+  const calls = []
+  let escaped = false
+  const visit = (node) => {
+    if (!node) return
+    if (node !== declaredNameNode && ts.isIdentifier(node) && node.text === setterName) {
+      const parent = node.parent
+      if (parent && ts.isCallExpression(parent) && unwrap(parent.expression) === node) calls.push(parent)
+      else escaped = true
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(owner.body ?? owner)
+  return escaped ? null : calls
+}
+
+// Independently scans the two places a raw colour literal could be
+// laundered through an already-registered useState exception: the
+// useState(...) call's own initial-value argument, and every argument ever
+// passed to the paired setter within the owning component (setterCalls is
+// already proven complete — hookStateLocal returns null instead whenever
+// the setter escapes). Silences ts-colors/unsupported for the duration (via
+// ctx.silentUnsupported) — an opaque or runtime argument here (a parameter,
+// `agent.color`, a callback parameter) adds nothing extra; the read-site
+// boundary already covers it. A functional update's own return value(s)
+// (`setC(prev => '#f00')`) are scanned the same way a plain argument is.
+function scanHookStateLaundering(state, ctx) {
+  const wasSilent = ctx.silentUnsupported
+  ctx.silentUnsupported = true
+  try {
+    scanStateValueArgument(state.initializer.arguments[0], ctx)
+    for (const call of state.setterCalls) scanStateValueArgument(call.arguments[0], ctx)
+  } finally {
+    ctx.silentUnsupported = wasSilent
+  }
+}
+
+function scanStateValueArgument(argument, ctx) {
+  if (!argument) return
+  const node = unwrap(argument)
+  if (node && (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) && node.body) {
+    for (const returned of collectReturns(node)) scanStateValueArgument(returned, ctx)
+    return
+  }
+  inspectCssValueExpr(argument, ctx, new Set())
+}
+
 // Only a simple, unrenamed-or-renamed, non-rest, non-default, non-nested
 // element is a stable proof target. A rest collection, a default fallback
 // value, or a nested sub-pattern each carry aggregation/fallback semantics
@@ -2211,6 +2502,46 @@ function literalDestructuredTemplateTargets(expression, ctx, stack) {
   return destructured.targets
 }
 
+// css-mode template escape hatch for a plain LOCAL identifier span (P6
+// review finding) — deliberately NEVER a parameter or an opaque call: this
+// mirrors inspectCssValueExpr's own unresolved-identifier boundary check
+// (same file, same rule), applied to a template SPAN instead of a bare
+// value. Returns the span's own identifier node — for the caller to
+// register as an exact, reviewable extension boundary — only when EVERY
+// other avenue this file has for proving the span is exhausted: it is a
+// bare identifier (never a nested expression — the "AST-normalized
+// expression" identity requirement stays exact, one finding per site), it
+// is not a parameter (a parameter/opaque call inside a template stays
+// governed by the comment above, unchanged), and it does not resolve
+// (LOOKUP_UNBOUND/MISSING, or a destructuring proof that could not
+// complete) — with a KNOWN paint-sink boundary available. Returns null for
+// anything else (no boundary, a parameter, an opaque call, or a value this
+// file CAN still resolve), leaving the pre-existing behaviour untouched.
+function runtimeBoundaryTemplateSpan(expression, ctx, stack, boundary) {
+  if (!boundary) return null
+  const node = unwrap(expression)
+  if (!node || !ts.isIdentifier(node) || isSkipIdent(node.text)) return null
+  // Same two narrow, provable exceptions as inspectCssValueExpr's own
+  // unresolved-identifier boundary check — never a blanket "any boundary"
+  // escape (see isRuntimeMeasurementBoundary's and hookStateLocal's own
+  // comments for why: the adversarial suite's opaque-call/opaque-array
+  // destructuring cases must stay unsupported even inside a template span).
+  if (boundary.owner === 'anonymous') return null
+  const hookState = isRuntimeMeasurementBoundary(boundary) ? null : hookStateLocal(node)
+  if (!isRuntimeMeasurementBoundary(boundary) && !hookState) return null
+  // Same laundering close as inspectCssValueExpr's own hookStateLocal branch
+  // (2026-09-19 lead review): the exact same exception, reached through a
+  // template span instead of a bare value, must not let a raw literal
+  // smuggled through the initial value or a setter call go unreported.
+  if (hookState) scanHookStateLaundering(hookState, ctx)
+  const init = resolveIdentInit(node, ctx, stack)
+  if (isParameterBinding(init) || POSITIONAL_UNSTABLE_INITS.has(init)) return null
+  if (init !== LOOKUP_MISSING && init !== LOOKUP_UNBOUND && init) return null
+  const destructured = resolveDestructuredTargets(node, ctx, stack)
+  if (destructured?.resolved) return null
+  return node
+}
+
 // A parameter is owned by its function; its runtime value comes from the
 // active caller/callee frame's call argument, or the parameter default, or —
 // when no frame is being resolved — the walk-time binding of that same
@@ -2290,7 +2621,7 @@ function positionalParameterInit(owner, name, ctx) {
     // forwardClassName → extension-boundary path applies uniformly.
     if (!bindable) {
       if (composerForwardParameter(parameter, owner)) {
-        return { kind: PARAMETER_BINDING, name, ownerName: functionIdentity(owner), declaration: parameter, reassigned: false, boolean: false, forwardClassName: true }
+        return { kind: PARAMETER_BINDING, name, ownerName: functionIdentity(owner), declaration: parameter, reassigned: false, boolean: false, forwardClassName: true, forwardStyle: false }
       }
       return LOOKUP_UNBOUND
     }
@@ -3016,6 +3347,11 @@ function emitUndefined(ctx, node, syntax, occurrenceKey) {
 }
 
 function emitUnsupported(ctx, node) {
+  // See scanHookStateLaundering: while silenced, an opaque/runtime argument
+  // adds nothing extra (the read-site boundary already covers it) — but a
+  // raw literal still reaches analyzeCssValue/emit('raw-color', ...)
+  // unconditionally beforehand, since this function is never on that path.
+  if (ctx.silentUnsupported) return
   emit(ctx, node, {
     ruleId: 'ts-colors/unsupported',
     syntax: printUnsupported(ctx.sourceFile, node),
@@ -3029,7 +3365,7 @@ function emitExtensionBoundary(ctx, node, binding) {
   emit(ctx, node, {
     ruleId: 'ts-colors/extension-boundary',
     syntax: `${binding.ownerName}#${binding.name}`,
-    message: `Unchanged className parameter forwarded from its declaration at ${declaration.line + 1}:${declaration.character + 1}; this remains blocking until its exact extension boundary is centrally reviewed.`,
+    message: `Unchanged ${binding.name} parameter forwarded from its declaration at ${declaration.line + 1}:${declaration.character + 1}; this remains blocking until its exact extension boundary is centrally reviewed.`,
   })
 }
 
