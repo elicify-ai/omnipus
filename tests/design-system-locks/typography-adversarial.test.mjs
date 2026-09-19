@@ -570,3 +570,227 @@ describe('capability: absence-of-member proof requires the ts-colors absenceValu
     } })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Independent review, round 2 (dist/design-system-baseline/cli-lanes/claude-typography-review/review.md):
+// Finding 1 (BLOCKING) — a same-file `const RECORD = {...}` mutated AFTER
+// declaration (direct member write or Object.assign) resolved to the STALE
+// pre-mutation literal with ZERO findings via localCandidates (the plain
+// object-literal record path) and via resolveRecordObjectLiteral's LOCAL
+// branch (the classCarryingLeaves leaf-reduction path) — neither had any
+// mutation-safety check at all, unlike the guarded call/conditional-owner
+// path (absenceBindingUsesSafe). Finding 2 (BLOCKING) — an IMPORTED record
+// mutated by the IMPORTING module (`import { SIZES } from './sizes';
+// SIZES.small = '...'`) resolved to the stale exporter-time literal with
+// ZERO findings via resolveImportedExpression (no const check, no
+// same-module check, no cross-module check at all) and via
+// resolveRecordObjectLiteral's/importedRecordAllValues' imported branches
+// (same-module check only — invisible to a mutation performed in a
+// DIFFERENT `ts.SourceFile`). Finding 3 (HIGH) — a self- or mutually-
+// recursive helper used directly as a class value crashed with
+// `RangeError: Maximum call stack size exceeded` via finiteCallReturns/
+// walkClassExpression's direct CallExpression resolution, which had no
+// cycle guard (unlike classCarryingLeaves' own node-identity `seen` set).
+// Every FORBIDDEN case below returned `(NONE)`/threw before this fix — see
+// dist/design-system-baseline/cli-lanes/claude-typography-fix2/summary.md.
+// ---------------------------------------------------------------------------
+
+describe('independent review round 2: record-mutation and recursion-cycle guards (Findings 1-3)', () => {
+  describe('Finding 1 — same-file record mutated after declaration', () => {
+    it('FORBIDDEN: a direct member write onto a local record after declaration fails closed (localCandidates literal-key path)', () => {
+      expectOne(
+        "const SIZES = { small: 'text-lg' }\nSIZES.small = 'text-[10px]'\nexport function X() { return <div className={SIZES.small} /> }",
+        'typography/unsupported-text-utility',
+        'SIZES.small',
+      )
+    })
+
+    it('FORBIDDEN: Object.assign onto a local record after declaration fails closed (localCandidates literal-key path)', () => {
+      expectOne(
+        "const config = { small: 'text-lg' }\nObject.assign(config, { small: 'text-[10px]' })\nexport function X() { return <div className={config.small} /> }",
+        'typography/unsupported-text-utility',
+        'config.small',
+      )
+    })
+
+    it('FORBIDDEN: a mutated local record reached through a DYNAMIC key still fails closed (localCandidates enumerate-all path)', () => {
+      expectOne(
+        "const SIZES = { small: 'text-lg' }\nSIZES.small = 'text-[10px]'\nexport function X({ key }) { return <div className={SIZES[key]} /> }",
+        'typography/unsupported-text-utility',
+        'SIZES[key]',
+      )
+    })
+
+    it('FORBIDDEN: a mutated local record reached through classCarryingLeaves\' own leaf-reduction (resolveRecordObjectLiteral LOCAL branch, distinct code path from localCandidates)', () => {
+      expectOne(
+        `
+        const PRIORITY_BADGE = {
+          1: { label: 'P1', className: 'bg-red-500' },
+          3: { label: 'P3', className: 'bg-amber-500' },
+        }
+        PRIORITY_BADGE[1] = { label: 'P1', className: 'text-[10px]' }
+        export function Card({ priority }) {
+          const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
+          return <span className={cn('base', badge.className)}>{badge.label}</span>
+        }
+      `,
+        'typography/unsupported-text-utility',
+        'badge.className',
+      )
+    })
+
+    it('PERMITTED (positive control): a NEVER-mutated local record still resolves cleanly through classCarryingLeaves (no regression from the new local-mutation guard)', () => {
+      expectClean(`
+        const PRIORITY_BADGE = {
+          1: { label: 'P1', className: 'bg-red-500' },
+          3: { label: 'P3', className: 'bg-amber-500' },
+        }
+        export function Card({ priority }) {
+          const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
+          return <span className={cn('base', badge.className)}>{badge.label}</span>
+        }
+      `)
+    })
+  })
+
+  describe('Finding 2 — imported record mutated by the importing module', () => {
+    it('FORBIDDEN: an imported record mutated by the IMPORTER (literal key) fails closed even though the exporting module never mutates it itself (resolveImportedExpression)', () => {
+      const source = "import { SIZES } from './sizes'\nSIZES.small = 'text-[10px]'\nexport function X() { return <div className={SIZES.small} /> }"
+      expectOne(source, 'typography/unsupported-text-utility', 'SIZES.small', { modules: {
+        'src/fixture.tsx': source,
+        'src/sizes.ts': "export const SIZES = { small: 'text-lg' }",
+      } })
+    })
+
+    it('FORBIDDEN: an imported record mutated by the IMPORTER (dynamic key) fails closed (importedRecordAllValues cross-module check)', () => {
+      const source = "import { SIZES } from './sizes'\nSIZES.small = 'text-[10px]'\nexport function X({ key }) { return <div className={SIZES[key]} /> }"
+      expectOne(source, 'typography/unsupported-text-utility', 'SIZES[key]', { modules: {
+        'src/fixture.tsx': source,
+        'src/sizes.ts': "export const SIZES = { small: 'text-lg' }",
+      } })
+    })
+
+    it('FORBIDDEN: an imported record mutated by the IMPORTER, reached through classCarryingLeaves\' `??` chain, fails closed (resolveRecordObjectLiteral IMPORTED branch cross-module check)', () => {
+      const source = `
+        import { PRIORITY_BADGE } from './priority'
+        export function Card({ priority }) {
+          const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
+          return <span className={cn('base', badge.className)}>{badge.label}</span>
+        }
+        PRIORITY_BADGE[1] = { label: 'P1', className: 'text-[10px]' }
+      `
+      expectOne(source, 'typography/unsupported-text-utility', 'badge.className', { modules: {
+        'src/fixture.tsx': source,
+        'src/priority.ts': "export const PRIORITY_BADGE = { 1: { label: 'P1', className: 'bg-red-500' }, 3: { label: 'P3', className: 'bg-amber-500' } }",
+      } })
+    })
+
+    it('PERMITTED (positive control): an imported record mutated by NEITHER the exporter NOR any importer still resolves cleanly through classCarryingLeaves (no regression from the new cross-module guard)', () => {
+      const source = `
+        import { PRIORITY_BADGE } from './priority'
+        export function Card({ priority }) {
+          const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
+          return <span className={cn('base', badge.className)}>{badge.label}</span>
+        }
+      `
+      expectClean(source, { modules: {
+        'src/fixture.tsx': source,
+        'src/priority.ts': "export const PRIORITY_BADGE = { 1: { label: 'P1', className: 'bg-red-500' }, 3: { label: 'P3', className: 'bg-amber-500' } }",
+      } })
+    })
+  })
+
+  describe('Finding 3 — self- and mutually-recursive helpers must fail closed, never throw', () => {
+    it('FORBIDDEN: a self-recursive helper used directly as a class value resolves its literal branch and fails the recursive branch closed, without throwing', () => {
+      const found = findings("function help(n) { if (n > 0) return help(n - 1); return 'text-[10px]' }\nexport function X({n}) { return <div className={help(n)} /> }")
+      assert.deepEqual(
+        found.map((f) => `${f.ruleId} ${f.syntax}`).sort(),
+        ['typography/arbitrary-text-size text-[10px]', 'typography/unsupported-text-utility help(n - 1)'].sort(),
+      )
+    })
+
+    it('FORBIDDEN: mutually recursive helpers (A calls B, B calls A) used directly as a class value fail closed on the cyclic branch, without throwing', () => {
+      const found = findings(
+        "function helpA(n) { if (n > 0) return helpB(n - 1); return 'text-[10px]' }\nfunction helpB(n) { if (n > 0) return helpA(n - 1); return 'text-lg' }\nexport function X({n}) { return <div className={helpA(n)} /> }",
+      )
+      assert.deepEqual(
+        found.map((f) => `${f.ruleId} ${f.syntax}`).sort(),
+        ['typography/arbitrary-text-size text-[10px]', 'typography/unsupported-text-utility helpA(n - 1)'].sort(),
+      )
+    })
+
+    it('PERMITTED (positive control): sibling, non-nested calls to the SAME non-recursive helper both still resolve (the cycle-guard push/pop must not leak across sibling calls)', () => {
+      expectOne(
+        "function help(active) { if (active) return 'text-lg'; return 'text-[10px]' }\nexport function X({a, b}) { return <div className={cn(help(a), help(b))} /> }",
+        'typography/arbitrary-text-size',
+        'text-[10px]',
+      )
+    })
+
+    it('PERMITTED (positive control): a deep but FINITE non-recursive call chain (A calls B calls C, no cycle) still resolves (the cycle guard must not over-trigger on ordinary depth)', () => {
+      expectOne(
+        "function C() { return 'text-[10px]' }\nfunction B() { return C() }\nfunction A() { return B() }\nexport function X() { return <div className={A()} /> }",
+        'typography/arbitrary-text-size',
+        'text-[10px]',
+      )
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Two further guards ported from ts-colors.mjs while closing Findings 1-3,
+  // both found missing via a REAL-TREE audit run (dist/design-system-baseline/
+  // cli-lanes/claude-typography-fix2/audit-final.json vs claude-lead's
+  // audit-typo-fix.json baseline) after the Finding 1-3 fixes above initially
+  // over-blocked real, never-mutated source:
+  //   - isReadonlyObjectStaticCallArgument/READONLY_OBJECT_STATIC_METHODS:
+  //     src/components/workspaces/ListView.tsx's `Object.keys(PRIORITY_BADGE)`
+  //     (a read-only, non-mutating static call) wrongly disqualified EVERY
+  //     other `.prop`/`[key]` read of the same never-mutated imported record
+  //     once exportNeverMutatedByImporters started scanning importer usage.
+  //   - scoping the never-mutated-MEMBER proof to record (object/array
+  //     literal) values only: src/components/library/LibraryPreviewPane.tsx's
+  //     `LIBRARY_ICON_BTN` (a plain string built by concatenation, referenced
+  //     directly as `className={LIBRARY_ICON_BTN}`) was wrongly required to
+  //     be used ONLY via `.prop`/`[key]` access everywhere — the correct
+  //     question for a `const` primitive (which cannot be reassigned by the
+  //     language itself and has no mutable members) is simply "is it const",
+  //     not "is every reference a property access".
+  // -------------------------------------------------------------------------
+  describe('real-tree precision fixes: isReadonlyObjectStaticCallArgument and record-literal-only scoping', () => {
+    const priorityModules = (extraImporter) => ({
+      'src/fixture.tsx': null, // filled in per-test below
+      'src/priority.ts': "export const PRIORITY_BADGE = { 1: { label: 'P1', className: 'bg-red-500' }, 3: { label: 'P3', className: 'bg-amber-500' } }",
+      ...extraImporter,
+    })
+
+    it('PERMITTED (positive control): Object.keys(RECORD) by ONE importer must not block a property read by ANOTHER importer of the same never-mutated record', () => {
+      const source = "import { PRIORITY_BADGE } from './priority'\nexport function Card({ priority }) { const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]; return <span className={cn('base', badge.className)}>{badge.label}</span> }"
+      const modules = priorityModules({ 'src/keys.ts': "import { PRIORITY_BADGE } from './priority'\nexport const PRIORITY_KEYS = Object.keys(PRIORITY_BADGE)" })
+      modules['src/fixture.tsx'] = source
+      expectClean(source, { modules })
+    })
+
+    it('FORBIDDEN (control): passing the SAME record bare to an ARBITRARY (non-readonly-static) function by another importer still fails closed — the exemption is narrow, not blanket', () => {
+      const source = "import { PRIORITY_BADGE } from './priority'\nexport function Card({ priority }) { const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]; return <span className={cn('base', badge.className)}>{badge.label}</span> }"
+      const modules = priorityModules({ 'src/other.ts': "import { PRIORITY_BADGE } from './priority'\nsomeExternalFn(PRIORITY_BADGE)" })
+      modules['src/fixture.tsx'] = source
+      expectOne(source, 'typography/unsupported-text-utility', 'badge.className', { modules })
+    })
+
+    it('PERMITTED (positive control): a plain (non-record) imported const built by string concatenation, referenced directly as the whole class value, resolves cleanly even though its OWN declaring module also references it bare (LIBRARY_ICON_BTN-shaped)', () => {
+      const source = "import { ICON_BTN } from './icon'\nexport function X() { return <div className={ICON_BTN} /> }"
+      expectClean(source, { modules: {
+        'src/fixture.tsx': source,
+        'src/icon.tsx': "export const ICON_BTN = 'flex h-7 w-7 ' + 'items-center justify-center'\nexport function Local() { return <button className={ICON_BTN} /> }",
+      } })
+    })
+
+    it('FORBIDDEN (control): the record-literal scoping does not exempt an ACTUAL below-floor literal reached through the plain-value path — it only skips the record-mutation proof, not classification itself', () => {
+      const source = "import { ICON_BTN } from './icon'\nexport function X() { return <div className={ICON_BTN} /> }"
+      expectOne(source, 'typography/text-size-below-floor', 'text-xs', { modules: {
+        'src/fixture.tsx': source,
+        'src/icon.tsx': "export const ICON_BTN = 'flex h-7 w-7 ' + 'text-xs'\nexport function Local() { return <button className={ICON_BTN} /> }",
+      } })
+    })
+  })
+})

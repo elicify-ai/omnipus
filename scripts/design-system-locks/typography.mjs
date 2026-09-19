@@ -1219,6 +1219,14 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
 
 function createClassWalker({ report, positionAt, sourceFile, registeredTokens, bindings, duplicateBindings, forwardedClassBoundary, parameterMemberBoundary, scannedParameterDefaults, moduleContext, handledCalls }) {
   const nodeHelpers = createClassNodeHelpers(sourceFile)
+  // Finding 3 fix, round 2: declarations currently "in progress" on the
+  // active finite-call resolution chain (push before walking a resolved
+  // call's returns, pop after) — see finiteCallReturns' declarationMarker
+  // doc comment. Scoped to one walker/file, not permanently accumulating:
+  // a marker is only ever present while its own subtree is still being
+  // walked, so sibling (non-nested) calls to the same helper elsewhere are
+  // never wrongly blocked.
+  const finiteCallStack = new Set()
   // A sink bound to one source range; token positions refine it.
   function classReporterFor(node) {
     return makeSink(positionAt(node.getStart(sourceFile)))
@@ -1312,10 +1320,19 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
         // style, or BrowserLiveView's `(() => { if (...) return {...}; ...
         // })()` chip config). Tried second so the stricter, longer-proven
         // path above still wins whenever both would apply.
-        const finiteReturns = finiteCallReturns(node, moduleContext)
-        if (finiteReturns) {
-          finiteReturns.forEach((returned) => walkClassExpression(returned, sink))
-          return
+        {
+          const finiteReturns = finiteCallReturns(node, moduleContext, finiteCallStack)
+          if (finiteReturns) {
+            const declaration = calleeDeclaration(node, moduleContext)
+            const marker = declarationMarker(declaration)
+            finiteCallStack.add(marker)
+            try {
+              finiteReturns.forEach((returned) => walkClassExpression(returned, sink))
+            } finally {
+              finiteCallStack.delete(marker)
+            }
+            return
+          }
         }
         emitUnsupported(node, sink)
         return
@@ -1551,13 +1568,28 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     if (!unwrapped || !ts.isIdentifier(unwrapped)) return null
     if (duplicateBindings.has(unwrapped.text) || hasMultipleVariableDeclarations(sourceFile, unwrapped.text)) return null
     const lexical = findLexicalBinding(unwrapped, unwrapped.text)
-    const localInitializer = lexical?.initializer ?? (bindings.has(unwrapped.text) ? bindings.get(unwrapped.text) : null)
-    const local = localInitializer ? unwrapStatic(localInitializer) : null
-    if (local && ts.isObjectLiteralExpression(local)) return local
-    const declaration = importedDeclaration(unwrapped, moduleContext)
-    if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
-      && (declaration.parent.flags & ts.NodeFlags.Const) && absenceBindingUsesSafe(declaration, false, true)) {
-      const imported = unwrapStatic(declaration.initializer)
+    const localValue = lexical?.initializer ?? (bindings.has(unwrapped.text) ? bindings.get(unwrapped.text) : null)
+    const local = localValue ? unwrapStatic(localValue) : null
+    if (local && ts.isObjectLiteralExpression(local)) {
+      // LEAD DECISION (Finding 1 fix, round 2): the LOCAL branch was
+      // previously trusted purely because `bindings`/`findLexicalBinding`
+      // only ever collect `const` declarations — but const-only blocks
+      // *reassignment*, not a later member write (`config.small = '...'`)
+      // onto the SAME never-reassigned binding. Require the same
+      // never-mutated proof the imported branch below already carries.
+      const localDeclaration = lexical?.declaration ?? topLevelConstDeclaration(unwrapped.text)
+      if (!localDeclaration || !absenceBindingUsesSafe(localDeclaration, false, true)) return null
+      return local
+    }
+    const importedDecl = importedDeclaration(unwrapped, moduleContext)
+    if (importedDecl && ts.isVariableDeclaration(importedDecl) && importedDecl.initializer
+      && (importedDecl.parent.flags & ts.NodeFlags.Const) && absenceBindingUsesSafe(importedDecl, false, true)
+      // LEAD DECISION (Finding 2 fix, round 2): never-mutated-in-its-own-module
+      // is not enough — a DIFFERENT importer can still mutate the exported
+      // record's members from its own `ts.SourceFile`, invisible to the
+      // check above. Require the same proof across every governed module.
+      && exportNeverMutatedByImporters(importedDecl, moduleContext)) {
+      const imported = unwrapStatic(importedDecl.initializer)
       if (imported && ts.isObjectLiteralExpression(imported)) return imported
     }
     return null
@@ -1688,8 +1720,12 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     // itself — an exported `let`/`var` binding can be reassigned wholesale by
     // another importer, and a mutated-in-its-own-module binding can hold a
     // different shape than its initializer shows; both stay unsupported.
+    // Finding 2 fix (round 2): never-mutated-in-its-OWN-module is not
+    // enough — a DIFFERENT importer can still mutate the exported record's
+    // members from its own file, invisible to absenceBindingUsesSafe above.
     if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer
-      || !(declaration.parent.flags & ts.NodeFlags.Const) || !absenceBindingUsesSafe(declaration, false, true)) return null
+      || !(declaration.parent.flags & ts.NodeFlags.Const) || !absenceBindingUsesSafe(declaration, false, true)
+      || !exportNeverMutatedByImporters(declaration, moduleContext)) return null
     const object = unwrapStatic(declaration.initializer)
     if (!ts.isObjectLiteralExpression(object) || object.properties.some((property) => ts.isSpreadAssignment(property))) return null
     const values = []
@@ -1747,8 +1783,23 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     if (!expression || seen.has(expression)) return []
     seen.add(expression)
     if (ts.isIdentifier(expression)) {
-      const resolved = localInitializer(expression)
-      return resolved !== expression ? localCandidates(resolved, seen) : []
+      if (duplicateBindings.has(expression.text) || hasMultipleVariableDeclarations(sourceFile, expression.text)) return []
+      const lexical = findLexicalBinding(expression, expression.text)
+      const initializer = lexical?.initializer ?? (bindings.has(expression.text) ? bindings.get(expression.text) : null)
+      if (!initializer) return []
+      // LEAD DECISION (Finding 1 fix, round 2, parity with resolveProvenPropertyAccess/
+      // resolveRecordObjectLiteral's absenceBindingUsesSafe gate): a same-file
+      // binding must be proven never mutated — reassigned, aliased,
+      // Object.assign'd, or member-written anywhere in its enclosing scope,
+      // including AFTER this read site — before its declaration-time
+      // initializer is trusted as the CURRENT value. Without this,
+      // `const config = {...}; config.small = 'text-[10px]'` (or
+      // `Object.assign(config, {...})`) silently resolved to the STALE
+      // pre-mutation literal.
+      const declaration = lexical?.declaration ?? topLevelConstDeclaration(expression.text)
+      if (!declaration || !absenceBindingUsesSafe(declaration, false, true)) return []
+      const resolved = unwrapStatic(initializer)
+      return resolved ? localCandidates(resolved, seen) : []
     }
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
       const owners = localCandidates(expression.expression, new Set(seen))
@@ -2431,6 +2482,115 @@ function importedDeclaration(identifier, context) {
   return null
 }
 
+// Only a JS/TS module can contain import/export/require syntax relevant to
+// exportNeverMutatedByImporters' cross-module proof below (parity with
+// ts-colors.mjs's isJsModulePath) — an asset file (`.svg`, `.css`, …)
+// present in the governed `modules` map is irrelevant and must not be
+// treated as an (unparseable) importer candidate.
+function isGovernedModulePath(modulePath) {
+  const lower = modulePath.toLowerCase()
+  return lower.endsWith('.ts') || lower.endsWith('.tsx') || lower.endsWith('.js') || lower.endsWith('.jsx')
+    || lower.endsWith('.mts') || lower.endsWith('.cts') || lower.endsWith('.mjs') || lower.endsWith('.cjs')
+}
+
+// A template-literal dynamic import()/require() argument's HEAD is always
+// the literal prefix of whatever string it evaluates to at runtime — a
+// substitution can only append characters after it, never rewrite or erase
+// them. governedModulePath only ever resolves a specifier that itself
+// starts with '@/' or a relative '.' form. If the head cannot possibly grow
+// into one of those two forms, no runtime value of the template can EVER be
+// a governedModulePath-resolvable specifier at all — proven impossible, not
+// guessed — so it can never target `origin`. When the head IS shaped like a
+// local specifier, it must additionally share `origin`'s directory (and,
+// lacking a trailing '/', `origin`'s basename must share the head's own
+// final segment as a prefix), or it is still a provably different target.
+// Any other argument shape stays exactly as conservative as before: not
+// excluded. Ported verbatim from ts-colors.mjs's dynamicImportProvenNotOrigin
+// (parity, Finding 2 fix round 2) — without this, a SINGLE dynamic
+// import()/require() anywhere in the ENTIRE governed tree (e.g. a test
+// file's `await import('@/store/ui')`, wholly unrelated to the record being
+// proven) poisoned exportNeverMutatedByImporters for EVERY exported record
+// program-wide, not just ones the dynamic import could plausibly reach —
+// found via a real-tree audit run flagging src/components/workspaces/
+// taskStatusConfig.ts's STATUS_BADGE (genuinely never mutated anywhere)
+// solely because an unrelated test file contained an unrelated dynamic
+// import.
+function dynamicImportProvenNotOrigin(modulePath, argument, origin) {
+  if (!ts.isTemplateExpression(argument)) return false
+  const head = argument.head.text
+  if (head.startsWith('@/') || head.startsWith('./') || head.startsWith('../')) {
+    const prefix = head.startsWith('@/') ? `src/${head.slice(2)}` : path.posix.normalize(path.posix.join(path.posix.dirname(modulePath), head))
+    const prefixDir = prefix.endsWith('/') ? prefix.slice(0, -1) : path.posix.dirname(prefix)
+    const originDir = path.posix.dirname(origin)
+    if (originDir !== prefixDir) return true
+    if (prefix.endsWith('/')) return false
+    return !path.posix.basename(origin).startsWith(path.posix.basename(prefix))
+  }
+  if ('@/'.startsWith(head) || './'.startsWith(head) || '../'.startsWith(head)) return false
+  return true
+}
+
+// LEAD DECISION (Finding 2 fix, round 2 — parity with ts-colors.mjs's
+// knownClassExportUsesSafe): an exported record's declaring module cannot
+// see a member write made by ANY OTHER module that imports it — `import {
+// SIZES } from './sizes'; SIZES.small = 'text-[10px]'` mutates SIZES from a
+// different `ts.SourceFile` than the one absenceBindingUsesSafe on the
+// EXPORTING declaration can ever walk. Scan every module supplied in the
+// governed `modules` context for a static import of this export; each
+// static named import must itself pass absenceBindingUsesSafe inside the
+// IMPORTING file's own scope. A default/namespace import sharing the same
+// import statement, a type-only re-export that is not itself type-only, a
+// dynamic `import()`/`require()` PROVABLY reaching this origin module, or a
+// missing/unparseable module all fail closed (return false) rather than
+// assume safety — a dynamic import PROVABLY reaching some OTHER module is
+// not this record's concern (dynamicImportProvenNotOrigin above) and must
+// not poison every unrelated exported record in the governed tree.
+function exportNeverMutatedByImporters(declaration, context) {
+  const statement = declaration.parent?.parent
+  if (!statement || !ts.isVariableStatement(statement)) return false
+  if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return true
+  if (!context?.modules || !ts.isIdentifier(declaration.name)) return false
+  const origin = declaration.getSourceFile().fileName
+  for (const modulePath of Object.keys(context.modules)) {
+    if (!isGovernedModulePath(modulePath)) continue
+    const record = moduleRecord(context, modulePath)
+    if (!record || !record.valid) return false
+    for (const item of record.sourceFile.statements) {
+      if ((!ts.isImportDeclaration(item) && !ts.isExportDeclaration(item)) || !item.moduleSpecifier || !ts.isStringLiteral(item.moduleSpecifier)) continue
+      if (governedModulePath(modulePath, item.moduleSpecifier.text, context.modules) !== origin) continue
+      if (ts.isExportDeclaration(item)) {
+        if (!item.isTypeOnly) return false
+        continue
+      }
+      const clause = item.importClause
+      if (!clause || clause.isTypeOnly) continue
+      const named = clause.namedBindings
+      if (clause.name || (named && !ts.isNamedImports(named))) return false
+      if (named) for (const specifier of named.elements) {
+        if (specifier.isTypeOnly || (specifier.propertyName?.text ?? specifier.name.text) !== declaration.name.text) continue
+        if (!absenceBindingUsesSafe(specifier, false, true)) return false
+      }
+    }
+    let dynamic = false
+    const visitDynamic = (node) => {
+      if (dynamic) return
+      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+        const argument = node.arguments[0]
+        if (!argument) dynamic = true
+        else if (ts.isStringLiteralLike(argument)) {
+          if (governedModulePath(modulePath, argument.text, context.modules) === origin) dynamic = true
+        } else if (!dynamicImportProvenNotOrigin(modulePath, argument, origin)) dynamic = true
+        if (dynamic) return
+      }
+      node.forEachChild(visitDynamic)
+    }
+    visitDynamic(record.sourceFile)
+    if (dynamic) return false
+  }
+  return true
+}
+
 function objectProperty(object, key) {
   for (const property of object.properties) {
     if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) continue
@@ -2453,8 +2613,33 @@ function resolveImportedExpression(node, context, seen = new Set()) {
     const declaration = importedDeclaration(expression, context)
     if (!declaration || seen.has(declaration)) return null
     seen.add(declaration)
-    if (!ts.isVariableDeclaration(declaration) || !declaration.initializer) return null
+    // LEAD DECISION (Finding 2 fix, round 2): this was the un-guarded
+    // fallback path — no const check, no same-module mutation check, no
+    // cross-module mutation check — that let `import { SIZES } from
+    // './sizes'; SIZES.small = 'text-[10px]'` resolve to the stale
+    // exporter-time literal with zero findings. `const`-only is required
+    // unconditionally (a `let` export can be reassigned wholesale by its
+    // OWN module regardless of member shape).
+    if (!ts.isVariableDeclaration(declaration) || !declaration.initializer
+      || !(declaration.parent.flags & ts.NodeFlags.Const)) return null
     const initializer = unwrapStatic(declaration.initializer)
+    // The never-mutated MEMBER proof (absenceBindingUsesSafe +
+    // exportNeverMutatedByImporters) only matters when the resolved value
+    // is a RECORD (object/array literal) whose own members could later be
+    // written out from under this resolution — that IS Finding 2's exploit
+    // shape. For a plain primitive export (a string/template built by
+    // concatenation — e.g. LibraryPreviewPane.tsx's `LIBRARY_ICON_BTN`,
+    // referenced directly as `className={LIBRARY_ICON_BTN}` — the far MORE
+    // common shape), `absenceBindingUsesSafe`'s actual contract ("every
+    // reference is a property/element access") is the WRONG question: a
+    // `const` primitive cannot be reassigned by the language itself and has
+    // no mutable members, so demanding every reference be `.prop`-shaped
+    // wrongly rejected the entirely normal, safe pattern of referencing the
+    // constant directly — a real regression found via a real-tree audit run
+    // (`LIBRARY_ICON_BTN`/`LINK_CLASS`/`priorityBadge.className`-shaped
+    // constants newly, wrongly flagged unsupported).
+    const isRecordLiteral = initializer && (ts.isObjectLiteralExpression(initializer) || ts.isArrayLiteralExpression(initializer))
+    if (isRecordLiteral && (!absenceBindingUsesSafe(declaration, false, true) || !exportNeverMutatedByImporters(declaration, context))) return null
     return resolveImportedExpression(initializer, context, seen) ?? initializer
   }
   if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
@@ -2646,12 +2831,40 @@ function calleeDeclaration(call, context) {
   return imported && (ts.isFunctionDeclaration(imported) || ts.isArrowFunction(imported) || ts.isFunctionExpression(imported)) ? imported : null
 }
 
+// A stable identity for a callee declaration — filename + source position —
+// used by finiteCallReturns' cycle guard below. collectFiniteReturns is
+// deterministic per declaration (it depends only on the declaration's body,
+// never on which call site triggered resolution), so a self- or mutually-
+// recursive helper always re-resolves to the SAME declaration on every hop
+// around the cycle; keying the guard on the declaration (not the call site)
+// catches that regardless of how many distinct call-expression nodes the
+// cycle passes through.
+function declarationMarker(declaration) {
+  return `${declaration.getSourceFile().fileName}#${declaration.pos}`
+}
+
 // Every finite return-value expression a call can produce, or null if the
 // callee/body is not provably finite. A non-block (concise) arrow body is
 // trivially one expression.
-function finiteCallReturns(call, context) {
+//
+// LEAD DECISION (Finding 3 fix, round 2): a self-recursive helper
+// (`function cls(n){ return n>0 ? cls(n-1) : 'text-[10px]' }`) or a mutually
+// recursive pair has no cycle guard here on its own — this function alone
+// cannot loop (it does not call itself), but a caller that walks a returned
+// call back into finiteCallReturns again (walkClassExpression's direct
+// class-value CallExpression path does exactly this) recurses forever and
+// crashes with a RangeError instead of failing closed. `stack` lets a
+// caller mark a declaration as "currently being resolved" for the duration
+// of walking ITS returns; re-entering finiteCallReturns for the same
+// declaration while its marker is still active is a proven cycle and must
+// fail closed (null — the same "not provably finite" contract as any other
+// unsupported shape), never throw. Defaults to a fresh Set so existing
+// callers that do not thread a stack (classCarryingLeaves, which already
+// carries its own independent node-identity cycle guard) are unaffected.
+function finiteCallReturns(call, context, stack = new Set()) {
   const declaration = calleeDeclaration(call, context)
   if (!declaration?.body) return null
+  if (stack.has(declarationMarker(declaration))) return null
   if (!ts.isBlock(declaration.body)) return [declaration.body]
   return collectFiniteReturns(declaration.body.statements)
 }
@@ -2727,6 +2940,57 @@ function absenceLexicalBinding(identifier) {
   return null
 }
 
+// A resolved member value consumed purely as a JSX element's own tag name
+// (`<Icon/>`, `<driveChip.Icon/>`) is a terminal render read: React only
+// invokes/constructs the referenced value, it is never handed anything that
+// could reach back and mutate the stable record that produced it. Ported
+// from ts-colors.mjs's isJsxTagName (parity, round 2) — without this an
+// unrelated sibling property rendered as a component tag blanket-blocks
+// every OTHER property read off the SAME record purely because it isn't
+// itself a further `.member` read.
+function isJsxTagName(expression) {
+  const parent = expression.parent
+  return Boolean(parent) && (ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent) || ts.isJsxClosingElement(parent)) && parent.tagName === expression
+}
+
+// `Object.keys/freeze/isFrozen/getOwnPropertyNames(X)` are well-known,
+// spec-pure static reads that can never hand a MUTABLE reference to one of
+// `X`'s nested values back to the caller: `keys`/`getOwnPropertyNames`
+// return a fresh array of plain (immutable) strings, and `freeze`/
+// `isFrozen` only touch `X`'s own mutability flag. Ported from
+// ts-colors.mjs's isReadonlyObjectStaticCallArgument/
+// READONLY_OBJECT_STATIC_METHODS (parity, round 2) — found missing via a
+// real-tree audit run: `ListView.tsx`'s `Object.keys(PRIORITY_BADGE)` (read
+// once, for its domain of keys) wrongly disqualified EVERY other,
+// unrelated `.prop`/`[key]` read of the same never-mutated imported record
+// (`PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]`) once
+// exportNeverMutatedByImporters started scanning importer usage.
+//
+// DELIBERATELY NARROWER than ts-colors.mjs's set here: ts-colors also
+// exempts `values`/`entries` because its `knownClassDerivedUsesSafe`
+// separately, recursively re-proves that EVERY value extracted that way is
+// itself never escaped/mutated (own doc comment: "already covered by the
+// SAME per-property proof used elsewhere in this file"). That recursive
+// derived-value proof is not ported here — exempting `values`/`entries`
+// WITHOUT it would silently trust `Object.values(REC).forEach(v => { v.cls
+// = 'text-[10px]' })`, which hands back LIVE references to REC's own nested
+// objects and mutates them in place (caught red-handed by
+// tests/design-system-locks/cross-scanner-false-green.test.mjs's "Object.values
+// mutation of a nested const record" / "Object.entries mutation ..." /
+// "imported record mutated via Object.values by the importer" cases — all
+// three zero-finding bypasses while `values`/`entries` were exempted here).
+// `keys`/`freeze`/`isFrozen`/`getOwnPropertyNames` have no such hole: none
+// of them ever return a reference to a nested object at all.
+const READONLY_OBJECT_STATIC_METHODS = new Set(['keys', 'freeze', 'isFrozen', 'getOwnPropertyNames'])
+
+function isReadonlyObjectStaticCallArgument(node) {
+  const parent = node.parent
+  if (!ts.isCallExpression(parent) || parent.expression === node || !parent.arguments.includes(node)) return false
+  const callee = unwrapStatic(parent.expression)
+  return ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Object'
+    && READONLY_OBJECT_STATIC_METHODS.has(callee.name.text)
+}
+
 // A receiver may only be read through properties; a factory may only be
 // called. Whole-object references, aliases, writes, deletes, increments and
 // calls through its members escape the proof. Scanning the enclosing block
@@ -2746,6 +3010,8 @@ function absenceBindingUsesSafe(declaration, factory, indexedReads = false) {
       if (factory) {
         if (!ts.isCallExpression(parent) || parent.expression !== node) { safe = false; return }
       } else {
+        if (isJsxTagName(node)) return
+        if (isReadonlyObjectStaticCallArgument(node)) return
         if ((!ts.isPropertyAccessExpression(parent) && !ts.isElementAccessExpression(parent)) || parent.expression !== node) { safe = false; return }
         const argument = ts.isElementAccessExpression(parent) && parent.argumentExpression ? unwrapStatic(parent.argumentExpression) : null
         const property = ts.isPropertyAccessExpression(parent) ? parent.name.text
