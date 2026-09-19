@@ -106,6 +106,13 @@ The lead integrates commands, dependencies, path filters and required CI results
 
 **B exit:** all six E1 locks detect seeded violations and reject new debt. The public-component manifest lock becomes fully blocking before C1.
 
+**Stage B closure — founder decisions, 2026-09-19.**
+
+- **Unsupported findings.** Findings the scanners cannot read and cannot be taught to read soundly are closed by *exact-source repair* before B acceptance. Each repair is an invisible change: no rendered difference and no behaviour change. Repairs are applied in batches by reviewed, idempotent helper scripts (codemods) with a dry-run diff, not edited file by file. They are never baselined. GitNexus impact analysis runs for every existing symbol a script edits, and high-risk edits are escalated to the founder.
+- **Existing-debt ledger.** The lead approves the ledger, as this plan and the execution contract assign. An entry is approved only if it passes the automatic rules: an exact fingerprint, a named owner lane, a replacement and an expiry checkpoint. The founder receives a one-page summary by area, rule and repair batch instead of the full list.
+- **Review gate.** The Stage A and B gate uses `/code-review high` over the complete Stage A and B change instead of the seven-reviewer assignment.
+- **Scanner definition of done.** The shared no-silent-pass suite (`tests/design-system-locks/cross-scanner-false-green.test.mjs`) passes for every value-resolving lock.
+
 ### C1–C5. Stable application ownership
 
 Repeat the following three waves inside **each** repair batch. Complete and verify the entire batch before starting the next one. The checked-in inventory assigns every surface exactly once; the lead retains shared foundations.
