@@ -1,0 +1,1355 @@
+{
+  "version": 1,
+  "tokens": [
+    {
+      "id": "font.family.heading",
+      "css": "--font-family-heading",
+      "layer": "primitive",
+      "kind": "fontFamily",
+      "value": "'Outfit', system-ui, -apple-system, sans-serif",
+      "description": "Display and heading family; preserves the current Outfit stack."
+    },
+    {
+      "id": "font.family.body",
+      "css": "--font-family-body",
+      "layer": "primitive",
+      "kind": "fontFamily",
+      "value": "'Inter', system-ui, -apple-system, sans-serif",
+      "description": "Interface and body family; preserves the current Inter stack."
+    },
+    {
+      "id": "font.family.mono",
+      "css": "--font-family-mono",
+      "layer": "primitive",
+      "kind": "fontFamily",
+      "value": "'JetBrains Mono', ui-monospace, monospace",
+      "description": "Code, identifiers and aligned technical-data family."
+    },
+    {
+      "id": "font.size.floor",
+      "css": "--font-size-floor",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "12px",
+      "description": "Hard minimum computed size for all interface text."
+    },
+    {
+      "id": "font.root.minimum",
+      "css": "--font-root-minimum",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "12px",
+      "description": "Minimum user-adjustable product root size."
+    },
+    {
+      "id": "font.root.default",
+      "css": "--font-root-default",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "14px",
+      "description": "Current default product root size."
+    },
+    {
+      "id": "font.root.maximum",
+      "css": "--font-root-maximum",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "20px",
+      "description": "Maximum user-adjustable product root size."
+    },
+    {
+      "id": "font.size.display",
+      "css": "--font-size-display",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "3rem",
+      "description": "Current product display size at the adjustable root.",
+      "responsive": true
+    },
+    {
+      "id": "font.size.pageTitle",
+      "css": "--font-size-page-title",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "1.875rem",
+      "description": "Current product page-title size at the adjustable root.",
+      "responsive": true
+    },
+    {
+      "id": "font.size.sectionTitle",
+      "css": "--font-size-section-title",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "1.125rem",
+      "description": "Current section-title size at the adjustable root.",
+      "responsive": true
+    },
+    {
+      "id": "font.size.body",
+      "css": "--font-size-body",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "1rem",
+      "description": "Current standard product body size at the adjustable root.",
+      "responsive": true
+    },
+    {
+      "id": "font.size.bodyCompact",
+      "css": "--font-size-body-compact",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "max(12px, 0.875rem)",
+      "description": "Current compact body size with the constitutional 12px floor.",
+      "responsive": true
+    },
+    {
+      "id": "font.size.utilityXs",
+      "css": "--font-size-utility-xs",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "max(12px, 0.75rem)",
+      "description": "Preserved Tailwind extra-small utility size with the constitutional 12px floor.",
+      "responsive": true
+    },
+    {
+      "id": "font.size.caption",
+      "css": "--font-size-caption",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "max(12px, 0.857142857rem)",
+      "description": "Dense caption and label size normalized to the 12px floor.",
+      "responsive": true
+    },
+    {
+      "id": "font.size.code",
+      "css": "--font-size-code",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "max(12px, 0.875rem)",
+      "description": "Compact technical text size with the constitutional 12px floor.",
+      "responsive": true
+    },
+    {
+      "id": "font.weight.regular",
+      "css": "--font-weight-regular",
+      "layer": "primitive",
+      "kind": "fontWeight",
+      "value": 400,
+      "description": "Regular text weight."
+    },
+    {
+      "id": "font.weight.medium",
+      "css": "--font-weight-medium",
+      "layer": "primitive",
+      "kind": "fontWeight",
+      "value": 500,
+      "description": "Medium label and caption weight."
+    },
+    {
+      "id": "font.weight.semibold",
+      "css": "--font-weight-semibold",
+      "layer": "primitive",
+      "kind": "fontWeight",
+      "value": 600,
+      "description": "Semibold control and compact-heading weight."
+    },
+    {
+      "id": "font.weight.bold",
+      "css": "--font-weight-bold",
+      "layer": "primitive",
+      "kind": "fontWeight",
+      "value": 700,
+      "description": "Bold display and title weight."
+    },
+    {
+      "id": "font.lineHeight.tight",
+      "css": "--font-line-height-tight",
+      "layer": "primitive",
+      "kind": "lineHeight",
+      "value": 1.1,
+      "description": "Tight display line height."
+    },
+    {
+      "id": "font.lineHeight.heading",
+      "css": "--font-line-height-heading",
+      "layer": "primitive",
+      "kind": "lineHeight",
+      "value": 1.25,
+      "description": "Heading line height that preserves current tight headings."
+    },
+    {
+      "id": "font.lineHeight.compact",
+      "css": "--font-line-height-compact",
+      "layer": "primitive",
+      "kind": "lineHeight",
+      "value": 1.4,
+      "description": "Compact label, caption and code line height."
+    },
+    {
+      "id": "font.lineHeight.body",
+      "css": "--font-line-height-body",
+      "layer": "primitive",
+      "kind": "lineHeight",
+      "value": 1.6,
+      "description": "Current body line height."
+    },
+    {
+      "id": "font.letterSpacing.tight",
+      "css": "--font-letter-spacing-tight",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "-0.025em",
+      "description": "Current tight title tracking."
+    },
+    {
+      "id": "font.letterSpacing.normal",
+      "css": "--font-letter-spacing-normal",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0em",
+      "description": "Default unmodified tracking."
+    },
+    {
+      "id": "font.letterSpacing.wide",
+      "css": "--font-letter-spacing-wide",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.025em",
+      "description": "Current wide label tracking."
+    },
+    {
+      "id": "font.measure.display",
+      "css": "--font-measure-display",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "24ch",
+      "description": "Upper line measure for display copy."
+    },
+    {
+      "id": "font.measure.heading",
+      "css": "--font-measure-heading",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "36ch",
+      "description": "Upper line measure for titles."
+    },
+    {
+      "id": "font.measure.body",
+      "css": "--font-measure-body",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "65ch",
+      "description": "Body-copy target within the constitutional 45\u201375 character range."
+    },
+    {
+      "id": "font.measure.compact",
+      "css": "--font-measure-compact",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "75ch",
+      "description": "Upper measure for compact interface copy."
+    },
+    {
+      "id": "font.measure.code",
+      "css": "--font-measure-code",
+      "layer": "primitive",
+      "kind": "string",
+      "value": "none",
+      "description": "Code measure is governed by its containing technical surface."
+    },
+    {
+      "id": "type.display.family",
+      "css": "--type-display-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.heading",
+      "description": "Family for display text."
+    },
+    {
+      "id": "type.display.size",
+      "css": "--type-display-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.display",
+      "description": "Size for display text.",
+      "responsive": true
+    },
+    {
+      "id": "type.display.weight",
+      "css": "--type-display-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.bold",
+      "description": "Weight for display text."
+    },
+    {
+      "id": "type.display.lineHeight",
+      "css": "--type-display-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.tight",
+      "description": "Line height for display text."
+    },
+    {
+      "id": "type.display.letterSpacing",
+      "css": "--type-display-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.tight",
+      "description": "Tracking for display text."
+    },
+    {
+      "id": "type.display.measure",
+      "css": "--type-display-measure",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.measure.display",
+      "description": "Maximum measure for display text."
+    },
+    {
+      "id": "type.pageTitle.family",
+      "css": "--type-page-title-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.heading",
+      "description": "Family for page titles."
+    },
+    {
+      "id": "type.pageTitle.size",
+      "css": "--type-page-title-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.pageTitle",
+      "description": "Size for page titles.",
+      "responsive": true
+    },
+    {
+      "id": "type.pageTitle.weight",
+      "css": "--type-page-title-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.bold",
+      "description": "Weight for page titles."
+    },
+    {
+      "id": "type.pageTitle.lineHeight",
+      "css": "--type-page-title-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.heading",
+      "description": "Line height for page titles."
+    },
+    {
+      "id": "type.pageTitle.letterSpacing",
+      "css": "--type-page-title-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.tight",
+      "description": "Tracking for page titles."
+    },
+    {
+      "id": "type.pageTitle.measure",
+      "css": "--type-page-title-measure",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.measure.heading",
+      "description": "Maximum measure for page titles."
+    },
+    {
+      "id": "type.sectionTitle.family",
+      "css": "--type-section-title-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.heading",
+      "description": "Family for section titles."
+    },
+    {
+      "id": "type.sectionTitle.size",
+      "css": "--type-section-title-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.sectionTitle",
+      "description": "Size for section titles.",
+      "responsive": true
+    },
+    {
+      "id": "type.sectionTitle.weight",
+      "css": "--type-section-title-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.bold",
+      "description": "Weight for section titles."
+    },
+    {
+      "id": "type.sectionTitle.lineHeight",
+      "css": "--type-section-title-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.heading",
+      "description": "Line height for section titles."
+    },
+    {
+      "id": "type.sectionTitle.letterSpacing",
+      "css": "--type-section-title-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.normal",
+      "description": "Tracking for section titles."
+    },
+    {
+      "id": "type.sectionTitle.measure",
+      "css": "--type-section-title-measure",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.measure.heading",
+      "description": "Maximum measure for section titles."
+    },
+    {
+      "id": "type.body.family",
+      "css": "--type-body-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.body",
+      "description": "Family for standard interface body text."
+    },
+    {
+      "id": "type.body.size",
+      "css": "--type-body-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.body",
+      "description": "Size for standard interface body text.",
+      "responsive": true
+    },
+    {
+      "id": "type.body.weight",
+      "css": "--type-body-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.regular",
+      "description": "Weight for standard interface body text."
+    },
+    {
+      "id": "type.body.lineHeight",
+      "css": "--type-body-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.body",
+      "description": "Line height for standard interface body text."
+    },
+    {
+      "id": "type.body.letterSpacing",
+      "css": "--type-body-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.normal",
+      "description": "Tracking for standard interface body text."
+    },
+    {
+      "id": "type.body.measure",
+      "css": "--type-body-measure",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.measure.body",
+      "description": "Maximum measure for standard body copy where the existing surface permits it."
+    },
+    {
+      "id": "type.bodyCompact.family",
+      "css": "--type-body-compact-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.body",
+      "description": "Family for compact interface body text."
+    },
+    {
+      "id": "type.bodyCompact.size",
+      "css": "--type-body-compact-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.bodyCompact",
+      "description": "Size for compact interface body text.",
+      "responsive": true
+    },
+    {
+      "id": "type.utilityXs.size",
+      "css": "--type-utility-xs-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.utilityXs",
+      "description": "Size for extra-small utility text that preserves Tailwind root responsiveness above the floor.",
+      "responsive": true
+    },
+    {
+      "id": "type.bodyCompact.weight",
+      "css": "--type-body-compact-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.regular",
+      "description": "Weight for compact interface body text."
+    },
+    {
+      "id": "type.bodyCompact.lineHeight",
+      "css": "--type-body-compact-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.compact",
+      "description": "Line height for compact interface body text."
+    },
+    {
+      "id": "type.bodyCompact.letterSpacing",
+      "css": "--type-body-compact-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.normal",
+      "description": "Tracking for compact interface body text."
+    },
+    {
+      "id": "type.bodyCompact.measure",
+      "css": "--type-body-compact-measure",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.measure.compact",
+      "description": "Maximum measure for compact interface body text."
+    },
+    {
+      "id": "type.label.family",
+      "css": "--type-label-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.body",
+      "description": "Family for field and control labels."
+    },
+    {
+      "id": "type.label.size",
+      "css": "--type-label-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.caption",
+      "description": "Size for field and control labels.",
+      "responsive": true
+    },
+    {
+      "id": "type.label.weight",
+      "css": "--type-label-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.medium",
+      "description": "Weight for field and control labels."
+    },
+    {
+      "id": "type.label.lineHeight",
+      "css": "--type-label-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.compact",
+      "description": "Line height for field and control labels."
+    },
+    {
+      "id": "type.label.letterSpacing",
+      "css": "--type-label-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.wide",
+      "description": "Tracking for field and control labels."
+    },
+    {
+      "id": "type.label.measure",
+      "css": "--type-label-measure",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.measure.compact",
+      "description": "Maximum measure for field and control labels."
+    },
+    {
+      "id": "type.caption.family",
+      "css": "--type-caption-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.body",
+      "description": "Family for captions and dense metadata."
+    },
+    {
+      "id": "type.caption.size",
+      "css": "--type-caption-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.caption",
+      "description": "Size for captions and dense metadata.",
+      "responsive": true
+    },
+    {
+      "id": "type.caption.weight",
+      "css": "--type-caption-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.medium",
+      "description": "Weight for captions and dense metadata."
+    },
+    {
+      "id": "type.caption.lineHeight",
+      "css": "--type-caption-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.compact",
+      "description": "Line height for captions and dense metadata."
+    },
+    {
+      "id": "type.caption.letterSpacing",
+      "css": "--type-caption-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.normal",
+      "description": "Tracking for captions and dense metadata."
+    },
+    {
+      "id": "type.caption.measure",
+      "css": "--type-caption-measure",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.measure.compact",
+      "description": "Maximum measure for captions and dense metadata."
+    },
+    {
+      "id": "type.code.family",
+      "css": "--type-code-family",
+      "layer": "semantic",
+      "kind": "fontFamily",
+      "ref": "font.family.mono",
+      "description": "Family for code, identifiers and aligned technical data."
+    },
+    {
+      "id": "type.code.size",
+      "css": "--type-code-size",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.code",
+      "description": "Size for code, identifiers and aligned technical data.",
+      "responsive": true
+    },
+    {
+      "id": "type.code.weight",
+      "css": "--type-code-weight",
+      "layer": "semantic",
+      "kind": "fontWeight",
+      "ref": "font.weight.regular",
+      "description": "Weight for code and technical data."
+    },
+    {
+      "id": "type.code.lineHeight",
+      "css": "--type-code-line-height",
+      "layer": "semantic",
+      "kind": "lineHeight",
+      "ref": "font.lineHeight.compact",
+      "description": "Line height for code and technical data."
+    },
+    {
+      "id": "type.code.letterSpacing",
+      "css": "--type-code-letter-spacing",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.letterSpacing.normal",
+      "description": "Tracking for code and technical data."
+    },
+    {
+      "id": "type.code.measure",
+      "css": "--type-code-measure",
+      "layer": "semantic",
+      "kind": "string",
+      "ref": "font.measure.code",
+      "description": "Code measure follows its technical container."
+    },
+    {
+      "id": "space.scale.0",
+      "css": "--space-0",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0px",
+      "description": "Zero spacing."
+    },
+    {
+      "id": "space.scale.1",
+      "css": "--space-1",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "4px",
+      "description": "Half-grid spacing step."
+    },
+    {
+      "id": "space.scale.2",
+      "css": "--space-2",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "8px",
+      "description": "Base spacing step."
+    },
+    {
+      "id": "space.scale.3",
+      "css": "--space-3",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "16px",
+      "description": "Two-grid spacing step."
+    },
+    {
+      "id": "space.scale.4",
+      "css": "--space-4",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "24px",
+      "description": "Three-grid spacing step."
+    },
+    {
+      "id": "space.scale.5",
+      "css": "--space-5",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "32px",
+      "description": "Four-grid spacing step."
+    },
+    {
+      "id": "space.scale.6",
+      "css": "--space-6",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "40px",
+      "description": "Five-grid spacing step."
+    },
+    {
+      "id": "space.scale.7",
+      "css": "--space-7",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "48px",
+      "description": "Six-grid spacing step."
+    },
+    {
+      "id": "space.scale.8",
+      "css": "--space-8",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "64px",
+      "description": "Eight-grid spacing step."
+    },
+    {
+      "id": "space.control.gap",
+      "css": "--space-control-gap",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "space.scale.2",
+      "description": "Default gap inside and between controls."
+    },
+    {
+      "id": "space.content.padding",
+      "css": "--space-content-padding",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "space.scale.4",
+      "description": "Default contained-content padding."
+    },
+    {
+      "id": "space.section.gap",
+      "css": "--space-section-gap",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "space.scale.6",
+      "description": "Default gap between page sections."
+    },
+    {
+      "id": "space.layout.gutter",
+      "css": "--space-layout-gutter",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "space.scale.5",
+      "description": "Default layout gutter."
+    },
+    {
+      "id": "space.page.margin",
+      "css": "--space-page-margin",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "space.scale.6",
+      "description": "Default wide-page margin."
+    },
+    {
+      "id": "layout.sidebar.width",
+      "css": "--layout-sidebar-width",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "min(256px, 80vw)",
+      "description": "Preserved viewport-safe sidebar width."
+    },
+    {
+      "id": "chrome.header.height",
+      "css": "--chrome-header-height",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "44px",
+      "description": "Preserved shell and panel header height."
+    },
+    {
+      "id": "chrome.browserTabs.height",
+      "css": "--chrome-browser-tabs-height",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "34px",
+      "description": "Preserved fixed live-browser tab height; changing it rebuilds the remote viewport."
+    },
+    {
+      "id": "target.pointer.minimum",
+      "css": "--target-pointer-minimum",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "24px",
+      "description": "Minimum fine-pointer hit region when the WCAG spacing exception is satisfied."
+    },
+    {
+      "id": "target.touch.minimum",
+      "css": "--target-touch-minimum",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "44px",
+      "description": "Minimum coarse-pointer, destructive, primary and isolated target region."
+    },
+    {
+      "id": "target.swatch.minimum",
+      "css": "--target-swatch-minimum",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "40px",
+      "description": "Preserved full-bleed swatch control geometry; its hit region still reaches the touch minimum."
+    },
+    {
+      "id": "breakpoint.reflow.minimum",
+      "css": "--breakpoint-reflow-minimum",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "320px",
+      "description": "Minimum supported single-axis reflow viewport."
+    },
+    {
+      "id": "breakpoint.content.medium",
+      "css": "--breakpoint-content-medium",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "640px",
+      "description": "Content reflow boundary corresponding to the current small layout transition."
+    },
+    {
+      "id": "breakpoint.content.wide",
+      "css": "--breakpoint-content-wide",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "1024px",
+      "description": "Content reflow boundary corresponding to the current wide layout transition."
+    },
+    {
+      "id": "density.comfortable.controlGap",
+      "css": "--density-comfortable-control-gap",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "space.scale.3",
+      "description": "Opt-in comfortable control gap."
+    },
+    {
+      "id": "density.compact.controlGap",
+      "css": "--density-compact-control-gap",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "space.scale.2",
+      "description": "Opt-in compact control gap."
+    },
+    {
+      "id": "density.comfortable.touchTarget",
+      "css": "--density-comfortable-touch-target",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "target.touch.minimum",
+      "description": "Touch target is invariant under comfortable density."
+    },
+    {
+      "id": "density.compact.touchTarget",
+      "css": "--density-compact-touch-target",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "target.touch.minimum",
+      "description": "Touch target is invariant under compact density."
+    },
+    {
+      "id": "density.comfortable.typeFloor",
+      "css": "--density-comfortable-type-floor",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.floor",
+      "description": "Type floor is invariant under comfortable density."
+    },
+    {
+      "id": "density.compact.typeFloor",
+      "css": "--density-compact-type-floor",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "font.size.floor",
+      "description": "Type floor is invariant under compact density."
+    },
+    {
+      "id": "radius.none",
+      "css": "--radius-none",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0px",
+      "description": "Square corner."
+    },
+    {
+      "id": "radius.small",
+      "css": "--radius-small",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.25rem",
+      "description": "Current Tailwind small radius, preserving root-size responsiveness.",
+      "responsive": true
+    },
+    {
+      "id": "radius.medium",
+      "css": "--radius-medium",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.375rem",
+      "description": "Current Tailwind medium radius, preserving root-size responsiveness.",
+      "responsive": true
+    },
+    {
+      "id": "radius.large",
+      "css": "--radius-large",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.5rem",
+      "description": "Current Tailwind large radius, preserving root-size responsiveness.",
+      "responsive": true
+    },
+    {
+      "id": "radius.extraLarge",
+      "css": "--radius-extra-large",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.75rem",
+      "description": "Current Tailwind extra-large radius, preserving root-size responsiveness.",
+      "responsive": true
+    },
+    {
+      "id": "radius.2xl",
+      "css": "--radius-2xl",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "1rem",
+      "description": "Current Tailwind 2xl radius, preserving root-size responsiveness.",
+      "responsive": true
+    },
+    {
+      "id": "radius.literal.3",
+      "css": "--radius-literal-3",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "3px",
+      "description": "Preserved scrollbar radius literal."
+    },
+    {
+      "id": "radius.literal.4",
+      "css": "--radius-literal-4",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "4px",
+      "description": "Preserved calendar radius literal."
+    },
+    {
+      "id": "radius.literal.6",
+      "css": "--radius-literal-6",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "6px",
+      "description": "Preserved calendar adapter radius literal."
+    },
+    {
+      "id": "radius.literal.10",
+      "css": "--radius-literal-10",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "10px",
+      "description": "Preserved graph adapter radius literal."
+    },
+    {
+      "id": "radius.full",
+      "css": "--radius-full",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "9999px",
+      "description": "Pill and circular radius."
+    },
+    {
+      "id": "border.width.none",
+      "css": "--border-width-none",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0px",
+      "description": "No border."
+    },
+    {
+      "id": "border.width.hairline",
+      "css": "--border-width-hairline",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "1px",
+      "description": "Permitted hairline and standard border width."
+    },
+    {
+      "id": "border.width.strong",
+      "css": "--border-width-strong",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "2px",
+      "description": "Strong boundary width for established emphasis and accessibility treatments."
+    },
+    {
+      "id": "border.style.solid",
+      "css": "--border-style-solid",
+      "layer": "primitive",
+      "kind": "string",
+      "value": "solid",
+      "description": "Standard solid boundary."
+    },
+    {
+      "id": "border.style.dashed",
+      "css": "--border-style-dashed",
+      "layer": "primitive",
+      "kind": "string",
+      "value": "dashed",
+      "description": "Established dashed drop-zone and provisional boundary."
+    },
+    {
+      "id": "elevation.flat",
+      "css": "--elevation-flat",
+      "layer": "primitive",
+      "kind": "shadow",
+      "value": "none",
+      "description": "No elevation shadow."
+    },
+    {
+      "id": "elevation.raised",
+      "css": "--elevation-raised",
+      "layer": "primitive",
+      "kind": "shadow",
+      "value": "0 1px 2px rgba(0, 0, 0, 0.35)",
+      "description": "Preserved restrained raised-surface shadow."
+    },
+    {
+      "id": "elevation.floating",
+      "css": "--elevation-floating",
+      "layer": "primitive",
+      "kind": "shadow",
+      "value": "0 4px 16px rgba(0, 0, 0, 0.5)",
+      "description": "Preserved floating graph and menu shadow."
+    },
+    {
+      "id": "elevation.overlay",
+      "css": "--elevation-overlay",
+      "layer": "primitive",
+      "kind": "shadow",
+      "value": "0 8px 24px rgba(0, 0, 0, 0.5)",
+      "description": "Preserved overlay and calendar popover shadow."
+    },
+    {
+      "id": "overlay.base",
+      "css": "--overlay-base",
+      "layer": "primitive",
+      "kind": "number",
+      "value": 0,
+      "description": "Base content stack level."
+    },
+    {
+      "id": "overlay.sticky",
+      "css": "--overlay-sticky",
+      "layer": "primitive",
+      "kind": "number",
+      "value": 10,
+      "description": "Sticky chrome stack level."
+    },
+    {
+      "id": "overlay.menu",
+      "css": "--overlay-menu",
+      "layer": "primitive",
+      "kind": "number",
+      "value": 20,
+      "description": "Menus and popovers relative to their active overlay context."
+    },
+    {
+      "id": "overlay.dialog",
+      "css": "--overlay-dialog",
+      "layer": "primitive",
+      "kind": "number",
+      "value": 50,
+      "description": "Sheets and dialogs stack level."
+    },
+    {
+      "id": "overlay.alert",
+      "css": "--overlay-alert",
+      "layer": "primitive",
+      "kind": "number",
+      "value": 60,
+      "description": "Alerts and toasts stack level."
+    },
+    {
+      "id": "overlay.viewer",
+      "css": "--overlay-viewer",
+      "layer": "primitive",
+      "kind": "number",
+      "value": 200,
+      "description": "Exceptional full-screen viewer stack level."
+    },
+    {
+      "id": "motion.duration.instant",
+      "css": "--motion-duration-instant",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "0ms",
+      "description": "Immediate feedback duration."
+    },
+    {
+      "id": "motion.duration.fast",
+      "css": "--motion-duration-fast",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "150ms",
+      "description": "Preserved fast opacity and hover transition."
+    },
+    {
+      "id": "motion.duration.normal",
+      "css": "--motion-duration-normal",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "200ms",
+      "description": "Preserved standard expansion and feedback transition."
+    },
+    {
+      "id": "motion.duration.slow",
+      "css": "--motion-duration-slow",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "300ms",
+      "description": "Preserved slow transition and sheet exit duration."
+    },
+    {
+      "id": "motion.duration.entrance",
+      "css": "--motion-duration-entrance",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "500ms",
+      "description": "Preserved sheet and onboarding entrance duration."
+    },
+    {
+      "id": "motion.loading.delay",
+      "css": "--motion-loading-delay",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "400ms",
+      "description": "Shared loading-indicator appearance delay within the required 300\u2013500ms range."
+    },
+    {
+      "id": "motion.loading.minimumVisible",
+      "css": "--motion-loading-minimum-visible",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "300ms",
+      "description": "Minimum visible dwell once a loading indicator appears."
+    },
+    {
+      "id": "motion.loading.escalation",
+      "css": "--motion-loading-escalation",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "10000ms",
+      "description": "No-progress threshold for long-running-state escalation."
+    },
+    {
+      "id": "motion.easing.standard",
+      "css": "--motion-easing-standard",
+      "layer": "primitive",
+      "kind": "easing",
+      "value": "cubic-bezier(0.4, 0, 0.2, 1)",
+      "description": "Preserved standard tween easing."
+    },
+    {
+      "id": "motion.easing.inOut",
+      "css": "--motion-easing-in-out",
+      "layer": "primitive",
+      "kind": "easing",
+      "value": "ease-in-out",
+      "description": "Preserved symmetric onboarding easing."
+    },
+    {
+      "id": "motion.easing.spring",
+      "css": "--motion-easing-spring",
+      "layer": "primitive",
+      "kind": "easing",
+      "value": "cubic-bezier(0.34, 1.56, 0.64, 1)",
+      "description": "Current spring easing."
+    },
+    {
+      "id": "motion.distance.small",
+      "css": "--motion-distance-small",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "4px",
+      "description": "Small feedback travel distance."
+    },
+    {
+      "id": "motion.distance.medium",
+      "css": "--motion-distance-medium",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "16px",
+      "description": "Standard entrance and expansion travel distance."
+    },
+    {
+      "id": "motion.distance.large",
+      "css": "--motion-distance-large",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "36px",
+      "description": "Preserved onboarding step travel distance."
+    },
+    {
+      "id": "motion.reduced.duration",
+      "css": "--motion-reduced-duration",
+      "layer": "primitive",
+      "kind": "duration",
+      "value": "0ms",
+      "description": "Non-essential motion duration under reduced motion."
+    },
+    {
+      "id": "motion.reduced.distance",
+      "css": "--motion-reduced-distance",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0px",
+      "description": "Travel removed under reduced motion."
+    },
+    {
+      "id": "icon.family",
+      "css": "--icon-family",
+      "layer": "primitive",
+      "kind": "string",
+      "value": "Phosphor",
+      "description": "Standard product icon family."
+    },
+    {
+      "id": "icon.size.small",
+      "css": "--icon-size-small",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "12px",
+      "description": "Small inline icon size; the containing hit region remains independently governed."
+    },
+    {
+      "id": "icon.size.compact",
+      "css": "--icon-size-compact",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "14px",
+      "description": "Prevalent compact-control icon size in current product chrome."
+    },
+    {
+      "id": "icon.size.medium",
+      "css": "--icon-size-medium",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "16px",
+      "description": "Default interface icon size."
+    },
+    {
+      "id": "icon.size.control",
+      "css": "--icon-size-control",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "18px",
+      "description": "Prevalent control and avatar icon size."
+    },
+    {
+      "id": "icon.size.large",
+      "css": "--icon-size-large",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "20px",
+      "description": "Large action and state icon size."
+    },
+    {
+      "id": "icon.size.prominent",
+      "css": "--icon-size-prominent",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "24px",
+      "description": "Prominent state and action icon size."
+    },
+    {
+      "id": "icon.size.feature",
+      "css": "--icon-size-feature",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "28px",
+      "description": "Feature-step and large state icon size used by current product surfaces."
+    },
+    {
+      "id": "icon.size.display",
+      "css": "--icon-size-display",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "32px",
+      "description": "Display and empty-state icon size."
+    },
+    {
+      "id": "icon.size.hero",
+      "css": "--icon-size-hero",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "48px",
+      "description": "Large empty-state and hero icon size used by current product surfaces."
+    },
+    {
+      "id": "icon.weight.default",
+      "css": "--icon-weight-default",
+      "layer": "primitive",
+      "kind": "string",
+      "value": "regular",
+      "description": "Default Phosphor icon weight."
+    },
+    {
+      "id": "icon.weight.emphasis",
+      "css": "--icon-weight-emphasis",
+      "layer": "primitive",
+      "kind": "string",
+      "value": "fill",
+      "description": "Established emphasized state and status icon weight."
+    },
+    {
+      "id": "icon.alignment.optical",
+      "css": "--icon-alignment-optical",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.125em",
+      "description": "Maximum optical baseline adjustment for inline icons."
+    },
+    {
+      "id": "icon.target.pointer",
+      "css": "--icon-target-pointer",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "target.pointer.minimum",
+      "description": "Minimum fine-pointer hit region around an interactive icon."
+    },
+    {
+      "id": "icon.target.touch",
+      "css": "--icon-target-touch",
+      "layer": "semantic",
+      "kind": "dimension",
+      "ref": "target.touch.minimum",
+      "description": "Minimum coarse-pointer hit region around an interactive icon."
+    }
+  ]
+}

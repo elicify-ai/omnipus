@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "pass": true,
+  "checks": {
+    "storybookOutputScanClean": true,
+    "storybookModuleProvenanceClean": true,
+    "provenanceMatchesCandidateAssets": true,
+    "initialGzipWithinBudget": true,
+    "totalRawWithinBudget": true
+  },
+  "budgets": {
+    "initialGzipBytes": 25600,
+    "totalRawBytes": 256000
+  },
+  "deltas": {
+    "initialGzipBytes": 16726,
+    "totalRawBytes": 31282
+  },
+  "baseline": {
+    "revision": "92aeb4d5dcb0d545e2370ddd1c57c099a03392ba",
+    "initialGzipBytes": 411908,
+    "totalRawBytes": 26131305
+  },
+  "candidate": {
+    "revision": null,
+    "initialGzipBytes": 428634,
+    "totalRawBytes": 26162587
+  },
+  "storybookEvidence": {
+    "clean": true,
+    "outputPathMatches": [],
+    "contentMatches": [],
+    "limitation": "Output scanning is supporting evidence; module provenance must be audited separately."
+  }
+}

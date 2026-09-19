@@ -1,16 +1,45 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-const Table = React.forwardRef<HTMLTableElement, React.HTMLAttributes<HTMLTableElement>>(
-  ({ className, ...props }, ref) => (
-    <div className="relative w-full overflow-auto">
-      <table
-        ref={ref}
-        className={cn('w-full caption-bottom text-sm', className)}
-        {...props}
-      />
-    </div>
-  )
+export interface TableProps extends React.HTMLAttributes<HTMLTableElement> {
+  containerProps?: React.HTMLAttributes<HTMLDivElement>
+}
+
+const TABLE_KEYBOARD_SCROLL_STEP = 40
+
+const Table = React.forwardRef<HTMLTableElement, TableProps>(
+  ({ className, containerProps, ...props }, ref) => {
+    const { className: containerClassName, onKeyDown, ...restContainerProps } = containerProps ?? {}
+    const handleContainerKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+      onKeyDown?.(event)
+      if (event.defaultPrevented || event.target !== event.currentTarget) return
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+
+      const container = event.currentTarget
+      const maximum = Math.max(0, container.scrollWidth - container.clientWidth)
+      const delta = event.key === 'ArrowRight' ? TABLE_KEYBOARD_SCROLL_STEP : -TABLE_KEYBOARD_SCROLL_STEP
+      const next = Math.min(maximum, Math.max(0, container.scrollLeft + delta))
+      if (next === container.scrollLeft) return
+
+      event.preventDefault()
+      container.scrollLeft = next
+    }
+
+    return (
+      <div
+        {...restContainerProps}
+        data-table-scroll=""
+        className={cn('relative w-full overflow-auto', containerClassName)}
+        onKeyDown={handleContainerKeyDown}
+      >
+        <table
+          ref={ref}
+          className={cn('w-full caption-bottom text-sm', className)}
+          {...props}
+        />
+      </div>
+    )
+  }
 )
 Table.displayName = 'Table'
 
@@ -33,7 +62,7 @@ const TableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTML
     <tr
       ref={ref}
       className={cn(
-        'border-b border-[var(--color-border)] transition-colors hover:bg-[var(--color-surface-3)]/50 data-[state=selected]:bg-[var(--color-surface-3)]',
+        'border-b border-[var(--color-border)] transition-colors motion-reduce:transition-none hover:bg-[var(--color-surface-3)]/50 data-[state=selected]:bg-[var(--color-surface-3)]',
         className
       )}
       {...props}

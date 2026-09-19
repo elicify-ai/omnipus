@@ -16,15 +16,16 @@ import { cn } from '@/lib/utils'
 export type CalendarProps = DayPickerProps
 
 const DAY_BASE =
-  'inline-flex h-9 w-9 items-center justify-center rounded-md p-0 text-sm font-normal font-inter ' +
-  'text-[var(--color-secondary)] transition-colors ' +
+  'inline-flex h-9 w-9 [@media(pointer:coarse)]:h-[44px] [@media(pointer:coarse)]:w-[44px] items-center justify-center rounded-md p-0 text-sm font-normal font-inter ' +
+  'text-[var(--color-secondary)] transition-colors motion-reduce:transition-none ' +
   'hover:bg-[var(--color-surface-2)] ' +
   ' ' +
   'disabled:pointer-events-none disabled:opacity-40 aria-disabled:pointer-events-none aria-disabled:opacity-40 ' +
-  'group-data-[today=true]:font-semibold group-data-[today=true]:text-[var(--color-accent)] ' +
-  'group-data-[outside=true]:text-[var(--color-muted)] group-data-[outside=true]:opacity-50 ' +
+  'group-data-[today=true]:font-semibold group-data-[today=true]:text-[var(--color-accent)] group-data-[today=true]:forced-colors:text-[CanvasText] ' +
+  'group-data-[outside=true]:text-[var(--color-muted)] ' +
   'group-data-[disabled=true]:text-[var(--color-muted)] group-data-[disabled=true]:opacity-40 ' +
   'group-data-[selected=true]:bg-[var(--color-accent)] group-data-[selected=true]:text-[var(--color-primary)] ' +
+  'group-data-[selected=true]:forced-colors:border-2 group-data-[selected=true]:forced-colors:border-[Highlight] group-data-[selected=true]:forced-colors:bg-[Canvas] group-data-[selected=true]:forced-colors:text-[CanvasText] ' +
   'group-data-[selected=true]:font-semibold group-data-[selected=true]:hover:bg-[var(--color-accent-hover)] ' +
   'group-data-[selected=true]:hover:text-[var(--color-primary)]'
 
@@ -35,13 +36,17 @@ const NAV_BUTTON =
   ' ' +
   'aria-disabled:pointer-events-none aria-disabled:opacity-30'
 
-function Calendar({ className, classNames, showOutsideDays = true, ...props }: CalendarProps) {
+function Calendar({ className, classNames, showOutsideDays = true, onDayFocus, ...props }: CalendarProps) {
   return (
     <DayPicker
       showOutsideDays={showOutsideDays}
-      className={cn('p-3 font-inter', className)}
+      data-calendar-viewport="true"
+      className={cn(
+        'box-border max-w-full overflow-x-auto overscroll-x-contain p-3 font-inter [@media(pointer:coarse)]:p-0',
+        className,
+      )}
       classNames={{
-        months: 'relative flex flex-col gap-4',
+        months: 'relative flex w-max min-w-full flex-col gap-4 [@media(pointer:coarse)]:min-w-[calc(var(--target-touch-minimum)*7)]',
         month: 'space-y-1',
         nav: 'absolute inset-x-1 top-1 flex items-center justify-between z-10',
         button_previous: NAV_BUTTON,
@@ -51,10 +56,10 @@ function Calendar({ className, classNames, showOutsideDays = true, ...props }: C
         caption_label: 'text-sm font-medium font-outfit text-[var(--color-secondary)]',
         month_grid: 'w-full border-collapse mt-1',
         weekdays: 'flex',
-        weekday: 'w-9 text-center text-[0.7rem] font-normal font-inter text-[var(--color-muted)]',
+        weekday: 'w-9 [@media(pointer:coarse)]:w-[44px] text-center text-xs font-normal font-inter text-[var(--color-muted)]',
         weeks: '',
         week: 'flex w-full mt-1',
-        day: 'group relative h-9 w-9 p-0 text-center text-sm focus-within:relative focus-within:z-20',
+        day: 'group relative h-9 w-9 [@media(pointer:coarse)]:h-[44px] [@media(pointer:coarse)]:w-[44px] p-0 text-center text-sm focus-within:relative focus-within:z-20',
         day_button: DAY_BASE,
         ...classNames,
       }}
@@ -65,6 +70,17 @@ function Calendar({ className, classNames, showOutsideDays = true, ...props }: C
           ) : (
             <CaretLeft weight="bold" className={chevronClassName} />
           ),
+      }}
+      onDayFocus={(date, modifiers, event) => {
+        const day = event.currentTarget as HTMLElement
+        const viewport = day.closest<HTMLElement>('[data-calendar-viewport]')
+        if (viewport) {
+          const viewportRect = viewport.getBoundingClientRect()
+          const dayRect = day.getBoundingClientRect()
+          if (dayRect.left < viewportRect.left) viewport.scrollLeft += dayRect.left - viewportRect.left
+          else if (dayRect.right > viewportRect.right) viewport.scrollLeft += dayRect.right - viewportRect.right
+        }
+        onDayFocus?.(date, modifiers, event)
       }}
       {...props}
     />

@@ -1,0 +1,247 @@
+{
+  "version": 1,
+  "component": "Button",
+  "exports": [
+    "Button",
+    "buttonVariants"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/button.tsx",
+  "documentation": "docs/internal/design/components/button.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "destructive",
+    "outline",
+    "secondary",
+    "ghost",
+    "link"
+  ],
+  "sizes": [
+    "sm",
+    "default",
+    "lg",
+    "icon"
+  ],
+  "states": [
+    "idle",
+    "pending",
+    "success",
+    "error",
+    "disabled",
+    "focus-visible"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/button.stories.tsx",
+      "exports": [
+        "Default",
+        "Destructive",
+        "Outline",
+        "Secondary",
+        "Ghost",
+        "Link",
+        "Small",
+        "Large",
+        "Disabled",
+        "Pending",
+        "Success",
+        "Error",
+        "Dense",
+        "NarrowViewport",
+        "IdleInvokesAction",
+        "PendingBlocksAction",
+        "DisabledLinkBlocksAction",
+        "DisabledLinkBlocksAuxiliaryAction",
+        "ExplicitSubmit",
+        "AdjacentTargets",
+        "ModalActionFeedback",
+        "ComposedFormTypes"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "button-unit",
+      "kind": "unit",
+      "file": "src/components/ui/button.test.tsx",
+      "test": "Button \u2014 action contract defaults a native button to type=button without changing explicit submit",
+      "applicable": true
+    },
+    {
+      "id": "button-idle-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Idle Invokes Action",
+      "story": "IdleInvokesAction",
+      "applicable": true
+    },
+    {
+      "id": "button-pending-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Pending Blocks Action",
+      "story": "PendingBlocksAction",
+      "applicable": true
+    },
+    {
+      "id": "button-success-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Success",
+      "story": "Success",
+      "applicable": true
+    },
+    {
+      "id": "button-error-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Error",
+      "story": "Error",
+      "applicable": true
+    },
+    {
+      "id": "button-disabled-link-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Disabled Link Blocks Action",
+      "story": "DisabledLinkBlocksAction",
+      "applicable": true
+    },
+    {
+      "id": "button-submit-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Explicit Submit",
+      "story": "ExplicitSubmit",
+      "applicable": true
+    },
+    {
+      "id": "button-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-pointer] pointer",
+      "story": "AdjacentTargets",
+      "applicable": true
+    },
+    {
+      "id": "button-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "button-auxiliary-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Button [check:button-auxiliary-browser] browser",
+      "story": "DisabledLinkBlocksAuxiliaryAction",
+      "applicable": true
+    },
+    {
+      "id": "button-announcement-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/button.test.tsx",
+      "test": "Button persistent action announcements updates the same initially empty live region through action states and clears idle feedback"
+    },
+    {
+      "id": "button-modal-announcement-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Modal Action Feedback",
+      "story": "ModalActionFeedback"
+    },
+    {
+      "id": "button-composed-form-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/button.stories.tsx",
+      "test": "Composed Form Types",
+      "story": "ComposedFormTypes",
+      "applicable": true
+    },
+    {
+      "id": "button-composed-button-unit",
+      "kind": "unit",
+      "file": "src/components/ui/button.test.tsx",
+      "test": "Button \u2014 composed form semantics preserves explicit button behavior through asChild",
+      "applicable": true
+    },
+    {
+      "id": "button-composed-reset-unit",
+      "kind": "unit",
+      "file": "src/components/ui/button.test.tsx",
+      "test": "Button \u2014 composed form semantics preserves explicit reset behavior through asChild",
+      "applicable": true
+    },
+    {
+      "id": "button-composed-submit-unit",
+      "kind": "unit",
+      "file": "src/components/ui/button.test.tsx",
+      "test": "Button \u2014 composed form semantics preserves explicit submit behavior through asChild",
+      "applicable": true
+    }
+  ]
+}

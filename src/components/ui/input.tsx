@@ -9,7 +9,7 @@ const Input = React.forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLI
         type={type}
         className={cn(
           // 44px tap target on mobile (touch min); compact 36px on sm+ (pointer).
-          'flex h-11 sm:h-9 w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-sm text-[var(--color-secondary)] transition-colors',
+          'flex h-11 sm:h-9 [@media(pointer:coarse)]:h-[44px] w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-sm text-[var(--color-secondary)] transition-colors motion-reduce:transition-none',
           'placeholder:text-[var(--color-muted)]',
           'disabled:cursor-not-allowed disabled:opacity-50',
           className

@@ -1,0 +1,17 @@
+{
+  "version": 1, "component": "ErrorState", "exports": ["ErrorState", "ErrorStateProps"], "category": "composite", "source": "src/components/ui/error-state.tsx", "documentation": "docs/internal/design/components/error-state.md", "owner": "design-system", "themes": ["dark"], "variants": ["message", "retry"], "sizes": ["default"], "states": ["informational", "retryable"],
+  "stories": [{ "file": "src/components/ui/error-state.stories.tsx", "exports": ["MessageOnly", "Retry"] }],
+  "checks": [
+    { "id": "error-state-unit", "kind": "unit", "file": "src/components/ui/error-state.test.tsx", "test": "ErrorState — presentation contract renders an alert and invokes retry when supplied", "applicable": true },
+    { "id": "error-state-interaction", "kind": "interaction", "file": "src/components/ui/error-state.stories.tsx", "test": "Retry", "story": "Retry", "applicable": true },
+    { "id": "error-state-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-axe] axe", "story": "Retry", "applicable": true },
+    { "id": "error-state-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-keyboard] keyboard", "story": "Retry", "applicable": true },
+    { "id": "error-state-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-browser] browser", "story": "Retry", "applicable": true },
+    { "id": "error-state-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-pointer] pointer", "story": "Retry", "applicable": true },
+    { "id": "error-state-reduced-motion", "kind": "reduced-motion", "applicable": false, "reason": "ErrorState adds no motion; its Button has a separate motion contract." },
+    { "id": "error-state-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-forced-colors] forced-colors", "story": "Retry", "applicable": true },
+    { "id": "error-state-root-size", "kind": "root-size", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-root-size] root-size", "story": "Retry", "applicable": true },
+    { "id": "error-state-zoom", "kind": "zoom", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-zoom] zoom", "story": "Retry", "applicable": true },
+    { "id": "error-state-reflow", "kind": "reflow", "file": "tests/design-system/browser.spec.ts", "test": "ErrorState [check:error-state-reflow] reflow", "story": "Retry", "applicable": true }
+  ]
+}

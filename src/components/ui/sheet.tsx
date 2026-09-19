@@ -3,7 +3,16 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 
-const Sheet = DialogPrimitive.Root
+type SheetProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>
+
+const SheetModalContext = React.createContext(true)
+
+const Sheet = ({ modal = true, ...props }: SheetProps) => (
+  <SheetModalContext.Provider value={modal}>
+    <DialogPrimitive.Root modal={modal} {...props} />
+  </SheetModalContext.Provider>
+)
+Sheet.displayName = DialogPrimitive.Root.displayName
 const SheetTrigger = DialogPrimitive.Trigger
 const SheetClose = DialogPrimitive.Close
 const SheetPortal = DialogPrimitive.Portal
@@ -16,7 +25,7 @@ const SheetOverlay = React.forwardRef<
     ref={ref}
     className={cn(
       'fixed inset-0 z-50 bg-black/60 backdrop-blur-sm',
-      'data-[state=open]:animate-in data-[state=closed]:animate-out',
+      'data-[state=open]:animate-in data-[state=closed]:animate-out motion-reduce:animate-none',
       'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
       className
     )}
@@ -28,6 +37,7 @@ SheetOverlay.displayName = DialogPrimitive.Overlay.displayName
 interface SheetContentProps
   extends React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> {
   side?: 'top' | 'bottom' | 'left' | 'right'
+  size?: 'sm' | 'md' | 'lg'
   overlay?: boolean
   /**
    * Tailwind width class (e.g. "sm:max-w-3xl", "sm:max-w-md") to override the
@@ -71,44 +81,56 @@ const sideDefaultWidth = {
   right: 'w-[90vw] sm:max-w-2xl',
 }
 
+const sheetSizeWidth = {
+  sm: 'w-[90vw] sm:max-w-md',
+  md: 'w-[90vw] sm:max-w-2xl',
+  lg: 'w-[90vw] sm:max-w-3xl',
+}
+
 const SheetContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   SheetContentProps
->(({ side = 'right', overlay = true, widthClass, showClose = true, className, children, ...props }, ref) => (
-  <SheetPortal>
-    {overlay && <SheetOverlay />}
-    <DialogPrimitive.Content
-      ref={ref}
-      // WCAG 4.1.2: Radix Dialog.Content sets role="dialog" automatically;
-      // pair it with aria-modal="true" so AT knows outside content is inert.
-      aria-modal="true"
-      className={cn(
-        // surface-0 (Deep Space Black): panels match the app background so the
-        // shell reads as one flat dark surface; cards/inputs (surface-2/3) still
-        // lift above it for contrast.
-        'fixed z-50 bg-[var(--color-surface-0)] p-6 shadow-xl transition ease-in-out',
-        'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500',
-        sideVariants[side],
-        // Default per-side width (e.g. left/right = sm:w-80). The widthClass
-        // prop OVERRIDES the default; pass a full Tailwind class like
-        // "sm:max-w-3xl" or "w-full sm:max-w-2xl".
-        widthClass ?? sideDefaultWidth[side],
-        className
-      )}
-      {...props}
-    >
-      {children}
-      {showClose && (
-        // tabIndex: WebKit tabbability repo convention — Radix renders this
-        // close button, so the explicit stamp lives here.
-        <DialogPrimitive.Close tabIndex={0} className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100">
-          <X size={16} />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
-      )}
-    </DialogPrimitive.Content>
-  </SheetPortal>
-))
+>(({ side = 'right', size, overlay = true, widthClass, showClose = true, className, children, ...props }, ref) => {
+  const modal = React.useContext(SheetModalContext)
+
+  return (
+    <SheetPortal>
+      {overlay && <SheetOverlay />}
+      <DialogPrimitive.Content
+        ref={ref}
+        // Radix selects its trapped modal or interactive nonmodal content
+        // branch from the Root prop. Keep the ARIA claim aligned with that
+        // resolved behavior; the later props spread preserves an explicit
+        // caller override.
+        aria-modal={modal ? 'true' : undefined}
+        className={cn(
+          // surface-0 (Deep Space Black): panels match the app background so the
+          // shell reads as one flat dark surface; cards/inputs (surface-2/3) still
+          // lift above it for contrast.
+          'fixed z-50 overflow-y-auto overscroll-contain bg-[var(--color-surface-0)] p-6 shadow-xl transition ease-in-out',
+          'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500 motion-reduce:animate-none motion-reduce:transition-none',
+          sideVariants[side],
+          // Default per-side width (e.g. left/right = sm:w-80). The widthClass
+          // prop OVERRIDES the default; pass a full Tailwind class like
+          // "sm:max-w-3xl" or "w-full sm:max-w-2xl".
+          widthClass ?? (size ? sheetSizeWidth[size] : sideDefaultWidth[side]),
+          className
+        )}
+        {...props}
+      >
+        {children}
+        {showClose && (
+          // tabIndex: WebKit tabbability repo convention — Radix renders this
+          // close button, so the explicit stamp lives here.
+          <DialogPrimitive.Close data-ds-action tabIndex={0} className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100">
+            <X aria-hidden="true" size={16} />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        )}
+      </DialogPrimitive.Content>
+    </SheetPortal>
+  )
+})
 SheetContent.displayName = DialogPrimitive.Content.displayName
 
 /**
@@ -140,7 +162,7 @@ SheetHeader.displayName = 'SheetHeader'
 // row is `justify-end`, so the visual RIGHT-most (primary, last in DOM)
 // button still lands right-most, same as before this fix.
 const SheetFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col sm:flex-row sm:justify-end sm:space-x-2', className)} {...props} />
+  <div className={cn('flex flex-col gap-2 max-sm:pointer-coarse:gap-6 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0', className)} {...props} />
 )
 SheetFooter.displayName = 'SheetFooter'
 

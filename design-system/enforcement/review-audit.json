@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "status": "draft-implementation-review",
+  "acceptance": false,
+  "findings": [
+    {
+      "priority": "high",
+      "target": "POSIX_FILE / walk / ledger and baseline schemas",
+      "finding": "ASCII whitelist excludes legitimate route filenames containing $, and walk silently skips them. This violates complete source coverage.",
+      "required": "Accept valid relative POSIX filenames including $ and spaces while rejecting absolute/traversal paths. Never silently skip invalid applicable paths; emit a blocking error. Test a src/routes/$workspaceId.tsx violation."
+    },
+    {
+      "priority": "high",
+      "target": "isReviewedBoundary / accountFindings",
+      "finding": "Test/story suffixes and generated paths are implicitly exempted without exact reviewed ledger entries.",
+      "required": "Require each exact path and boundary kind to be explicitly registered before excluding its governed findings; test an unregistered .stories.tsx and .test.tsx violation."
+    },
+    {
+      "priority": "high",
+      "target": "accountFindings",
+      "finding": "Boundary and permanent-exception filtering precedes infrastructureKind, so parse/unsupported errors can be suppressed.",
+      "required": "Classify and reject parse/unsupported findings before any exception or debt accounting; prove exact matching permanent exceptions and reviewed boundaries cannot silence them."
+    },
+    {
+      "priority": "medium",
+      "target": "collectSourceFiles",
+      "finding": "Missing source roots are silently ignored; wrong root can yield an empty scan.",
+      "required": "Default source scan must fail on missing canonical src root and invalid root; optional package roots should be explicit. Add wrong-root/empty-scan fixture."
+    },
+    {
+      "priority": "medium",
+      "target": "audit report",
+      "finding": "Report exposes only errors and scannedFileCount, so accepted existing debt disappears from a successful audit report.",
+      "required": "Include current debt fingerprint counts and per-rule totals, accepted baseline debt, and applied registered exceptions. The checkpoint must report existing debt explicitly even when no new debt is introduced."
+    }
+  ]
+}

@@ -45,6 +45,77 @@ Storybook is required development verification before screen conversion. It is n
 
 Usability work (empty Board, Library, pickers, task panel, Knowledge) is **not** this program. It starts after C6.
 
+## 1b. Execution model — four concurrent agents
+
+**Founder-authorized revision, 2026-09-17:** use four concurrent agents **in total: one lead plus three `gpt-5.6-sol` workers**. This supersedes the earlier requirement for eight simultaneous Sol workers plus the lead. Eight responsibility packages remain; they run in waves within each stage. No capacity or configuration change is required for a session exposing four total slots. Workers must not spawn additional agents beyond that limit.
+
+All project work remains exclusively in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session`.
+
+The governing sequence remains **contract preparation → A: Encode → B: audit-mode locks → C1 → C2 → C3 → C4 → C5 → C6 → founder acceptance**. Parallelism is confined to the current stage. A completed wave does not authorize starting a later repair batch. Usability work remains excluded until C6.
+
+The lead owns token and manifest schemas, public-component classification rules, shared configuration, dependency installation, public exports, CI integration, checkpoints, and acceptance decisions. Before dispatch, assign exclusive file lists and settle shared contracts. Workers must not revert others' changes and must request shared-contract changes through the lead. Each component owner supplies tests, stories, and its manifest. Integration checks run with all edits paused at an identified code revision.
+
+### A. Encode assignments
+
+Before wave A1, establish the token schema, component classification, manifest schema, verification-harness interface, and file ownership. Workers in later waves consume these contracts; they do not redefine them.
+
+| Wave | Sol worker 1 | Sol worker 2 | Sol worker 3 |
+|---|---|---|---|
+| A1 | Package 1: colour foundations, D3/D4 status contracts, generator, CSS/TypeScript outputs and graph validation | Package 2: typography, spacing, density, breakpoints, radius, borders, elevation, motion and icon definitions | Package 7: Storybook infrastructure, browser verification harness and production-bundle isolation checks |
+| A2 | Package 3: Button, IconButton, Badge and presentation primitives; action states and accessible names | Package 4: Dialog, ConfirmDialog, Sheet and overlay/menu contracts; focus, dismissal, stacking and scroll containment | Package 5: Field and form/selection controls; identity, labels, descriptions, validation, required, disabled and read-only semantics |
+| A3 | Package 6: Skeleton, collection/error/loading components, Progress, JobStatus and shared loading timing | Package 8: full catalog classification, route/tab/modal inventory, manifest validator and verification coverage mapping | Reproduce component and harness results; report integration findings to owners |
+
+Package 8 may complete its final coverage check only after package 6 supplies its artifacts. Package 7 owns the common harness; package 8 checks completeness. Neither independently rewrites component implementations. Resolve failed contracts before dependent work starts.
+
+Preserve these implementation decisions:
+
+- Generate deterministic CSS and typed TypeScript from machine-readable definitions. Supply both semantic CSS references and resolved hexadecimal colours for third-party adapters.
+- Preserve current rendered values outside approved normalizations. Encode spacing and typography before activating application-wide adoption in C1.
+- Explicitly export app-independent foundations, primitives and composites from the actual library entry. Exclude shells, stores and domain widgets; physical domain relocation waits until C5.
+- Give Button explicit action states and default button semantics. Characterize existing submission behavior and preserve it through explicit submit controls. Require an accessible name for IconButton. Field supplies identity and accessibility properties without imposing new layout.
+- Confirmation does not dismiss on outside click; Escape and enabled Cancel dismiss. Confirmation invokes the caller without automatically closing.
+- Extract pure query-error presentation while retaining forced logout in the application adapter.
+- Keep collection and job components caller-controlled. Use 400ms loading delay, 300ms minimum display, and 10-second no-progress escalation. Retain cached content during refresh.
+- Correct determinate Progress semantics; unknown progress is indeterminate.
+
+**A exit:** verify generated values and all component contracts. Every public component is classified, documented, and covered by applicable stories, interaction, accessibility and browser checks. Storybook builds separately and adds no production payload. No application conversion starts before this gate.
+
+### B. Enforcement assignments
+
+| Wave | Sol worker 1 | Sol worker 2 | Sol worker 3 |
+|---|---|---|---|
+| B1 | Package 1: CSS colour enforcement and token-graph checks | Package 2: TypeScript/JSX/SVG/style-object/class-builder colour enforcement | Package 3: typography rules and computed 12px-floor verification |
+| B2 | Package 4: closed spacing-scale enforcement | Package 5: raw button/dialog/confirm/switch and low-level import restrictions | Package 6: single D4 status-palette enforcement |
+| B3 | Package 7: public-export → manifest → story → executed-check coverage | Package 8: audit orchestration, temporary ledger validation and CI self-tests | Independently reproduce seeded lock failures and permitted fixtures |
+
+The lead integrates commands, dependencies, path filters and required CI results. Audit mode scans the complete applicable tree and reports existing debt. Reject new violations using syntax fingerprints and occurrence counts, not line numbers or aggregate totals. Temporary exemptions require owned ledger entries with replacements and expiry checkpoints; permanent exceptions require narrow registered boundaries. Reject expired exceptions, unclassified parsing failures and unsupported coverage gaps. Preserve all existing correctness lint rules. Prove every lock using permitted and forbidden fixtures and deliberate breakage.
+
+**B exit:** all six E1 locks detect seeded violations and reject new debt. The public-component manifest lock becomes fully blocking before C1.
+
+### C1–C5. Stable application ownership
+
+Repeat the following three waves inside **each** repair batch. Complete and verify the entire batch before starting the next one. The checked-in inventory assigns every surface exactly once; the lead retains shared foundations.
+
+| Wave within each batch | Sol worker 1 | Sol worker 2 | Sol worker 3 |
+|---|---|---|---|
+| 1 | Lane 1: workspace board, list, graph and task/plan controls | Lane 2: calendar and workspace management/team/settings | Lane 3: chat, sessions and conversation surfaces |
+| 2 | Lane 4: library, knowledge, media and document previews | Lane 5: agents and skills | Lane 6: settings, providers, connectors and policy controls |
+| 3 | Lane 7: shell, navigation, authentication/onboarding, profile and usage | Lane 8: live browser, global search/approval overlays and remaining integration surfaces | Independently verify the current batch's completed surfaces and reproduce findings |
+
+Before replacements, characterize implicit Enter submission, focus restoration, unsaved state, dismissal, keyboard ordering, asynchronous actions and URL-backed navigation. Before each existing-symbol edit, run GitNexus impact analysis and report the blast radius; warn before high-risk edits. Preflight on 2026-09-17 verified a working CLI query against the index for starting commit `92aeb4d5dcb0d545e2370ddd1c57c099a03392ba`; recheck freshness when execution resumes.
+
+After each batch, pause all edits, run integrated checks, resolve findings and record debt counts and evidence before advancing. Partial batches are development checkpoints, not product cutovers. C6 verifies the whole inventory, closes all temporary exceptions, proves every lock remains blocking, and verifies production/package output.
+
+### Reviews and final acceptance
+
+Run seven independent review assignments in waves of at most three workers: correctness/security, test coverage, silent failures, type/API design, simplification, comment accuracy, and UI/accessibility. Assign each review to a worker who did not implement the reviewed files; split review scope when necessary to preserve independence. The reproduction assignment uses a free worker slot after review work frees it, never a fifth concurrent agent. Repeat the seven-review gate at feature integration and on the complete program diff.
+
+Verification remains Chromium, Firefox and WebKit; applicable keyboard flows and axe checks; 12/14/20px root settings; 200% zoom; 320px reflow; reduced motion; forced colours; and non-overlapping fine/coarse-pointer targets. Obtain representative human screen-reader evidence for navigation, a validating form, dialog/sheet, collection state and a long-running job. Automation does not substitute for that evidence.
+
+The approved production budget remains **zero Storybook payload, at most 25 KiB additional compressed initial JavaScript/CSS, and at most 250 KiB additional total embedded assets**, compared with the same starting revision and build environment. Run applicable frontend and CI checks, GitNexus change detection before commits, and verify the actual running application. No screenshot suite.
+
+Report **code correct and tested** separately from **reachable by users**. Final acceptance still requires the founder's judgment that the running app looks like Omnipus.
+
 ## 2. Cutover inventory before repair
 
 Encode starts immediately. It does not wait for an exhaustive audit.

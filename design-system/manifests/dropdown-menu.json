@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "component": "DropdownMenu",
+  "exports": [
+    "DropdownMenu",
+    "DropdownMenuTrigger",
+    "DropdownMenuContent",
+    "DropdownMenuItem",
+    "DropdownMenuCheckboxItem",
+    "DropdownMenuRadioItem",
+    "DropdownMenuLabel",
+    "DropdownMenuSeparator",
+    "DropdownMenuShortcut",
+    "DropdownMenuGroup",
+    "DropdownMenuPortal",
+    "DropdownMenuSub",
+    "DropdownMenuSubContent",
+    "DropdownMenuSubTrigger",
+    "DropdownMenuRadioGroup"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/dropdown-menu.tsx",
+  "documentation": "docs/internal/design/components/dropdown-menu.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "MenuContract",
+        "MenuKeyboard"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "dropdown-menu-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/overlays.test.tsx",
+      "test": "overlay source contracts preserves dropdown submenu composition"
+    },
+    {
+      "id": "dropdown-menu-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Menu Contract",
+      "story": "MenuContract"
+    },
+    {
+      "id": "dropdown-menu-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-axe] axe",
+      "story": "MenuContract"
+    },
+    {
+      "id": "dropdown-menu-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-keyboard] keyboard",
+      "story": "MenuKeyboard"
+    },
+    {
+      "id": "dropdown-menu-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-browser] browser",
+      "story": "MenuContract"
+    },
+    {
+      "id": "dropdown-menu-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-pointer] pointer",
+      "story": "MenuKeyboard"
+    },
+    {
+      "id": "dropdown-menu-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-reduced-motion] reduced-motion",
+      "story": "MenuContract"
+    },
+    {
+      "id": "dropdown-menu-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-forced-colors] forced-colors",
+      "story": "MenuContract"
+    },
+    {
+      "id": "dropdown-menu-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-root-size] root-size",
+      "story": "MenuContract"
+    },
+    {
+      "id": "dropdown-menu-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-zoom] zoom",
+      "story": "MenuContract"
+    },
+    {
+      "id": "dropdown-menu-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DropdownMenu [check:dropdown-menu-reflow] reflow",
+      "story": "MenuContract"
+    }
+  ]
+}

@@ -1,0 +1,163 @@
+{
+  "version": 1,
+  "component": "CollectionState",
+  "exports": [
+    "CollectionState",
+    "CollectionStateProps",
+    "CollectionStatus"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/collection-state.tsx",
+  "documentation": "docs/internal/design/components/collection-state.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "content-defined"
+  ],
+  "states": [
+    "initial-loading",
+    "refreshing",
+    "empty",
+    "partial",
+    "ready",
+    "error"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/collection-state.stories.tsx",
+      "exports": [
+        "Ready",
+        "InitialLoading",
+        "Refreshing",
+        "Empty",
+        "Partial",
+        "Error"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "collection-state-unit",
+      "kind": "unit",
+      "file": "src/components/ui/collection-state.test.tsx",
+      "test": "CollectionState \u2014 caller-controlled collection lifecycle retains cached children and exposes a non-blocking refresh indicator",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/collection-state.stories.tsx",
+      "test": "Ready",
+      "story": "Ready",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CollectionState [check:collection-state-axe] axe",
+      "story": "Ready",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-keyboard",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "The state owner adds no controls; supplied content owns keyboard behavior."
+    },
+    {
+      "id": "collection-state-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CollectionState [check:collection-state-browser] browser",
+      "story": "Ready",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-pointer",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "The state owner adds no pointer targets; supplied content owns pointer behavior."
+    },
+    {
+      "id": "collection-state-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CollectionState [check:collection-state-reduced-motion] reduced-motion",
+      "story": "InitialLoading",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CollectionState [check:collection-state-forced-colors] forced-colors",
+      "story": "Ready",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CollectionState [check:collection-state-root-size] root-size",
+      "story": "Ready",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CollectionState [check:collection-state-zoom] zoom",
+      "story": "Ready",
+      "applicable": true
+    },
+    {
+      "id": "collection-state-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "CollectionState [check:collection-state-reflow] reflow",
+      "story": "Ready",
+      "applicable": true
+    },
+    {
+      "id": "collection-live-contract",
+      "kind": "unit",
+      "file": "src/components/ui/collection-state.test.tsx",
+      "test": "CollectionState \u2014 announcement and visual dwell separation keeps a polite atomic status outside busy content through every caller state",
+      "applicable": true
+    },
+    {
+      "id": "collection-initial-loading-ready-dwell",
+      "kind": "unit",
+      "file": "src/components/ui/collection-state.test.tsx",
+      "test": "CollectionState \u2014 announcement and visual dwell separation announces initial-loading to ready immediately while completing the 300ms visual dwell",
+      "applicable": true
+    },
+    {
+      "id": "collection-initial-loading-partial-dwell",
+      "kind": "unit",
+      "file": "src/components/ui/collection-state.test.tsx",
+      "test": "CollectionState \u2014 announcement and visual dwell separation announces initial-loading to partial immediately while completing the 300ms visual dwell",
+      "applicable": true
+    },
+    {
+      "id": "collection-refreshing-ready-dwell",
+      "kind": "unit",
+      "file": "src/components/ui/collection-state.test.tsx",
+      "test": "CollectionState \u2014 announcement and visual dwell separation announces refreshing to ready immediately while completing the 300ms visual dwell",
+      "applicable": true
+    },
+    {
+      "id": "collection-refreshing-partial-dwell",
+      "kind": "unit",
+      "file": "src/components/ui/collection-state.test.tsx",
+      "test": "CollectionState \u2014 announcement and visual dwell separation announces refreshing to partial immediately while completing the 300ms visual dwell",
+      "applicable": true
+    }
+  ]
+}

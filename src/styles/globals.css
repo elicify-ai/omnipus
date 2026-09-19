@@ -8,7 +8,13 @@
 @import '@fontsource/jetbrains-mono/400.css';
 @import '@fontsource/jetbrains-mono/500.css';
 
-@import 'tailwindcss';
+/* Supply component tokens now; the later theme keeps existing app values
+   until the C1 foundation conversion. This does not activate spacing utilities. */
+@import './tokens.generated.css' layer(theme);
+@import 'tailwindcss' source(none);
+@source '../';
+@source not '../**/*.stories.*';
+@source not '../**/*.test.*';
 
 /* ------------------------------------------------------------------ */
 /* US-1: Tailwind v4 @theme — all Sovereign Deep brand tokens          */

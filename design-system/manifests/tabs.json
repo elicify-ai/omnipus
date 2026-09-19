@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "component": "Tabs",
+  "exports": [
+    "Tabs",
+    "TabsList",
+    "TabsTrigger",
+    "TabsContent"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/tabs.tsx",
+  "documentation": "docs/internal/design/components/tabs.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default",
+    "dense"
+  ],
+  "states": [
+    "inactive",
+    "active",
+    "disabled",
+    "focus-visible"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/tabs.stories.tsx",
+      "exports": [
+        "Default",
+        "Disabled",
+        "Dense",
+        "NarrowViewport",
+        "Activation"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "tabs-unit",
+      "kind": "unit",
+      "file": "src/components/ui/tabs.test.tsx",
+      "test": "Tabs keyboard contract moves between tabs with ArrowRight and exposes the selected panel",
+      "applicable": true
+    },
+    {
+      "id": "tabs-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tabs [check:tabs-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "tabs-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/tabs.stories.tsx",
+      "test": "Activation",
+      "story": "Activation"
+    }
+  ]
+}

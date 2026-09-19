@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "component": "Select",
+  "exports": [
+    "Select",
+    "SelectGroup",
+    "SelectValue",
+    "SelectTrigger",
+    "SelectContent",
+    "SelectLabel",
+    "SelectItem",
+    "SelectSeparator",
+    "SelectScrollUpButton",
+    "SelectScrollDownButton"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/select.tsx",
+  "documentation": "docs/internal/design/components/select.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default",
+    "open",
+    "disabled"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/select.stories.tsx",
+      "exports": [
+        "Default",
+        "Disabled"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "select-unit",
+      "kind": "unit",
+      "file": "src/components/ui/select.test.tsx",
+      "test": "Select — controlled form contract preserves name, accessible identity and reports a selected value",
+      "applicable": true
+    },
+    {
+      "id": "select-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/select.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-disabled-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/select.stories.tsx",
+      "test": "Disabled",
+      "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "select-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "select-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Select [check:select-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

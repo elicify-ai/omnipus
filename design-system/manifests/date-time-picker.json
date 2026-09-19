@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "component": "DateTimePicker",
+  "exports": [
+    "DateTimePicker",
+    "DateTimePickerProps"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/date-time-picker.tsx",
+  "documentation": "docs/internal/design/components/date-time-picker.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "empty",
+    "selected",
+    "open",
+    "disabled",
+    "read-only"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/date-time-picker.stories.tsx",
+      "exports": [
+        "Default",
+        "Closed",
+        "Disabled",
+        "ReadOnly"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "date-time-picker-unit",
+      "kind": "unit",
+      "file": "src/components/ui/date-time-picker.test.tsx",
+      "test": "DateTimePicker \u2014 day selection picking a day preserves the existing time-of-day",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/date-time-picker.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-disabled-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/date-time-picker.stories.tsx",
+      "test": "Disabled",
+      "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-read-only-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/date-time-picker.stories.tsx",
+      "test": "Read Only",
+      "story": "ReadOnly",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-keyboard] keyboard",
+      "story": "Closed",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Popover and Select motion are owned and verified by their primitives."
+    },
+    {
+      "id": "date-time-picker-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-root-size] root-size",
+      "story": "Closed",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-zoom] zoom",
+      "story": "Closed",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DateTimePicker [check:date-time-picker-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "date-time-picker-complete-field-unit",
+      "kind": "unit",
+      "file": "src/components/ui/date-time-picker.test.tsx",
+      "test": "DateTimePicker \u2014 complete Field wiring preserves explicit identity and all descriptions through read-only validation and error clearing",
+      "applicable": true
+    }
+  ]
+}

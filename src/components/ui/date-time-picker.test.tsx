@@ -13,6 +13,7 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { DateTimePicker } from './date-time-picker'
+import { Field } from './field'
 
 beforeAll(() => {
   if (!Element.prototype.hasPointerCapture) {
@@ -51,26 +52,67 @@ describe('DateTimePicker — trigger render', () => {
     expect(screen.getByRole('button', { name: 'Trigger at' })).toHaveTextContent('Pick a date and time')
   })
 
-  // Parts, not one region's ordering — see the note in date-picker.test.tsx.
-  // The WHOLE string is locale-formatted here: formatDateTimeDisplay calls
-  // toLocaleString(undefined, ...), so the clock convention and even the
-  // meridiem casing follow the viewer ("02:30 PM" vs "02:30 pm", and a
-  // 24-hour locale would render neither). The time is therefore matched
-  // case-insensitively, and on the digits — which is the part that carries the
-  // meaning — rather than on a casing this component does not choose.
+  // D13 requires platform locale formatting. The field selection characterizes
+  // the existing display; Intl is the independent oracle for ordering and clock convention.
   it('shows the formatted date + time when value is set', () => {
-    render(<DateTimePicker value={new Date(2026, 5, 22, 14, 30)} onChange={vi.fn()} aria-label="Trigger at" />)
-    const label = screen.getByRole('button', { name: 'Trigger at' }).textContent ?? ''
-    expect(label).toMatch(/22/)
-    expect(label).toMatch(/Jun/i)
-    expect(label).toMatch(/2026/)
-    expect(label).toMatch(/02:30/)
-    expect(label).toMatch(/pm/i)
+    const value = new Date(2026, 5, 22, 14, 30)
+    const expected = new Intl.DateTimeFormat(undefined, {
+      year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    }).format(value)
+    render(<DateTimePicker value={value} onChange={vi.fn()} aria-label="Trigger at" />)
+    expect(screen.getByRole('button', { name: 'Trigger at' }).textContent).toBe(expected)
   })
 
   it('is disabled when disabled=true', () => {
     render(<DateTimePicker value={null} onChange={vi.fn()} disabled aria-label="Trigger at" />)
     expect(screen.getByRole('button', { name: 'Trigger at' })).toBeDisabled()
+  })
+
+  it('remains focusable but does not open when read-only', () => {
+    render(<DateTimePicker value={new Date(2026, 5, 22, 14, 30)} onChange={vi.fn()} readOnly aria-label="Trigger at" />)
+    const trigger = screen.getByRole('button', { name: 'Trigger at' })
+    expect(trigger).toHaveAttribute('aria-disabled', 'true')
+    expect(trigger).not.toBeDisabled()
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(trigger).toHaveClass('data-[readonly=true]:!opacity-100')
+  })
+
+  it('forwards Field metadata and gives required a valid description', () => {
+    render(
+      <Field label="Starts at" description="Local time" required>
+        <DateTimePicker value={null} onChange={vi.fn()} aria-label="Explicit start time" />
+      </Field>,
+    )
+    const trigger = screen.getByRole('button', { name: 'Explicit start time' })
+    expect(trigger).not.toHaveAttribute('aria-required')
+    const descriptions = (trigger.getAttribute('aria-describedby') ?? '').split(/\s+/).map((id) => document.getElementById(id)?.textContent)
+    expect(descriptions).toEqual(expect.arrayContaining(['Local time', 'Required']))
+  })
+
+  it('rejects an invalid Date before generating time options', () => {
+    expect(() => render(<DateTimePicker value={new Date(Number.NaN)} onChange={vi.fn()} aria-label="Trigger at" />))
+      .toThrow('value must be a valid Date or null')
+  })
+
+  it('bounds the open calendar popover to the narrow viewport', () => {
+    render(<DateTimePicker value={null} onChange={vi.fn()} aria-label="Trigger at" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger at' }))
+
+    expect(screen.getByRole('dialog')).toHaveClass('max-w-[calc(100vw-var(--space-3))]')
+  })
+
+  it.each(['readOnly', 'disabled'] as const)('closes immediately when %s becomes true while open', (mode) => {
+    const onChange = vi.fn()
+    const value = new Date(2026, 5, 15, 9, 30)
+    const { rerender } = render(<DateTimePicker value={value} onChange={onChange} aria-label="Trigger at" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger at' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    rerender(<DateTimePicker value={value} onChange={onChange} aria-label="Trigger at" {...{ [mode]: true }} />)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    rerender(<DateTimePicker value={value} onChange={onChange} aria-label="Trigger at" />)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
 
@@ -139,6 +181,29 @@ describe('DateTimePicker — day selection', () => {
 })
 
 describe('DateTimePicker — hour/minute selects', () => {
+  it.each([0, -1, 61, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'rejects invalid minuteStep %s instead of hanging or generating a partial list',
+    (minuteStep) => {
+      expect(() => render(<DateTimePicker value={null} onChange={vi.fn()} minuteStep={minuteStep} aria-label="Trigger at" />))
+        .toThrow('minuteStep must be a finite integer from 1 through 60')
+    },
+  )
+
+  it('preserves the existing time-first current-date behavior explicitly', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(2026, 8, 17, 11, 25))
+      const onChange = vi.fn()
+      render(<DateTimePicker value={null} onChange={onChange} aria-label="Trigger at" />)
+      fireEvent.click(screen.getByRole('button', { name: 'Trigger at' }))
+      selectOption('Hour', '14')
+      expect(onChange).toHaveBeenCalledOnce()
+      expect(onChange).toHaveBeenCalledWith(new Date(2026, 8, 17, 14, 25, 0, 0))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('changing the hour updates the time and keeps the date', () => {
     const onChange = vi.fn()
     render(<DateTimePicker value={new Date(2026, 5, 15, 9, 30)} onChange={onChange} aria-label="Trigger at" />)
@@ -218,5 +283,52 @@ describe('DateTimePicker — Done button', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Trigger at' }))
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     expect(document.querySelector('[data-day="2026-06-15"]')).not.toBeInTheDocument()
+  })
+})
+
+// Field and DateTimePicker contracts require identity and descriptions on the actual trigger.
+describe('DateTimePicker — complete Field wiring', () => {
+  it('preserves explicit identity and all descriptions through read-only validation and error clearing', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(
+      <>
+        <span id="time-zone-help">Jakarta time</span>
+        <Field label="Starts at" description="Local time" error="Choose a future time" required>
+          <DateTimePicker id="starts-at" value={null} onChange={onChange} readOnly aria-describedby="time-zone-help" aria-invalid={false} />
+        </Field>
+      </>,
+    )
+    const trigger = screen.getByRole('button', { name: 'Starts at' })
+    expect(trigger).toHaveAttribute('id', 'starts-at')
+    expect(document.querySelector('label')).toHaveAttribute('for', 'starts-at')
+    expect(trigger).toHaveAttribute('aria-invalid', 'true')
+    expect(trigger).not.toHaveAttribute('required')
+    expect(trigger).not.toHaveAttribute('aria-required')
+    expect(trigger).toHaveAccessibleDescription('Jakarta time Local time Choose a future time Required')
+    const descriptions = (trigger.getAttribute('aria-describedby') ?? '').split(/\s+/)
+    expect(descriptions).toHaveLength(4)
+    expect(new Set(descriptions).size).toBe(4)
+    expect(trigger).not.toBeDisabled()
+    expect(trigger).toHaveAttribute('aria-disabled', 'true')
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(onChange).not.toHaveBeenCalled()
+
+    rerender(
+      <>
+        <span id="time-zone-help">Jakarta time</span>
+        <Field label="Starts at">
+          <DateTimePicker id="starts-at" value={null} onChange={onChange} readOnly aria-describedby="time-zone-help" aria-invalid={false} />
+        </Field>
+      </>,
+    )
+    expect(screen.getByRole('button', { name: 'Starts at' })).toBe(trigger)
+    expect(trigger).toHaveAttribute('aria-invalid', 'false')
+    expect(trigger).toHaveAttribute('aria-describedby', 'time-zone-help')
+    expect(trigger).toHaveAccessibleDescription('Jakarta time')
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.getElementById('starts-at-required')).toBeNull()
   })
 })

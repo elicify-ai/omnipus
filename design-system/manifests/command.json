@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "component": "Command",
+  "exports": [
+    "Command",
+    "CommandInput",
+    "CommandList",
+    "CommandEmpty",
+    "CommandGroup",
+    "CommandItem",
+    "CommandSeparator"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/command.tsx",
+  "documentation": "docs/internal/design/components/command.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "CommandContract"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "command-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/overlays.test.tsx",
+      "test": "overlay contracts gives command search an owned accessible name with caller override"
+    },
+    {
+      "id": "command-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Command Contract",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-axe] axe",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-keyboard] keyboard",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-browser] browser",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-pointer] pointer",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-reduced-motion] reduced-motion",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-forced-colors] forced-colors",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-root-size] root-size",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-zoom] zoom",
+      "story": "CommandContract"
+    },
+    {
+      "id": "command-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Command [check:command-reflow] reflow",
+      "story": "CommandContract"
+    }
+  ]
+}

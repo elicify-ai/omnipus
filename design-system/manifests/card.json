@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "component": "Card",
+  "exports": [
+    "Card",
+    "CardHeader",
+    "CardFooter",
+    "CardTitle",
+    "CardDescription",
+    "CardContent"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/card.tsx",
+  "documentation": "docs/internal/design/components/card.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default",
+    "dense"
+  ],
+  "states": [
+    "default"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/card.stories.tsx",
+      "exports": [
+        "Default",
+        "Dense",
+        "NarrowViewport"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "card-unit",
+      "kind": "unit",
+      "file": "src/components/ui/card.test.tsx",
+      "test": "Card \u2014 elevated dark surface renders children correctly",
+      "applicable": true
+    },
+    {
+      "id": "card-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Card [check:card-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "card-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Card [check:card-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "card-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Card [check:card-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "card-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Card [check:card-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "card-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Card [check:card-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "card-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Card [check:card-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "card-interaction-not-applicable",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "Card has no interaction behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "card-keyboard-not-applicable",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Card has no keyboard behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "card-pointer-not-applicable",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Card has no pointer behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "card-reduced-motion-not-applicable",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Card has no reduced-motion behavior beyond its covered presentation contract."
+    }
+  ]
+}

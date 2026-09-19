@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "status": "draft-test-review",
+  "acceptance": false,
+  "reviewedFiles": [
+    "scripts/design-system-locks/coverage.mjs",
+    "tests/design-system-locks/coverage.test.mjs"
+  ],
+  "findings": [
+    {
+      "id": "executed-surface-is-file-existence-only",
+      "severity": "high",
+      "area": "stale-or-incomplete execution evidence",
+      "finding": "An application surface verification marked `executed` passes when its declared file merely exists. checkCoverage composes validateCatalog, whose executed check stops at existsSync; verifyCoverage processes component manifests only and never associates surface checkId/file/test with evidence.",
+      "incorrectTestExpectation": "`keeps passing when a planned surface check becomes executed with its file present` creates empty test files and expects zero errors.",
+      "requiredBehavior": "Every surface entry marked executed must have exact passing evidence for its declared file and test, including required browser projects where applicable. Empty files or declarations alone must fail. Planned application entries may remain the sole bounded tolerance.",
+      "requiredAdversarialFixtures": [
+        "Mark all three route checks executed, create empty files, provide no matching evidence: expect errors for every check.",
+        "Provide evidence with the right file but a superstring test title: expect no exact evidence.",
+        "Provide one required browser project only: expect missing-project errors.",
+        "Provide exact passing evidence for every executed surface check: expect clean."
+      ]
+    },
+    {
+      "id": "public-applicability-can-be-hidden-by-free-text-reason",
+      "severity": "high",
+      "area": "public gaps must never be hidden",
+      "finding": "The minimal public Toggle fixture marks axe, keyboard, browser, pointer, reduced-motion, forced-colors, root-size, zoom and reflow non-applicable with a generic fixture reason, and the lock accepts it. The validator checks only that a non-applicable item has non-empty reason text, so a public component can suppress required coverage by setting applicable=false.",
+      "incorrectTestExpectation": "The nominal fully covered public Toggle project is considered complete despite no axe, keyboard or pointer evidence for an interactive control.",
+      "requiredBehavior": "Non-applicability must be constrained by a reviewed applicability policy or exact supported reason/category. Universally applicable public checks such as axe cannot be disabled by arbitrary prose, and an interactive Toggle cannot hide keyboard/pointer coverage. Legitimately irrelevant checks need a structured, reviewed reason.",
+      "requiredAdversarialFixtures": [
+        "Set a public interactive component's axe check to applicable=false with generic prose: expect an applicability error.",
+        "Set its keyboard and pointer checks non-applicable: expect errors.",
+        "Use an approved structured non-applicability category for a genuinely static component and an irrelevant interaction check: expect clean.",
+        "Remove or alter the approved reason/category: expect fail closed."
+      ]
+    },
+    {
+      "id": "evidence-has-no-freshness-or-source-binding",
+      "severity": "high",
+      "area": "stale execution evidence",
+      "finding": "Evidence association uses runner file, exact test title, pass status and project only. Reports carry no checked source hash, artifact hash, revision, run identity or timestamp boundary, so an old passing report with unchanged names can satisfy modified source/tests/stories or a different Storybook index.",
+      "requiredBehavior": "Coverage evidence must bind to the reviewed source snapshot and built Storybook index, using the integration fingerprint or exact hashes/provenance already produced by the harness. Stale reports from a prior source revision must fail even when file and test names still match.",
+      "requiredAdversarialFixtures": [
+        "Generate passing evidence, then change the covered source without changing names: expect stale evidence rejection.",
+        "Generate passing story evidence, then replace the Storybook index with a different artifact carrying the same story metadata: expect provenance mismatch.",
+        "Use evidence whose declared source/build fingerprint matches the current project snapshot: expect clean.",
+        "Omit fingerprint/provenance metadata from an otherwise matching report: expect fail closed."
+      ]
+    },
+    {
+      "id": "async-process-cwd-race",
+      "severity": "high",
+      "area": "composition API and root handling",
+      "finding": "checkCoverage changes the process-global working directory, then awaits verifyCoverage, whose path resolution repeatedly reads process.cwd(). Two concurrent calls for different roots can switch cwd during either await, read the other fixture's manifests/sources, and restore cwd in the wrong order.",
+      "requiredBehavior": "The exported async API must be root-pure and safe for concurrent composition. Prefer passing an explicit root through Stage A validators and resolving every path from it. If that API cannot change immediately, serialize calls with a reviewed mutex and prove restoration after success and failure.",
+      "requiredAdversarialFixtures": [
+        "Run Promise.all on two complete roots with deliberately different catalogs/manifests/evidence: both must return their own deterministic result and cwd must be unchanged.",
+        "Run one valid and one malformed root concurrently: the malformed errors must not contaminate the valid result.",
+        "Force verifyCoverage to reject after an await: cwd must still equal its original value.",
+        "Call checkCoverage while another unrelated async task resolves a relative path: unrelated resolution must remain unchanged."
+      ]
+    },
+    {
+      "id": "artifact-paths-can-escape-root",
+      "severity": "high",
+      "area": "root handling and evidence integrity",
+      "finding": "indexPath and evidencePaths are resolved against root but are not required to remain inside it. `../` paths, absolute paths and symlink escapes can supply a Storybook index or passing reports from another checkout while catalog/manifests come from the requested root.",
+      "requiredBehavior": "Require index and evidence artifacts to resolve inside the canonical project root or inside an explicitly declared, provenance-bound artifact root. Reject lexical and realpath/symlink escapes before reading files.",
+      "requiredAdversarialFixtures": [
+        "Point indexPath at ../other-project/index.json with matching names: expect containment error.",
+        "Point evidencePaths at an absolute passing report from another root: expect containment error.",
+        "Use a symlink inside root targeting an external report: expect realpath containment error.",
+        "Use relative and absolute paths that resolve to valid artifacts inside root: expect identical clean results."
+      ]
+    },
+    {
+      "id": "invalid-root-breaks-return-contract",
+      "severity": "medium",
+      "area": "missing input fail-closed behavior",
+      "finding": "process.chdir(projectRoot) occurs outside the inner validator catches. A missing, non-directory or inaccessible root rejects checkCoverage instead of returning its documented `{ errors: string[] }` result shape.",
+      "requiredBehavior": "Validate root before changing cwd and return an actionable coverage error in the stable API shape. CLI may still exit nonzero based on that error list.",
+      "requiredAdversarialFixtures": [
+        "Call checkCoverage with a missing root: resolve to one root error, do not reject.",
+        "Call with root pointing to a regular file: resolve to an actionable root-not-directory error.",
+        "Call with a valid root missing catalog, surfaces, manifest directory, index and evidence: return accumulated fail-closed errors without an unhandled exception.",
+        "After each invalid-root case, assert process.cwd() is unchanged."
+      ]
+    },
+    {
+      "id": "planned-filter-is-text-prefix-not-structured-scope",
+      "severity": "medium",
+      "area": "only planned application gaps may be tolerated",
+      "finding": "The only tolerance filters every validateCatalog error beginning with `planned verification gap:`. It relies on display text rather than structured surface status/category and does not itself prove the suppressed item is an application surface awaiting an allowed C batch.",
+      "requiredBehavior": "Stage A should expose structured errors or coverage should inspect validated inventory entries directly, suppressing only status=planned on application surfaces with complete mappings and an allowed future checkpoint. Public component/foundation gaps and malformed planned entries must remain blocking.",
+      "requiredAdversarialFixtures": [
+        "A complete application route check marked planned with a valid C checkpoint: tolerate only that gap.",
+        "A planned entry lacking its allowed checkpoint or carrying an unknown checkpoint: block.",
+        "A public component or foundation verification represented as planned: block.",
+        "An unrelated validator error whose message begins with the same prefix: block rather than suppress by text."
+      ]
+    }
+  ],
+  "verifiedExistingCoverage": [
+    "Missing manifest directory/manifest coverage is exercised fail closed.",
+    "Missing Storybook index and missing evidence files are exercised fail closed.",
+    "Missing exact evidence, failed evidence, unsupported evidence shape and suffix/superstring mismatches are covered.",
+    "Uncataloged module/public exports and invalid public classifications are covered.",
+    "Working-directory restoration is tested for one successful sequential call."
+  ]
+}

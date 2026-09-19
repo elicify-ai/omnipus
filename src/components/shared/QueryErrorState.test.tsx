@@ -58,4 +58,14 @@ describe('QueryErrorState', () => {
     render(<QueryErrorState message="Something broke" />)
     expect(screen.getByText('Something broke')).toBeInTheDocument()
   })
+
+  it('removes an already-rendered retry action on the render that observes forced logout', () => {
+    const retry = vi.fn()
+    const { rerender } = render(<QueryErrorState message="Something broke" onRetry={retry} />)
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    mockIsForceLoggingOut.mockReturnValue(true)
+    rerender(<QueryErrorState message="Something broke" onRetry={retry} />)
+    expect(screen.queryByRole('button', { name: /retry/i })).toBeNull()
+    expect(screen.queryByText('Something broke')).toBeNull()
+  })
 })

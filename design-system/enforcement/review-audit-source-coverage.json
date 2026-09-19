@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "status": "resolved-and-verified",
+  "subject": "scripts/design-system-locks/audit.mjs",
+  "requirements": [
+    "E1: each of the six locks covers its applicable formats",
+    "contract.sourceScope: include public-package source alongside canonical application source",
+    "Missing canonical application source remains blocking"
+  ],
+  "reproduction": {
+    "before": "Audit accepted missing per-scanner formats while another scanner advertised them, and omitted packages/ui/src.",
+    "red": "b-audit.scope-red.log: six failures caused by false clean reports"
+  },
+  "implementation": {
+    "requiredFormats": "Explicit per-scanner minimum coverage checked during module loading; injected unit-test API remains separate.",
+    "sourceRoots": [
+      "src",
+      "packages/ui/src"
+    ],
+    "optionalPackage": true,
+    "requiredApplicationRoot": true
+  },
+  "verification": {
+    "suite": "b-audit.scope-final.log",
+    "tests": 41,
+    "passed": 41,
+    "exit": 0,
+    "lintExit": 0,
+    "mutations": "b-audit.scope-mutations.json",
+    "mutationCount": 3,
+    "killed": 3,
+    "restored": true
+  },
+  "impact": {
+    "risk": "UNKNOWN",
+    "reason": "Exact new function UIDs are not indexed; source dependency inspection limits change to audit orchestration and tests."
+  },
+  "remaining": "Stage B acceptance requires remaining scanner fixes, actual policy/ledger integration and CI checks."
+}

@@ -26,9 +26,11 @@ const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
 )
 Avatar.displayName = 'Avatar'
 
+export type AvatarImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'alt'> & { alt: string }
+
 const AvatarImage = React.forwardRef<
   HTMLImageElement,
-  React.ImgHTMLAttributes<HTMLImageElement>
+  AvatarImageProps
 >(({ className, ...props }, ref) => (
   <img
     ref={ref}

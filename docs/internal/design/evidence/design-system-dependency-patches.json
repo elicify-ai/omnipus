@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "status": "dependency-audit-verified-build-validation-pending",
+  "audit": {
+    "vulnerabilities": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "dependencies": {
+      "prod": 493,
+      "dev": 753,
+      "optional": 169,
+      "peer": 0,
+      "peerOptional": 0,
+      "total": 1258
+    }
+  },
+  "report": "dist/design-system-baseline/cli-lanes/dependency-audit-final.json",
+  "scope": [
+    "dompurify",
+    "mermaid",
+    "browserslist",
+    "baseline-browser-mapping",
+    "brace-expansion",
+    "fast-uri",
+    "js-yaml"
+  ],
+  "override": "brace-expansion@^1.0.0 requires ^1.1.18; other major lines retain their dependency constraints",
+  "stageAInputFingerprint": "089623f8427e893be5ea7c0ce9ca94f4f9d1c4663078a41f5d44719a087ea2ec",
+  "remaining": [
+    "Fresh production budget",
+    "Final A checks",
+    "B integration",
+    "Pause before C1"
+  ]
+}

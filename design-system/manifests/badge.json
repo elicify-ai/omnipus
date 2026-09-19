@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "component": "Badge",
+  "exports": [
+    "Badge",
+    "badgeVariants"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/badge.tsx",
+  "documentation": "docs/internal/design/components/badge.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "secondary",
+    "outline",
+    "success",
+    "error",
+    "destructive",
+    "warning",
+    "muted"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/badge.stories.tsx",
+      "exports": [
+        "Default",
+        "Secondary",
+        "Outline",
+        "Success",
+        "Error",
+        "Destructive",
+        "Warning",
+        "Muted",
+        "Dense",
+        "NarrowViewport"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "badge-unit",
+      "kind": "unit",
+      "file": "src/components/ui/badge.test.tsx",
+      "test": "Badge presentation contract renders the default variant as non-interactive status text",
+      "applicable": true
+    },
+    {
+      "id": "badge-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Badge [check:badge-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "badge-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Badge [check:badge-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "badge-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Badge [check:badge-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "badge-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Badge [check:badge-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "badge-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Badge [check:badge-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "badge-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Badge [check:badge-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "badge-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Badge [check:badge-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "badge-interaction-not-applicable",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "Badge has no interaction behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "badge-keyboard-not-applicable",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Badge has no keyboard behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "badge-pointer-not-applicable",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Badge has no pointer behavior beyond its covered presentation contract."
+    }
+  ]
+}

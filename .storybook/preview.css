@@ -1,0 +1,4 @@
+@import '../src/styles/library.css';
+
+/* Story fixtures may use layout utilities that are deliberately absent from the public CSS scan. */
+@source '../src/**/*.stories.*';

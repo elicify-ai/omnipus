@@ -1,0 +1,5 @@
+# Badge\n\nBadge is a public presentation primitive in the Omnipus design system. It preserves the existing Sovereign Deep appearance and consumes shared foundation tokens.\n\n## Contract\n\n- Variants: default, secondary, outline, success, error, destructive, warning, muted.\n- Sizes: default.\n- States: default.\n- Public exports: Badge, badgeVariants.\n- Theme: dark.\n\nThe colocated stories cover every declared variant, size and state, plus dense and narrow-viewport presentations. The manifest maps applicable unit, accessibility, keyboard, pointer, motion, forced-colour, root-size, zoom and reflow checks to executable evidence.\n
+
+The default filled badge maps to the readable `ButtonFace` and `ButtonText` system-color pair with a `CanvasText` boundary in forced-colors mode. This preserves the status cue without changing normal rendering.
+
+Error and destructive variants retain the canonical red and existing 20% tinted background. Their label uses `--badge-error-foreground` so 12px text reaches at least 4.5:1 on all four foundation surfaces. This contrast normalization does not change the D3 error colour or D4 workflow status palette.

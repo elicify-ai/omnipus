@@ -4,9 +4,10 @@ import { Command as CommandPrimitive } from 'cmdk'
 const Command = React.forwardRef<
   React.ComponentRef<typeof CommandPrimitive>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive>
->(({ className, ...props }, ref) => (
+>(({ className, label = 'Command search', ...props }, ref) => (
   <CommandPrimitive
     ref={ref}
+    label={label}
     className={`flex h-full w-full flex-col overflow-hidden rounded-md ${className ?? ''}`}
     style={{ backgroundColor: 'var(--color-surface-1)', color: 'var(--color-secondary)' }}
     {...props}
@@ -21,7 +22,7 @@ const CommandInput = React.forwardRef<
   <div className="flex items-center border-b px-3" style={{ borderColor: 'var(--color-border)' }}>
     <CommandPrimitive.Input
       ref={ref}
-      className={`flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ''}`}
+      className={`flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none [@media(pointer:coarse)]:min-h-[44px] disabled:cursor-not-allowed disabled:opacity-50 ${className ?? ''}`}
       style={{ color: 'var(--color-secondary)' }}
       {...props}
     />

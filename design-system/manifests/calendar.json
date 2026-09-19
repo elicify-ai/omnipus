@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "component": "Calendar",
+  "exports": [
+    "Calendar",
+    "CalendarProps"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/calendar.tsx",
+  "documentation": "docs/internal/design/components/calendar.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default",
+    "selected",
+    "disabled",
+    "outside"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/calendar.stories.tsx",
+      "exports": [
+        "Default",
+        "DisabledDays"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "calendar-unit",
+      "kind": "unit",
+      "file": "src/components/ui/calendar.test.tsx",
+      "test": "Calendar — selection clicking a day calls onSelect with that Date",
+      "applicable": true
+    },
+    {
+      "id": "calendar-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/calendar.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "calendar-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Calendar [check:calendar-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "status": "draft-test-review",
+  "acceptance": false,
+  "reviewedFiles": [
+    "tests/design-system-locks/css-colors.test.mjs",
+    "tests/design-system-locks/typography.test.mjs"
+  ],
+  "requirements": ["E1", "D1", "D2", "D3", "D9"],
+  "findings": [
+    {
+      "id": "typography-svg-scope",
+      "severity": "high",
+      "testFile": "tests/design-system-locks/typography.test.mjs",
+      "requirement": "E1/D2 source scope includes SVG and all computed UI text",
+      "currentExpectation": "The scanner API test expects extensions to equal .ts, .tsx, .js, .jsx, .mjs, .cjs and .css, omitting .svg.",
+      "requiredExpectation": "SVG files and SVG text attributes must be scanned; sub-12px SVG text must produce a typography floor finding rather than be skipped or return clean.",
+      "requiredAdversarialFixtures": [
+        { "path": "src/icon.svg", "source": "<svg><text font-size=\"11px\">Label</text></svg>", "expected": "typography/font-size-below-floor" },
+        { "path": "src/icon.tsx", "source": "export const X = () => <svg><text fontSize=\"11px\">Label</text></svg>", "expected": "typography/font-size-below-floor" },
+        { "path": "src/icon.tsx", "source": "export const X = () => <svg><text fontSize={11}>Label</text></svg>", "expected": "typography/font-size-below-floor" }
+      ]
+    },
+    {
+      "id": "css-unregistered-color-token",
+      "severity": "high",
+      "testFile": "tests/design-system-locks/css-colors.test.mjs",
+      "requirement": "E1/D3 permit application colors only through registered tokens or exact registered exceptions",
+      "currentExpectation": "The raw-color table explicitly expects `a { color: var(--unregistered-local) }` to return no finding.",
+      "requiredExpectation": "A color-valued unregistered custom property reference must produce an unregistered-color-token finding. Registered color token references remain clean.",
+      "requiredAdversarialFixtures": [
+        { "source": "a { color: var(--unregistered-local) }", "expected": "unregistered color token finding" },
+        { "source": "a { background: linear-gradient(var(--color-primary), var(--unregistered-local)) }", "expected": "one unregistered color token finding" },
+        { "source": "a { color: var(--color-primary, var(--unregistered-local)) }", "expected": "one unregistered color token finding" },
+        { "source": "a { color: var(--color-primary) }", "expected": "clean" }
+      ]
+    },
+    {
+      "id": "typography-role-properties",
+      "severity": "high",
+      "testFile": "tests/design-system-locks/typography.test.mjs",
+      "requirement": "D9 rejects arbitrary family, size, weight, line-height and letter-spacing values",
+      "currentExpectation": "A permitted-case test states that weight, tracking and leading are outside this lane, while no other named scanner owns D9 typography properties.",
+      "requiredExpectation": "Named registered utilities or tokens may pass, but arbitrary or literal off-role weight, line-height and letter-spacing values must fail.",
+      "requiredAdversarialFixtures": [
+        { "source": "export const X = () => <p className=\"font-[350]\">x</p>", "expected": "arbitrary typography finding" },
+        { "source": "export const X = () => <p className=\"leading-[13px]\">x</p>", "expected": "arbitrary typography finding" },
+        { "source": "export const X = () => <p className=\"tracking-[.1em]\">x</p>", "expected": "arbitrary typography finding" },
+        { "source": ".x { font-weight: 350; line-height: 13px; letter-spacing: .1em }", "expected": "three governed typography findings" },
+        { "source": "export const X = () => <p className=\"font-medium leading-normal tracking-normal\">x</p>", "expected": "clean only when these named roles are registered policy values" }
+      ]
+    },
+    {
+      "id": "css-data-uri-color-bypass",
+      "severity": "high",
+      "testFile": "tests/design-system-locks/css-colors.test.mjs",
+      "requirement": "E1 covers unregistered colors in CSS and SVG values; exceptions are exact central boundaries",
+      "currentExpectation": "The permitted table treats any hex encoded inside a data-URI SVG as clean.",
+      "requiredExpectation": "A paint color embedded in a CSS data-URI must be parsed and reported or must fail closed as unsupported. Only an exact centrally registered asset or exception boundary may pass.",
+      "requiredAdversarialFixtures": [
+        { "source": "a { background-image: url(\"data:image/svg+xml,<svg><path fill='%23ffffff'/></svg>\") }", "expected": "raw-color or unsupported finding" },
+        { "source": "a { mask-image: url(\"data:image/svg+xml,<svg><path stroke='%23d4af37'/></svg>\") }", "expected": "raw-color or unsupported finding" },
+        { "source": "a { background-image: url('/assets/registered.svg') }", "expected": "clean at this scanner boundary" }
+      ]
+    },
+    {
+      "id": "typography-indirection-and-dynamic-values",
+      "severity": "medium",
+      "testFile": "tests/design-system-locks/typography.test.mjs",
+      "requirement": "E1 must not silently lose governed values through AST indirection or builders",
+      "currentExpectation": "Coverage includes direct className strings, cn/cva strings, template interpolation and one dynamic member expression, but not common constant, array, clsx or style-object indirection.",
+      "requiredExpectation": "Resolvable indirection must be scanned. Unresolvable governed expressions must produce an explicit unsupported finding rather than return clean.",
+      "requiredAdversarialFixtures": [
+        { "source": "const tiny = 'text-xs'; export const X = () => <p className={tiny}>x</p>", "expected": "text-size-below-floor or explicit unsupported finding" },
+        { "source": "export const X = () => <p className={clsx('text-base', cond && 'text-xs')}>x</p>", "expected": "text-size-below-floor" },
+        { "source": "const styles = { fontSize: '11px' }; export const X = () => <p style={styles}>x</p>", "expected": "font-size-below-floor or explicit unsupported finding" },
+        { "source": "export const X = () => <p style={{ ...props.style, fontSize: size }}>x</p>", "expected": "explicit unsupported font-size finding" },
+        { "source": "export const X = () => <p style={{ ['font' + 'Size']: '11px' }}>x</p>", "expected": "font-size-below-floor or explicit unsupported finding" }
+      ]
+    },
+    {
+      "id": "typography-token-resolution-and-shadowing",
+      "severity": "medium",
+      "testFile": "tests/design-system-locks/typography.test.mjs",
+      "requirement": "D2 hard floor and D3 single directed token graph",
+      "currentExpectation": "Registered `var(--type-*)` references are treated as clean while the test policy leaves resolvedTokens empty; no test proves a registered token cannot resolve below 12px or be shadowed locally.",
+      "requiredExpectation": "A registered type token resolving below 12px must be rejected by this scanner or by a specifically asserted token-graph gate. Local declarations must not shadow canonical registered type tokens with unsafe values.",
+      "requiredAdversarialFixtures": [
+        { "source": "export const X = () => <p style={{ fontSize: 'var(--type-caption-size)' }}>x</p>", "policy": "--type-caption-size resolves to 10px", "expected": "font-size-below-floor or proved token-graph rejection" },
+        { "path": "src/fixture.css", "source": ".scope { --type-caption-size: 10px; font-size: var(--type-caption-size) }", "expected": "unsafe shadow/redefinition or font-size-below-floor finding" },
+        { "path": "src/fixture.css", "source": ".scope { font-size: var(--type-caption-size) }", "policy": "canonical token resolves to max(12px, .75rem)", "expected": "clean" }
+      ]
+    },
+    {
+      "id": "typography-unit-and-function-fail-closed-matrix",
+      "severity": "medium",
+      "testFile": "tests/design-system-locks/typography.test.mjs",
+      "requirement": "D1/D2 prove the 12px minimum across the 12–20px root range and narrow reflow; unsupported governed syntax fails closed",
+      "currentExpectation": "The suite covers px, rem, vw, em, vh and a few calc/min/max/clamp shapes, but leaves several relative units, zero/negative values, nested math and Tailwind @apply untested.",
+      "requiredExpectation": "Each governed unit or function must be safely evaluated at the policy boundaries or produce an unsupported finding; none may silently return clean.",
+      "requiredAdversarialFixtures": [
+        { "source": "export const X = () => <p style={{ fontSize: '75%' }}>x</p>", "expected": "below-floor or unsupported finding" },
+        { "source": "export const X = () => <p style={{ fontSize: '8pt' }}>x</p>", "expected": "below-floor or unsupported finding" },
+        { "source": "export const X = () => <p style={{ fontSize: '2vmin' }}>x</p>", "expected": "below-floor or unsupported finding" },
+        { "source": "export const X = () => <p style={{ fontSize: '1lh' }}>x</p>", "expected": "unsupported finding" },
+        { "source": "export const X = () => <p style={{ fontSize: '1rlh' }}>x</p>", "expected": "unsupported finding" },
+        { "source": "export const X = () => <p style={{ fontSize: '2ch' }}>x</p>", "expected": "unsupported finding" },
+        { "source": "export const X = () => <p style={{ fontSize: 0 }}>x</p>", "expected": "font-size-below-floor" },
+        { "source": "export const X = () => <p style={{ fontSize: '-1px' }}>x</p>", "expected": "font-size-below-floor" },
+        { "source": "export const X = () => <p style={{ fontSize: 'max(12px, min(2vw, 11px))' }}>x</p>", "expected": "clean only if the outer max is correctly proved to enforce 12px; otherwise explicit unsupported" },
+        { "path": "src/fixture.css", "source": ".x { @apply text-xs; }", "expected": "text-size-below-floor or explicit unsupported finding" }
+      ]
+    }
+  ]
+}

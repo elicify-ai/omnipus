@@ -95,9 +95,43 @@ describe('AlertDialog', () => {
   it('footer stacks in DOM order (no *-reverse class)', () => {
     render(<Harness open onOpenChange={() => {}} onAction={() => {}} />)
     const cancelButton = screen.getByRole('button', { name: 'Cancel' })
+    const actionButton = screen.getByRole('button', { name: 'Delete' })
     const footer = cancelButton.closest('div')
     expect(footer).not.toBeNull()
     expect(footer!.className).not.toMatch(/-reverse\b/)
-    expect(footer!.className).toMatch(/\bflex-col\b/)
+    expect(footer).toHaveClass('flex-col', 'sm:flex-row', 'sm:justify-end')
+    expect(Array.from(footer!.querySelectorAll('button')).map((button) => button.textContent)).toEqual([
+      'Cancel',
+      'Delete',
+    ])
+    expect(cancelButton.compareDocumentPosition(actionButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+  })
+
+  // D7 / Stage A: enlarge stacked coarse-pointer separation, not Button chrome.
+  // Spec: keep unprefixed `gap-2` for fine-pointer narrow stacks; apply `gap-6`
+  // only when pointer is coarse AND width is below `sm`; keep the `sm+` row at
+  // `space-x-2` / `gap-0`. jsdom cannot layout or evaluate those media queries —
+  // the class contract is the unit oracle. Overlapping 44px hit-regions at
+  // coarse 390×844 is the real-browser oracle (lead re-runs that check; do not
+  // pin pre-geometry page coordinates here).
+  it('footer applies gap-6 only for coarse pointers below sm', () => {
+    render(<Harness open onOpenChange={() => {}} onAction={() => {}} />)
+    const footer = screen.getByRole('button', { name: 'Cancel' }).closest('div')
+    expect(footer).not.toBeNull()
+    expect(footer).toHaveClass(
+      'flex',
+      'flex-col',
+      'gap-2',
+      'max-sm:pointer-coarse:gap-6',
+      'sm:flex-row',
+      'sm:justify-end',
+      'sm:space-x-2',
+      'sm:gap-0',
+    )
+    expect(footer).not.toHaveClass('gap-6')
+    expect(footer).not.toHaveClass('pointer-coarse:gap-6')
+    expect(footer!.className.split(/\s+/)).not.toContain('[@media(pointer:coarse)]:gap-6')
   })
 })

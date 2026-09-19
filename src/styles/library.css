@@ -1,0 +1,122 @@
+/* Reusable component foundations. Application viewport and shell layout stay outside this file. */
+@import '@fontsource/outfit/400.css';
+@import '@fontsource/outfit/700.css';
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import 'tailwindcss' source(none);
+@import './tokens.theme.generated.css';
+@import './tokens.generated.css';
+
+@source "../components/ui/accordion.tsx";
+@source "../components/ui/alert-dialog.tsx";
+@source "../components/ui/avatar.tsx";
+@source "../components/ui/badge.tsx";
+@source "../components/ui/button.tsx";
+@source "../components/ui/calendar.tsx";
+@source "../components/ui/card.tsx";
+@source "../components/ui/checkbox.tsx";
+@source "../components/ui/command.tsx";
+@source "../components/ui/date-picker.tsx";
+@source "../components/ui/date-time-picker.tsx";
+@source "../components/ui/dialog.tsx";
+@source "../components/ui/dropdown-menu.tsx";
+@source "../components/ui/input.tsx";
+@source "../components/ui/label.tsx";
+@source "../components/ui/popover.tsx";
+@source "../components/ui/progress.tsx";
+@source "../components/ui/select.tsx";
+@source "../components/ui/separator.tsx";
+@source "../components/ui/sheet.tsx";
+@source "../components/ui/slider.tsx";
+@source "../components/ui/smart-select.tsx";
+@source "../components/ui/switch.tsx";
+@source "../components/ui/table.tsx";
+@source "../components/ui/tabs.tsx";
+@source "../components/ui/textarea.tsx";
+@source "../components/ui/icon-button.tsx";
+@source "../components/ui/field.tsx";
+@source "../components/ui/confirm-dialog.tsx";
+@source "../components/ui/skeleton.tsx";
+@source "../components/ui/collection-state.tsx";
+@source "../components/ui/job-status.tsx";
+@source "../components/ui/empty-state.tsx";
+@source "../components/ui/error-state.tsx";
+@source "../components/ui/query-error-state.tsx";
+
+@theme inline {
+  --font-headline: var(--type-page-title-family);
+  --font-body: var(--type-body-family);
+  --font-mono: var(--type-code-family);
+  --text-xs: var(--type-utility-xs-size);
+  --text-sm: var(--type-body-compact-size);
+  --spacing-chrome-header: var(--chrome-header-height);
+  --spacing-tap-target-min: var(--target-touch-minimum);
+}
+
+@layer base {
+  html {
+    font-size: clamp(var(--font-root-minimum), var(--user-font-size, var(--font-root-default)), var(--font-root-maximum));
+    color-scheme: dark;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  body {
+    margin: 0;
+    background-color: var(--color-primary);
+    color: var(--color-secondary);
+    font-family: var(--type-body-family);
+    line-height: var(--type-body-line-height);
+  }
+}
+
+/* Preserve the existing single focus treatment, including composite-owned focus. */
+:focus-visible:not([data-no-focus-ring]) {
+  outline: 1px solid var(--color-accent) !important;
+  outline-color: var(--color-accent) !important;
+  outline-offset: 2px;
+  --tw-ring-shadow: 0 0 transparent !important;
+  --tw-ring-offset-shadow: 0 0 transparent !important;
+}
+[data-no-focus-ring]:focus-visible {
+  outline: none !important;
+}
+
+/* The transparent hit region grows without changing the visible control box.
+   Consumers must leave enough space between controls for these regions not to overlap. */
+[data-ds-action]::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: max(100%, var(--icon-target-pointer));
+  height: max(100%, var(--icon-target-pointer));
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+@media (pointer: coarse) {
+  [data-ds-action]::before {
+    width: max(100%, var(--icon-target-touch));
+    height: max(100%, var(--icon-target-touch));
+  }
+}
+
+/* Keep keyboard focus in the user's high-contrast palette, including controls
+   that preserve their explicit system-color fills with forced-color-adjust. */
+@media (forced-colors: active) {
+  :root {
+    --color-primary: Canvas;
+    --color-surface-0: Canvas;
+    --color-surface-1: Canvas;
+    --color-surface-2: Canvas;
+    --color-surface-3: Canvas;
+    --color-secondary: CanvasText;
+    --color-muted: CanvasText;
+    --color-border: CanvasText;
+  }
+  :focus-visible:not([data-no-focus-ring]) {
+    outline-color: Highlight !important;
+  }
+}

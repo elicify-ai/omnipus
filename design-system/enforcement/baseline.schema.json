@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Omnipus design-system lock baseline",
+  "description": "Existing-debt snapshot. Each fingerprint is SHA-256 of JSON.stringify([ruleId, path, syntax]); counts may decrease, never increase, and position never participates. This schema does not approve a repository baseline.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "fingerprints"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "fingerprints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["fingerprint", "ruleId", "path", "syntax", "count"],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "ruleId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?!\\.\\.)(?!.*\\/\\.\\.)[A-Za-z0-9._$ -]+(?:\\/[A-Za-z0-9._$ -]+)*$"
+          },
+          "syntax": {
+            "type": "string",
+            "minLength": 1
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

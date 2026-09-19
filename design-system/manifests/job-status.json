@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "component": "JobStatus",
+  "exports": [
+    "JobStatus",
+    "JobStatusProps",
+    "JobState"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/job-status.tsx",
+  "documentation": "docs/internal/design/components/job-status.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "queued",
+    "running",
+    "progress",
+    "paused",
+    "failed",
+    "complete",
+    "cancelled",
+    "stalled"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/job-status.stories.tsx",
+      "exports": [
+        "Progressing",
+        "Queued",
+        "RunningUnknown",
+        "Paused",
+        "Failed",
+        "Complete",
+        "Cancelled"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "job-status-unit",
+      "kind": "unit",
+      "file": "src/components/ui/job-status.test.tsx",
+      "test": "JobStatus \u2014 truthful long-running job state escalates after exactly 10000ms without progress and retains the last known value",
+      "applicable": true
+    },
+    {
+      "id": "job-status-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/job-status.stories.tsx",
+      "test": "Progressing",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-axe] axe",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-keyboard] keyboard",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-browser] browser",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-pointer] pointer",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-reduced-motion] reduced-motion",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-forced-colors] forced-colors",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-root-size] root-size",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-zoom] zoom",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-status-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "JobStatus [check:job-status-reflow] reflow",
+      "story": "Progressing",
+      "applicable": true
+    },
+    {
+      "id": "job-restart-after-complete",
+      "kind": "unit",
+      "file": "src/components/ui/job-status.test.tsx",
+      "test": "JobStatus \u2014 restart and owned announcements starts a fresh progress history and stall interval after complete on the same job key",
+      "applicable": true
+    },
+    {
+      "id": "job-restart-after-failed",
+      "kind": "unit",
+      "file": "src/components/ui/job-status.test.tsx",
+      "test": "JobStatus \u2014 restart and owned announcements starts a fresh progress history and stall interval after failed on the same job key",
+      "applicable": true
+    },
+    {
+      "id": "job-restart-after-cancelled",
+      "kind": "unit",
+      "file": "src/components/ui/job-status.test.tsx",
+      "test": "JobStatus \u2014 restart and owned announcements starts a fresh progress history and stall interval after cancelled on the same job key",
+      "applicable": true
+    },
+    {
+      "id": "job-cancelled-retry",
+      "kind": "unit",
+      "file": "src/components/ui/job-status.test.tsx",
+      "test": "JobStatus \u2014 restart and owned announcements invokes only Retry for a cancelled job and leaves lifecycle state with the caller",
+      "applicable": true
+    },
+    {
+      "id": "job-announcement-ownership",
+      "kind": "unit",
+      "file": "src/components/ui/job-status.test.tsx",
+      "test": "JobStatus \u2014 restart and owned announcements keeps job announcements separate from empty idle action statuses",
+      "applicable": true
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+{
+  "version": 1,
+  "component": "Separator",
+  "exports": [
+    "Separator"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/separator.tsx",
+  "documentation": "docs/internal/design/components/separator.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "horizontal",
+    "vertical",
+    "semantic"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "decorative",
+    "semantic"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/separator.stories.tsx",
+      "exports": [
+        "Horizontal",
+        "Vertical",
+        "Semantic",
+        "Dense",
+        "NarrowViewport"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "separator-unit",
+      "kind": "unit",
+      "file": "src/components/ui/separator.test.tsx",
+      "test": "Separator semantics is decorative by default",
+      "applicable": true
+    },
+    {
+      "id": "separator-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Separator [check:separator-axe] axe",
+      "story": "Horizontal",
+      "applicable": true
+    },
+    {
+      "id": "separator-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Separator [check:separator-browser] browser",
+      "story": "Horizontal",
+      "applicable": true
+    },
+    {
+      "id": "separator-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Separator [check:separator-forced-colors] forced-colors",
+      "story": "Horizontal",
+      "applicable": true
+    },
+    {
+      "id": "separator-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Separator [check:separator-zoom] zoom",
+      "story": "Horizontal",
+      "applicable": true
+    },
+    {
+      "id": "separator-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Separator [check:separator-reflow] reflow",
+      "story": "Horizontal",
+      "applicable": true
+    },
+    {
+      "id": "separator-interaction-not-applicable",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "Separator has no interaction behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "separator-keyboard-not-applicable",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Separator has no keyboard behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "separator-pointer-not-applicable",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Separator has no pointer behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "separator-reduced-motion-not-applicable",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Separator has no reduced-motion behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "separator-root-size-not-applicable",
+      "kind": "root-size",
+      "applicable": false,
+      "reason": "Separator has no root-size behavior beyond its covered presentation contract."
+    }
+  ]
+}

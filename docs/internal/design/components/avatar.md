@@ -1,0 +1,3 @@
+# Avatar\n\nAvatar is a public presentation primitive in the Omnipus design system. It preserves the existing Sovereign Deep appearance and consumes shared foundation tokens.\n\n## Contract\n\n- Variants: fallback, image.\n- Sizes: sm, md, lg.\n- States: default.\n- Public exports: Avatar, AvatarImage, AvatarFallback.\n- Theme: dark.\n\nThe colocated stories cover every declared variant, size and state, plus dense and narrow-viewport presentations. The manifest maps applicable unit, accessibility, keyboard, pointer, motion, forced-colour, root-size, zoom and reflow checks to executable evidence.\n
+
+`AvatarImage` requires an explicit `alt` value. Use meaningful text for an informative avatar and `alt=""` for a deliberately decorative image.

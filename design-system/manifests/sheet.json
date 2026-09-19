@@ -1,0 +1,137 @@
+{
+  "version": 1,
+  "component": "Sheet",
+  "exports": [
+    "Sheet",
+    "SheetPortal",
+    "SheetOverlay",
+    "SheetTrigger",
+    "SheetClose",
+    "SheetContent",
+    "SheetHeader",
+    "SheetFooter",
+    "SheetTitle",
+    "SheetDescription"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/sheet.tsx",
+  "documentation": "docs/internal/design/components/sheet.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "sm",
+    "md",
+    "lg"
+  ],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "SheetContract",
+        "SheetKeyboard",
+        "SheetFooterTargets"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "sheet-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/overlays.test.tsx",
+      "test": "overlay contracts maps named sheet sizes without removing the legacy width override"
+    },
+    {
+      "id": "sheet-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Sheet Contract",
+      "story": "SheetContract"
+    },
+    {
+      "id": "sheet-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-axe] axe",
+      "story": "SheetContract"
+    },
+    {
+      "id": "sheet-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-keyboard] keyboard",
+      "story": "SheetKeyboard"
+    },
+    {
+      "id": "sheet-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-browser] browser",
+      "story": "SheetContract"
+    },
+    {
+      "id": "sheet-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-pointer] pointer",
+      "story": "SheetFooterTargets"
+    },
+    {
+      "id": "sheet-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-reduced-motion] reduced-motion",
+      "story": "SheetContract"
+    },
+    {
+      "id": "sheet-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-forced-colors] forced-colors",
+      "story": "SheetContract"
+    },
+    {
+      "id": "sheet-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-root-size] root-size",
+      "story": "SheetContract"
+    },
+    {
+      "id": "sheet-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-zoom] zoom",
+      "story": "SheetContract"
+    },
+    {
+      "id": "sheet-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Sheet [check:sheet-reflow] reflow",
+      "story": "SheetContract"
+    }
+  ]
+}

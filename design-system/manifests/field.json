@@ -1,0 +1,196 @@
+{
+  "version": 1,
+  "component": "Field",
+  "exports": [
+    "Field"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/field.tsx",
+  "documentation": "docs/internal/design/components/field.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "required",
+    "invalid",
+    "optional"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "required",
+    "invalid",
+    "read-only",
+    "disabled",
+    "optional"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/field.stories.tsx",
+      "exports": [
+        "Default",
+        "Required",
+        "Invalid",
+        "ReadOnly",
+        "Disabled",
+        "NarrowViewport",
+        "Optional"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "field-unit",
+      "kind": "unit",
+      "file": "src/components/ui/field.test.tsx",
+      "test": "Field \u2014 association contract connects label, description and error to the control without owning its value",
+      "applicable": true
+    },
+    {
+      "id": "field-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/field.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-read-only-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/field.stories.tsx",
+      "test": "Read Only",
+      "story": "ReadOnly",
+      "applicable": true
+    },
+    {
+      "id": "field-disabled-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/field.stories.tsx",
+      "test": "Disabled",
+      "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "field-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Field has no motion or animated transition."
+    },
+    {
+      "id": "field-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Field [check:field-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "field-validation-precedence-unit",
+      "kind": "unit",
+      "file": "src/components/ui/field.test.tsx",
+      "test": "Field \u2014 validation precedence and compound wiring marks an explicit false child invalid while its Field error exists, then restores the child state",
+      "applicable": true
+    },
+    {
+      "id": "field-child-validation-unit",
+      "kind": "unit",
+      "file": "src/components/ui/field.test.tsx",
+      "test": "Field \u2014 validation precedence and compound wiring preserves child validation when Field supplies no error",
+      "applicable": true
+    },
+    {
+      "id": "field-select-composition-unit",
+      "kind": "unit",
+      "file": "src/components/ui/field.test.tsx",
+      "test": "Field \u2014 validation precedence and compound wiring wires Select root required state and trigger identity separately",
+      "applicable": true
+    },
+    {
+      "id": "field-optional-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/field.stories.tsx",
+      "test": "Optional",
+      "story": "Optional",
+      "applicable": true
+    },
+    {
+      "id": "field-optional-localized-unit",
+      "kind": "unit",
+      "file": "src/components/ui/field.test.tsx",
+      "test": "Field \u2014 optional indication shows caller-localized optional copy without making the control required",
+      "applicable": true
+    },
+    {
+      "id": "field-optional-required-unit",
+      "kind": "unit",
+      "file": "src/components/ui/field.test.tsx",
+      "test": "Field \u2014 optional indication suppresses optional copy when either Field or its child is required",
+      "applicable": true
+    },
+    {
+      "id": "field-optional-omitted-unit",
+      "kind": "unit",
+      "file": "src/components/ui/field.test.tsx",
+      "test": "Field \u2014 optional indication leaves existing labels unchanged when optional copy is omitted",
+      "applicable": true
+    }
+  ]
+}

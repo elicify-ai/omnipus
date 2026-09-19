@@ -1,0 +1,1660 @@
+{
+  "version": 1,
+  "tokens": [
+    {
+      "id": "primitive.color.surface-0",
+      "css": "--primitive-color-surface-0",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#0A0A0B"
+    },
+    {
+      "id": "primitive.color.surface-1",
+      "css": "--primitive-color-surface-1",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#111113"
+    },
+    {
+      "id": "primitive.color.surface-2",
+      "css": "--primitive-color-surface-2",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#141416"
+    },
+    {
+      "id": "primitive.color.surface-3",
+      "css": "--primitive-color-surface-3",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#222228"
+    },
+    {
+      "id": "primitive.color.silver",
+      "css": "--primitive-color-silver",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#E2E8F0"
+    },
+    {
+      "id": "primitive.color.grey",
+      "css": "--primitive-color-grey",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#9CA3AF"
+    },
+    {
+      "id": "primitive.color.border",
+      "css": "--primitive-color-border",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#2D3748"
+    },
+    {
+      "id": "primitive.color.gold",
+      "css": "--primitive-color-gold",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#D4AF37"
+    },
+    {
+      "id": "primitive.color.gold-hover",
+      "css": "--primitive-color-gold-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#C49E2F"
+    },
+    {
+      "id": "primitive.color.green",
+      "css": "--primitive-color-green",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#10B981"
+    },
+    {
+      "id": "primitive.color.amber",
+      "css": "--primitive-color-amber",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#EAB308"
+    },
+    {
+      "id": "primitive.color.red",
+      "css": "--primitive-color-red",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#EF4444"
+    },
+    {
+      "id": "primitive.color.red-hover",
+      "css": "--primitive-color-red-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#DC2626"
+    },
+    {
+      "id": "primitive.color.destructive-action-hover",
+      "css": "--primitive-color-destructive-action-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#EA2626"
+    },
+    {
+      "id": "primitive.color.blue",
+      "css": "--primitive-color-blue",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#3B82F6"
+    },
+    {
+      "id": "primitive.color.orange",
+      "css": "--primitive-color-orange",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#F97316"
+    },
+    {
+      "id": "primitive.color.mount",
+      "css": "--primitive-color-mount",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#8EA3BD"
+    },
+    {
+      "id": "primitive.color.grey-tint",
+      "css": "--primitive-color-grey-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#9CA3AF1A"
+    },
+    {
+      "id": "primitive.color.grey-hover",
+      "css": "--primitive-color-grey-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#9CA3AF26"
+    },
+    {
+      "id": "primitive.color.blue-tint",
+      "css": "--primitive-color-blue-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#3B82F61A"
+    },
+    {
+      "id": "primitive.color.blue-hover",
+      "css": "--primitive-color-blue-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#3B82F626"
+    },
+    {
+      "id": "primitive.color.gold-tint",
+      "css": "--primitive-color-gold-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#D4AF371A"
+    },
+    {
+      "id": "primitive.color.gold-status-hover",
+      "css": "--primitive-color-gold-status-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#D4AF3726"
+    },
+    {
+      "id": "primitive.color.orange-tint",
+      "css": "--primitive-color-orange-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#F973161A"
+    },
+    {
+      "id": "primitive.color.orange-hover",
+      "css": "--primitive-color-orange-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#F9731626"
+    },
+    {
+      "id": "primitive.color.green-tint",
+      "css": "--primitive-color-green-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#10B9811A"
+    },
+    {
+      "id": "primitive.color.green-hover",
+      "css": "--primitive-color-green-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#10B98126"
+    },
+    {
+      "id": "primitive.color.red-tint",
+      "css": "--primitive-color-red-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#EF44441A"
+    },
+    {
+      "id": "primitive.color.red-status-hover",
+      "css": "--primitive-color-red-status-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#EF444426"
+    },
+    {
+      "id": "primitive.color.amber-tint",
+      "css": "--primitive-color-amber-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#EAB3081A"
+    },
+    {
+      "id": "primitive.color.amber-hover",
+      "css": "--primitive-color-amber-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#EAB30826"
+    },
+    {
+      "id": "color.surface.page",
+      "css": "--color-primary",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.surface-0"
+    },
+    {
+      "id": "color.surface.zero",
+      "css": "--color-surface-0",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.surface-0"
+    },
+    {
+      "id": "color.surface.raised",
+      "css": "--color-surface-1",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.surface-1"
+    },
+    {
+      "id": "color.surface.card",
+      "css": "--color-surface-2",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.surface-2"
+    },
+    {
+      "id": "color.surface.high",
+      "css": "--color-surface-3",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.surface-3"
+    },
+    {
+      "id": "color.text.primary",
+      "css": "--color-secondary",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.silver"
+    },
+    {
+      "id": "color.text.muted",
+      "css": "--color-muted",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.grey"
+    },
+    {
+      "id": "color.border.default",
+      "css": "--color-border",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.border"
+    },
+    {
+      "id": "color.accent.default",
+      "css": "--color-accent",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.gold"
+    },
+    {
+      "id": "color.accent.hover",
+      "css": "--color-accent-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.gold-hover"
+    },
+    {
+      "id": "color.success",
+      "css": "--color-success",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.green"
+    },
+    {
+      "id": "color.warning",
+      "css": "--color-warning",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.amber"
+    },
+    {
+      "id": "color.error",
+      "css": "--color-error",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.red"
+    },
+    {
+      "id": "color.error.hover",
+      "css": "--color-error-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.red-hover"
+    },
+    {
+      "id": "color.action.destructive-hover",
+      "css": "--color-destructive-action-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.destructive-action-hover"
+    },
+    {
+      "id": "color.info",
+      "css": "--color-info",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.blue"
+    },
+    {
+      "id": "color.blocked",
+      "css": "--color-blocked",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.orange"
+    },
+    {
+      "id": "color.cancelled",
+      "css": "--color-cancelled",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.amber"
+    },
+    {
+      "id": "color.mount",
+      "css": "--color-mount",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.mount"
+    },
+    {
+      "id": "color.status.inbox",
+      "css": "--color-status-inbox",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.grey"
+    },
+    {
+      "id": "color.status.inbox.background",
+      "css": "--color-status-inbox-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.grey-tint"
+    },
+    {
+      "id": "color.status.inbox.hover",
+      "css": "--color-status-inbox-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.grey-hover"
+    },
+    {
+      "id": "color.status.next",
+      "css": "--color-status-next",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.blue"
+    },
+    {
+      "id": "color.status.next.background",
+      "css": "--color-status-next-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.blue-tint"
+    },
+    {
+      "id": "color.status.next.hover",
+      "css": "--color-status-next-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.blue-hover"
+    },
+    {
+      "id": "color.status.in-progress",
+      "css": "--color-status-in-progress",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.gold"
+    },
+    {
+      "id": "color.status.in-progress.background",
+      "css": "--color-status-in-progress-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.gold-tint"
+    },
+    {
+      "id": "color.status.in-progress.hover",
+      "css": "--color-status-in-progress-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.gold-status-hover"
+    },
+    {
+      "id": "color.status.blocked",
+      "css": "--color-status-blocked",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.orange"
+    },
+    {
+      "id": "color.status.blocked.background",
+      "css": "--color-status-blocked-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.orange-tint"
+    },
+    {
+      "id": "color.status.blocked.hover",
+      "css": "--color-status-blocked-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.orange-hover"
+    },
+    {
+      "id": "color.status.done",
+      "css": "--color-status-done",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.green"
+    },
+    {
+      "id": "color.status.done.background",
+      "css": "--color-status-done-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.green-tint"
+    },
+    {
+      "id": "color.status.done.hover",
+      "css": "--color-status-done-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.green-hover"
+    },
+    {
+      "id": "color.status.failed",
+      "css": "--color-status-failed",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.red"
+    },
+    {
+      "id": "color.status.failed.background",
+      "css": "--color-status-failed-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.red-tint"
+    },
+    {
+      "id": "color.status.failed.hover",
+      "css": "--color-status-failed-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.red-status-hover"
+    },
+    {
+      "id": "color.status.cancelled",
+      "css": "--color-status-cancelled",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.amber"
+    },
+    {
+      "id": "color.status.cancelled.background",
+      "css": "--color-status-cancelled-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.amber-tint"
+    },
+    {
+      "id": "color.status.cancelled.hover",
+      "css": "--color-status-cancelled-hover",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.amber-hover"
+    },
+    {
+      "id": "component.status.inbox.foreground",
+      "css": "--status-inbox-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.inbox",
+      "owner": "Status",
+      "purpose": "Render the inbox status foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.inbox.background",
+      "css": "--status-inbox-background",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.inbox.background",
+      "owner": "Status",
+      "purpose": "Render the inbox status background.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.inbox.border",
+      "css": "--status-inbox-border",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.inbox",
+      "owner": "Status",
+      "purpose": "Render the inbox status border.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.inbox.icon",
+      "css": "--status-inbox-icon",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.inbox",
+      "owner": "Status",
+      "purpose": "Render the inbox status icon.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.inbox.label",
+      "css": "--status-inbox-label",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.inbox",
+      "owner": "Status",
+      "purpose": "Render the inbox status label.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.inbox.hover",
+      "css": "--status-inbox-hover",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.inbox.hover",
+      "owner": "Status",
+      "purpose": "Render the inbox status hover.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.inbox.focus",
+      "css": "--status-inbox-focus",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.inbox",
+      "owner": "Status",
+      "purpose": "Render the inbox status focus.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.foreground",
+      "css": "--status-next-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.next",
+      "owner": "Status",
+      "purpose": "Render the next status foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.background",
+      "css": "--status-next-background",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.next.background",
+      "owner": "Status",
+      "purpose": "Render the next status background.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.border",
+      "css": "--status-next-border",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.next",
+      "owner": "Status",
+      "purpose": "Render the next status border.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.icon",
+      "css": "--status-next-icon",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.next",
+      "owner": "Status",
+      "purpose": "Render the next status icon.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.label",
+      "css": "--status-next-label",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.next",
+      "owner": "Status",
+      "purpose": "Render the next status label.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.hover",
+      "css": "--status-next-hover",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.next.hover",
+      "owner": "Status",
+      "purpose": "Render the next status hover.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.focus",
+      "css": "--status-next-focus",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.next",
+      "owner": "Status",
+      "purpose": "Render the next status focus.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.foreground",
+      "css": "--status-in-progress-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.in-progress",
+      "owner": "Status",
+      "purpose": "Render the in-progress status foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.background",
+      "css": "--status-in-progress-background",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.in-progress.background",
+      "owner": "Status",
+      "purpose": "Render the in-progress status background.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.border",
+      "css": "--status-in-progress-border",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.in-progress",
+      "owner": "Status",
+      "purpose": "Render the in-progress status border.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.icon",
+      "css": "--status-in-progress-icon",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.in-progress",
+      "owner": "Status",
+      "purpose": "Render the in-progress status icon.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.label",
+      "css": "--status-in-progress-label",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.in-progress",
+      "owner": "Status",
+      "purpose": "Render the in-progress status label.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.hover",
+      "css": "--status-in-progress-hover",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.in-progress.hover",
+      "owner": "Status",
+      "purpose": "Render the in-progress status hover.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.focus",
+      "css": "--status-in-progress-focus",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.in-progress",
+      "owner": "Status",
+      "purpose": "Render the in-progress status focus.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.foreground",
+      "css": "--status-blocked-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.blocked",
+      "owner": "Status",
+      "purpose": "Render the blocked status foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.background",
+      "css": "--status-blocked-background",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.blocked.background",
+      "owner": "Status",
+      "purpose": "Render the blocked status background.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.border",
+      "css": "--status-blocked-border",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.blocked",
+      "owner": "Status",
+      "purpose": "Render the blocked status border.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.icon",
+      "css": "--status-blocked-icon",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.blocked",
+      "owner": "Status",
+      "purpose": "Render the blocked status icon.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.label",
+      "css": "--status-blocked-label",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.blocked",
+      "owner": "Status",
+      "purpose": "Render the blocked status label.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.hover",
+      "css": "--status-blocked-hover",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.blocked.hover",
+      "owner": "Status",
+      "purpose": "Render the blocked status hover.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.focus",
+      "css": "--status-blocked-focus",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.blocked",
+      "owner": "Status",
+      "purpose": "Render the blocked status focus.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.foreground",
+      "css": "--status-done-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.done",
+      "owner": "Status",
+      "purpose": "Render the done status foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.background",
+      "css": "--status-done-background",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.done.background",
+      "owner": "Status",
+      "purpose": "Render the done status background.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.border",
+      "css": "--status-done-border",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.done",
+      "owner": "Status",
+      "purpose": "Render the done status border.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.icon",
+      "css": "--status-done-icon",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.done",
+      "owner": "Status",
+      "purpose": "Render the done status icon.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.label",
+      "css": "--status-done-label",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.done",
+      "owner": "Status",
+      "purpose": "Render the done status label.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.hover",
+      "css": "--status-done-hover",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.done.hover",
+      "owner": "Status",
+      "purpose": "Render the done status hover.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.focus",
+      "css": "--status-done-focus",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.done",
+      "owner": "Status",
+      "purpose": "Render the done status focus.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.foreground",
+      "css": "--status-failed-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.failed",
+      "owner": "Status",
+      "purpose": "Render the failed status foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.background",
+      "css": "--status-failed-background",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.failed.background",
+      "owner": "Status",
+      "purpose": "Render the failed status background.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.border",
+      "css": "--status-failed-border",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.failed",
+      "owner": "Status",
+      "purpose": "Render the failed status border.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.icon",
+      "css": "--status-failed-icon",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.failed",
+      "owner": "Status",
+      "purpose": "Render the failed status icon.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.label",
+      "css": "--status-failed-label",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.failed",
+      "owner": "Status",
+      "purpose": "Render the failed status label.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.hover",
+      "css": "--status-failed-hover",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.failed.hover",
+      "owner": "Status",
+      "purpose": "Render the failed status hover.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.focus",
+      "css": "--status-failed-focus",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.failed",
+      "owner": "Status",
+      "purpose": "Render the failed status focus.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.foreground",
+      "css": "--status-cancelled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.cancelled",
+      "owner": "Status",
+      "purpose": "Render the cancelled status foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.background",
+      "css": "--status-cancelled-background",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.cancelled.background",
+      "owner": "Status",
+      "purpose": "Render the cancelled status background.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.border",
+      "css": "--status-cancelled-border",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.cancelled",
+      "owner": "Status",
+      "purpose": "Render the cancelled status border.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.icon",
+      "css": "--status-cancelled-icon",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.cancelled",
+      "owner": "Status",
+      "purpose": "Render the cancelled status icon.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.label",
+      "css": "--status-cancelled-label",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.cancelled",
+      "owner": "Status",
+      "purpose": "Render the cancelled status label.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.hover",
+      "css": "--status-cancelled-hover",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.cancelled.hover",
+      "owner": "Status",
+      "purpose": "Render the cancelled status hover.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.focus",
+      "css": "--status-cancelled-focus",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.status.cancelled",
+      "owner": "Status",
+      "purpose": "Render the cancelled status focus.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "color.text.on-status-fill",
+      "css": "--color-text-on-status-fill",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.surface-0"
+    },
+    {
+      "id": "component.status.inbox.filled-foreground",
+      "css": "--status-inbox-filled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.on-status-fill",
+      "owner": "Status",
+      "purpose": "Render the inbox status filled foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.next.filled-foreground",
+      "css": "--status-next-filled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.on-status-fill",
+      "owner": "Status",
+      "purpose": "Render the next status filled foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.in-progress.filled-foreground",
+      "css": "--status-in-progress-filled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.on-status-fill",
+      "owner": "Status",
+      "purpose": "Render the in-progress status filled foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.blocked.filled-foreground",
+      "css": "--status-blocked-filled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.on-status-fill",
+      "owner": "Status",
+      "purpose": "Render the blocked status filled foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.done.filled-foreground",
+      "css": "--status-done-filled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.on-status-fill",
+      "owner": "Status",
+      "purpose": "Render the done status filled foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.failed.filled-foreground",
+      "css": "--status-failed-filled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.on-status-fill",
+      "owner": "Status",
+      "purpose": "Render the failed status filled foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "component.status.cancelled.filled-foreground",
+      "css": "--status-cancelled-filled-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.on-status-fill",
+      "owner": "Status",
+      "purpose": "Render the cancelled status filled foreground.",
+      "states": [
+        "default",
+        "hover",
+        "focus"
+      ],
+      "consumers": [
+        "calendar chips",
+        "task pills",
+        "list cells",
+        "graph nodes"
+      ]
+    },
+    {
+      "id": "primitive.color.red-label",
+      "css": "--primitive-color-red-label",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#F87171"
+    },
+    {
+      "id": "color.text.error",
+      "css": "--color-text-error",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.red-label"
+    },
+    {
+      "id": "component.badge.error.foreground",
+      "css": "--badge-error-foreground",
+      "layer": "component",
+      "kind": "color",
+      "ref": "color.text.error",
+      "owner": "Badge",
+      "purpose": "Keep error and destructive labels readable over the existing 20% error tint on every foundation surface.",
+      "states": [
+        "error",
+        "destructive"
+      ],
+      "consumers": [
+        "Badge error",
+        "Badge destructive"
+      ]
+    }
+  ]
+}

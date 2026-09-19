@@ -1,6 +1,7 @@
 import * as React from 'react'
 import { Check, CaretUpDown } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import {
   Select,
   SelectTrigger,
@@ -31,6 +32,10 @@ interface SmartSelectProps {
   disabled?: boolean
   className?: string
   triggerClassName?: string
+  id?: string
+  required?: boolean
+  'aria-describedby'?: string
+  'aria-invalid'?: React.AriaAttributes['aria-invalid']
   items: SmartSelectItem[]
   /** Accessible name for the trigger, forwarded to both the plain Radix
    *  trigger and the searchable cmdk trigger. Required — without it, the
@@ -51,11 +56,22 @@ export function SmartSelect({
   triggerClassName,
   items,
   ariaLabel,
+  id,
+  required,
+  'aria-describedby': ariaDescribedBy,
+  'aria-invalid': ariaInvalid,
 }: SmartSelectProps) {
   if (items.length <= SEARCHABLE_THRESHOLD) {
     return (
       <Select value={value} onValueChange={onValueChange} disabled={disabled}>
-        <SelectTrigger className={cn(triggerClassName, className)} aria-label={ariaLabel}>
+        <SelectTrigger
+          id={id}
+          className={cn(triggerClassName, className)}
+          aria-label={ariaLabel}
+          aria-describedby={ariaDescribedBy}
+          aria-invalid={ariaInvalid}
+          aria-required={required || undefined}
+        >
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
@@ -79,6 +95,10 @@ export function SmartSelect({
       triggerClassName={triggerClassName}
       items={items}
       ariaLabel={ariaLabel}
+      id={id}
+      required={required}
+      aria-describedby={ariaDescribedBy}
+      aria-invalid={ariaInvalid}
     />
   )
 }
@@ -92,6 +112,10 @@ function SearchableSelect({
   triggerClassName,
   items,
   ariaLabel,
+  id,
+  required,
+  'aria-describedby': ariaDescribedBy,
+  'aria-invalid': ariaInvalid,
 }: SmartSelectProps) {
   const [open, setOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
@@ -110,16 +134,22 @@ function SearchableSelect({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="outline"
           disabled={disabled}
+          id={id}
+          role="combobox"
           aria-expanded={open}
           aria-haspopup="dialog"
           aria-label={ariaLabel}
+          aria-describedby={ariaDescribedBy}
+          aria-invalid={ariaInvalid}
+          aria-required={required || undefined}
           className={cn(
-            'flex h-9 w-full items-center justify-between rounded-md border px-3 py-2 text-sm',
+            'flex w-full items-center justify-between px-3 py-2 text-sm',
             'bg-[var(--color-surface-1)] text-[var(--color-secondary)]',
-            'ring-offset-[var(--color-primary)] transition-colors',
+            'ring-offset-[var(--color-primary)] transition-colors motion-reduce:transition-none',
             '',
             'disabled:cursor-not-allowed disabled:opacity-50',
             open
@@ -132,8 +162,8 @@ function SearchableSelect({
           <span className={cn('line-clamp-1', !selectedLabel && 'text-[var(--color-muted)]')}>
             {selectedLabel ?? placeholder}
           </span>
-          <CaretUpDown size={14} className="ml-2 shrink-0 opacity-50" />
-        </button>
+          <CaretUpDown size={14} className="ml-2 shrink-0 opacity-50" aria-hidden="true" />
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         className="w-[var(--radix-popover-trigger-width)] min-w-[8rem] p-0"
@@ -158,7 +188,7 @@ function SearchableSelect({
                 >
                   <span className="flex-1">{item.label}</span>
                   {item.value === value && (
-                    <Check size={14} style={{ color: 'var(--color-accent)' }} className="ml-2 shrink-0" />
+                    <Check size={14} style={{ color: 'var(--color-accent)' }} className="ml-2 shrink-0" aria-hidden="true" />
                   )}
                 </CommandItem>
               ))}

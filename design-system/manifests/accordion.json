@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "component": "Accordion",
+  "exports": [
+    "Accordion",
+    "AccordionItem",
+    "AccordionTrigger",
+    "AccordionContent"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/accordion.tsx",
+  "documentation": "docs/internal/design/components/accordion.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "AccordionContract",
+        "AccordionKeyboard"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "accordion-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/overlays.test.tsx",
+      "test": "overlay contracts supports accordion keyboard expansion and hides its decorative icon"
+    },
+    {
+      "id": "accordion-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Accordion Contract",
+      "story": "AccordionContract"
+    },
+    {
+      "id": "accordion-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-axe] axe",
+      "story": "AccordionContract"
+    },
+    {
+      "id": "accordion-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-keyboard] keyboard",
+      "story": "AccordionKeyboard"
+    },
+    {
+      "id": "accordion-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-browser] browser",
+      "story": "AccordionContract"
+    },
+    {
+      "id": "accordion-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-pointer] pointer",
+      "story": "AccordionKeyboard"
+    },
+    {
+      "id": "accordion-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-reduced-motion] reduced-motion",
+      "story": "AccordionContract"
+    },
+    {
+      "id": "accordion-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-forced-colors] forced-colors",
+      "story": "AccordionContract"
+    },
+    {
+      "id": "accordion-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-root-size] root-size",
+      "story": "AccordionContract"
+    },
+    {
+      "id": "accordion-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-zoom] zoom",
+      "story": "AccordionContract"
+    },
+    {
+      "id": "accordion-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Accordion [check:accordion-reflow] reflow",
+      "story": "AccordionContract"
+    }
+  ]
+}

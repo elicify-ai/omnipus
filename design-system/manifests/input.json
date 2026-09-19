@@ -1,0 +1,19 @@
+{
+  "version":1,"component":"Input","exports":["Input"],"category":"primitive","source":"src/components/ui/input.tsx","documentation":"docs/internal/design/components/input.md","owner":"design-system","themes":["dark"],"variants":["text","password","email","number"],"sizes":["default"],"states":["default","read-only","invalid","disabled"],
+  "stories":[{"file":"src/components/ui/input.stories.tsx","exports":["Default","ReadOnly","Invalid","Disabled","NarrowViewport"]}],
+  "checks":[
+    {"id":"input-unit","kind":"unit","file":"src/components/ui/input.test.tsx","test":"Input — Forge Gold focus ring preserves native form identity, controlled changes, read-only and invalid state","applicable":true},
+    {"id":"input-interaction","kind":"interaction","file":"src/components/ui/input.stories.tsx","test":"Default","story":"Default","applicable":true},
+    {"id":"input-read-only-interaction","kind":"interaction","file":"src/components/ui/input.stories.tsx","test":"Read Only","story":"ReadOnly","applicable":true},
+    {"id":"input-disabled-interaction","kind":"interaction","file":"src/components/ui/input.stories.tsx","test":"Disabled","story":"Disabled","applicable":true},
+    {"id":"input-axe","kind":"axe","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-axe] axe","story":"Default","applicable":true},
+    {"id":"input-keyboard","kind":"keyboard","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-keyboard] keyboard","story":"Default","applicable":true},
+    {"id":"input-browser","kind":"browser","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-browser] browser","story":"Default","applicable":true},
+    {"id":"input-pointer","kind":"pointer","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-pointer] pointer","story":"Default","applicable":true},
+    {"id":"input-reduced-motion","kind":"reduced-motion","applicable":true,"file":"tests/design-system/browser.spec.ts","test":"Input [check:input-reduced-motion] reduced-motion","story":"Default"},
+    {"id":"input-forced-colors","kind":"forced-colors","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-forced-colors] forced-colors","story":"Default","applicable":true},
+    {"id":"input-root-size","kind":"root-size","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-root-size] root-size","story":"Default","applicable":true},
+    {"id":"input-zoom","kind":"zoom","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-zoom] zoom","story":"Default","applicable":true},
+    {"id":"input-reflow","kind":"reflow","file":"tests/design-system/browser.spec.ts","test":"Input [check:input-reflow] reflow","story":"Default","applicable":true}
+  ]
+}

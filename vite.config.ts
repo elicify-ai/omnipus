@@ -1,4 +1,5 @@
 import { defineConfig } from 'vitest/config'
+import { designSystemProductionProvenance } from './scripts/design-system/bundle-provenance.mjs'
 import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -104,6 +105,7 @@ export function enumeratePdfjsRuntimeAssets(
       throw new Error(
         `pdfjs runtime assets: cannot read ${join(pkgRoot, dir)} — PDFs will render ` +
           `blank/mis-typeset for a whole class of documents (FR-018a). Cause: ${String(err)}`,
+        { cause: err },
       )
     }
     files = files.filter((f) => !PDFJS_FORBIDDEN.test(`${dir}/${f}`))
@@ -213,6 +215,9 @@ export default defineConfig({
     TanStackRouterVite({ autoCodeSplitting: !isVitest }),
     react(),
     pdfjsRuntimeAssetsPlugin(),
+    ...(!isVitest ? [designSystemProductionProvenance({
+      evidencePath: 'docs/internal/design/evidence/design-system-production-provenance.json',
+    })] : []),
   ],
   resolve: {
     alias: {

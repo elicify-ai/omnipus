@@ -1,0 +1,147 @@
+{
+  "version": 1,
+  "status": "draft-test-review",
+  "acceptance": false,
+  "reviewedFiles": [
+    "scripts/design-system-locks/spacing.mjs",
+    "tests/design-system-locks/spacing.test.mjs"
+  ],
+  "requirements": ["E1", "D1", "D10", "design-system/enforcement/contract.json"],
+  "findings": [
+    {
+      "id": "rem-spacing-can-pass-at-default-root",
+      "severity": "high",
+      "finding": "The scanner converts rem spacing at the 14px default root and accepts it when that one computed value lands on the closed scale. D10 requires spacing and control geometry to use pixels so it does not change with the user's 12–20px root setting.",
+      "definitiveProbe": {
+        "path": "src/x.css",
+        "source": ".x { padding: 0.285714285714rem }",
+        "actual": "empty findings because the value is approximately 4px at a 14px root",
+        "required": "off-scale or unsupported finding because the spacing changes at 12px and 20px roots"
+      },
+      "missingTests": [
+        "A rem value that equals 4px only at the 14px default must fail.",
+        "A Tailwind numeric/decimal utility whose rem result happens to equal a closed step at 14px must fail.",
+        "Zero rem may remain the dimensionless zero exception."
+      ]
+    },
+    {
+      "id": "calc-validates-operands-not-result",
+      "severity": "high",
+      "finding": "analyzeCalc checks each operand independently and permits unitless multipliers/divisors, but never evaluates the resulting length. On-scale inputs can therefore produce off-scale output.",
+      "definitiveProbe": {
+        "path": "src/x.css",
+        "source": ".x { padding: calc(4px * 3); gap: calc(8px / 3) }",
+        "actual": "empty findings",
+        "required": "both declarations must fail because their results are 12px and approximately 2.667px"
+      },
+      "missingTests": [
+        "calc(4px * 3) is off-scale.",
+        "calc(8px / 3) is off-scale.",
+        "p-[calc(4px_*_3)] follows the same result rule.",
+        "calc(4px + 4px) remains clean because its evaluated result is 8px.",
+        "Token arithmetic must use resolved token values before judging the result."
+      ]
+    },
+    {
+      "id": "percent-and-fr-spacing-are-silently-exempt",
+      "severity": "high",
+      "finding": "IGNORE_UNITS makes all percentage and fr values in governed spacing properties clean. This creates an undocumented broad exception to the closed pixel scale; it also treats invalid CSS such as gap:1fr as verified.",
+      "definitiveProbe": {
+        "path": "src/x.css",
+        "source": ".x { padding: 50%; gap: 1fr }",
+        "actual": "empty findings",
+        "required": "unsupported findings unless an exact centrally reviewed layout boundary permits the value"
+      },
+      "incorrectTestExpectation": "The owner test `does not treat geometry, percent, auto, grid, or flex lengths as spacing` explicitly expects padding:50% and gap:1fr to pass.",
+      "missingTests": [
+        "Percentage padding and margin do not silently pass as closed-scale spacing.",
+        "fr in gap fails closed rather than being confused with grid track geometry.",
+        "Percentage or fr values in non-spacing properties such as width or grid-template-columns remain outside this scanner."
+      ]
+    },
+    {
+      "id": "local-class-and-style-indirection-is-missed",
+      "severity": "high",
+      "finding": "visitClassLike and visitStyleLike silently return for identifier expressions. Locally resolvable constants can carry definite off-scale spacing without a finding; this is distinct from imported CSS-module class names, whose CSS is scanned separately.",
+      "definitiveProbes": [
+        {
+          "path": "src/x.tsx",
+          "source": "const c = 'p-[13px]'; export const X = () => <div className={c} />",
+          "actual": "empty findings",
+          "required": "spacing/off-scale for p-[13px]"
+        },
+        {
+          "path": "src/x.tsx",
+          "source": "const s = { padding: 13 }; export const X = () => <div style={s} />",
+          "actual": "empty findings",
+          "required": "spacing/off-scale for padding:13px"
+        }
+      ],
+      "missingTests": [
+        "Resolve local const string className values.",
+        "Resolve local const style-object values.",
+        "Resolve local arrays and simple conditional aliases.",
+        "Emit unsupported for a provably spacing-bearing dynamic expression that cannot be resolved; do not blanket-reject CSS-module identifiers."
+      ]
+    },
+    {
+      "id": "source-extension-denominator-is-incomplete",
+      "severity": "medium",
+      "finding": "The scanner advertises only .css/.js/.jsx/.ts/.tsx. The shared contract covers JS/JSX/TS/TSX/SVG and central dispatch normally uses advertised extensions, so .mjs/.cjs and SVG spacing-bearing content can be omitted from the denominator. Direct calls return parse-error, but that does not prove the orchestrator will dispatch them.",
+      "definitiveProbes": [
+        {
+          "path": "src/x.mjs",
+          "source": "export const c = 'p-[13px]'",
+          "actual": "unsupported-extension parse-error on direct call; .mjs absent from extensions",
+          "required": "scan JavaScript module syntax or centrally enumerate the boundary"
+        },
+        {
+          "path": "src/x.svg",
+          "source": "<svg><foreignObject style=\"padding:13px\" /></svg>",
+          "actual": "unsupported-extension parse-error on direct call; .svg absent from extensions",
+          "required": "scan spacing-bearing SVG/CSS syntax or centrally enumerate the boundary"
+        }
+      ]
+    },
+    {
+      "id": "tailwind-v4-token-shorthand-is-false-positive",
+      "severity": "medium",
+      "finding": "Tailwind v4 parenthesized custom-property shorthand is classified as an unsupported named utility even when it references a registered spacing token.",
+      "definitiveProbe": {
+        "path": "src/x.tsx",
+        "source": "export const X = () => <div className=\"p-(--space-2)\" />",
+        "actual": "spacing/unsupported for p-(--space-2)",
+        "required": "clean when the referenced token is registered and is a D10 spacing token; invalid-var for unknown tokens"
+      },
+      "missingTests": [
+        "Registered p-(--space-2), gap-(--space-control-gap), and responsive variants pass.",
+        "Unknown p-(--not-a-token) fails.",
+        "Registered non-spacing token shorthand fails."
+      ]
+    },
+    {
+      "id": "policy-can-expand-constitutional-scale",
+      "severity": "medium",
+      "finding": "closedScaleFromPolicy replaces the constitutional scale with every resolved token whose id begins space.scale. A malformed or extended policy can silently make an arbitrary value legal, although D10 defines one closed scale and policy input is supposed to be canonical rather than legislative.",
+      "definitiveProbe": {
+        "path": "src/x.css",
+        "policyMutation": "add resolvedTokens['space.scale.99'] = '13px'",
+        "source": ".x { padding: 13px }",
+        "actual": "empty findings",
+        "required": "policy validation error or off-scale finding; extra scale steps require a constitutional schema/design change"
+      },
+      "missingTests": [
+        "Missing policy may use the fixed constitutional fallback.",
+        "Canonical policy with exactly the approved scale passes.",
+        "Extra, duplicate-conflicting, malformed, rem-based, or off-scale space.scale entries fail closed rather than changing enforcement."
+      ]
+    }
+  ],
+  "verifiedStrengths": [
+    "The scanner rejects arbitrary 4px multiples that are not named closed steps: 12px, 20px and 56px all produced spacing/off-scale findings.",
+    "Logical CSS properties are covered: marginInlineStart:13 produced an off-scale finding while paddingBlock:8 remained clean.",
+    "Direct CSS declarations, JSX literal styles, @apply, responsive/negative variants, cn/clsx/cva strings, unknown vars and parse errors have focused coverage.",
+    "Registered non-spacing tokens are not accepted merely because they appear in tokenCssNames.",
+    "Scanner code contains no path-based exception logic; exception and ledger accounting remain centralized."
+  ]
+}

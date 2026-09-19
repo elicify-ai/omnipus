@@ -24,7 +24,7 @@ const DialogOverlay = React.forwardRef<
       // Dim only — no backdrop blur (operator direction: the surrounding UI
       // should stay legible behind modals; the 80% Deep Space dim is enough).
       'fixed inset-0 z-50 bg-[var(--color-primary)]/80',
-      'data-[state=open]:animate-in data-[state=closed]:animate-out',
+      'data-[state=open]:animate-in data-[state=closed]:animate-out motion-reduce:animate-none',
       'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
       className
     )}
@@ -66,10 +66,10 @@ const DialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         'fixed left-[50%] top-[50%] z-50 grid w-[calc(100%-2rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4',
-        'max-h-[90dvh] overflow-y-auto',
+        'max-h-[90dvh] overflow-y-auto overscroll-contain',
         'border border-[var(--color-border)] bg-[var(--color-surface-1)] p-6 shadow-2xl',
         'rounded-xl text-[var(--color-secondary)]',
-        'data-[state=open]:animate-in data-[state=closed]:animate-out',
+        'data-[state=open]:animate-in data-[state=closed]:animate-out motion-reduce:animate-none',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
         'data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%]',
@@ -81,8 +81,8 @@ const DialogContent = React.forwardRef<
       {children}
       {/* tabIndex: WebKit tabbability repo convention — Radix renders this
           close button, so the explicit stamp lives here. */}
-      <DialogPrimitive.Close tabIndex={0} className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 disabled:pointer-events-none data-[state=open]:bg-[var(--color-surface-2)] data-[state=open]:text-[var(--color-muted)]">
-        <X size={16} />
+      <DialogPrimitive.Close data-ds-action tabIndex={0} className="absolute right-2 top-2 flex h-11 w-11 items-center justify-center rounded-sm opacity-70 ring-offset-[var(--color-primary)] transition-opacity hover:opacity-100 disabled:pointer-events-none data-[state=open]:bg-[var(--color-surface-2)] data-[state=open]:text-[var(--color-muted)]">
+        <X aria-hidden="true" size={16} />
         <span className="sr-only">Close</span>
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
@@ -102,7 +102,7 @@ DialogHeader.displayName = 'DialogHeader'
 // row is `justify-end`, so the visual RIGHT-most (primary, last in DOM)
 // button still lands right-most, same as before this fix.
 const DialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col sm:flex-row sm:justify-end sm:space-x-2', className)} {...props} />
+  <div className={cn('flex flex-col gap-2 max-sm:pointer-coarse:gap-6 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0', className)} {...props} />
 )
 DialogFooter.displayName = 'DialogFooter'
 

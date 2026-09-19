@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "status": "draft-implementation-review",
+  "acceptance": false,
+  "subject": {
+    "source": "scripts/design-system-locks/audit.mjs",
+    "schema": "design-system/enforcement/ledger.schema.json",
+    "adversarialTests": "tests/design-system-locks/audit-boundaries-adversarial.test.mjs"
+  },
+  "reviewBasis": [
+    "design-system/enforcement/contract.json#sourceScope",
+    "design-system/enforcement/contract.json#exceptions",
+    "docs/internal/design/design-system-definition.md#e1-the-build-enforces-this-rulebook"
+  ],
+  "finding": {
+    "priority": "high",
+    "target": "validateExactBoundaries / extraReviewedPaths / isReviewedBoundary",
+    "summary": "reviewedBoundaries trusts the declared path without validating that its kind describes that path",
+    "detail": "Any existing application file can be registered as kind test, story, or generated-tokens. extraReviewedPaths then reduces the registry to a path Set, and accountFindings suppresses every ordinary scanner finding at that path.",
+    "reproducedDisguises": [
+      {
+        "path": "src/components/App.tsx",
+        "kind": "test"
+      },
+      {
+        "path": "src/components/Settings.tsx",
+        "kind": "story"
+      },
+      {
+        "path": "src/components/Dashboard.tsx",
+        "kind": "generated-tokens"
+      },
+      {
+        "path": "src/components/Button.test.tsx",
+        "kind": "story"
+      },
+      {
+        "path": "src/components/tokens.generated.ts",
+        "kind": "generated-tokens"
+      }
+    ],
+    "observed": "Each disguise produces an audit report with ok=true, no errors, and the raw violation recorded as an applied boundary.",
+    "impact": "A ledger-only change can exempt arbitrary production code from every ordinary design-system scanner without using the exact rule and syntax boundary required for permanent exceptions."
+  },
+  "requiredValidation": {
+    "test": "The exact path must have a recognized .test.* or .spec.* script suffix.",
+    "story": "The exact path must have a recognized .stories.* script suffix.",
+    "generated-tokens": [
+      "src/styles/tokens.generated.css",
+      "src/design-system/tokens.ts"
+    ],
+    "mismatchedKind": "A path valid for one boundary kind is invalid under another kind.",
+    "invalidDisposition": [
+      "Emit a blocking validation error tied to the declared path.",
+      "Do not add the invalid path to the applied boundary set.",
+      "Continue accounting ordinary findings at that path as debt."
+    ]
+  },
+  "positiveControls": [
+    "src/components/Button.test.tsx registered as test",
+    "src/components/Button.stories.tsx registered as story",
+    "src/styles/tokens.generated.css registered as generated-tokens",
+    "src/design-system/tokens.ts registered as generated-tokens"
+  ],
+  "ambiguity": {
+    "present": true,
+    "detail": "The shared contract specifies blocking validation and exact legitimate boundary categories, but it does not prescribe the audit error code or message text. The adversarial tests therefore require a non-debt blocking error associated with the invalid path without inventing a specific code. The canonical generated-token paths are taken from audit.mjs's existing generated-token registry; expanding that registry requires a separate reviewed decision."
+  },
+  "testResult": {
+    "command": "node --test tests/design-system-locks/audit-boundaries-adversarial.test.mjs",
+    "exitCode": 1,
+    "collected": 4,
+    "passed": 1,
+    "failed": 3,
+    "skipped": 0,
+    "interpretation": "The legitimate-boundary positive control passes. All three authorization-negative cases fail because arbitrary or mismatched paths are accepted."
+  },
+  "disposition": "Not accepted until boundary kind and path are validated together and invalid entries cannot suppress raw findings."
+}

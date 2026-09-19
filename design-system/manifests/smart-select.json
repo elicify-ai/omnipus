@@ -1,0 +1,139 @@
+{
+  "version": 1,
+  "component": "SmartSelect",
+  "exports": [
+    "SmartSelect"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/smart-select.tsx",
+  "documentation": "docs/internal/design/components/smart-select.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "plain",
+    "searchable",
+    "disabled"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/smart-select.stories.tsx",
+      "exports": [
+        "Plain",
+        "Searchable",
+        "Disabled",
+        "FieldMetadata"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "smart-select-unit",
+      "kind": "unit",
+      "file": "src/components/ui/smart-select.test.tsx",
+      "test": "SmartSelect — controlled threshold contract keeps accessible identity and selected value across plain and searchable branches",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/smart-select.stories.tsx",
+      "test": "Plain",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-searchable-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/smart-select.stories.tsx",
+      "test": "Searchable",
+      "story": "Searchable",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-field-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/smart-select.stories.tsx",
+      "test": "Field Metadata",
+      "story": "FieldMetadata",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-axe] axe",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-keyboard] keyboard",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-browser] browser",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-pointer] pointer",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Motion is owned and verified by the underlying Select and Popover primitives."
+    },
+    {
+      "id": "smart-select-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-forced-colors] forced-colors",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-root-size] root-size",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-zoom] zoom",
+      "story": "Plain",
+      "applicable": true
+    },
+    {
+      "id": "smart-select-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SmartSelect [check:smart-select-reflow] reflow",
+      "story": "Plain",
+      "applicable": true
+    }
+  ]
+}

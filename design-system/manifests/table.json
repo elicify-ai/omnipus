@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "component": "Table",
+  "exports": [
+    "Table",
+    "TableHeader",
+    "TableBody",
+    "TableRow",
+    "TableHead",
+    "TableCell"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/table.tsx",
+  "documentation": "docs/internal/design/components/table.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "selected"
+  ],
+  "sizes": [
+    "default",
+    "dense"
+  ],
+  "states": [
+    "default",
+    "hover",
+    "selected",
+    "overflow-focus"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/table.stories.tsx",
+      "exports": [
+        "Default",
+        "Selected",
+        "Dense",
+        "NarrowViewport",
+        "OverflowRegion"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "table-unit",
+      "kind": "unit",
+      "file": "src/components/ui/table.test.tsx",
+      "test": "Table semantic structure retains native table, row, columnheader, and cell roles",
+      "applicable": true
+    },
+    {
+      "id": "table-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "table-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "table-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "table-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "table-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "table-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "table-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "table-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/table.stories.tsx",
+      "test": "Overflow Region",
+      "story": "OverflowRegion"
+    },
+    {
+      "id": "table-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Table [check:table-keyboard] keyboard",
+      "story": "OverflowRegion"
+    },
+    {
+      "id": "table-pointer-not-applicable",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Table has no pointer behavior beyond its covered presentation contract."
+    }
+  ]
+}

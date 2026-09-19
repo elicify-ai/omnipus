@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "status": "draft-implementation-review",
+  "acceptance": false,
+  "specification": "E1 and enforcement contract: color enforcement across complete applicable TS/JSX/SVG source",
+  "evidence": "tests/design-system-locks/ts-colors-adversarial.test.mjs",
+  "result": {
+    "exitCode": 1,
+    "tests": 8,
+    "pass": 3,
+    "fail": 5,
+    "mutationVerification": "pending owner repair and freeze"
+  },
+  "findings": [
+    {
+      "target": "CSS inside JSX style element",
+      "requirement": "Report raw governed paint or explicit unsupported finding, never empty success."
+    },
+    {
+      "target": "SVG paint embedded in inline background image",
+      "requirement": "Report raw governed paint or explicit unsupported finding, never empty success."
+    },
+    {
+      "target": "DOM style color assignment",
+      "requirement": "Report raw governed paint or explicit unsupported finding, never empty success."
+    },
+    {
+      "target": "CSSOM style.setProperty color assignment",
+      "requirement": "Report raw governed paint or explicit unsupported finding, never empty success."
+    },
+    {
+      "target": "Canvas fillStyle assignment",
+      "requirement": "Report raw governed paint or explicit unsupported finding, never empty success."
+    }
+  ]
+}

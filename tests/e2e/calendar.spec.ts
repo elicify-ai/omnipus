@@ -427,6 +427,7 @@ test(
         'The drag assertions are meaningless without a seeded task, and an unavailable ' +
         'tasks endpoint is an implementation or environment gap the skip policy requires ' +
         'to fail, not skip green.',
+        { cause: err },
       );
     }
 
@@ -540,6 +541,7 @@ test(
         'The revert-on-failure assertions are meaningless without a seeded task, and an ' +
         'unavailable tasks endpoint is an implementation or environment gap the skip policy ' +
         'requires to fail, not skip green.',
+        { cause: err },
       );
     }
 

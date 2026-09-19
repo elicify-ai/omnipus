@@ -36,7 +36,7 @@ const AccordionTrigger = React.forwardRef<
       {...props}
     >
       {children}
-      <CaretDown size={14} className="shrink-0 transition-transform duration-200 text-[var(--color-muted)]" />
+      <CaretDown aria-hidden="true" size={14} className="shrink-0 transition-transform duration-200 motion-reduce:transition-none text-[var(--color-muted)]" />
     </AccordionPrimitive.Trigger>
   </AccordionPrimitive.Header>
 ))
@@ -50,7 +50,7 @@ const AccordionContent = React.forwardRef<
     ref={ref}
     className={cn(
       'overflow-hidden text-sm',
-      'data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down',
+      'data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down motion-reduce:animate-none',
       className
     )}
     {...props}
