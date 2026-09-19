@@ -41,7 +41,9 @@ Currently checks:
     instead of "make build" or an official release
   - Browser live-view WebRTC video/audio capture availability (disabled in
     config, compiled out in a lite build, or otherwise not capable on this
-    host) — degrades silently to JPEG screenshots when unavailable
+    host) — surfaces a persistent not_capable error with the real reason
+    and a Retry when unavailable (no silent degradation — WebRTC is the
+    only live-video path, per ADR-061)
   - Package-bundled Chrome (ADR-052): missing required host shared libraries
     (Linux only) and a SHA-256 mismatch between the bundled chrome binary
     and its chrome.sha256 manifest. Bare-binary installs (no chromium/
@@ -121,9 +123,11 @@ func checkBuildIntegrity() []warning {
 }
 
 // checkBrowserVideoCapability warns when the WebRTC live-browser video/audio
-// capture path (ADR-047/ADR-048) cannot work, so the live-view panel is
-// silently degrading to JPEG screenshots instead of streaming real video —
-// today the only signal is a WARN buried in the gateway log
+// capture path (ADR-047/ADR-048) cannot work, so the live-view panel
+// will surface a persistent not_capable error with the real reason and
+// a Retry instead of streaming real video (no silent degradation — the
+// JPEG screencast fallback is deleted, per ADR-061). Today the only
+// signal is a WARN buried in the gateway log
 // (pkg/gateway/browser_webrtc.go's webrtcUnavailableReason). This mirrors
 // that function's WebRTCEnabled -> lite-build -> capture-capable gate
 // ladder, plus the capture_shared_context precondition (ADR-048 condition
@@ -141,9 +145,19 @@ func checkBrowserVideoCapability(cfg *config.Config) []warning {
 		return []warning{
 			{
 				code: "WARN-BROWSER-001",
+				// Squad K: same ADR-061 correction as WARN-BROWSER-005.
+				// The JPEG screencast fallback is deleted; WebRTC is the
+				// only live-video path. The honest copy names what the
+				// panel actually shows when the feature is off: a
+				// persistent "Live video is turned off" error with the
+				// reason and a Retry (disabled branch of
+				// translateWebRTCFallbackReason), not a silent degrade
+				// to a slower stream nobody can detect.
 				message: "Browser live-view WebRTC video/audio capture is disabled " +
-					"(tools.browser.webrtc_enabled=false). The live-view panel will silently fall back to JPEG " +
-					"screenshots. Set webrtc_enabled=true if you want live video/audio.",
+					"(tools.browser.webrtc_enabled=false). The live-view panel will surface a persistent " +
+					"'Live video is turned off' error with the reason and a Retry (no silent degradation — " +
+					"WebRTC is the only live-video path, per ADR-061). Set webrtc_enabled=true if you " +
+					"want live video/audio.",
 			},
 		}
 	}
@@ -160,15 +174,37 @@ func checkBrowserVideoCapability(cfg *config.Config) []warning {
 		}
 	}
 
-	installRoot := browser.InstallRootForProfileDir(b.ProfileDir)
+	installRoot, installRootErr := browser.EffectiveInstallRoot(b.ProfileDir)
+	if installRootErr != nil {
+		return []warning{{
+			code: "WARN-BROWSER-005",
+			// Squad K: the previous copy said the panel "will fall back
+			// to JPEG screenshots" — factually wrong post-ADR-061 (the
+			// JPEG screencast fallback is deleted; WebRTC is the ONLY
+			// live-video path). The honest copy names the real behavior
+			// the SPA renders when capability classification fails:
+			// a persistent not_capable error with the real reason and
+			// a Retry (translateWebRTCFallbackReason's not_capable
+			// branch, plus BrowserLiveView's persistent error strip).
+			message: fmt.Sprintf("Browser live-view capability check could not resolve the managed install root: %v. The live-view panel will surface a persistent not_capable error with the real reason and a Retry until the install root can be computed (no silent degradation — WebRTC is the only live-video path, per ADR-061).", installRootErr),
+		}}
+	}
 	videoCap := browser.ClassifyVideoCapabilityWithExec(b.ExecPath, installRoot)
 	if !videoCap.Capable {
 		return []warning{
 			{
 				code: "WARN-BROWSER-003",
+				// Squad K: same ADR-061 correction. The previous copy said
+				// the panel "will fall back to JPEG screenshots" — factually
+				// wrong; the JPEG screencast fallback is deleted (WebRTC is
+				// the only live-video path). The honest copy names the
+				// real behavior: a persistent not_capable error with the
+				// real reason and a Retry (translateWebRTCFallbackReason's
+				// not_capable branch + BrowserLiveView's persistent error
+				// strip). The Reason field is operator-only; end users
+				// see the SPA's translated copy.
 				message: fmt.Sprintf(
-					"Browser live-view video/audio capture is not available: %s. The live-view panel will fall "+
-						"back to JPEG screenshots.",
+					"Browser live-view video/audio capture is not available: %s. The live-view panel will surface a persistent not_capable error with the real reason and a Retry (no silent degradation — WebRTC is the only live-video path, per ADR-061).",
 					videoCap.Reason,
 				),
 			},

@@ -2384,6 +2384,56 @@ jobs:
           rm -rf /tmp/omnipus-e2e
           mkdir -p /tmp/omnipus-e2e
 
+      - name: Provision gateway's managed Chrome via the installer (Squad K)
+        # Founder ruling 2026-09-19: the GATEWAY's capture browser must come
+        # via the managed installer (EnsureChromiumFullBuild), not by
+        # pointing the gateway at the Playwright cache. The Playwright cache
+        # step a few steps below still installs chromium for the test
+        # HARNESS browser (Playwright's own machinery) — that is untouched.
+        #
+        # This step is placed AFTER "Prepare gateway home directory" (so it
+        # provisions the SAME /tmp/omnipus-e2e the rest of the job uses) and
+        # calls the new `omnipus browser provision` subcommand added by
+        # Squad K — a non-interactive, no-side-effects entry point onto the
+        # SAME managed install path the gateway's Preprovision invokes. The
+        # leaf prints "exec_path=<abs path>" on success and exits non-zero
+        # with the LOUD error EnsureChromiumFullBuild now returns on
+        # missing-manifest / missing-platform / integrity failure (the
+        # silent headless-shell swap was the actual defect — installer.go's
+        # now-explicit "manifest missing" branch is what surfaces here).
+        #
+        # The earlier proposal in this brief's first cut called
+        # `omnipus doctor` instead. That was wrong three ways: doctor never
+        # installs, doctor exits 1 on ANY warning (always fires on a
+        # fresh runner), and the immediately following pre-existing step
+        # ran `rm -rf /tmp/omnipus-e2e` and wiped the install root before
+        # any test could use it. `omnipus browser provision` exists
+        # exactly to be the correct call.
+        #
+        # A 64-hex placeholder master key is fine: the install path does
+        # not decrypt anything, and the gateway's credential vault is
+        # unused here. No secret material is read or printed.
+        env:
+          OMNIPUS_MASTER_KEY: "0000000000000000000000000000000000000000000000000000000000000001"
+        run: |
+          set -euo pipefail
+          export OMNIPUS_HOME=/tmp/omnipus-e2e
+          /tmp/omnipus-ci browser provision || {
+            echo "::error::omnipus browser provision failed — the gateway's managed Chrome could not be installed before tests ran." >&2
+            echo "::error::See the install/manifest error above. The gateway's live-view pipeline (WebRTC tabCapture) will not work without a full Chrome build, per capability.go:35-48." >&2
+            echo "::error::Founder ruling 2026-09-19: the gateway's capture browser must come via the installer; the Playwright cache is not an acceptable substitute." >&2
+            exit 1
+          }
+          # Sanity-check the install — chrome.sha256 must verify so a
+          # future spec running `tabCapture` does not silently start
+          # against a tampered binary. Chromeintegrity is the same
+          # verifier the runtime uses (installer.go:546).
+          if [ ! -f "$OMNIPUS_HOME/browser/chromium/chrome.sha256" ]; then
+            echo "::error::chrome.sha256 manifest is missing after provision; the install was not completed by the new command." >&2
+            exit 1
+          fi
+          echo "Gateway managed Chrome provisioned under $OMNIPUS_HOME/browser/chromium/"
+
       - name: Resolve shard LLM key
         # Map this shard's key_slot (from shards.json) to an OpenRouter key and expose it to
         # every later step as OPENROUTER_API_KEY_CI via $GITHUB_ENV — so the seed/onboard/

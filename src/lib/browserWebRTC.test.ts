@@ -23,7 +23,18 @@ import { BrowserWebRTCSession, translateWebRTCFallbackReason, pcFactoryWithICESe
 describe('translateWebRTCFallbackReason', () => {
   it('maps the three capability-gate reasons to a specific, non-retry-inviting explanation', () => {
     expect(translateWebRTCFallbackReason('disabled')).toMatch(/turned off for this installation/i)
-    expect(translateWebRTCFallbackReason('not_capable')).toMatch(/isn't supported on this server/i)
+    // Squad K (founder ruling 2026-09-19): the previous copy read as a
+    // platform limitation ("isn't supported on this server") and hid
+    // the fact that the gateway is running the headless-shell build (or
+    // has no managed chrome at all) when the WebRTC tabCapture-required
+    // full build is what the installer was asked to fetch. The honest
+    // copy names both the symptom AND the concrete next step (run the
+    // installer, or pin tools.browser.exec_path to a local full Chrome
+    // binary). Asserts both fragments so a future copy change has to
+    // update both the symptom AND the recovery in lockstep.
+    expect(translateWebRTCFallbackReason('not_capable')).toMatch(/managed Chrome build cannot capture/i)
+    expect(translateWebRTCFallbackReason('not_capable')).toMatch(/Run the gateway installer/i)
+    expect(translateWebRTCFallbackReason('not_capable')).toMatch(/tools\.browser\.exec_path/i)
     expect(translateWebRTCFallbackReason('lite_build')).toMatch(/lite build/i)
   })
 
