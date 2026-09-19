@@ -47,21 +47,31 @@ async function isAuthenticated(page: Page): Promise<boolean> {
 }
 
 /**
- * Complete the 4-step onboarding wizard with EXACT selectors from the SPA.
+ * Complete the local-mode onboarding wizard (src/routes/onboarding.tsx) with
+ * EXACT selectors from the SPA. The wizard runs BEFORE any session exists
+ * (the FR-050 pre-auth window), so finishing it does not sign the admin in —
+ * the caller lands on the login form afterwards and signs in with the
+ * account it just created (loginAs handles that hand-off).
  *
- * Step 1 — "Get Started"
- * Step 2 — Pick OpenRouter → fill #onboarding-api-key → "Connect & Load Models"
- *           (on success the "Continue" button becomes enabled)
- * Step 3 — Fill #admin-username / #admin-password / #admin-password-confirm → "Create Account"
- * Step 4 — "Start Exploring"
+ * Step 1 — admin username: #admin-username → "Continue"
+ * Step 2 — admin password: #admin-password / #admin-password-confirm → "Continue"
+ * Step 3 — preferences: #pref-name → "Continue"
+ * Step 4 — provider: pick the OpenRouter Popular tile
+ *           (picker-popular-openrouter) → type the key into the second-level
+ *           panel (provider-detail-panel-api-key-input) → confirm
+ *           (provider-detail-panel-continue) → choose the first model
+ *           (onboarding-model-select, then the first onboarding-model-* item;
+ *           choosing auto-probes it, FR-029) → "Finish" once the probe passed
+ * Done   — "Start chatting" on the Meet-your-Assistant screen
  *
  * The API key is sourced from OPENROUTER_API_KEY_CI (or OPENROUTER_API_KEY as a
- * fallback for local worker runs); tests will fail with a real connection error
- * if it is absent — that is intentional.
+ * fallback for local worker runs); tests will fail with a real probe error if
+ * it is absent — that is intentional: Finish only enables on a passed probe.
  *
- * IMPORTANT: pressSequentially() is used instead of fill() because React's synthetic
- * onChange is not triggered by fill() on controlled inputs — the submit button stays
- * disabled={!username.trim() || !password} without real keystroke events.
+ * IMPORTANT: pressSequentially() is used instead of fill() on the admin
+ * inputs because React's synthetic onChange is not triggered by fill() on
+ * controlled inputs — the Continue button stays disabled={!username.trim()}
+ * without real keystroke events.
  */
 async function completeOnboarding(page: Page, creds: Credentials): Promise<void> {
   const apiKey =
@@ -69,45 +79,59 @@ async function completeOnboarding(page: Page, creds: Credentials): Promise<void>
     process.env.OPENROUTER_API_KEY ??
     'sk-test-placeholder';
 
-  // ── Step 1 ────────────────────────────────────────────────────────────────
+  // ── Step 1 — Admin username ───────────────────────────────────────────────
   await expect(page).toHaveURL(/onboarding/, { timeout: 15_000 });
-  await page.getByRole('button', { name: 'Get Started' }).click();
-
-  // ── Step 2 — Provider ─────────────────────────────────────────────────────
-  // Click the OpenRouter provider button (exact display_name from AVAILABLE_PROVIDERS)
-  await page.getByRole('button', { name: /OpenRouter/i }).click();
-
-  // Enter the API key using the ID selector confirmed in onboarding.tsx:562
-  await expect(page.locator('#onboarding-api-key')).toBeVisible({ timeout: 8_000 });
-  await page.locator('#onboarding-api-key').pressSequentially(apiKey);
-
-  // "Connect & Load Models" is the CTA before model selection (onboarding.tsx:609)
-  await page.getByRole('button', { name: 'Connect & Load Models' }).click();
-
-  // After a successful connection the "Continue" button appears (onboarding.tsx:662-669).
-  // Wait for it to become enabled (disabled until testStatus==='success' && selectedModel).
-  const continueBtn = page.getByRole('button', { name: 'Continue' });
-  await expect(continueBtn).toBeEnabled({ timeout: 30_000 });
-  await continueBtn.click();
-
-  // ── Step 3 — Admin account ────────────────────────────────────────────────
-  // pressSequentially() required — fill() does not trigger React onChange on these inputs
   await expect(page.locator('#admin-username')).toBeVisible({ timeout: 10_000 });
   await page.locator('#admin-username').pressSequentially(creds.username);
+  await page.getByRole('button', { name: /^continue$/i }).click();
+
+  // ── Step 2 — Admin password ───────────────────────────────────────────────
+  await expect(page.locator('#admin-password')).toBeVisible({ timeout: 10_000 });
   await page.locator('#admin-password').pressSequentially(creds.password);
   await page.locator('#admin-password-confirm').pressSequentially(creds.password);
-  await page.getByRole('button', { name: 'Create Account' }).click();
+  await page.getByRole('button', { name: /^continue$/i }).click();
 
-  // ── Step 4 — Done ─────────────────────────────────────────────────────────
-  await expect(page.getByRole('button', { name: 'Start Exploring' })).toBeVisible({ timeout: 15_000 });
-  await page.getByRole('button', { name: 'Start Exploring' }).click();
+  // ── Step 3 — Preferences ──────────────────────────────────────────────────
+  await expect(page.locator('#pref-name')).toBeVisible({ timeout: 10_000 });
+  await page.locator('#pref-name').fill(creds.username);
+  await page.getByRole('button', { name: /^continue$/i }).click();
 
-  // Post-condition: banner landmark visible = authenticated
-  await expect(page.getByRole('banner')).toBeVisible({ timeout: 15_000 });
+  // ── Step 4 — Provider ─────────────────────────────────────────────────────
+  // The ONE picker (FR-021): OpenRouter is a Popular tile in the shipped
+  // catalog (pkg/providers/catalog/data/providers_catalog.json, tier "popular").
+  await page.getByTestId('picker-popular-openrouter').click();
+  const panel = page.getByTestId('provider-detail-panel');
+  await expect(panel).toBeVisible({ timeout: 8_000 });
+  await panel.getByTestId('provider-detail-panel-api-key-input').fill(apiKey);
+  await panel.getByTestId('provider-detail-panel-continue').click();
+  await expect(page.getByTestId('onboarding-provider-summary')).toBeVisible();
+
+  // Choosing a model auto-probes it (FR-029); Finish enables only when the
+  // probe for THAT model passed.
+  await page.getByTestId('onboarding-model-select').click();
+  await page
+    .locator('[data-testid^="onboarding-model-"]:not([data-testid="onboarding-model-select"])')
+    .first()
+    .click();
+  const finishBtn = page.getByRole('button', { name: /^finish$/i });
+  await expect(finishBtn).toBeEnabled({ timeout: 30_000 });
+  await finishBtn.click();
+
+  // ── Done — Meet your Assistant ────────────────────────────────────────────
+  const startChatting = page.getByRole('button', { name: 'Start chatting' });
+  await expect(startChatting).toBeVisible({ timeout: 15_000 });
+  await startChatting.click();
+
+  // Post-condition: the wizard is finished. In local mode no session was
+  // minted, so the /_app guard sends a fresh browser to the login form —
+  // loginAs signs in from there.
+  await expect(page.locator('#login-username').or(page.getByRole('banner'))).toBeVisible({
+    timeout: 15_000,
+  });
 }
 
 async function completeLoginForm(page: Page, creds: Credentials): Promise<void> {
-  // Use the exact IDs confirmed in login.tsx:110 and :130
+  // Use the exact IDs from src/routes/-login-local.tsx (#login-username, #login-password)
   await expect(page.locator('#login-username')).toBeVisible({ timeout: 10_000 });
 
   // pressSequentially() is required — fill() does not fire React synthetic onChange,
@@ -115,7 +139,7 @@ async function completeLoginForm(page: Page, creds: Credentials): Promise<void> 
   await page.locator('#login-username').pressSequentially(creds.username);
   await page.locator('#login-password').pressSequentially(creds.password);
 
-  // Submit button text is "Sign in" (login.tsx:168)
+  // Submit button text is "Sign in" (-login-local.tsx)
   await page.getByRole('button', { name: 'Sign in' }).click();
 
   // After successful login the URL leaves the login page
@@ -146,6 +170,8 @@ export async function loginAs(page: Page, username = 'admin', password = 'admin1
 
   if (url.includes('/onboarding')) {
     await completeOnboarding(page, creds);
+    if (await isAuthenticated(page)) return;
+    await completeLoginForm(page, creds);
     return;
   }
 
@@ -156,10 +182,12 @@ export async function loginAs(page: Page, username = 'admin', password = 'admin1
     return;
   }
 
-  // Fallback: check for onboarding button on the root route (redirected)
-  const getStartedBtn = page.getByRole('button', { name: 'Get Started' });
-  if (await getStartedBtn.isVisible({ timeout: 5_000 })) {
+  // Fallback: the wizard's first field on the root route (redirected)
+  const adminUsername = page.locator('#admin-username');
+  if (await adminUsername.isVisible({ timeout: 5_000 })) {
     await completeOnboarding(page, creds);
+    if (await isAuthenticated(page)) return;
+    await completeLoginForm(page, creds);
     return;
   }
 

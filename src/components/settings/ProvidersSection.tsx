@@ -74,7 +74,8 @@ import {
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import { DRAFT_DISCARD_PROMPT, draftCloseDecision, type DraftCloseAction } from '@/hooks/use-draft-guard'
-import { ReAuthDialog } from './ReAuthDialog'
+import { isReAuthCancelled } from './useReAuthGate'
+import { useStepUp } from './useStepUp'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { ProviderRow, cliKindOf, isEntitlementEligible } from './ProviderRow'
 import { SignInDialog } from '@/components/providers/SignInDialog'
@@ -92,22 +93,6 @@ import type {
   ProviderUpdateRequest,
   EntitlementResponse,
 } from '@/lib/api/generated/openapi-types'
-
-// A pending provider edit captured before the re-auth prompt; replayed once the
-// consent token is minted. `id` is the id submitted to the PUT (resolveSubmitId).
-// `draftKey` is the canonical per-provider draft-state key (sheetDraftKey) —
-// carried through so the mutation's success/close handlers clear the SAME key
-// the Sheet read from. `key` carries an
-// API-key change (empty string = no key change); `models` carries a manual
-// model-slug catalogue replacement (undefined = leave the catalogue unchanged).
-type PendingProviderChange = {
-  id: string
-  draftKey: string
-  key: string
-  models?: string[]
-  /** Custom-endpoint pair (FR-037) — set only for a Custom endpoint row. */
-  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
-}
 
 // The item shown in the Sheet — either an existing configured provider (configure
 // mode) or a catalog entry for first-time setup (connect mode).
@@ -634,6 +619,7 @@ function ProviderConfigSheet({
 export function ProvidersSection() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
+  const stepUp = useStepUp()
 
   // Sheet state
   const [sheetTarget, setSheetTarget] = useState<SheetTarget | null>(null)
@@ -665,8 +651,6 @@ export function ProvidersSection() {
   const [checkingEntitlement, setCheckingEntitlement] = useState<Record<string, boolean>>({})
   const [entitlementErrors, setEntitlementErrors] = useState<Record<string, string | undefined>>({})
 
-  const [pending, setPending] = useState<PendingProviderChange | null>(null)
-  const [reauthOpen, setReauthOpen] = useState(false)
 
   // Sign-in dialog state (ADR-068 §8b, T068-33) — which provider row's
   // SignInDialog is open, if any.
@@ -727,14 +711,14 @@ export function ProvidersSection() {
     },
   })
 
-  const { mutate: applyChange, isPending: isSaving } = useMutation({
-    mutationFn: ({ id, key, token, models, custom }: {
+  const { mutateAsync: applyChange, isPending: isSaving } = useMutation({
+    mutationFn: ({ id, key, models, custom, token }: {
       id: string
       draftKey: string
       key: string
-      token: string
       models?: string[]
       custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
+      token?: string
     }) => configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models, custom),
     // Destructure `draftKey` (NOT `id`) — the draft-state key set by
     // requestChange, so the typed key / validation banner is cleared under the
@@ -776,7 +760,6 @@ export function ProvidersSection() {
         addToast({ message: 'Provider saved', variant: 'success' })
         setSheetOpen(false)
       }
-      setPending(null)
       setApiKeys((prev) => ({ ...prev, [draftKey]: '' }))
       // The draft is now on the server: closing the sheet loses nothing
       // (FR-033, "saved = clean").
@@ -784,10 +767,13 @@ export function ProvidersSection() {
     },
     onError: (err: Error) => {
       addToast({ message: getErrorMessage(err, 'Provider save failed'), variant: 'error' })
-      setPending(null)
     },
   })
 
+  // requestChange runs the edit through the step-up gate (ADR-0010 WP3):
+  // ReAuthDialog + a replayed consent token in local mode, ConfirmDialog with
+  // no token in platform mode. The actual PUT only fires once the operator
+  // stands behind it.
   const requestChange = (
     id: string,
     draftKey: string,
@@ -796,20 +782,20 @@ export function ProvidersSection() {
     custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>,
   ) => {
     setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
-    setPending({ id, draftKey, key, models, custom })
-    setReauthOpen(true)
-  }
-
-  const onReAuthConfirmed = (token: string) => {
-    if (!pending) return
-    applyChange({
-      id: pending.id,
-      draftKey: pending.draftKey,
-      key: pending.key,
-      token,
-      models: pending.models,
-      custom: pending.custom,
-    })
+    void stepUp
+      .gate(
+        (token) => applyChange({ id, draftKey, key, models, custom, token }),
+        {
+          title: 'Save this API key?',
+          body: 'The key is stored encrypted and used for every request Omnipus sends to this provider. Any key already stored for it is replaced.',
+          confirmLabel: 'Save API key',
+        },
+      )
+      .catch((err: unknown) => {
+        // A dismissed dialog is a no-op, not a failure. A real save failure
+        // already surfaced its toast via the mutation's onError above.
+        if (isReAuthCancelled(err)) return
+      })
   }
 
   const handleTest = async (id: string) => {
@@ -1268,7 +1254,10 @@ export function ProvidersSection() {
           if (!o) {
             // Clean up on close — same draft key the Sheet reads
             // from (sheetDraftKey), so the banner never survives under a
-            // stale key (BUG #2, see PendingProviderChange's doc comment).
+            // stale key (BUG #2: the mutation's onSuccess/onError above
+            // clear state by `draftKey`, not by whichever literal id the PUT
+            // submitted, which can diverge from the draft key on alias
+            // storage).
             if (sheetTarget) {
               setSaveValidation((prev) => ({ ...prev, [sheetDraftKey(sheetTarget)]: undefined }))
             }
@@ -1309,16 +1298,7 @@ export function ProvidersSection() {
         />
       )}
 
-      <ReAuthDialog
-        open={reauthOpen}
-        onOpenChange={(o) => {
-          setReauthOpen(o)
-          if (!o) setPending(null)
-        }}
-        title="Confirm to update provider"
-        description="Re-type your password to change this provider's API key."
-        onConfirmed={onReAuthConfirmed}
-      />
+      {stepUp.dialogs}
 
       {signInTarget && (
         <SignInDialog

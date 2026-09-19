@@ -1,0 +1,51 @@
+title: AppStateIdentity
+type: object
+description: >
+  Which edition this binary was built as, and whether the caller is signed in
+  (ADR-0010, docs/specs/login-and-onboarding-spec.md §2.2). This is the ONLY
+  field the UI reads to branch on edition or sign-in state — no build-time
+  flag, no `window.isElectron` sniffing. `mode` mirrors
+  `config.EditionAuthMode()` (derived from the stamped edition, never a
+  runtime setting); `edition` mirrors the stamped `config.Edition`. `account`
+  is present only when `signed_in` is true; `blocked_reason` is present only
+  when it is false. `sign_in.start_url` is deliberately NOT carried here —
+  the app starts sign-in itself.
+required:
+  - mode
+  - edition
+  - signed_in
+additionalProperties: false
+properties:
+  mode:
+    type: string
+    enum: [local, platform]
+    description: >
+      How this build authenticates its users — mirrors
+      `security.platform_auth.mode` (FR-PA-080). `local` is the open-source
+      edition's own password login; `platform` delegates sign-in to a
+      registered omnipus.ai provider.
+    example: local
+  edition:
+    type: string
+    enum: [core, desktop, hosted]
+    description: The product this binary was built as, stamped at build time.
+    example: core
+  signed_in:
+    type: boolean
+    description: Whether the caller of this request is authenticated.
+    example: false
+  # Present only when `signed_in` is true. See AppStateIdentityAccount.yaml.
+  account:
+    $ref: './AppStateIdentityAccount.yaml'
+  blocked_reason:
+    type: string
+    enum:
+      - none
+      - signed_out
+      - expired
+      - revoked
+      - no_account
+      - subject_mismatch
+      - unreachable
+    description: Present only when `signed_in` is false.
+    example: signed_out

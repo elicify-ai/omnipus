@@ -41,7 +41,17 @@ GO_VERSION=$(shell $(GO) version | awk '{print $$3}')
 # pkg/config/version.go documents this path explicitly. The CLI reads Version
 # via config.GetVersion(). (pkg/gateway has its own unrelated Version var.)
 CONFIG_PKG=github.com/elicify-ai/omnipus/pkg/config
-LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -s -w
+# Edition (ADR-0010): which product this binary is — core (open-source),
+# desktop or hosted. Stamped the same way Version is, and defaulted to `core`
+# explicitly rather than left off: pkg/config/edition.go's Edition var
+# already defaults to "core" in source, so an unstamped `go build` and an
+# `EDITION=core` build behave identically — this default just makes the
+# open-source path say so instead of relying on the zero value. Desktop and
+# hosted builds override it (root Makefile's desktop-binary, hosted/Dockerfile).
+# See docs/plans/engine-divergence-workplan-review-2.md finding N2: a hosted
+# or desktop build without this flag must not silently pass as core.
+EDITION?=core
+LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -X $(CONFIG_PKG).Edition=$(EDITION) -s -w
 
 # Go variables
 GO?=CGO_ENABLED=0 go

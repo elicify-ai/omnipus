@@ -6,6 +6,7 @@ import { z } from 'zod'
 import {
   AuditLogResponse as AuditLogResponseSchema,
   AuditEntry as AuditEntrySchema,
+  BackupEntry as BackupEntrySchema,
   ExecAllowlist as ExecAllowlistSchema,
   ExecProxyStatus as ExecProxyStatusSchema,
   PendingRestartEntry as PendingRestartEntrySchema,
@@ -13,40 +14,41 @@ import {
   SandboxConfig as SandboxConfigSchema,
   SandboxStatus as SandboxStatusSchema,
   SkillTrustResponse as SkillTrustResponseSchema,
-  BackupEntry as BackupEntrySchema,
   // Newly promoted from inline openapi.yaml schemas:
   SkillTrustUpdateResponse as SkillTrustUpdateResponseSchema,
   PromptGuardUpdateResponse as PromptGuardUpdateResponseSchema,
-  BackupCreateResponse as BackupCreateResponseSchema,
   // O4 gateway self-restart (contract-first #8):
   GatewayRestartResponse as GatewayRestartResponseSchema,
   // O14 god-mode switch (contract-first #8):
   GodModeStatus as GodModeStatusSchema,
   GodModeUpdateResponse as GodModeUpdateResponseSchema,
+  // WP4: local backup — off in platform mode (contract-first #8):
+  BackupCreateResponse as BackupCreateResponseSchema,
 } from '@/lib/api/generated/schemas'
 import type {
   SandboxConfig,
   SandboxConfigUpdate,
   SandboxStatus,
   AuditLogResponse,
+  BackupEntry,
   ExecAllowlist,
   ExecProxyStatus,
   SkillTrustResponse,
   PromptGuardResponse,
   PendingRestartEntry,
-  BackupEntry,
   // Newly promoted from inline openapi.yaml schemas:
   SkillTrustUpdateRequest,
   SkillTrustUpdateResponse,
   PromptGuardUpdateRequest,
   PromptGuardUpdateResponse,
-  BackupCreateResponse,
   // O4 gateway self-restart (contract-first #8):
   GatewayRestartResponse,
   // O14 god-mode switch (contract-first #8):
   GodModeStatus,
   GodModeUpdateRequest,
   GodModeUpdateResponse,
+  // WP4: local backup — off in platform mode (contract-first #8):
+  BackupCreateResponse,
 } from '@/lib/api/generated/openapi-types'
 import { REAUTH_HEADER } from './auth'
 import { ApiSchemaError, _recordApiSchemaError, request } from './http'
@@ -99,7 +101,13 @@ export function rotateCredentials(newPassphrase: string, reAuthToken?: string): 
   })
 }
 
-// ── Backup / Restore ──────────────────────────────────────────────────────────
+// ── Backup / Restore (WP4: local backup — off in platform mode) ────────────────
+//
+// createBackup/fetchBackups/restoreBackup only ever succeed against a local-mode
+// engine (config.EditionAuthMode() == config.AuthModeLocal); the server answers
+// 404 in platform mode and the routes are not even registered there. The
+// caller in DataSection.tsx is responsible for not rendering this section
+// outside local mode — these functions do not themselves check the mode.
 
 // BackupEntry — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/BackupEntry.yaml.
@@ -112,9 +120,16 @@ export function fetchBackups(): Promise<BackupEntry[]> {
   return request<BackupEntry[]>('/backups', undefined, z.array(BackupEntrySchema))
 }
 
-export function restoreBackup(filename: string): Promise<void> {
+// restoreBackup overwrites the whole vault, so it takes the step-up gate like
+// the credential writes above: the consent token in local mode, none in
+// platform mode (where the route does not exist anyway).
+export function restoreBackup(filename: string, reAuthToken?: string): Promise<void> {
   // no-schema: void response; 204 No Content on success.
-  return request<void>('/restore', { method: 'POST', body: JSON.stringify({ filename }) })
+  return request<void>('/restore', {
+    method: 'POST',
+    headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
+    body: JSON.stringify({ filename }),
+  })
 }
 
 // ── Audit Log ─────────────────────────────────────────────────────────────────
@@ -279,9 +294,8 @@ export function gatewayRestart(): Promise<GatewayRestartResponse> {
 // enablement flow: flip switch -> persist authorization -> restart to
 // activate. Enabling when `supported` is false always returns 403.
 //
-// Step-up auth: the POST is re-auth-gated. Callers obtain a single-use consent
-// token via reAuth() and pass it here; it is replayed in the X-Reauth-Token
-// header (a missing/invalid token yields a 403).
+// The SPA confirms the flip with the operator before calling (ADR-0008 ruling
+// 6); on the wire the guard is the authenticated session.
 
 export function fetchGodMode(): Promise<GodModeStatus> {
   return request<GodModeStatus>('/gateway/god-mode', undefined, GodModeStatusSchema)

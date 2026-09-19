@@ -8,10 +8,11 @@
  *   - turns off the shell guard / deny-patterns.
  * Audit logging, the prompt-guard, and rate limiting STAY ON.
  *
- * Because it removes capability restraints globally, flipping it ALWAYS requires
- * password step-up — the same reAuth / X-Reauth-Token flow used by tool-policies
- * and integrations. We stage the desired state, open ReAuthDialog, and only fire
- * the write (with the minted consent token) once the password is confirmed.
+ * Because it removes capability restraints globally, flipping it ALWAYS asks for
+ * a confirmation first (ADR-0008 ruling 6) — a dialog that names the change and
+ * asks whether you meant it, not a password. We stage the desired state, open
+ * the step-up gate (ReAuthDialog in local mode, ConfirmDialog in platform
+ * mode — ADR-0010 WP3), and only fire the write once the operator confirms.
  *
  * Live state is read from GET /api/v1/gateway/god-mode (GodModeStatus:
  * { enabled, available, supported, persisted }). `supported` is build support
@@ -41,11 +42,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { ReAuthDialog } from './ReAuthDialog'
+import { useStepUp } from './useStepUp'
+import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
 
 export function GodModeControl() {
   const { addToast } = useUiStore()
+  const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
   const { data: godMode, isLoading, isError } = useQuery({
@@ -53,10 +56,6 @@ export function GodModeControl() {
     queryFn: fetchGodMode,
   })
 
-  // The desired next state, staged while the step-up dialog is open. The write
-  // only fires from onReAuthConfirmed once the consent token is minted.
-  const [pendingNext, setPendingNext] = useState<boolean | null>(null)
-  const [reauthOpen, setReauthOpen] = useState(false)
   // Opened when setGodMode reports restart_required=true (enabling from a
   // boot that was not yet authorized). Never opens for a disable.
   const [restartModalOpen, setRestartModalOpen] = useState(false)
@@ -89,8 +88,11 @@ export function GodModeControl() {
   // must not read (or behave, e.g. disabling the toggle) as if it were.
   const knownUnsupported = !isLoading && !isError && !supported
 
-  const { mutate: applyChange, isPending: isSaving } = useMutation({
-    mutationFn: ({ next, token }: { next: boolean; token: string }) => setGodMode(next, token),
+  const { mutateAsync: applyChangeAsync, isPending: isSaving } = useMutation({
+    // The consent token exists only in local (password) mode; confirm mode
+    // calls with no token, exactly as before.
+    mutationFn: ({ next, token }: { next: boolean; token?: string }) =>
+      token === undefined ? setGodMode(next) : setGodMode(next, token),
     onSuccess: (data, { next }) => {
       // Refresh the read-side state so the banner + toggle reflect reality.
       queryClient.invalidateQueries({ queryKey: ['god-mode'] })
@@ -100,7 +102,6 @@ export function GodModeControl() {
       // A pending-restart entry for sandbox.god_mode(_allowed) also appears in
       // the generic banner; refresh it so it's in sync with our own modal.
       queryClient.invalidateQueries({ queryKey: ['pending-restart'] })
-      setPendingNext(null)
       if (data.restart_required) {
         // Enabled, but not yet active in this process — surface the restart
         // modal so the operator can activate immediately (or defer via
@@ -115,7 +116,6 @@ export function GodModeControl() {
       }
     },
     onError: (err: unknown) => {
-      setPendingNext(null)
       addToast({
         message: getErrorMessage(err, 'Could not change god-mode'),
         variant: 'error',
@@ -123,8 +123,27 @@ export function GodModeControl() {
     },
   })
 
-  // requestToggle stages the desired state and opens the step-up dialog. The PUT
-  // fires from onReAuthConfirmed once the password is verified. Gated on
+  // stage runs a change through the step-up gate (ADR-0010 WP3): ReAuthDialog
+  // and a replayed consent token in local mode, ConfirmDialog with no token in
+  // platform mode. The gate is staged BEFORE the POST fires, so "cancel" means
+  // nothing was sent and the staged state is simply dropped.
+  function stage(next: boolean) {
+    void stepUp
+      .gate((token) => applyChangeAsync({ next, token }), {
+        title: next ? 'Enable god mode?' : 'Disable god mode?',
+        body: next
+          ? 'Agents stop asking permission before anything, and the sandbox around their code is switched off. You can turn this back off at any time.'
+          : 'Agents go back to asking permission, and the sandbox around their code is switched back on.',
+        confirmLabel: next ? 'Enable god mode' : 'Disable god mode',
+      })
+      .catch((err: unknown) => {
+        // A cancelled gate sent nothing; a real failure already toasted in
+        // the mutation's onError. Nothing else to undo.
+        if (!isReAuthCancelled(err)) return
+      })
+  }
+
+  // requestToggle stages the desired state through the gate. Gated on
   // `knownUnsupported` — blocks only once a successful, non-loading fetch has
   // confirmed god-mode is unsupported; a still-loading or failed fetch must
   // NOT block the toggle, since those are "unknown" states, not a confirmed
@@ -138,8 +157,7 @@ export function GodModeControl() {
   // reflects the actual config intent the switch controls.
   function requestToggle() {
     if (knownUnsupported || isSaving) return
-    setPendingNext(!persisted)
-    setReauthOpen(true)
+    stage(!persisted)
   }
 
   // requestDisarm always stages `false`, regardless of the current state —
@@ -148,16 +166,10 @@ export function GodModeControl() {
   // by the backend (fail-safe), so this never needs to check availability.
   function requestDisarm() {
     if (isSaving) return
-    setPendingNext(false)
-    setReauthOpen(true)
+    stage(false)
   }
 
-  function onReAuthConfirmed(token: string) {
-    if (pendingNext === null) return
-    applyChange({ next: pendingNext, token })
-  }
-
-  const busy = isSaving || reauthOpen
+  const busy = isSaving
 
   return (
     <div className="space-y-3">
@@ -296,22 +308,9 @@ export function GodModeControl() {
         </div>
       </div>
 
-      {/* Step-up password modal — always shown before a god-mode change. */}
-      <ReAuthDialog
-        open={reauthOpen}
-        onOpenChange={(next) => {
-          setReauthOpen(next)
-          // Dialog dismissed without confirming — drop the staged change.
-          if (!next) setPendingNext(null)
-        }}
-        title="Confirm your password to change god-mode"
-        description={
-          pendingNext
-            ? 'God-mode removes all permission prompts and disables the kernel sandbox. Re-type your password to enable it.'
-            : 'Re-type your password to disable god-mode and restore the previous protections.'
-        }
-        onConfirmed={onReAuthConfirmed}
-      />
+      {/* The step-up dialogs (ReAuthDialog in local mode, ConfirmDialog in
+          platform mode) — rendered once; only the one matching the mode ever opens. */}
+      {stepUp.dialogs}
 
       {/* O14: shown only when enabling persisted authorization but the
           override has no live effect yet in this process (restart_required

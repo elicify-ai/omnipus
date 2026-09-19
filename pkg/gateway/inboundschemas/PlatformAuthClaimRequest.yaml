@@ -1,0 +1,19 @@
+type: object
+description: >
+  The state the caller received from POST /auth/platform/start, presented to
+  collect the session that the browser half of the sign-in just opened. The
+  desktop app needs this because the browser's cookie jar is not its own: the
+  Set-Cookie written by /auth/callback lands in the user's real browser, and
+  without this route the application would poll for a session it can never see.
+required:
+  - state
+additionalProperties: false
+properties:
+  state:
+    type: string
+    minLength: 1
+    description: >
+      The state value from PlatformAuthStartResponse. For the 60 seconds after
+      a successful callback it is what identifies the waiting session, so treat
+      it as a credential for that window and keep it in memory only.
+    example: "T1c0bWl0aGVzdGF0ZXZhbHVlZXhhbXBsZQ"

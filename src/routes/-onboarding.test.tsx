@@ -8,19 +8,30 @@ import { catalogEndpointHint, catalogSubtitle } from '@/lib/catalogDisplay'
 
 // Wave 5b spec tests — OnboardingWizard frontend tests
 // Traces to: wave5b-system-agent-spec.md — Onboarding Flow BDD scenarios
-// Re-based on ADR-068 T068-24: step 3 is the SHARED ProviderPicker +
+// Re-based on ADR-068 T068-24: the SHARED ProviderPicker +
 // ProviderDetailPanel (FR-021), the model field starts empty and carries the
 // FR-029 label, and *Finish* is gated on a probe of the CHOSEN auth method for
 // the CHOSEN model.
 //
-// FR-12.3 flow (3 numbered steps + unnumbered completion screen):
+// Restored from the merge base (184d7247) and adapted for the local-mode
+// wizard's Personal-preferences step (ADR-0010 WP5; founder decision
+// 2026-09-19: kept in the open-source build too and proposed upstream with
+// the seams PR, rather than restoring upstream's original 3-step flow). The
+// ONLY changes from the merge base are: the Personal step insertion (step 3,
+// filled on the way through the helpers below), the resulting step-count and
+// step-number shifts (3 → 4 steps; the provider step moves from step 3 to
+// step 4), and the provider-step heading text ("Add a model key" → "Select
+// your model provider and default model"). The platform-mode counterpart of
+// this file is -onboarding-platform.test.tsx.
+//
+// FR-12.3 flow (4 numbered steps + unnumbered completion screen):
 //   Step 1 — "What should I call you?" (name/username)
 //   Step 2 — "Set your password" (password + confirm)
-//   Step 3 — "Add a model key" (provider + auth method + model)
+//   Step 3 — "What should I call you?" (personal name + tone/detail preferences)
+//   Step 4 — "Select your model provider and default model" (provider + auth method + model)
 //   Completion — "Meet your Assistant" (Mia intro, Start chatting)
-// The step indicator tracks the 3 numbered steps only; the completion screen
-// is not a numbered step, so aria-valuemax is 3 — FR-028's "onboarding stays
-// three steps" is asserted against that same indicator.
+// The step indicator tracks the 4 numbered steps only; the completion screen
+// is not a numbered step, so aria-valuemax is 4.
 
 // Mock TanStack Router navigate
 const mockNavigate = vi.fn()
@@ -171,15 +182,20 @@ async function advanceNameToPassword(username = 'admin') {
   await waitFor(() => screen.getByText(/set your password/i))
 }
 
-// Helper: advance from step 2 (Password) to step 3 (Model key).
+// Helper: advance from step 2 (Password) to step 4 (Provider), through the
+// Personal-preferences step (ADR-0010 WP5, step 3) that now sits between
+// them — fill its name field and continue, same as the platform-mode flow.
 async function advancePasswordToModelKey(password = 'password123') {
   fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: password } })
   fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: password } })
   fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-  await waitFor(() => screen.getByText(/add a model key/i))
+  await waitFor(() => screen.getByLabelText(/^name$/i))
+  fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Daniel' } })
+  fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+  await waitFor(() => screen.getByText(/select your model provider and default model/i))
 }
 
-async function goToStep3() {
+async function goToStep4() {
   await renderWizard()
   await advanceNameToPassword()
   await advancePasswordToModelKey()
@@ -224,11 +240,11 @@ async function pickModel(modelId: string) {
 
 const finishButton = () => screen.getByRole('button', { name: /finish|retry setup/i })
 
-// Helper: from step 3, connect Anthropic with a key and a probed model —
-// leaves the wizard on step 3 with Finish enabled.
+// Helper: from step 4, connect Anthropic with a key and a probed model —
+// leaves the wizard on step 4 with Finish enabled.
 const ANTHROPIC_MODEL = 'claude-sonnet-4-5'
 
-async function connectProviderOnStep3() {
+async function connectProviderOnStep4() {
   vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: ANTHROPIC_MODEL })
   await openPanelForTile('anthropic')
   await confirmPanelWithKey('sk-ant-api03-test')
@@ -254,13 +270,13 @@ describe('OnboardingWizard — step navigation', () => {
     expect(screen.getByText(/set your password/i)).toBeInTheDocument()
   })
 
-  it('shows step progress indicator with 3 dots (aria-valuemax=3)', async () => {
+  it('shows step progress indicator with 4 dots (aria-valuemax=4)', async () => {
     await renderWizard()
     const progressbar = screen.getByRole('progressbar')
     expect(progressbar).toBeInTheDocument()
     expect(progressbar).toHaveAttribute('aria-valuenow', '1')
     expect(progressbar).toHaveAttribute('aria-valuemin', '1')
-    expect(progressbar).toHaveAttribute('aria-valuemax', '3')
+    expect(progressbar).toHaveAttribute('aria-valuemax', '4')
   })
 
   it('step 1 Continue is disabled until a username is entered', async () => {
@@ -277,14 +293,16 @@ describe('OnboardingWizard — step navigation', () => {
     })
   })
 
-  it('step 3 Back button returns to step 2', async () => {
+  it('step 4 Back button returns to step 3 (Personal)', async () => {
+    // Provider's onBack targets the Personal step (ADR-0010 WP5), not
+    // Password — the Personal step now sits directly ahead of it.
     await renderWizard()
     await advanceNameToPassword()
     await advancePasswordToModelKey()
-    expect(screen.getByText(/add a model key/i)).toBeInTheDocument()
+    expect(screen.getByText(/select your model provider and default model/i)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /back/i }))
     await waitFor(() => {
-      expect(screen.getByText(/set your password/i)).toBeInTheDocument()
+      expect(screen.getByLabelText(/^name$/i)).toBeInTheDocument()
     })
   })
 })
@@ -414,7 +432,9 @@ describe('OnboardingWizard — admin credential fields work with password manage
       fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
       fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: 'password123' } })
       fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-      await waitFor(() => screen.getByText(/add a model key/i))
+      // Step 2's Continue now lands on the Personal step (ADR-0010 WP5), not
+      // Provider directly — its own name field is the next screen's marker.
+      await waitFor(() => screen.getByLabelText(/^name$/i))
       const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('')
       expect(written).not.toMatch(/HTMLFormElement.*requestSubmit/i)
     } finally {
@@ -424,10 +444,10 @@ describe('OnboardingWizard — admin credential fields work with password manage
 })
 
 // =====================================================================
-// Scenario: Provider selection (Step 3)
+// Scenario: Provider selection (Step 4)
 // =====================================================================
 // =====================================================================
-// ADR-068 T068-24 — step 3 is the SHARED picker (FR-021), the auth-method
+// ADR-068 T068-24 — step 4 is the SHARED picker (FR-021), the auth-method
 // control lives in its second-level panel (FR-028), and the model field is
 // empty, labelled, and probe-gated (FR-029).
 //
@@ -442,33 +462,33 @@ describe('OnboardingWizard — admin credential fields work with password manage
 // test, plus the onboarding hint that routes the operator to Custom endpoint).
 // =====================================================================
 
-describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021)', () => {
+describe('OnboardingWizard — step 4 renders the shared provider picker (FR-021)', () => {
   it('the source no longer carries its own company grid (no PRIORITY_COMPANIES)', () => {
     const src = readFileSync(join(__dirname_onboarding, 'onboarding.tsx'), 'utf-8')
     expect(src).not.toContain('PRIORITY_COMPANIES')
     expect(src).toContain("from '@/components/providers/ProviderPicker'")
   })
 
-  it('step 3 mounts ProviderPicker with the fetched catalog (12 Popular tiles)', async () => {
-    await goToStep3()
+  it('step 4 mounts ProviderPicker with the fetched catalog (12 Popular tiles)', async () => {
+    await goToStep4()
     const popular = screen.getByTestId('picker-popular')
     expect(within(popular).getAllByRole('button')).toHaveLength(12)
     expect(screen.getByTestId('picker-popular-anthropic')).toBeInTheDocument()
   })
 
-  it('choosing a company opens the second-level panel without leaving step 3 (FR-028)', async () => {
-    await goToStep3()
+  it('choosing a company opens the second-level panel without leaving step 4 (FR-028)', async () => {
+    await goToStep4()
     await openPanelForTile('anthropic')
 
-    // The step tracker still shows exactly 3 steps, on step 3.
+    // The step tracker still shows exactly 4 steps, on step 4.
     const progressbar = screen.getByRole('progressbar')
-    expect(progressbar).toHaveAttribute('aria-valuemax', '3')
-    expect(progressbar).toHaveAttribute('aria-valuenow', '3')
-    expect(screen.getAllByText('Step 3 of 3').length).toBeGreaterThan(0)
+    expect(progressbar).toHaveAttribute('aria-valuemax', '4')
+    expect(progressbar).toHaveAttribute('aria-valuenow', '4')
+    expect(screen.getAllByText('Step 4 of 4').length).toBeGreaterThan(0)
   })
 
   it('switching the auth segment to API key reveals the key field and hides the sign-in radios', async () => {
-    await goToStep3()
+    await goToStep4()
     // GitHub is the fixture's company that offers BOTH methods (github-copilot
     // sign-in beside the github-models key row), so it is where the segmented
     // control exists at all.
@@ -486,12 +506,12 @@ describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021
 
     expect(screen.getByTestId('provider-detail-panel-api-key-input')).toBeInTheDocument()
     expect(screen.queryByTestId('provider-detail-panel-auth-signin')).not.toBeInTheDocument()
-    // Still three steps — the whole point of FR-028.
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '3')
+    // Still four steps — the whole point of FR-028.
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '4')
   })
 
   it('the confirmed row renders the subtitle and endpoint derived from the fetched document (US-7 parity)', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForCompany('Zhipu AI', 'glm')
     await confirmPanelWithKey('sk-zai-test')
 
@@ -504,7 +524,7 @@ describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021
   })
 
   it('Change reopens the picker and drops the confirmed row', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
 
@@ -515,7 +535,7 @@ describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021
   })
 
   it('never probes the key path with an empty key (error prevention)', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     // Confirm with NO key typed.
     fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
@@ -530,7 +550,7 @@ describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021
   })
 
   it('a provider with no fixed default base points the operator at Custom endpoint', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForCompany('Azure OpenAI', 'azure')
     await confirmPanelWithKey('azure-key-123')
 
@@ -550,7 +570,7 @@ describe('OnboardingWizard — step 3 renders the shared provider picker (FR-021
 
 describe('OnboardingWizard — local provider needs no credential (FR-039)', () => {
   it('Ollama shows no API-key field and no "Add an API key" gate', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForCompany('Ollama', 'ollama')
 
     // No key input anywhere in the panel — a local endpoint has nothing to type.
@@ -576,7 +596,7 @@ describe('OnboardingWizard — local provider needs no credential (FR-039)', () 
 
   it('completes the probe and enables Finish with no operator-supplied key', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: 'ollama-default' })
-    await goToStep3()
+    await goToStep4()
     await openPanelForCompany('Ollama', 'ollama')
     fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
     await waitFor(() => screen.getByTestId('onboarding-provider-summary'))
@@ -598,16 +618,20 @@ describe('OnboardingWizard — local provider needs no credential (FR-039)', () 
 
 // =====================================================================
 // Scenario: Onboarding model field is empty and labelled (FR-029)
-// Scenario: Fresh install seeds no default model (step-3 half)
+// Scenario: Fresh install seeds no default model (step-4 half)
 // =====================================================================
 
 describe('OnboardingWizard — model field (FR-029)', () => {
   it('renders the model field with the verbatim label, no value, and Finish disabled', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
 
-    expect(ONBOARDING_MODEL_LABEL).toBe('Model for your first agent')
+    // FR-OB-021 (ADR-068 rebase, independent of ADR-0010 WP5): the model
+    // field's accessible label reads "Default model" on both editions, not
+    // upstream's original "Model for your first agent" — pinned against the
+    // shipped constant itself, per onboarding.tsx's own doc comment.
+    expect(ONBOARDING_MODEL_LABEL).toBe('Default model')
     const trigger = screen.getByTestId('onboarding-model-select')
     // With no value the accessible name is the label verbatim.
     expect(trigger).toHaveAttribute('aria-label', ONBOARDING_MODEL_LABEL)
@@ -620,7 +644,7 @@ describe('OnboardingWizard — model field (FR-029)', () => {
 
   it('choosing a model probes the api_key method with that exact model, then enables Finish', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: ANTHROPIC_MODEL })
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
 
@@ -638,7 +662,7 @@ describe('OnboardingWizard — model field (FR-029)', () => {
 
   it('changing the model re-probes and disables Finish until the new probe passes', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: ANTHROPIC_MODEL })
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
     await pickModel(ANTHROPIC_MODEL)
@@ -671,7 +695,7 @@ describe('OnboardingWizard — model field (FR-029)', () => {
     // and reports what it actually exercised. That is not a pass for the pick
     // on screen, so Finish must stay disabled.
     vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: 'claude-opus-4-1' })
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
 
@@ -683,7 +707,7 @@ describe('OnboardingWizard — model field (FR-029)', () => {
 
   it('a failed probe surfaces the friendly error and leaves Finish disabled', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: false, error: 'upstream models: status 401' })
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
 
@@ -703,7 +727,7 @@ describe('OnboardingWizard — sign-in path', () => {
   const CODEX_MODEL = CATALOG_PROVIDERS.find((e) => e.id === 'codex-cli')!.models![0]!.id
 
   async function chooseCodexCli() {
-    await goToStep3()
+    await goToStep4()
     await openPanelForCompany('Codex CLI', 'codex')
     // Sign-in only: no segment, no key field, sign-in pre-selected (FR-005).
     expect(screen.queryByTestId('provider-detail-panel-auth-segment')).not.toBeInTheDocument()
@@ -768,8 +792,8 @@ describe('OnboardingWizard — sign-in path', () => {
   })
 
   it('completion sends the OnboardingProviderApiKey variant on the key path', async () => {
-    await goToStep3()
-    await connectProviderOnStep3()
+    await goToStep4()
+    await connectProviderOnStep4()
 
     fireEvent.click(finishButton())
     await waitFor(() => expect(completeOnboardingTransaction).toHaveBeenCalledOnce())
@@ -792,7 +816,7 @@ describe('OnboardingWizard — sign-in path', () => {
 describe('OnboardingWizard — catalog unavailable', () => {
   it('shows the picker error state with Retry, and Custom endpoint stays selectable', async () => {
     vi.mocked(fetchProvidersCatalog).mockRejectedValueOnce(new Error('503'))
-    await goToStep3()
+    await goToStep4()
 
     await waitFor(() => screen.getByTestId('picker-catalog-error'))
     expect(screen.queryByTestId('picker-popular-openai')).not.toBeInTheDocument()
@@ -806,7 +830,7 @@ describe('OnboardingWizard — catalog unavailable', () => {
   it('onboarding completes through Custom endpoint while the catalog is down', async () => {
     vi.mocked(fetchProvidersCatalog).mockRejectedValue(new Error('503'))
     vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: 'my-model' })
-    await goToStep3()
+    await goToStep4()
     await waitFor(() => screen.getByTestId('picker-catalog-error'))
 
     fireEvent.click(screen.getByTestId('picker-custom-endpoint'))
@@ -860,7 +884,7 @@ describe('OnboardingWizard — probe banner (Flow-A / MAJOR-4)', () => {
       probed_model: ANTHROPIC_MODEL,
       validation: { outcome, message },
     })
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
     await pickModel(ANTHROPIC_MODEL)
@@ -887,8 +911,8 @@ describe('OnboardingWizard — probe banner (Flow-A / MAJOR-4)', () => {
 
   it('clean success (no validation) → no banner appears', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: ANTHROPIC_MODEL })
-    await goToStep3()
-    await connectProviderOnStep3()
+    await goToStep4()
+    await connectProviderOnStep4()
     expect(screen.queryByTestId('onboarding-probe-validation-banner')).not.toBeInTheDocument()
   })
 
@@ -898,7 +922,7 @@ describe('OnboardingWizard — probe banner (Flow-A / MAJOR-4)', () => {
       error: 'status 401',
       validation: { outcome: 'no_credit', message: 'no credit' },
     })
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-api03-test')
     await pickModel(ANTHROPIC_MODEL)
@@ -914,7 +938,7 @@ describe('OnboardingWizard — probe banner (Flow-A / MAJOR-4)', () => {
 describe('OnboardingWizard — friendly probe error display', () => {
   async function failProbe(rawError: string) {
     vi.mocked(probeProvider).mockResolvedValue({ success: false, error: rawError })
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
     await confirmPanelWithKey('sk-ant-test')
     await pickModel(ANTHROPIC_MODEL)
@@ -1025,13 +1049,13 @@ describe('friendlyProbeError', () => {
 // Scenario: friendly probe error in the UI (display-layer mapping + a11y)
 // =====================================================================
 // =====================================================================
-// Scenario: visible step counter (sighted users) — 3 steps
+// Scenario: visible step counter (sighted users) — 4 steps
 // =====================================================================
 
 describe('OnboardingWizard — visible step indicator', () => {
-  it('shows a visible "Step 1 of 3" counter alongside the progressbar', async () => {
+  it('shows a visible "Step 1 of 4" counter alongside the progressbar', async () => {
     await renderWizard()
-    const matches = screen.getAllByText(/step 1 of 3/i)
+    const matches = screen.getAllByText(/step 1 of 4/i)
     expect(matches.length).toBeGreaterThanOrEqual(2)
   })
 })
@@ -1128,11 +1152,11 @@ describe('evaluatePasswordStrength', () => {
 // =====================================================================
 
 describe('OnboardingWizard — finish', () => {
-  // Helper: walk through the 3 numbered steps to leave the wizard on step 3
+  // Helper: walk through the 4 numbered steps to leave the wizard on step 4
   // with Finish enabled (provider confirmed, model chosen, probe passed).
   async function goToCompleteReady() {
-    await goToStep3()
-    await connectProviderOnStep3()
+    await goToStep4()
+    await connectProviderOnStep4()
   }
 
   it('completing calls completeOnboardingTransaction and reveals Meet your Assistant', async () => {
@@ -1253,7 +1277,7 @@ describe('OnboardingWizard — finish', () => {
     expect(screen.getByText(/bound to my workspace/i)).toBeInTheDocument()
   })
 
-  it('surfaces an inline error and stays on step 3 with Retry setup when finish fails', async () => {
+  it('surfaces an inline error and stays on step 4 with Retry setup when finish fails', async () => {
     vi.mocked(completeOnboardingTransaction).mockRejectedValueOnce(new Error('server exploded'))
 
     await goToCompleteReady()
@@ -1263,8 +1287,8 @@ describe('OnboardingWizard — finish', () => {
       expect(screen.getByTestId('onboarding-error')).toBeInTheDocument()
     })
     expect(screen.getByText(/server exploded/i)).toBeInTheDocument()
-    // Stayed on step 3 (still showing the model-key heading) and did not navigate.
-    expect(screen.getByText(/add a model key/i)).toBeInTheDocument()
+    // Stayed on step 4 (still showing the model-provider heading) and did not navigate.
+    expect(screen.getByText(/select your model provider and default model/i)).toBeInTheDocument()
     expect(mockNavigate).not.toHaveBeenCalled()
     expect(screen.getByRole('button', { name: /retry setup/i })).toBeInTheDocument()
   })
@@ -1325,8 +1349,8 @@ describe('Providers catalog — onboarding reads GET /providers/catalog, never a
     expect(src).not.toContain("from '@/lib/generated/")
   })
 
-  it('the wizard requests the catalog from the API on step 3', async () => {
-    await goToStep3()
+  it('the wizard requests the catalog from the API on step 4', async () => {
+    await goToStep4()
     expect(fetchProvidersCatalog).toHaveBeenCalled()
   })
 

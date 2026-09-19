@@ -16,7 +16,22 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
+
+// withEdition pins config.Edition for the duration of the test, restoring the
+// prior value on cleanup — the same save/restore pattern
+// pkg/config/edition_test.go uses. config.EditionAuthMode() (and therefore
+// defaultExemptPaths()) derives from this package-level var, so every mode
+// composition test in this file must set it explicitly rather than rely on
+// whatever the previous test left behind.
+func withEdition(t *testing.T, e string) {
+	t.Helper()
+	prev := config.Edition
+	config.Edition = e
+	t.Cleanup(func() { config.Edition = prev })
+}
 
 // nextHandler is a trivial handler that records a success-marker in the
 // response so tests can confirm whether the middleware let the request
@@ -111,28 +126,97 @@ func TestCSRF_MatchPassesThrough(t *testing.T) {
 	assert.Equal(t, "next-ran", rec.Body.String())
 }
 
+// TestCSRF_DefaultExempt pins the default exempt list (no options passed) for
+// BOTH auth modes (ADR-0010 WP2): local mode (core edition) restores
+// upstream's own bootstrap set — /api/v1/auth/login plus the two onboarding
+// routes, since local mode runs onboarding BEFORE any session exists;
+// platform mode (desktop, hosted) has NO auth route exempt by default — the
+// registered sign-in provider declares its cookie-issuing start route and the
+// gateway passes it in with WithExemptPaths at boot (auth_mode.go's
+// csrfExemptPaths; pinned against this middleware by
+// TestAuthMode_CsrfExemptPaths_MatchTheMiddlewareDefault), with onboarding
+// deliberately NOT exempt (TestCSRF_OnboardingCompleteIsNotExempt and
+// TestCSRF_ProbeProviderIsNotExempt pin that negative separately). Both
+// modes carry the operational health endpoints (mounted on health-server
+// mux; exempt here for defense-in-depth in case of future remount).
 func TestCSRF_DefaultExempt(t *testing.T) {
-	// Default exempt list (no options passed) includes the cookie-issuer
-	// endpoints (onboarding, login) and operational health endpoints
-	// (mounted on health-server mux; exempt here for defense-in-depth in
-	// case of future remount).
-	h := buildMW()
-	for _, path := range []string{
-		"/api/v1/onboarding/complete",
-		"/api/v1/auth/login",
-		"/health",
-		"/ready",
-		"/reload",
-	} {
-		t.Run(path, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{}`)))
+	cases := map[string]struct {
+		edition string
+		exempt  []string
+	}{
+		"local mode (core edition)": {
+			edition: config.EditionCore,
+			exempt: []string{
+				"/api/v1/onboarding/complete",
+				"/api/v1/onboarding/probe-provider",
+				"/api/v1/auth/login",
+				"/health",
+				"/ready",
+				"/reload",
+			},
+		},
+		"platform mode (hosted edition)": {
+			edition: config.EditionHosted,
+			exempt: []string{
+				"/health",
+				"/ready",
+				"/reload",
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			withEdition(t, tc.edition)
+			h := buildMW()
+			// The sign-in start route is the provider's to declare, never a
+			// middleware default — in either mode it is gated until the
+			// gateway passes it in with WithExemptPaths.
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/platform/start", nil)
 			rec := httptest.NewRecorder()
 			h.ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusForbidden, rec.Code, "provider start route must not be a middleware default")
+			for _, path := range tc.exempt {
+				t.Run(path, func(t *testing.T) {
+					req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(`{}`)))
+					rec := httptest.NewRecorder()
+					h.ServeHTTP(rec, req)
 
-			assert.Equal(t, http.StatusOK, rec.Code, "exempt path %s must bypass CSRF gate", path)
-			assert.Equal(t, "next-ran", rec.Body.String())
+					assert.Equal(t, http.StatusOK, rec.Code, "exempt path %s must bypass CSRF gate", path)
+					assert.Equal(t, "next-ran", rec.Body.String())
+				})
+			}
 		})
 	}
+}
+
+// TestCSRF_ProbeProviderIsNotExempt pins the removal of
+// /api/v1/onboarding/probe-provider from the default exempt set.
+//
+// It was exempt on the rationale "called on fresh install, no cookie exists".
+// Under ADR-0008 the probe is a withAuth route reached only from inside the
+// wizard, so the caller always holds the session cookie sign-in issued — and
+// it issues no CSRF cookie of its own, so it never met this set's invariant
+// either. While the exemption stood, an attacker page could make the victim's
+// browser POST a probe with the session cookie and no CSRF token, driving an
+// outbound request from the gateway to an attacker-chosen api_base.
+//
+// This is a platform-mode-only property (local mode's onboarding runs
+// pre-auth and DOES exempt this route — TestCSRF_DefaultExempt's local-mode
+// case pins that), so mode is pinned explicitly here rather than relying on
+// whatever a previous test left in config.Edition.
+func TestCSRF_ProbeProviderIsNotExempt(t *testing.T) {
+	withEdition(t, config.EditionHosted)
+	h := buildMW()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/probe-provider",
+		bytes.NewReader([]byte(`{}`)))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code,
+		"the provider probe must be CSRF-gated like any other state-changing route")
+	assert.NotEqual(t, "next-ran", rec.Body.String(),
+		"the handler must not be reached without a CSRF cookie and header")
 }
 
 func TestCSRF_WithExemptPath_DropsDefaults(t *testing.T) {
@@ -176,13 +260,16 @@ func TestCSRF_WithExemptPaths_Multiple(t *testing.T) {
 
 func TestCSRF_WithDefaultExempts_AndCustom(t *testing.T) {
 	// Combining WithDefaultExempts with WithExemptPath yields defaults UNION
-	// custom. Both the default /api/v1/auth/login AND the custom /extra are
-	// exempt.
+	// custom. Both the default /health AND the custom /extra are exempt.
+	// Pinned to platform mode — TestCSRF_DefaultExempt already covers both
+	// modes' defaults on their own; this test's subject is the UNION
+	// behavior, not re-deriving the mode table. /extra stands in for the
+	// provider start route the gateway passes in the same way at boot.
+	withEdition(t, config.EditionHosted)
 	h := buildMW(WithDefaultExempts(), WithExemptPath("/extra"))
 
 	for _, p := range []string{
-		"/api/v1/auth/login",
-		"/api/v1/onboarding/complete",
+		"/health",
 		"/extra",
 	} {
 		req := httptest.NewRequest(http.MethodPost, p, nil)
@@ -261,14 +348,40 @@ func TestCSRF_WithClientIPFunc_FallbackRemoteAddr(t *testing.T) {
 	assert.Equal(t, "192.0.2.7:51234", seenIP, "fallback must be r.RemoteAddr")
 }
 
+// TestCSRF_OnboardingCompleteIsNotExempt pins the removal of an exemption that
+// had outlived its reason.
+//
+// It was exempt because it "issues the cookie so the SPA's first post-onboarding
+// request can pass the gate". Under ADR-0008 it issues no cookie — the session
+// and __Host-csrf are minted at platform sign-in, which happens BEFORE the
+// wizard — and the route is withAuth. So the exemption bought nothing and cost
+// this: an attacker page could make a signed-in victim's browser complete their
+// onboarding with an attacker-chosen provider and API key, writing that key into
+// the victim's encrypted credential store.
+//
+// Platform-mode-only, like TestCSRF_ProbeProviderIsNotExempt — local mode's
+// onboarding runs pre-auth and DOES exempt this route.
+func TestCSRF_OnboardingCompleteIsNotExempt(t *testing.T) {
+	withEdition(t, config.EditionHosted)
+	h := buildMW()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code,
+		"a state-changing POST with no CSRF cookie or header must be refused")
+}
+
 func TestCSRF_NilOptionIgnored(t *testing.T) {
 	// Passing a nil Option must be safely ignored, not panic. This lets
 	// callers conditionally apply options via a ternary without branching.
+	// Mode pinned to platform for the same reason as the tests above — the
+	// subject here is nil-Option handling, not the mode table.
+	withEdition(t, config.EditionHosted)
 	var noOpt Option
 	h := buildMW(noOpt)
 
-	// Default behavior still in effect: onboarding is exempt.
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", nil)
+	// Default behavior still in effect: the operational health route is exempt.
+	req := httptest.NewRequest(http.MethodPost, "/health", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)

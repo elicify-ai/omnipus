@@ -555,29 +555,36 @@ func TestContract_DevicePairingRequestFrame_ZeroValue(t *testing.T) {
 
 // ── REST response types (OpenAPI) ─────────────────────────────────────────────
 
-// LoginResponse — bearer token response
-// Traces to: contracts/components/schemas/LoginResponse.yaml
+// OnboardingCompleteResponse — the token-less completion response
+// Traces to: contracts/components/schemas/OnboardingCompleteResponse.yaml. It
+// is its own schema, not an alias of LoginResponse: the local password login
+// and the bearer token it returned are both deleted (ADR-0008 ruling 2), and
+// LoginResponse.yaml went with them.
 
-func TestContract_LoginResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "LoginResponse", FixtureLoginResponse_Populated())
+func TestContract_OnboardingCompleteResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "OnboardingCompleteResponse", FixtureOnboardingCompleteResponse_Populated())
 }
 
-func TestContract_LoginResponse_ZeroValue(t *testing.T) {
-	// token="", username="" — both required, token must match BearerToken's
-	// minLength/pattern constraints.
-	mustFailComponent(t, "LoginResponse", FixtureLoginResponse_ZeroValue(),
-		"zero value has empty required fields and token doesn't match BearerToken pattern")
+func TestContract_OnboardingCompleteResponse_MissingUsername(t *testing.T) {
+	// `username` is the one required property left once `token` is gone. The Go
+	// zero value can no longer express this case — Username is a non-pointer
+	// string, so it always marshals as "" and satisfies "required" — so the
+	// negative is stated on raw JSON instead, at the same strength.
+	raw, err := json.Marshal(map[string]any{})
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteResponse", raw),
+		"a response with no username must fail — username is required")
 }
 
-func TestContract_LoginResponse_Edge(t *testing.T) {
+func TestContract_OnboardingCompleteResponse_Edge(t *testing.T) {
 	// no warning, unicode username
-	mustPassComponent(t, "LoginResponse", FixtureLoginResponse_Edge())
+	mustPassComponent(t, "OnboardingCompleteResponse", FixtureOnboardingCompleteResponse_Edge())
 }
 
-func TestContract_LoginResponse_Differentiation(t *testing.T) {
+func TestContract_OnboardingCompleteResponse_Differentiation(t *testing.T) {
 	// Two populated fixtures produce different JSON — guards against hardcoded stubs.
-	f1 := FixtureLoginResponse_Populated()
-	f2 := FixtureLoginResponse_Edge()
+	f1 := FixtureOnboardingCompleteResponse_Populated()
+	f2 := FixtureOnboardingCompleteResponse_Edge()
 
 	raw1, err := json.Marshal(f1)
 	require.NoError(t, err)
@@ -587,8 +594,8 @@ func TestContract_LoginResponse_Differentiation(t *testing.T) {
 	assert.NotEqual(t, string(raw1), string(raw2),
 		"two different fixtures must produce different JSON (differentiation test)")
 
-	mustPassComponent(t, "LoginResponse", f1)
-	mustPassComponent(t, "LoginResponse", f2)
+	mustPassComponent(t, "OnboardingCompleteResponse", f1)
+	mustPassComponent(t, "OnboardingCompleteResponse", f2)
 }
 
 // Session — core session metadata
@@ -1459,15 +1466,18 @@ func TestContract_McpServerCreate_Edge(t *testing.T) {
 // Traces to: contracts/components/schemas/AppState.yaml
 
 func TestContract_AppState_Populated(t *testing.T) {
-	// All optional fields set alongside the required onboarding_complete bool.
-	// Traces to: AppState.yaml — required: [onboarding_complete]
+	// All optional fields set alongside the required onboarding_complete bool
+	// and identity object (identity added by ADR-0010 WP1).
+	// Traces to: AppState.yaml — required: [onboarding_complete, identity]
 	mustPassComponent(t, "AppState", FixtureAppState_Populated())
 }
 
 func TestContract_AppState_ZeroValue(t *testing.T) {
-	// ZeroValue passes: onboarding_complete=false is a valid boolean.
-	// AppState is one of the few types where Go zero value is schema-valid.
-	// Traces to: AppState.yaml — boolean fields have no enum constraint
+	// onboarding_complete=false is a valid boolean, and every OTHER optional
+	// field is Go-zero (absent). identity is required and its mode/edition
+	// subfields are enum-constrained (ADR-0010 WP1), so it can no longer be
+	// true Go-zero end to end — the fixture fills only that one field.
+	// Traces to: AppState.yaml — required: [onboarding_complete, identity]
 	mustPassComponent(t, "AppState", FixtureAppState_ZeroValue())
 }
 
@@ -1792,48 +1802,6 @@ func TestContract_DevicesResponse_NilPairedRejected(t *testing.T) {
 	validationErr := validateAgainstComponentSchemaRawJSON(t, "DevicesResponse", raw)
 	assert.Error(t, validationErr,
 		"paired:null MUST fail validation — DevicesResponse.paired is required type: array")
-}
-
-// ── BackupEntry ───────────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupEntry.yaml
-// Note: oapi-codegen inlined BackupEntry inside the listBackups response;
-// we test the schema directly via raw JSON.
-
-func TestContract_BackupEntry_Populated(t *testing.T) {
-	// All required fields set.
-	// Traces to: BackupEntry.yaml — required: [filename, size_bytes, created_at]
-	raw, err := json.Marshal(FixtureBackupEntryJSON_Populated())
-	require.NoError(t, err)
-	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
-		"fully-populated BackupEntry must validate")
-}
-
-func TestContract_BackupEntry_ZeroValue(t *testing.T) {
-	// Empty map — missing all required fields.
-	// Traces to: BackupEntry.yaml
-	raw, err := json.Marshal(FixtureBackupEntryJSON_ZeroValue())
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
-		"empty object must fail BackupEntry schema — all required fields missing")
-}
-
-func TestContract_BackupEntry_Edge(t *testing.T) {
-	// Zero-byte size (valid), long filename.
-	// Traces to: BackupEntry.yaml — size_bytes: minimum: 0
-	raw, err := json.Marshal(FixtureBackupEntryJSON_Edge())
-	require.NoError(t, err)
-	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
-		"zero-byte backup entry must validate — minimum: 0 is valid")
-}
-
-func TestContract_BackupEntry_Differentiation(t *testing.T) {
-	// Two BackupEntry fixtures must produce different JSON.
-	raw1, err := json.Marshal(FixtureBackupEntryJSON_Populated())
-	require.NoError(t, err)
-	raw2, err := json.Marshal(FixtureBackupEntryJSON_Edge())
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different BackupEntry fixtures must produce different JSON")
 }
 
 // ── StorageStats ──────────────────────────────────────────────────────────────
@@ -2302,37 +2270,6 @@ func TestContract_ChannelTestResponse_Differentiation(t *testing.T) {
 	mustPassComponent(t, "ChannelTestResponse", f2)
 }
 
-// ── BackupCreateResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupCreateResponse.yaml
-
-func TestContract_BackupCreateResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_Populated())
-}
-
-func TestContract_BackupCreateResponse_ZeroValue(t *testing.T) {
-	// JSON Schema "required" checks key presence, not non-empty values.
-	// path="", size_bytes=0, and created_at="0001-01-01T00:00:00Z" all satisfy
-	// the presence requirement — the zero value passes schema validation.
-	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_ZeroValue())
-}
-
-func TestContract_BackupCreateResponse_Edge(t *testing.T) {
-	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_Edge())
-}
-
-func TestContract_BackupCreateResponse_Differentiation(t *testing.T) {
-	f1 := FixtureBackupCreateResponse_Populated()
-	f2 := FixtureBackupCreateResponse_Edge()
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different BackupCreateResponse fixtures must produce different JSON")
-	mustPassComponent(t, "BackupCreateResponse", f1)
-	mustPassComponent(t, "BackupCreateResponse", f2)
-}
-
 // ── OperationResult ───────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/OperationResult.yaml
 
@@ -2571,35 +2508,6 @@ func TestContract_AuthFrame_TokenPatternRejects(t *testing.T) {
 			require.NoError(t, err)
 			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AuthFrame", raw),
 				"token %q must fail AuthFrame pattern validation — %s", tc.token, tc.reason)
-		})
-	}
-}
-
-// ── LoginResponse token exact-72-char ────────────────────────────────────────
-// Traces to: contracts/components/schemas/LoginResponse.yaml (minLength:72, maxLength:72)
-
-func TestContract_LoginResponse_Token72ExactRejects(t *testing.T) {
-	// Traces to: LoginResponse.yaml — token: minLength:72, maxLength:72
-	// 71-char token (too short) and 73-char token (too long) must fail.
-	cases := []struct {
-		name   string
-		token  string
-		reason string
-	}{
-		{"71_chars", "omnipus_" + repeatStr("a", 63), "71 chars is below minLength:72"},
-		{"73_chars", "omnipus_" + repeatStr("a", 65), "73 chars is above maxLength:72"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			doc := map[string]any{
-				"token":    tc.token,
-				"role":     "admin",
-				"username": "admin",
-			}
-			raw, err := json.Marshal(doc)
-			require.NoError(t, err)
-			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "LoginResponse", raw),
-				"token %q (len=%d) must fail LoginResponse — %s", tc.token, len(tc.token), tc.reason)
 		})
 	}
 }
@@ -2990,33 +2898,67 @@ func TestContract_SessionStateFrame_TooManyPending(t *testing.T) {
 
 // ── Closed-shape rejection tests (additionalProperties: false) ────────────────
 
-func TestContract_LoginResponse_RejectsExtraneousField(t *testing.T) {
-	// Traces to: LoginResponse.yaml — additionalProperties: false
+func TestContract_OnboardingCompleteResponse_RejectsExtraneousField(t *testing.T) {
+	// Traces to: OnboardingCompleteResponse.yaml — additionalProperties: false.
+	// The body is otherwise VALID, so the extraneous key is the only thing that
+	// can reject it. `token` is one such key now: the response that used to
+	// carry it is closed against it (ADR-0008 ruling 2).
 	doc := map[string]any{
-		"token":          "omnipus_" + repeatStr("a", 64),
 		"username":       "admin",
 		"injected_field": "should be rejected",
 	}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "LoginResponse", raw),
-		"LoginResponse with extraneous field must fail — additionalProperties: false")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteResponse", raw),
+		"OnboardingCompleteResponse with extraneous field must fail — additionalProperties: false")
 }
 
 func TestContract_OnboardingCompleteRequest_RejectsExtraneousField(t *testing.T) {
-	// Traces to: OnboardingCompleteRequest.yaml — additionalProperties: false
+	// Traces to: OnboardingCompleteRequest.yaml — additionalProperties: false.
+	// The body is otherwise VALID, so the only thing that can reject it is the
+	// extraneous key — without that, this test would pass for the wrong reason.
 	doc := map[string]any{
-		"username":   "admin",
-		"password":   "securepassword",
-		"api_key":    "key123",
-		"provider":   "anthropic",
-		"model":      "claude-sonnet-4-6",
+		"provider": map[string]any{
+			"auth_method": "api_key",
+			"id":          "anthropic",
+			"api_key":     "key123",
+			"model":       "claude-sonnet-4-6",
+		},
 		"extra_flag": true, // extraneous
 	}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
 		"OnboardingCompleteRequest with extraneous field must fail — additionalProperties: false")
+}
+
+// TestContract_OnboardingCompleteRequest_AcceptsAdminBlockAtSchemaLevel pins
+// the WP5 (ADR-0010) redesign on the wire: commit f232d1755 restored `admin`
+// as a schema-level property (required in local mode, refused with a 400 in
+// platform mode — see OnboardingCompleteRequest.yaml's own description). This
+// test used to assert `admin` must be rejected outright, pinning the earlier
+// ADR-0008-ruling-2 world where the local account had been deleted entirely;
+// that invariant no longer holds now that local mode mints a real admin
+// account again. The static component schema cannot see which edition is
+// running, so it accepts a structurally valid `admin` block unconditionally —
+// the platform-mode 400 refusal is mode-dependent and is enforced by the
+// gateway handler's strict decode instead, pinned by
+// pkg/gateway/rest_onboarding_authority_test.go's
+// TestOnboardingComplete_BodyCarryingAnAdminBlock_Is400.
+func TestContract_OnboardingCompleteRequest_AcceptsAdminBlockAtSchemaLevel(t *testing.T) {
+	doc := map[string]any{
+		"provider": map[string]any{
+			"auth_method": "api_key",
+			"id":          "anthropic",
+			"api_key":     "key123",
+			"model":       "claude-sonnet-4-6",
+		},
+		"admin": map[string]any{"username": "admin", "password": "s3cr3tpassword"},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
+		"admin is a valid schema-level property since WP5 restored local-mode admin creation (ADR-0010)")
 }
 
 func TestContract_GlobalToolPolicies_RejectsExtraneousField(t *testing.T) {
@@ -3601,15 +3543,6 @@ func TestContract_IntegrationProvider_Populated(t *testing.T) {
 func TestContract_IntegrationProvider_ZeroValue(t *testing.T) {
 	mustFailComponent(t, "IntegrationProvider", FixtureIntegrationProvider_ZeroValue(),
 		"kind is \"\" (not in [search, voice])")
-}
-
-func TestContract_ReAuthResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "ReAuthResponse", FixtureReAuthResponse_Populated())
-}
-
-func TestContract_ReAuthResponse_ZeroValue(t *testing.T) {
-	// All required fields are scalars with no value constraints → zero value is valid.
-	mustPassComponent(t, "ReAuthResponse", FixtureReAuthResponse_ZeroValue())
 }
 
 func TestContract_PerformanceSettings_Populated(t *testing.T) {

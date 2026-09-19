@@ -30,7 +30,8 @@ import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 import { ShellDenyPatternsEditor } from '@/components/agents/ShellDenyPatternsEditor'
-import { useReAuthGate, isReAuthCancelled } from './useReAuthGate'
+import { isReAuthCancelled } from './useReAuthGate'
+import { useStepUp } from './useStepUp'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
 import { SsrfEditor, SSRF_PRESETS } from './SsrfEditor'
 
@@ -293,16 +294,35 @@ function Abi4Banner({
 export function SandboxSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
+  const stepUp = useStepUp()
 
-  // PUT /api/v1/security/sandbox-config is re-auth gated (Spec-6 FR-12.2). Every
-  // sandbox-config mutation (mode toggle, agent-defaults autosave, paths/SSRF
-  // save) routes its PUT through runGated, which replays a single-use consent
-  // token via updateSandboxConfig's header arg when the server demands re-auth —
-  // same dialog/copy as IntegrationsSection.
-  const { runGated: runGatedSandbox, dialog: reAuthDialog } = useReAuthGate({
-    title: 'Confirm to change sandbox',
-    description: 'Re-type your password to change the sandbox security configuration.',
-  })
+  // Sandbox configuration is one of the six ADR-0008 controls the step-up gate
+  // (ADR-0010 WP3) covers — ReAuthDialog + a replayed consent token in local
+  // mode, ConfirmDialog with no token in platform mode. Every PUT to
+  // /api/v1/security/sandbox-config goes through it.
+  //
+  // The gate is staged BEFORE the mutation fires (not after a 403), so
+  // "cancel" means the request was never sent. Each staged save carries its own
+  // `cancel`, because most of these controls apply optimistically and a
+  // cancelled save must put the UI back where it was.
+  function askSandboxConfirm(next: {
+    title: string
+    body: string
+    confirmLabel: string
+    run: (token?: string) => Promise<unknown>
+    cancel: () => void
+  }) {
+    void stepUp
+      .gate(next.run, { title: next.title, body: next.body, confirmLabel: next.confirmLabel })
+      .catch((err: unknown) => {
+        if (isReAuthCancelled(err)) {
+          next.cancel()
+          return
+        }
+        // A real save failure already surfaced its toast via the mutation's
+        // own onError above.
+      })
+  }
 
   // ── Status query ───────────────────────────────────────────────────────────
   const [statusExpanded, setStatusExpanded] = useState(false)
@@ -328,15 +348,14 @@ export function SandboxSection(): React.ReactElement {
   const [globalDenyPatterns, setGlobalDenyPatterns] = useState<string[]>([])
   const [denyPatternsSaving, setDenyPatternsSaving] = useState(false)
 
-  const { mutate: saveDenyPatterns } = useMutation({
-    mutationFn: async (data: { shell_deny_patterns: string[] }) => {
+  const { mutateAsync: saveDenyPatterns } = useMutation({
+    mutationFn: async (data: { shell_deny_patterns: string[]; token?: string }) => {
       // Persist via PUT /api/v1/security/sandbox-config under the canonical
       // backend key (shell_deny_patterns) defined in
       // pkg/gateway/rest_sandbox_config.go::sandboxConfigPutBody.
-      await runGatedSandbox((token) =>
-        updateSandboxConfig({
-          shell_deny_patterns: data.shell_deny_patterns,
-        }, token),
+      await updateSandboxConfig(
+        { shell_deny_patterns: data.shell_deny_patterns },
+        data.token,
       )
     },
     onMutate: () => setDenyPatternsSaving(true),
@@ -346,17 +365,6 @@ export function SandboxSection(): React.ReactElement {
     },
     onError: (err: Error) => {
       setDenyPatternsSaving(false)
-      if (isReAuthCancelled(err)) {
-        // user dismissed the password prompt — revert the optimistic edit so
-        // the textarea doesn't keep showing an unsaved change with no
-        // indicator that it was never persisted. denyPatternsTouched is
-        // cleared first (same technique the configData hydration effect
-        // uses) so this programmatic revert does not itself re-trigger the
-        // debounced autosave below.
-        denyPatternsTouched.current = false
-        setGlobalDenyPatterns(extractShellDenyPatterns(configData))
-        return
-      }
       addToast({ message: getErrorMessage(err, 'Failed to save deny patterns'), variant: 'error' })
     },
   })
@@ -376,8 +384,22 @@ export function SandboxSection(): React.ReactElement {
   useEffect(() => {
     if (!denyPatternsTouched.current) return
     const handle = setTimeout(() => {
-      saveDenyPatterns({
-        shell_deny_patterns: globalDenyPatterns.filter((x) => x.trim() !== ''),
+      askSandboxConfirm({
+        title: 'Save the shell deny patterns?',
+        body: 'Commands matching these patterns are refused for every agent. Changing the list changes what every agent may run.',
+        confirmLabel: 'Save deny patterns',
+        run: (token) =>
+          saveDenyPatterns({
+            shell_deny_patterns: globalDenyPatterns.filter((x) => x.trim() !== ''),
+            token,
+          }),
+        // Cancelled: put the textarea back to the saved list. The touched flag
+        // is cleared first (same technique the configData hydration effect
+        // uses) so this programmatic revert does not re-trigger the debounce.
+        cancel: () => {
+          denyPatternsTouched.current = false
+          setGlobalDenyPatterns(extractShellDenyPatterns(configData))
+        },
       })
     }, 400)
     return () => clearTimeout(handle)
@@ -473,9 +495,9 @@ export function SandboxSection(): React.ReactElement {
   }, [configData])
 
   // ── Mode save mutation ────────────────────────────────────────────────────
-  const { mutate: doSaveMode } = useMutation({
-    mutationFn: (body: Parameters<typeof updateSandboxConfig>[0]) =>
-      runGatedSandbox((token) => updateSandboxConfig(body, token)),
+  const { mutateAsync: doSaveMode } = useMutation({
+    mutationFn: (vars: { body: Parameters<typeof updateSandboxConfig>[0]; token?: string }) =>
+      updateSandboxConfig(vars.body, vars.token),
     onMutate: () => setSaveState('saving'),
     onSuccess: (saved) => {
       setSaveState('saved')
@@ -483,20 +505,6 @@ export function SandboxSection(): React.ReactElement {
       void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
     },
     onError: (err: Error) => {
-      if (isReAuthCancelled(err)) {
-        // user dismissed the password prompt — no-op, not a toast-worthy
-        // error, but the mode was already flipped optimistically in
-        // handleModeChange before this mutation fired. It MUST be reverted
-        // here too (same as the real-error branch below) — otherwise the
-        // radio is left pointing at an unsaved target mode with no error
-        // indicator (saveState goes back to 'idle', which SaveStatus renders
-        // as nothing), and because handleModeChange early-returns when
-        // `mode === currentMode`, re-clicking the same (already-selected but
-        // unsaved) radio would not even refire onChange — no recovery path.
-        setSaveState('idle')
-        setCurrentMode(savedMode)
-        return
-      }
       setSaveState('error')
       const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
@@ -507,9 +515,9 @@ export function SandboxSection(): React.ReactElement {
   })
 
   // ── Filesystem-model save mutation ────────────────────────────────────────
-  const { mutate: doSaveFsModel } = useMutation({
-    mutationFn: (body: Parameters<typeof updateSandboxConfig>[0]) =>
-      runGatedSandbox((token) => updateSandboxConfig(body, token)),
+  const { mutateAsync: doSaveFsModel } = useMutation({
+    mutationFn: (vars: { body: Parameters<typeof updateSandboxConfig>[0]; token?: string }) =>
+      updateSandboxConfig(vars.body, vars.token),
     onMutate: () => setSaveState('saving'),
     onSuccess: (saved) => {
       setSaveState('saved')
@@ -517,11 +525,6 @@ export function SandboxSection(): React.ReactElement {
       void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
     },
     onError: (err: Error) => {
-      if (isReAuthCancelled(err)) {
-        setSaveState('idle')
-        setCurrentFsModel(savedFsModel)
-        return
-      }
       setSaveState('error')
       const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
@@ -532,12 +535,13 @@ export function SandboxSection(): React.ReactElement {
 
   // ── Workspace file limit save mutation ────────────────────────────────────
   // Same contract as doSaveFsModel: optimistic in the handler, reverted here on
-  // both failure paths. The revert is mandatory, not tidiness — the handler's
-  // equality guard means a stuck optimistic value can never be re-submitted by
-  // clicking the same radio again, so without it there is no recovery path.
-  const { mutate: doSaveWorkspaceLimit } = useMutation({
-    mutationFn: (body: SandboxUpdateBody) =>
-      runGatedSandbox((token) => updateSandboxConfig(body, token)),
+  // failure (and by the confirmation's own cancel path). The revert is
+  // mandatory, not tidiness — the handler's equality guard means a stuck
+  // optimistic value can never be re-submitted by clicking the same radio
+  // again, so without it there is no recovery path.
+  const { mutateAsync: doSaveWorkspaceLimit } = useMutation({
+    mutationFn: (vars: { body: SandboxUpdateBody; token?: string }) =>
+      updateSandboxConfig(vars.body, vars.token),
     onMutate: () => setSaveState('saving'),
     onSuccess: (saved) => {
       setSaveState('saved')
@@ -545,11 +549,6 @@ export function SandboxSection(): React.ReactElement {
       void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
     },
     onError: (err: Error) => {
-      if (isReAuthCancelled(err)) {
-        setSaveState('idle')
-        setCurrentWorkspaceLimit(savedWorkspaceLimit)
-        return
-      }
       setSaveState('error')
       const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
@@ -560,8 +559,8 @@ export function SandboxSection(): React.ReactElement {
 
   // ── Paths/SSRF save mutation ──────────────────────────────────────────────
   const saveMutation = useMutation({
-    mutationFn: (body: Parameters<typeof updateSandboxConfig>[0]) =>
-      runGatedSandbox((token) => updateSandboxConfig(body, token)),
+    mutationFn: (vars: { body: Parameters<typeof updateSandboxConfig>[0]; token?: string }) =>
+      updateSandboxConfig(vars.body, vars.token),
     onMutate: () => setSaveState('saving'),
     onSuccess: (resp) => {
       setSaveState('saved')
@@ -575,17 +574,6 @@ export function SandboxSection(): React.ReactElement {
       }
     },
     onError: (err: Error) => {
-      if (isReAuthCancelled(err)) {
-        // user dismissed the password prompt — no-op, not an error; but the
-        // path/SSRF add or delete that triggered this save already applied
-        // optimistically to pathList/ssrfList. Revert both to the last
-        // known-saved server state so the UI doesn't keep showing a "phantom"
-        // unsaved entry with no indicator that it was never persisted
-        // (mirrors doSaveMode's revert-on-cancel for the mode radio).
-        setSaveState('idle')
-        revertPathsSsrfToServer()
-        return
-      }
       setSaveState('error')
       const msg = getErrorMessage(err, 'Save failed')
       setErrorMessage(msg)
@@ -607,9 +595,10 @@ export function SandboxSection(): React.ReactElement {
 
   // Reverts pathList/ssrfList (and the derived SSRF preset/advanced-open
   // state) back to the last known-saved server config. Used both when the
-  // wildcard-SSRF confirmation is backed out of and when the re-auth prompt
-  // for a paths/SSRF save is cancelled — in both cases an optimistic edit
-  // must not keep appearing applied when it was never persisted.
+  // wildcard-SSRF confirmation is backed out of and when the sandbox-config
+  // confirmation for a paths/SSRF save is cancelled — in both cases an
+  // optimistic edit must not keep appearing applied when it was never
+  // persisted.
   function revertPathsSsrfToServer() {
     if (!configData) return
     setPathList(configData.allowed_paths ?? [])
@@ -624,9 +613,19 @@ export function SandboxSection(): React.ReactElement {
   function commitPathsSsrf(paths: string[], ssrf: string[]) {
     setPathRowErrors({})
     setSsrfAdvancedErrors({})
-    saveMutation.mutate({
-      allowed_paths: paths,
-      ssrf: { allow_internal: ssrf },
+    askSandboxConfirm({
+      title: 'Save the sandbox configuration?',
+      body: 'This changes which paths agents may reach and which internal addresses they may call. Some of it only takes effect after the gateway restarts.',
+      confirmLabel: 'Save sandbox configuration',
+      run: (token) =>
+        saveMutation.mutateAsync({
+          body: {
+            allowed_paths: paths,
+            ssrf: { allow_internal: ssrf },
+          },
+          token,
+        }),
+      cancel: revertPathsSsrfToServer,
     })
   }
 
@@ -737,7 +736,16 @@ export function SandboxSection(): React.ReactElement {
     // value with no error indicator, and re-clicking it would not refire
     // onChange because of the equality guard above.
     setCurrentFsModel(model)
-    doSaveFsModel({ filesystem_model: model })
+    askSandboxConfirm({
+      title: 'Change what agents can read?',
+      body:
+        model === 'open'
+          ? 'Agents may read anywhere on this machine, not just their workspace. The gateway must restart before it takes effect.'
+          : 'Agents are confined to their own workspace for reads and execution. The gateway must restart before it takes effect.',
+      confirmLabel: 'Change filesystem model',
+      run: (token) => doSaveFsModel({ body: { filesystem_model: model }, token }),
+      cancel: () => setCurrentFsModel(savedFsModel),
+    })
   }
 
   function handleWorkspaceLimitChange(next: boolean) {
@@ -749,8 +757,16 @@ export function SandboxSection(): React.ReactElement {
     if (!serverWorkspaceLimit || workspaceLimitEnvLocked) return
     if (next === currentWorkspaceLimit) return
     setCurrentWorkspaceLimit(next)
-    // The key is echoed back, never hardcoded — see WORKSPACE_LIMIT_KEYS.
-    doSaveWorkspaceLimit({ [serverWorkspaceLimit.key]: next } as SandboxUpdateBody)
+    askSandboxConfirm({
+      title: 'Change the workspace file limit?',
+      body: next
+        ? 'Agents are limited to files inside their own workspace.'
+        : 'Agents are no longer limited to files inside their own workspace.',
+      confirmLabel: 'Change file limit',
+      // The key is echoed back, never hardcoded — see WORKSPACE_LIMIT_KEYS.
+      run: (token) => doSaveWorkspaceLimit({ body: { [serverWorkspaceLimit.key]: next } as SandboxUpdateBody, token }),
+      cancel: () => setCurrentWorkspaceLimit(savedWorkspaceLimit),
+    })
   }
 
   function handleModeChange(mode: 'enforce' | 'permissive' | 'off') {
@@ -767,12 +783,31 @@ export function SandboxSection(): React.ReactElement {
       typeof issueRef === 'string'
 
     if (isAbi4Incompatible) {
-      pendingSaveRef.current = () => doSaveMode({ mode })
+      pendingSaveRef.current = () => askModeConfirm(mode)
       setShowEnforceModal(true)
       return
     }
 
-    doSaveMode({ mode })
+    askModeConfirm(mode)
+  }
+
+  // askModeConfirm stages the sandbox-mode change behind the confirmation.
+  // Cancelling reverts the optimistic radio to the saved mode — handleModeChange
+  // early-returns when the clicked mode already equals currentMode, so without
+  // the revert there would be no way to re-submit it.
+  function askModeConfirm(mode: 'enforce' | 'permissive' | 'off') {
+    askSandboxConfirm({
+      title: 'Change the sandbox mode?',
+      body:
+        mode === 'off'
+          ? 'The kernel sandbox stops confining agents entirely. The gateway must restart before it takes effect.'
+          : mode === 'permissive'
+            ? 'The kernel sandbox reports what it would have blocked instead of blocking it. The gateway must restart before it takes effect.'
+            : 'The kernel sandbox enforces its limits on every agent. The gateway must restart before it takes effect.',
+      confirmLabel: 'Change sandbox mode',
+      run: (token) => doSaveMode({ body: { mode }, token }),
+      cancel: () => setCurrentMode(savedMode),
+    })
   }
 
   // ── Status display helpers ────────────────────────────────────────────────
@@ -1335,7 +1370,9 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
         </DialogContent>
       </Dialog>
 
-      {reAuthDialog}
+      {/* ADR-0010 WP3 — the sandbox-configuration step-up gate. Staged before
+          the PUT, so a cancel/dismiss means nothing was sent. */}
+      {stepUp.dialogs}
     </section>
   )
 }

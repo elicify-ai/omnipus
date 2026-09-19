@@ -288,6 +288,39 @@ func TestIntegrationProviderUpdate_WithReAuth_Succeeds(t *testing.T) {
 	assert.Equal(t, "duckduckgo", resp["active_search"])
 }
 
+// TestIntegrationProviderUpdate_PlatformMode_NoReAuthToken_Succeeds proves that
+// in platform mode requireReAuth is a no-op (WP2 deliverable 3): the same
+// sensitive PUT that TestIntegrationProviderUpdate_RequiresReAuth pins as 403
+// in local mode succeeds here with NO X-Reauth-Token at all, because the
+// omnipus.ai sign-in session is the guard, not a re-typed password. Mode is
+// selected explicitly via withEdition — the package default (config.Edition
+// is core, i.e. local mode) is what every other test above relies on.
+func TestIntegrationProviderUpdate_PlatformMode_NoReAuthToken_Succeeds(t *testing.T) {
+	withEdition(t, config.EditionHosted)
+	api, user := newReAuthTestAPI(t)
+
+	w := putIntegration(api, user, "duckduckgo", `{"kind":"search","active":true}`, "")
+	require.Equal(t, http.StatusOK, w.Code,
+		"platform mode must not require a re-auth token; body=%s", w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "duckduckgo", resp["active_search"])
+}
+
+// TestIntegrationProviderUpdate_Unauthenticated_Rejected verifies the PUT
+// refuses a request with no authenticated user in context, independent of the
+// re-auth gate (which never runs without a user to check).
+func TestIntegrationProviderUpdate_Unauthenticated_Rejected(t *testing.T) {
+	api, _ := newReAuthTestAPI(t)
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/integrations/providers/duckduckgo",
+		strings.NewReader(`{"kind":"search","active":true}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleIntegrationProviders(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
 // TestIntegrationProviderUpdate_KindMismatch_Rejected verifies a body whose kind
 // does not match the provider's kind is rejected 400.
 func TestIntegrationProviderUpdate_KindMismatch_Rejected(t *testing.T) {

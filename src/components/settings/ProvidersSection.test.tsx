@@ -80,9 +80,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     getDefaultModel: vi.fn(),
     putDefaultModel: vi.fn(),
     checkEntitlement: vi.fn(),
-    reAuth: vi.fn(),
     signOutProvider: vi.fn(),
     fetchSignInStatus: vi.fn(),
+    fetchAppState: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
@@ -151,10 +151,19 @@ vi.mock('@/components/providers/ReSignInDialog', () => ({
 }))
 
 import * as api from '@/lib/api'
+import type { AppState } from '@/lib/api'
 import { ProvidersSection } from './ProvidersSection'
 import { catalogEntryById, catalogGroupName, UNGROUPED_PROVIDER_GROUP } from '@/lib/catalogDisplay'
 import { PROVIDERS_CATALOG, CATALOG_PROVIDERS } from '@/test/fixtures/providersCatalog'
 import { catalogLabel, catalogSubtitle } from '@/lib/catalogDisplay'
+
+// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
+// ConfirmDialog, no consent token (ADR-0010 WP3). The password-mode (local
+// edition) equivalent lives in ProvidersSection.password.test.tsx.
+const PLATFORM_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as AppState
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -230,6 +239,7 @@ beforeEach(() => {
   vi.mocked(api.fetchProvidersCatalog).mockResolvedValue(PROVIDERS_CATALOG)
   // A fresh install has no default model; describes that need one override this.
   vi.mocked(api.getDefaultModel).mockResolvedValue(null as never)
+  vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
 // ---------------------------------------------------------------------------
@@ -734,7 +744,7 @@ describe('ProvidersSection — BrandDisclaimer present wherever marks appear', (
 // Original re-auth tests (updated for Sheet — save button is inside sheet)
 // ---------------------------------------------------------------------------
 
-describe('ProvidersSection — original re-auth tests', () => {
+describe('ProvidersSection — save confirmation (ADR-0008 ruling 6)', () => {
   it('lists providers from the API', async () => {
     renderSection()
     await waitFor(() => {
@@ -743,7 +753,8 @@ describe('ProvidersSection — original re-auth tests', () => {
     })
   })
 
-  it('opens the re-auth dialog before configuring (does NOT call PUT directly)', async () => {
+  // FR-OB-041: exactly Cancel and one confirm, and no input of any kind.
+  it('opens the confirmation before configuring (does NOT call PUT directly)', async () => {
     renderSection()
     await waitFor(() => screen.getByTestId('configure-btn-anthropic'))
     // Open the Sheet
@@ -754,14 +765,15 @@ describe('ProvidersSection — original re-auth tests', () => {
     fireEvent.change(screen.getByTestId('api-key-input-anthropic'), { target: { value: 'sk-ant-secret' } })
     fireEvent.click(screen.getByTestId('save-provider-anthropic'))
 
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
+    const dialog = await screen.findByTestId('confirm-dialog')
+    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
+    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Save API key')
+    // No input of any kind — this is a decision, not a credential prompt.
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
     expect(api.configureProvider).not.toHaveBeenCalled()
   })
 
-  it('replays the consent token into configureProvider after re-auth', async () => {
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+  it('confirming performs the save', async () => {
     vi.mocked(api.configureProvider).mockResolvedValue(ANTHROPIC_PROVIDER as never)
 
     renderSection()
@@ -772,23 +784,40 @@ describe('ProvidersSection — original re-auth tests', () => {
     fireEvent.change(screen.getByTestId('api-key-input-anthropic'), { target: { value: 'sk-ant-secret' } })
     fireEvent.click(screen.getByTestId('save-provider-anthropic'))
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
 
     await waitFor(() => {
-      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
       expect(api.configureProvider).toHaveBeenCalledWith(
         'anthropic',
         'sk-ant-secret',
         undefined,
         undefined,
-        'reauth_tok',
+        // 5th arg (ADR-0010 WP3): the re-auth consent token — confirm mode
+        // (platform edition, pinned by this file's app-state mock) carries
+        // none.
+        undefined,
         undefined,
         // 7th arg (ADR-068 FR-037): the custom-endpoint pair, absent here.
         undefined,
       )
     })
+  })
+
+  it('cancelling performs nothing', async () => {
+    renderSection()
+    await waitFor(() => screen.getByTestId('configure-btn-anthropic'))
+    fireEvent.click(screen.getByTestId('configure-btn-anthropic'))
+    await waitFor(() => screen.getByTestId('provider-config-sheet'))
+
+    fireEvent.change(screen.getByTestId('api-key-input-anthropic'), { target: { value: 'sk-ant-secret' } })
+    fireEvent.click(screen.getByTestId('save-provider-anthropic'))
+
+    fireEvent.click(await screen.findByTestId('confirm-cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+    })
+    expect(api.configureProvider).not.toHaveBeenCalled()
   })
 
   it('shows an error when the providers query fails', async () => {
@@ -832,7 +861,6 @@ const MANUAL_PROVIDER = [
 describe('ProvidersSection — manual provider (Sheet)', () => {
   it('shows the editable slug list and PUTs the edited models', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue(MANUAL_PROVIDER as never)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.configureProvider).mockResolvedValue(MANUAL_PROVIDER[0] as never)
 
     renderSection()
@@ -850,11 +878,9 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
     fireEvent.click(screen.getByTestId('add-model-mygw'))
     expect(within(screen.getByTestId('model-list-mygw')).getByText('mygw/mixtral-8x7b')).toBeInTheDocument()
 
-    // Save → re-auth → PUT with the new models array
+    // Save → confirm → PUT with the new models array
     fireEvent.click(screen.getByTestId('save-provider-mygw'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'pw' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
 
     await waitFor(() => {
       expect(api.configureProvider).toHaveBeenCalledWith(
@@ -862,7 +888,7 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
         undefined,
         undefined,
         undefined,
-        'reauth_tok',
+        undefined,
         ['mygw/llama-3.3-70b', 'mygw/mixtral-8x7b'],
         undefined,
       )
@@ -871,7 +897,6 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
 
   it('removing a slug updates the list and PUTs the smaller set', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue(MANUAL_PROVIDER as never)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.configureProvider).mockResolvedValue(MANUAL_PROVIDER[0] as never)
 
     renderSection()
@@ -884,9 +909,7 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
     expect(screen.getByText(/no models added yet/i)).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('save-provider-mygw'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'pw' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
 
     await waitFor(() => {
       expect(api.configureProvider).toHaveBeenCalledWith(
@@ -894,7 +917,7 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
         undefined,
         undefined,
         undefined,
-        'reauth_tok',
+        undefined,
         [],
         undefined,
       )
@@ -929,10 +952,7 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
     fireEvent.change(screen.getByTestId('api-key-input-openrouter'), { target: { value: key } })
     fireEvent.click(screen.getByTestId('save-provider-openrouter'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
   }
 
   it('US8.1 — 422 (InvalidKey) shows blocking error toast and Sheet stays open', async () => {
@@ -1302,23 +1322,16 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
         message: 'Your OpenRouter key works, but the account has no credit.',
       },
     } as never)
-    vi.mocked(api.reAuth).mockResolvedValue({
-      verified: true,
-      token: 'reauth_tok',
-      expires_in: 300,
-    } as never)
 
     await openSheetWithKey('sk-saved-key')
     fireEvent.click(screen.getByTestId('save-provider-openrouter'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
 
     await waitFor(() => {
       expect(screen.getByTestId('save-validation-banner-openrouter')).toBeInTheDocument()
     })
 
-    // The re-auth dialog was a second Radix dismissable layer on top of the
+    // The confirmation was a second Radix dismissable layer on top of the
     // sheet; the sheet re-attaches its own Escape listener only once Radix's
     // layer bookkeeping has re-rendered after that unmount. Flush that before
     // pressing Esc, or the first key press is swallowed by the library, not by

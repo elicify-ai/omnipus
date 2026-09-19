@@ -2,9 +2,8 @@ type: object
 title: GodModeUpdateRequest
 description: >
   Body for POST /api/v1/gateway/god-mode. Flips the global god-mode
-  ("bypass-permissions") switch. This is a high-blast-radius security change and
-  requires a valid single-use re-auth consent token (password step-up) replayed
-  in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns
+  ("bypass-permissions") switch. This is a high-blast-radius security change.
+  In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). Returns
   403 when god mode is not SUPPORTED in this build (compiled with the
   nogodmode tag) and enabled=true. Enabling is otherwise always permitted:
   when the build supports it but this boot was not already authorized (see

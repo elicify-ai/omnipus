@@ -968,6 +968,78 @@ func (e AgentUpdateRequestToolsCfgBuiltinPolicies) Valid() bool {
 	}
 }
 
+// Defines values for AppStateIdentityBlockedReason.
+const (
+	AppStateIdentityBlockedReasonExpired         AppStateIdentityBlockedReason = "expired"
+	AppStateIdentityBlockedReasonNoAccount       AppStateIdentityBlockedReason = "no_account"
+	AppStateIdentityBlockedReasonNone            AppStateIdentityBlockedReason = "none"
+	AppStateIdentityBlockedReasonRevoked         AppStateIdentityBlockedReason = "revoked"
+	AppStateIdentityBlockedReasonSignedOut       AppStateIdentityBlockedReason = "signed_out"
+	AppStateIdentityBlockedReasonSubjectMismatch AppStateIdentityBlockedReason = "subject_mismatch"
+	AppStateIdentityBlockedReasonUnreachable     AppStateIdentityBlockedReason = "unreachable"
+)
+
+// Valid indicates whether the value is a known member of the AppStateIdentityBlockedReason enum.
+func (e AppStateIdentityBlockedReason) Valid() bool {
+	switch e {
+	case AppStateIdentityBlockedReasonExpired:
+		return true
+	case AppStateIdentityBlockedReasonNoAccount:
+		return true
+	case AppStateIdentityBlockedReasonNone:
+		return true
+	case AppStateIdentityBlockedReasonRevoked:
+		return true
+	case AppStateIdentityBlockedReasonSignedOut:
+		return true
+	case AppStateIdentityBlockedReasonSubjectMismatch:
+		return true
+	case AppStateIdentityBlockedReasonUnreachable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AppStateIdentityEdition.
+const (
+	AppStateIdentityEditionCore    AppStateIdentityEdition = "core"
+	AppStateIdentityEditionDesktop AppStateIdentityEdition = "desktop"
+	AppStateIdentityEditionHosted  AppStateIdentityEdition = "hosted"
+)
+
+// Valid indicates whether the value is a known member of the AppStateIdentityEdition enum.
+func (e AppStateIdentityEdition) Valid() bool {
+	switch e {
+	case AppStateIdentityEditionCore:
+		return true
+	case AppStateIdentityEditionDesktop:
+		return true
+	case AppStateIdentityEditionHosted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AppStateIdentityMode.
+const (
+	AppStateIdentityModeLocal    AppStateIdentityMode = "local"
+	AppStateIdentityModePlatform AppStateIdentityMode = "platform"
+)
+
+// Valid indicates whether the value is a known member of the AppStateIdentityMode enum.
+func (e AppStateIdentityMode) Valid() bool {
+	switch e {
+	case AppStateIdentityModeLocal:
+		return true
+	case AppStateIdentityModePlatform:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AttachmentType.
 const (
 	AttachmentTypeAudio AttachmentType = "audio"
@@ -4361,6 +4433,45 @@ func (e NotificationListNotificationsType) Valid() bool {
 	}
 }
 
+// Defines values for OnboardingPreferencesDetail.
+const (
+	OnboardingPreferencesDetailBrief    OnboardingPreferencesDetail = "brief"
+	OnboardingPreferencesDetailThorough OnboardingPreferencesDetail = "thorough"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingPreferencesDetail enum.
+func (e OnboardingPreferencesDetail) Valid() bool {
+	switch e {
+	case OnboardingPreferencesDetailBrief:
+		return true
+	case OnboardingPreferencesDetailThorough:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OnboardingPreferencesTone.
+const (
+	OnboardingPreferencesToneDirect OnboardingPreferencesTone = "direct"
+	OnboardingPreferencesToneFormal OnboardingPreferencesTone = "formal"
+	OnboardingPreferencesToneWarm   OnboardingPreferencesTone = "warm"
+)
+
+// Valid indicates whether the value is a known member of the OnboardingPreferencesTone enum.
+func (e OnboardingPreferencesTone) Valid() bool {
+	switch e {
+	case OnboardingPreferencesToneDirect:
+		return true
+	case OnboardingPreferencesToneFormal:
+		return true
+	case OnboardingPreferencesToneWarm:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OnboardingProviderApiKeyAuthMethod.
 const (
 	OnboardingProviderApiKeyAuthMethodApiKey OnboardingProviderApiKeyAuthMethod = "api_key"
@@ -5306,6 +5417,24 @@ func (e PlanUpdateRequestState) Valid() bool {
 	case PlanUpdateRequestStateFailed:
 		return true
 	case PlanUpdateRequestStateRunning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PlatformAuthStartRequestMethod.
+const (
+	PlatformAuthStartRequestMethodEmail  PlatformAuthStartRequestMethod = "email"
+	PlatformAuthStartRequestMethodGoogle PlatformAuthStartRequestMethod = "google"
+)
+
+// Valid indicates whether the value is a known member of the PlatformAuthStartRequestMethod enum.
+func (e PlatformAuthStartRequestMethod) Valid() bool {
+	switch e {
+	case PlatformAuthStartRequestMethodEmail:
+		return true
+	case PlatformAuthStartRequestMethodGoogle:
 		return true
 	default:
 		return false
@@ -11634,6 +11763,33 @@ type AppState struct {
 	// GodModeOptedIn True when the operator has explicitly opted into god mode (sandbox=off). Distinct from god_mode_available to allow UI differentiation.
 	GodModeOptedIn *bool `json:"god_mode_opted_in,omitempty"`
 
+	// Identity Which edition this binary was built as, and whether the caller is signed in (ADR-0010, docs/specs/login-and-onboarding-spec.md §2.2). This is the ONLY field the UI reads to branch on edition or sign-in state — no build-time flag, no `window.isElectron` sniffing. `mode` mirrors `config.EditionAuthMode()` (derived from the stamped edition, never a runtime setting); `edition` mirrors the stamped `config.Edition`. `account` is present only when `signed_in` is true; `blocked_reason` is present only when it is false. `sign_in.start_url` is deliberately NOT carried here — the app starts sign-in itself.
+	Identity struct {
+		// Account The signed-in account, present on `AppState.identity.account` only when `identity.signed_in` is true (docs/specs/login-and-onboarding-spec.md §2.2).
+		Account *struct {
+			// EmailMasked The account's email, masked for display — never the full address.
+			EmailMasked string `json:"email_masked"`
+
+			// Label Display name for the signed-in account.
+			Label string `json:"label"`
+
+			// Org The signed-in account's organization, or null.
+			Org *string `json:"org"`
+		} `json:"account,omitempty"`
+
+		// BlockedReason Present only when `signed_in` is false.
+		BlockedReason *AppStateIdentityBlockedReason `json:"blocked_reason,omitempty"`
+
+		// Edition The product this binary was built as, stamped at build time.
+		Edition AppStateIdentityEdition `json:"edition"`
+
+		// Mode How this build authenticates its users — mirrors `security.platform_auth.mode` (FR-PA-080). `local` is the open-source edition's own password login; `platform` delegates sign-in to a registered omnipus.ai provider.
+		Mode AppStateIdentityMode `json:"mode"`
+
+		// SignedIn Whether the caller of this request is authenticated.
+		SignedIn bool `json:"signed_in"`
+	} `json:"identity"`
+
 	// LastDoctorRun RFC3339 timestamp of the last health-check run. Absent if never run.
 	LastDoctorRun *time.Time `json:"last_doctor_run,omitempty"`
 
@@ -11645,6 +11801,54 @@ type AppState struct {
 
 	// VideoEmbedHosts Allow-listed video-embed hostnames (ADR-083 D-C/D9, EMB-075/EMB-081). A note's markdown-link video embed is drawn as a locally-rendered, click-to-play frame only when its URL's host EXACTLY matches an entry here — never a prefix or suffix match, so a look-alike domain is never framed. This is the same allow-list the served Content-Security-Policy's frame-src directive carries (EMB-079); a test asserts the two are equal (EMB-080). The shipped default contains exactly one entry. An operator who empties this list turns video framing off entirely: no external host reaches the served policy, and every video embed falls back to a plain link. Read-only — this reflects an operator configuration key, not settable via this endpoint.
 	VideoEmbedHosts *[]string `json:"video_embed_hosts,omitempty"`
+}
+
+// AppStateIdentityBlockedReason Present only when `signed_in` is false.
+type AppStateIdentityBlockedReason string
+
+// AppStateIdentityEdition The product this binary was built as, stamped at build time.
+type AppStateIdentityEdition string
+
+// AppStateIdentityMode How this build authenticates its users — mirrors `security.platform_auth.mode` (FR-PA-080). `local` is the open-source edition's own password login; `platform` delegates sign-in to a registered omnipus.ai provider.
+type AppStateIdentityMode string
+
+// AppStateIdentity Which edition this binary was built as, and whether the caller is signed in (ADR-0010, docs/specs/login-and-onboarding-spec.md §2.2). This is the ONLY field the UI reads to branch on edition or sign-in state — no build-time flag, no `window.isElectron` sniffing. `mode` mirrors `config.EditionAuthMode()` (derived from the stamped edition, never a runtime setting); `edition` mirrors the stamped `config.Edition`. `account` is present only when `signed_in` is true; `blocked_reason` is present only when it is false. `sign_in.start_url` is deliberately NOT carried here — the app starts sign-in itself.
+type AppStateIdentity struct {
+	// Account The signed-in account, present on `AppState.identity.account` only when `identity.signed_in` is true (docs/specs/login-and-onboarding-spec.md §2.2).
+	Account *struct {
+		// EmailMasked The account's email, masked for display — never the full address.
+		EmailMasked string `json:"email_masked"`
+
+		// Label Display name for the signed-in account.
+		Label string `json:"label"`
+
+		// Org The signed-in account's organization, or null.
+		Org *string `json:"org"`
+	} `json:"account,omitempty"`
+
+	// BlockedReason Present only when `signed_in` is false.
+	BlockedReason *AppStateIdentityBlockedReason `json:"blocked_reason,omitempty"`
+
+	// Edition The product this binary was built as, stamped at build time.
+	Edition AppStateIdentityEdition `json:"edition"`
+
+	// Mode How this build authenticates its users — mirrors `security.platform_auth.mode` (FR-PA-080). `local` is the open-source edition's own password login; `platform` delegates sign-in to a registered omnipus.ai provider.
+	Mode AppStateIdentityMode `json:"mode"`
+
+	// SignedIn Whether the caller of this request is authenticated.
+	SignedIn bool `json:"signed_in"`
+}
+
+// AppStateIdentityAccount The signed-in account, present on `AppState.identity.account` only when `identity.signed_in` is true (docs/specs/login-and-onboarding-spec.md §2.2).
+type AppStateIdentityAccount struct {
+	// EmailMasked The account's email, masked for display — never the full address.
+	EmailMasked string `json:"email_masked"`
+
+	// Label Display name for the signed-in account.
+	Label string `json:"label"`
+
+	// Org The signed-in account's organization, or null.
+	Org *string `json:"org"`
 }
 
 // AppStatePatchRequest Request body for PATCH /api/v1/state. Partial update to application state. Currently only supports marking onboarding as complete (onboarding_complete must be true — setting it to false is rejected 400).
@@ -11809,6 +12013,12 @@ type AuditLogUpdateResponse struct {
 
 	// Saved True when the configuration was successfully persisted to disk.
 	Saved bool `json:"saved"`
+}
+
+// AuthSessionResponse Who the omnipus-session cookie on this request belongs to. Returned by GET /auth/session, which answers 200 with this body when the cookie resolves to a user and 401 when it does not — nothing else. The sign-in screen polls it while the user finishes in their browser, and the desktop shell polls it to know when to bring its window back to the front.
+type AuthSessionResponse struct {
+	// Username The signed-in account's email address. Since ADR-0008 the account IS the login, so this is an email and not a locally chosen name.
+	Username string `json:"username"`
 }
 
 // BackupCreateResponse Response from POST /api/v1/backup. Returns the path, size, and creation time of the new backup archive.
@@ -12385,12 +12595,12 @@ type ContextSettings struct {
 
 // ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	AbsoluteTriggerChars *int                    `json:"absolute_trigger_chars,omitempty"`
-	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
-	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
-	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
-	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
-	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
+	AbsoluteTriggerChars *int `json:"absolute_trigger_chars,omitempty"`
+	BuiltinFailureCap    *int `json:"builtin_failure_cap,omitempty"`
+	BuiltinSuccessCap    *int `json:"builtin_success_cap,omitempty"`
+	DefaultContextWindow *int `json:"default_context_window,omitempty"`
+	IngestBoundBytes     *int `json:"ingest_bound_bytes,omitempty"`
+	McpResultCap         *int `json:"mcp_result_cap,omitempty"`
 	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
 }
 
@@ -12406,7 +12616,7 @@ type CreateVaultRequest struct {
 	ParentRelPath *string `json:"parent_rel_path,omitempty"`
 }
 
-// CredentialRotateRequest Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
+// CredentialRotateRequest Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
 type CredentialRotateRequest struct {
 	// NewPassphrase New passphrase used to derive the new vault key. Must not be empty.
 	NewPassphrase string `json:"new_passphrase"`
@@ -13032,7 +13242,7 @@ type EntitlementResponse struct {
 	Cached bool `json:"cached"`
 
 	// CheckedAt When the live listing call was made (the cached result keeps the original time).
-	CheckedAt time.Time          `json:"checked_at"`
+	CheckedAt time.Time `json:"checked_at"`
 	Models    []EntitlementModel `json:"models"`
 }
 
@@ -14105,7 +14315,7 @@ type GodModeStatus struct {
 	Supported bool `json:"supported"`
 }
 
-// GodModeUpdateRequest Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
+// GodModeUpdateRequest Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
 type GodModeUpdateRequest struct {
 	// Enabled Desired god-mode state. true turns god mode on, false turns it off.
 	Enabled bool `json:"enabled"`
@@ -14232,7 +14442,7 @@ type IntegrationProvider struct {
 // IntegrationProviderKind Whether this provider supplies web search or voice-input transcription.
 type IntegrationProviderKind string
 
-// IntegrationProviderUpdateRequest Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Because integration edits are sensitive, the SPA must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid token are rejected 403.
+// IntegrationProviderUpdateRequest Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
 type IntegrationProviderUpdateRequest struct {
 	// Active When true, select this provider as the active one for its kind.
 	Active *bool `json:"active,omitempty"`
@@ -15804,16 +16014,19 @@ type NotificationListNotificationsSeverity string
 // "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 type NotificationListNotificationsType string
 
-// OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+// OnboardingCompleteRequest Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: in local mode (open-source edition) the route runs BEFORE any session exists and mints the instance's first account — `admin` is REQUIRED, upstream's behaviour restored. In platform mode (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1 and 2: the omnipus.ai account is the login) — `admin` is REFUSED (400) because no local credential is ever minted on that edition. `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is optional in both modes.
 type OnboardingCompleteRequest struct {
-	// Admin Initial admin account credentials.
-	Admin struct {
+	// Admin Initial admin account credentials. Required in local mode; refused (400) in platform mode.
+	Admin *struct {
 		// Password Admin password. Minimum 8 characters.
 		Password string `json:"password"`
 
 		// Username Admin login name.
 		Username string `json:"username"`
-	} `json:"admin"`
+	} `json:"admin,omitempty"`
+
+	// Preferences Step 1's name and tone/detail preferences (spec: onboarding-and-profile-spec.md FR-OB-010..-018). Onboarding has no per-step persistence, so these ride in the same POST /onboarding/complete request as the provider — the server writes them into the global USER.md as prose (FR-OB-013/-013a) after the config transaction succeeds.
+	Preferences *OnboardingPreferences `json:"preferences,omitempty"`
 
 	// Provider LLM provider configuration to persist, discriminated by `auth_method`.
 	Provider OnboardingCompleteRequest_Provider `json:"provider"`
@@ -15824,17 +16037,35 @@ type OnboardingCompleteRequest_Provider struct {
 	union json.RawMessage
 }
 
-// OnboardingCompleteResponse Returned on successful login or onboarding/complete. Contains the bearer token to use in subsequent Authorization headers and the username.
+// OnboardingCompleteResponse Returned on a successful POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: `token` is present ONLY in local mode — the caller had no session before this call, so completion bootstraps one via a one-shot bearer token, upstream's behaviour restored. In platform mode the caller already held a session (ADR-0008 ruling 2 — the omnipus.ai account is the login, and completion runs behind that session), so no token is issued and the field is absent. `username` is always present: the account the instance was set up for (the admin username just minted, in local mode; the authenticated account, in platform mode) — echoed back so the SPA does not have to re-read it.
 type OnboardingCompleteResponse struct {
 	// Token Canonical opaque bearer token format used by Omnipus. Two forms are accepted: the current id-tagged form "omnipus_" + 8 hex (token id) + "_" + 64 hex (32 random bytes) = 81 characters, and the legacy form "omnipus_" + 64 hex = 72 characters (still honored for tokens minted before the multi-token model). The id segment routes verification to the right hash in the user's token set; only the 64-hex secret is bcrypt-hashed (kept under bcrypt's 72-byte limit). Used in Authorization headers, WS AuthFrame, and rotate-token responses.
-	Token string `json:"token"`
+	Token *string `json:"token,omitempty"`
 
-	// Username The authenticated user's login name.
+	// Username The account the instance was set up for.
 	Username string `json:"username"`
 
-	// Warning Non-fatal advisory message. Present on onboarding/complete for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead (see POST /onboarding/complete). Never present on POST /auth/login.
+	// Warning Non-fatal advisory message, present for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead.
 	Warning *string `json:"warning,omitempty"`
 }
+
+// OnboardingPreferences Step 1's name and tone/detail preferences (spec: onboarding-and-profile-spec.md FR-OB-010..-018). Onboarding has no per-step persistence, so these ride in the same POST /onboarding/complete request as the provider — the server writes them into the global USER.md as prose (FR-OB-013/-013a) after the config transaction succeeds.
+type OnboardingPreferences struct {
+	// Detail How much detail the person wants by default.
+	Detail OnboardingPreferencesDetail `json:"detail"`
+
+	// Name Display name as typed on step 1. The server strips control characters, leading `#`/backticks and collapses whitespace before writing it into USER.md (FR-OB-014) — this field itself carries the raw typed value.
+	Name string `json:"name"`
+
+	// Tone How the person wants agents to talk to them.
+	Tone OnboardingPreferencesTone `json:"tone"`
+}
+
+// OnboardingPreferencesDetail How much detail the person wants by default.
+type OnboardingPreferencesDetail string
+
+// OnboardingPreferencesTone How the person wants agents to talk to them.
+type OnboardingPreferencesTone string
 
 // OnboardingProviderApiKey The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). Discriminated by `auth_method` following the ADR-034 inline oneOf mechanism; `api_key` is REQUIRED here and is not a property of the sign-in variant.
 type OnboardingProviderApiKey struct {
@@ -16797,6 +17028,30 @@ type PlanUpdateRequestDodStatus string
 // PlanUpdateRequestState Requested state transition. Validated against the canonical plan state machine (Plan.yaml `state` description); illegal transitions are rejected 400.
 type PlanUpdateRequestState string
 
+// PlatformAuthClaimRequest The state the caller received from POST /auth/platform/start, presented to collect the session that the browser half of the sign-in just opened. The desktop app needs this because the browser's cookie jar is not its own: the Set-Cookie written by /auth/callback lands in the user's real browser, and without this route the application would poll for a session it can never see.
+type PlatformAuthClaimRequest struct {
+	// State The state value from PlatformAuthStartResponse. For the 60 seconds after a successful callback it is what identifies the waiting session, so treat it as a credential for that window and keep it in memory only.
+	State string `json:"state"`
+}
+
+// PlatformAuthStartRequest Which omnipus.ai sign-in method the user picked on the in-app sign-in screen (ADR-0008 ruling 5, revised). It is only a HINT passed through to the platform's own sign-in page — the platform decides what it actually offers, and the instance never sees a credential either way.
+type PlatformAuthStartRequest struct {
+	// Method The provider the user chose. "google" and "email" are the launch set (ADR-0008, "What a user may sign in with"); Sign in with Apple is deliberately not offered until there is an iOS client.
+	Method PlatformAuthStartRequestMethod `json:"method"`
+}
+
+// PlatformAuthStartRequestMethod The provider the user chose. "google" and "email" are the launch set (ADR-0008, "What a user may sign in with"); Sign in with Apple is deliberately not offered until there is an iOS client.
+type PlatformAuthStartRequestMethod string
+
+// PlatformAuthStartResponse Where to send the user's system browser to sign in, and the opaque handle that ties the eventual redirect back to this attempt. The PKCE verifier behind it NEVER leaves the gateway — the client sees only the challenge, already embedded in authorize_url.
+type PlatformAuthStartResponse struct {
+	// AuthorizeUrl The platform's authorization URL, complete with client_id, the loopback redirect_uri, response_type=code, the S256 code_challenge, state and the chosen method hint. Open it in the SYSTEM browser, never in an embedded web view (RFC 8252 §8.12).
+	AuthorizeUrl string `json:"authorize_url"`
+
+	// State The single-use, 10-minute anti-forgery value the platform will echo back to /auth/callback. Keep it in memory for as long as the sign-in is in progress: for the 60 seconds after a successful callback it is also what POST /auth/platform/claim accepts to hand the resulting session to the application, so during that window it IS a credential. Do not store it, log it or show it.
+	State string `json:"state"`
+}
+
 // ProbeProviderRequest Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked).
 type ProbeProviderRequest struct {
 	// ApiBase Base URL. Required (with protocol) when id is not a catalog id; optional override for a catalog provider. SSRF-checked before any outbound call.
@@ -17054,8 +17309,8 @@ type ProviderDeleteRequest struct {
 // ProviderDeleteResponse Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is true on success (HTTP 200); on a failed step the server responds 500 with deleted false and a retryable state. dependents lists every reference that was cleared (agent primaries cleared, fallback entries removed) — nothing is re-pointed silently. There is no Undo: the stored key is gone.
 type ProviderDeleteResponse struct {
 	// DefaultChanged True when new_default was applied before the removal.
-	DefaultChanged bool                `json:"default_changed"`
-	Deleted        bool                `json:"deleted"`
+	DefaultChanged bool `json:"default_changed"`
+	Deleted        bool `json:"deleted"`
 	Dependents     []ProviderDependent `json:"dependents"`
 
 	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
@@ -17118,7 +17373,7 @@ type ProviderValidation struct {
 type ProvidersCatalog struct {
 	// DefaultResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
 	DefaultResizeLimits CatalogResizeLimits `json:"default_resize_limits"`
-	Providers           []CatalogProvider   `json:"providers"`
+	Providers []CatalogProvider `json:"providers"`
 
 	// SchemaVersion Document schema version. Only "2.0.0" is accepted on load (FR-001).
 	SchemaVersion ProvidersCatalogSchemaVersion `json:"schema_version"`
@@ -22263,7 +22518,7 @@ type Workspace struct {
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Message       *string                           `json:"message,omitempty"`
+	Message *string `json:"message,omitempty"`
 
 	// Mounts Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
 	Mounts *[]struct {
@@ -22345,9 +22600,9 @@ type WorkspaceDelegation struct {
 	DefaultDepth int `json:"default_depth"`
 
 	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
-	Edges      []WorkspaceDelegationEdge `json:"edges"`
-	ErrorStage *string                   `json:"error_stage,omitempty"`
-	Message    *string                   `json:"message,omitempty"`
+	Edges []WorkspaceDelegationEdge `json:"edges"`
+	ErrorStage *string `json:"error_stage,omitempty"`
+	Message    *string `json:"message,omitempty"`
 
 	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
 	PersistenceStatus *WorkspaceDelegationPersistenceStatus `json:"persistence_status,omitempty"`
@@ -22499,9 +22754,9 @@ type WorkspaceUpdateRequest struct {
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Name          *string                           `json:"name,omitempty"`
-	PinOrder      *int                              `json:"pin_order,omitempty"`
-	Pinned        *bool                             `json:"pinned,omitempty"`
+	Name     *string `json:"name,omitempty"`
+	PinOrder *int    `json:"pin_order,omitempty"`
+	Pinned   *bool   `json:"pinned,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
@@ -22858,6 +23113,12 @@ type ChangePasswordJSONRequestBody = ChangePasswordRequest
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = LoginRequest
+
+// ClaimPlatformAuthJSONRequestBody defines body for ClaimPlatformAuth for application/json ContentType.
+type ClaimPlatformAuthJSONRequestBody = PlatformAuthClaimRequest
+
+// StartPlatformAuthJSONRequestBody defines body for StartPlatformAuth for application/json ContentType.
+type StartPlatformAuthJSONRequestBody = PlatformAuthStartRequest
 
 // ReAuthJSONRequestBody defines body for ReAuth for application/json ContentType.
 type ReAuthJSONRequestBody = ReAuthRequest

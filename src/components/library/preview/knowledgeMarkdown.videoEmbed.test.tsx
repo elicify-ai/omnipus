@@ -45,7 +45,13 @@ const VIDEO_ID = 'dQw4w9WgXcQ' // 11 chars — the spec's own F1 fixture
 const VIDEO_URL = `https://${ALLOWED_HOST}/embed/${VIDEO_ID}`
 
 function appState(hosts: string[]): AppState {
-  return { onboarding_complete: true, video_embed_hosts: hosts }
+  // ADR-0010 / login-and-onboarding-spec.md §2.2 — `identity` is a required
+  // AppState field; this suite is about video-embed hosts, not identity.
+  return {
+    onboarding_complete: true,
+    video_embed_hosts: hosts,
+    identity: { mode: 'local', edition: 'core', signed_in: false, blocked_reason: 'signed_out' },
+  }
 }
 
 function renderNote(content: string, opts: { resolveEmbedUrl?: (target: string) => EmbedResolution } = {}) {

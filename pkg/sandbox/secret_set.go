@@ -27,7 +27,13 @@ import "github.com/elicify-ai/omnipus/pkg/fspolicy"
 //	agents, workspaces            app only     cross-agent isolation
 //	config.json.bak-* etc.        kernel only  a copy of a secret is a secret
 //	auth.json, backups            NEITHER      plaintext OAuth tokens; a tarball
-//	                                           of the entire vault
+//	                                           of the entire vault. auth.json's
+//	                                           writer is gone; backups' writer
+//	                                           is restored behind the local
+//	                                           auth-mode switch (WP4,
+//	                                           ADR-0010) — the files either
+//	                                           left on existing installs are
+//	                                           not.
 //
 // These aliases exist so no call site in this package churns. There is still
 // exactly one list.

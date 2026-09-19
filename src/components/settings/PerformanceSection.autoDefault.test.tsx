@@ -32,7 +32,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchPerformanceSettings: vi.fn(),
     updatePerformanceSettings: vi.fn(),
-    reAuth: vi.fn(),
     isApiError: actual.isApiError,
   }
 })

@@ -1303,6 +1303,13 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error
 	// The net effect — state-changing requests without a valid cookie+header
 	// get rejected — is identical.
 	csrfMW := middleware.CSRFMiddleware(
+		// The active auth mode contributes its CSRF-exempt paths (ADR-0010
+		// WP2): in platform mode the registered sign-in provider's start
+		// route, which is what issues the cookie; in local mode upstream's
+		// bootstrap routes, which the defaults below already carry. Without
+		// this the provider's CSRFExempt flag would be decoration.
+		middleware.WithDefaultExempts(),
+		middleware.WithExemptPaths(activeAuthMode(stg.api).csrfExemptPaths...),
 		// clientIPWithLiveFallback (not the bare clientIP) — this reporter runs
 		// before configSnapshotMiddleware injects a config snapshot (see the
 		// wrap-order comment below), so it needs the live-config fallback to

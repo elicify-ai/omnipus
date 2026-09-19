@@ -220,10 +220,13 @@ func (t *ConfigSetTool) Execute(_ context.Context, args map[string]any) *tools.T
 // Keys outside this set are rejected by system.config.set to avoid corrupting the config.
 //
 // This list is a POLICY statement — which sections an agent may touch — and not
-// a claim that they exist. Three entries name nothing on config.Config today:
-// "security." and "workspace_path" are reserved (see blockedConfigKeys, which
-// refuses them), and "heartbeat." is simply dead — heartbeats are a per-agent
-// concern (HEARTBEAT.md), not a config section. That used to matter, because a
+// a claim that they exist. "workspace_path" names nothing on config.Config and
+// is reserved (see blockedConfigKeys, which refuses it); "heartbeat." is simply
+// dead — heartbeats are a per-agent concern (HEARTBEAT.md), not a config
+// section. "security." DOES exist now (config.SecurityConfig, ADR-0008), which
+// changed what refuses a write under it: until the section landed, a key there
+// was refused for landing nowhere, and blockedConfigKeys' `security` entry was
+// insurance. Now that entry is the only refusal there is. That used to matter, because a
 // write under a section that does not exist was reported as a success and
 // dropped; validateConfigKeyLands is now the authority on whether a key exists,
 // so a dead prefix here costs a clear refusal rather than a silent lie.
@@ -568,21 +571,30 @@ var blockedConfigKeys = []blockedConfigKey{
 			"enforcement configuration rather than a secret. The write stays blocked",
 	},
 
-	// ---- reserved: no such config section exists TODAY ----
+	// ---- security: the trust anchor, and one reserved sibling ----
 	//
-	// "security" and "workspace_path" are listed in knownConfigPrefixes but
-	// there is no matching field on config.Config, so a write under them is
-	// currently a silent no-op that reports success (dotSet creates the key in
-	// the generic map; the unmarshal back into *config.Config drops it).
-	// Blocking them is behaviour-neutral today and fail-closed tomorrow: if a
-	// `security` section is ever introduced, or `workspace_path` — the anchor
-	// the filesystem confinement is computed from — is reintroduced, it does
-	// not silently become agent-writable the moment the field lands.
+	// `security` STOPPED being reserved the day ADR-0008 landed: it now holds
+	// security.platform_auth.* — the omnipus.ai issuer, this instance's id and
+	// the public keys whose signatures open a session (config.SecurityConfig).
+	// This deny entry is therefore no longer fail-closed insurance; it is the
+	// only thing refusing the write, and it is doing real work every day.
+	//
+	// ADR-0005 E3 states the attack in one line: an agent that can write the
+	// trust anchor points it at a key it controls and mints itself a session.
+	// The subtree — not the leaf keys — is what is blocked, so tomorrow's key
+	// under security.* is refused the day it is added rather than the day
+	// somebody remembers to list it.
+	//
+	// "workspace_path" below is still genuinely reserved: it names nothing on
+	// config.Config today.
 	{
 		Key: "security",
-		Reason: "reserved — no such config section exists today, and a security section must " +
-			"never be agent-writable by default if one is introduced",
-		ReadOKReason: "reserved and empty. Nothing to disclose; the write stays blocked",
+		Reason: "it holds the omnipus.ai trust anchor (security.platform_auth.*) — an agent " +
+			"that could write it would point it at a key it controls and sign itself in " +
+			"(ADR-0005 E3)",
+		ReadOKReason: "a public verification key, an issuer URL and an instance id are not secrets, " +
+			"and an agent that can read them can explain why a sign-in failed instead of " +
+			"guessing. The write stays blocked",
 	},
 	{
 		Key: "workspace_path",

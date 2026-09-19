@@ -1,0 +1,36 @@
+type: object
+description: >
+  Step 1's name and tone/detail preferences (spec: onboarding-and-profile-spec.md
+  FR-OB-010..-018). Onboarding has no per-step persistence, so these ride in the
+  same POST /onboarding/complete request as the provider — the server writes
+  them into the global USER.md as prose (FR-OB-013/-013a) after the config
+  transaction succeeds.
+required:
+  - name
+  - tone
+  - detail
+additionalProperties: false
+properties:
+  name:
+    type: string
+    maxLength: 200
+    description: >
+      Display name as typed on step 1. The server strips control characters,
+      leading `#`/backticks and collapses whitespace before writing it into
+      USER.md (FR-OB-014) — this field itself carries the raw typed value.
+    example: Daniel
+  tone:
+    type: string
+    enum:
+      - direct
+      - warm
+      - formal
+    description: How the person wants agents to talk to them.
+    example: direct
+  detail:
+    type: string
+    enum:
+      - brief
+      - thorough
+    description: How much detail the person wants by default.
+    example: brief

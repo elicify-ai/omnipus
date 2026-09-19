@@ -199,6 +199,7 @@ func readConfigMap(t *testing.T, dir string) map[string]any {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders GET (backward compat)
 func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 	t.Setenv("OMNIPUS_MASTER_KEY", "")
 	t.Setenv("OMNIPUS_KEY_FILE", "")
@@ -285,20 +286,22 @@ func TestProviders_BackwardCompatPlaintextAPIKey(t *testing.T) {
 // is available — NOT as plaintext api_key in config.json.
 //
 // BDD: Given OMNIPUS_MASTER_KEY is set (credentials store can be unlocked),
-// When POST /api/v1/onboarding/complete {"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-secret"},...} is called,
+// When POST /api/v1/onboarding/complete {"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-secret"}} is called,
 // Then config.json has "api_key_ref" in the provider entry (not plaintext "api_key"),
 // AND credentials.json contains the API key encrypted under the master key.
 //
 // Traces to: pkg/gateway/rest_onboarding.go — HandleCompleteOnboarding credential store integration
 func TestOnboarding_CreatesAPIKeyRef(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	api, tmpDir, _ := newTestAPIWithMasterKey(t)
 
-	body := `{"provider":{"auth_method":"api_key","id":"anthropic","api_key":"sk-ant-secret-key"},"admin":{"username":"alice","password":"alice1234"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"anthropic","api_key":"sk-ant-secret-key"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	require.Equal(t, http.StatusOK, w.Code, "onboarding must succeed when credentials store is available")
 
@@ -352,6 +355,7 @@ func TestOnboarding_CreatesAPIKeyRef(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest_onboarding.go — HandleCompleteOnboarding fallback path
 func TestOnboarding_RefusesWhenNoMasterKey(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	// After SEC-23 enforcement: no plaintext fallback — the credential store must be
 	// unlocked before onboarding can complete. When the store exists on disk but the
 	// master key is unavailable (operator lost/rotated the key), HandleCompleteOnboarding
@@ -373,11 +377,12 @@ func TestOnboarding_RefusesWhenNoMasterKey(t *testing.T) {
 		0o600,
 	))
 
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-fallback-test"},"admin":{"username":"bob","password":"bob12345"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-fallback-test"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	// SEC-23: must refuse with 503 when credential store is locked — no plaintext fallback.
 	require.Equal(t, http.StatusServiceUnavailable, w.Code,
@@ -400,6 +405,7 @@ func TestOnboarding_RefusesWhenNoMasterKey(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders PUT (credential store integration)
 func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	// Start a local stub server that ValidateKey will hit instead of the live
 	// api.anthropic.com endpoint (which would reject our fake key with 401 →
 	// InvalidKey → 422, blocking the credential-ref storage mechanics under test).
@@ -443,11 +449,6 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/anthropic"
 	req = injectUser(req, "admin")
-	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
-	// consent token (mint one for the injected "admin" user).
-	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
-	require.NoError(t, provTokErr)
-	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, isolateRateLimit(t, req))
@@ -507,6 +508,7 @@ func TestProviderPUT_StoresAPIKeyRef(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders PUT (refuse if locked, SEC-23)
 func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	api, tmpDir := newTestAPIWithHome(t)
 	// No master key — credentials store will be locked. Seed a credentials.json
 	// so auto-generate (Unlock mode 4) does not fire — this test pins the
@@ -524,11 +526,6 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.URL.Path = "/api/v1/providers/openai"
 	req = injectUser(req, "admin")
-	// FR-12.2/FR-6.6: a post-onboarding provider-key PUT requires the re-auth
-	// consent token (mint one for the injected "admin" user).
-	provTok, provTokErr := api.reauthStoreOrInit().mint("admin")
-	require.NoError(t, provTokErr)
-	req.Header.Set(reAuthHeader, provTok)
 	w := httptest.NewRecorder()
 
 	api.HandleProviders(w, isolateRateLimit(t, req))
@@ -552,6 +549,7 @@ func TestProviderPUT_RefusesWhenNoMasterKey(t *testing.T) {
 //
 // Traces to: pkg/gateway/rest.go — HandleProviders GET (api_key_ref resolution)
 func TestProviderGET_ResolvesAPIKeyRefFromCredStore(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	// setupMasterKeyTempDir sets OMNIPUS_MASTER_KEY and returns (tmpDir, hexKey)
 	// without creating an AgentLoop. The loop below is the only one created, so
 	// peak memory for this test is one AgentLoop (not two). #351 #352

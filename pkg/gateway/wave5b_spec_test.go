@@ -13,7 +13,7 @@
 // because their behaviors are now covered by live tests on the new path:
 //   - error contract / RBAC deny / exclusivity → pkg/tools/compositor_*_test.go,
 //     pkg/coreagent/*_seed_test.go, pkg/sysagent/tools/*_test.go
-//   - confirmation / approval gating          → pkg/gateway/{approvals,reauth_gate,
+//   - confirmation / approval gating          → pkg/gateway/{approvals,
 //     rest_tool_policies}_test.go
 //   - single-user bypass                       → pkg/gateway/{rest_auth,routes_admin}_test.go
 //   - create/delete-agent, configure-provider  → pkg/sysagent/tools/{agent,provider}_test.go

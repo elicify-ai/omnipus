@@ -115,3 +115,74 @@ func TestSandboxExtraPorts_NilConfig(t *testing.T) {
 		t.Fatalf("expected nil for a nil config, got %v", got)
 	}
 }
+
+// TestSandboxExtraPorts_IncludesPlatformAuthIssuerPort is the direct
+// regression guard for the intermittent `dial tcp 127.0.0.1:8099: connect:
+// permission denied` against a non-default-port platform sign-in issuer
+// (CI's loopback tools/authstub, and any staging/local issuer on a
+// non-standard port). editions/platform's discovery flow dials the issuer's
+// own origin for RFC 8414 metadata, then only accepts authorize/token
+// endpoints on that exact origin (sameOriginAsIssuer) — so the issuer's port
+// must be allow-listed the same way the gateway's own port is.
+func TestSandboxExtraPorts_IncludesPlatformAuthIssuerPort(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.Port = 5000
+	cfg.Sandbox.DevServerPortRange = config.PortRange{18000, 18999}
+	cfg.Security.PlatformAuth.Issuer = "http://127.0.0.1:8099"
+
+	got := portSet(t, sandboxExtraPorts(cfg))
+	if got[8099] == 0 {
+		t.Fatal("configured platform-auth issuer port 8099 missing from the sandbox port allow-list")
+	}
+}
+
+// TestSandboxExtraPorts_HTTPSIssuerWithoutPortAddsNothing — an issuer on the
+// scheme's default port needs no extra rule: 443 is already in
+// sandbox.DefaultConnectPorts, and a duplicate rule for it would be a
+// meaningless-but-harmless no-op this test pins as intentional, not
+// accidental.
+func TestSandboxExtraPorts_HTTPSIssuerWithoutPortAddsNothing(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Sandbox.DevServerPortRange = config.PortRange{18000, 18001}
+	cfg.Security.PlatformAuth.Issuer = "https://omnipus.ai"
+
+	got := sandboxExtraPorts(cfg)
+	if len(got) != 2 {
+		t.Fatalf("expected exactly the 2 dev-server ports (no extra rule for the issuer's default port), got %v", got)
+	}
+}
+
+// TestSandboxExtraPorts_NoPlatformAuthUnchanged — the ordinary local-mode
+// instance (no issuer configured) must see no behavior change from adding
+// this allow-list group.
+func TestSandboxExtraPorts_NoPlatformAuthUnchanged(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.Port = 5000
+	cfg.Sandbox.DevServerPortRange = config.PortRange{18000, 18001}
+
+	got := sandboxExtraPorts(cfg)
+	if len(got) != 3 {
+		t.Fatalf("expected exactly gateway port + 2 dev-server ports with platform auth unset, got %v", got)
+	}
+}
+
+// TestSandboxExtraPorts_MalformedIssuerAddsNothing — a malformed issuer must
+// not panic or emit a bogus port rule. The platform provider already refuses
+// a malformed issuer loudly elsewhere (this is a sandbox allow-list, not a
+// second validator), so silently adding nothing is correct here.
+func TestSandboxExtraPorts_MalformedIssuerAddsNothing(t *testing.T) {
+	for _, issuer := range []string{
+		"not a url",
+		"://missing-scheme",
+		"127.0.0.1:8099", // no scheme: url.Parse treats "127.0.0.1" as the scheme
+	} {
+		cfg := &config.Config{}
+		cfg.Sandbox.DevServerPortRange = config.PortRange{18000, 18001}
+		cfg.Security.PlatformAuth.Issuer = issuer
+
+		got := sandboxExtraPorts(cfg)
+		if len(got) != 2 {
+			t.Errorf("issuer %q: expected exactly the 2 dev-server ports (malformed issuer adds nothing), got %v", issuer, got)
+		}
+	}
+}

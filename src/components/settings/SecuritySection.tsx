@@ -64,7 +64,8 @@ import { SandboxSection } from './SandboxSection'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
-import { useReAuthGate, isReAuthCancelled } from './useReAuthGate'
+import { isReAuthCancelled } from './useReAuthGate'
+import { useStepUp } from './useStepUp'
 
 // ── Tool Access — Global Policies (US-B3) ──────────────────────────────────────
 // CATEGORY_LABELS, PolicyBadge, and groupByCategory are now imported from the
@@ -88,14 +89,11 @@ function GlobalToolPoliciesSection() {
   })
   const [isDraftReady, setIsDraftReady] = useState(false)
 
-  // PUT /api/v1/security/tool-policies is re-auth gated (Spec-3 FR-3.3 / Spec-6
-  // FR-12.2). The auto-save fires the PUT directly; the gate replays a single-use
-  // consent token via updateGlobalToolPolicies's header arg when the server
-  // demands re-auth — same dialog/copy as IntegrationsSection.
-  const { runGated, dialog: reAuthDialog } = useReAuthGate({
-    title: 'Confirm to change tool access',
-    description: 'Re-type your password to change the global tool policy.',
-  })
+  // PUT /api/v1/security/tool-policies has no server-side step-up and gets no
+  // confirmation either (FR-OB-046): rest_tool_policies.go:69 removed its gate
+  // deliberately, so the client asked for a password the server never demanded.
+  // It is not one of ADR-0008 ruling 6's six controls. The auto-save fires the
+  // PUT directly.
 
   useEffect(() => {
     if (!globalPolicies || isDraftReady) return
@@ -108,7 +106,7 @@ function GlobalToolPoliciesSection() {
   const { status: saveStatus, error: saveError } = useAutoSave(
     toolPolicyValue,
     async (cfg) => {
-      await runGated((token) => updateGlobalToolPolicies(cfg, token))
+      await updateGlobalToolPolicies(cfg)
       queryClient.invalidateQueries({ queryKey: ['global-tool-policies'] })
     },
     { disabled: !isDraftReady },
@@ -152,7 +150,6 @@ function GlobalToolPoliciesSection() {
           {Object.keys(toolPolicyValue.policies).length} tool polic{Object.keys(toolPolicyValue.policies).length !== 1 ? 'ies' : 'y'} configured
         </span>
       </div>
-      {reAuthDialog}
     </div>
   )
 }
@@ -171,6 +168,7 @@ const POLICY_MODE_COPY = {
 
 export function SecuritySection() {
   const { addToast } = useUiStore()
+  const stepUp = useStepUp()
   const queryClient = useQueryClient()
 
   const { data: config, isLoading, isError: configError } = useQuery({
@@ -215,9 +213,13 @@ export function SecuritySection() {
   const [credModalOpen, setCredModalOpen] = useState(false)
   const [credKey, setCredKey] = useState('')
   const [credValue, setCredValue] = useState('')
-  const [deletingKey, setDeletingKey] = useState<string | null>(null)
   const [rotateModalOpen, setRotateModalOpen] = useState(false)
   const [rotatePassphrase, setRotatePassphrase] = useState('')
+  // ADR-0010 WP3: each vault operation gets its OWN step-up gate (ReAuthDialog
+  // + a replayed consent token in local mode, ConfirmDialog with no token in
+  // platform mode). Deleting and re-keying the vault are among the
+  // highest-blast-radius operations in the product; "the vault is one
+  // control" is a UI grouping, not a licence to gate once (spec FR-OB-040).
 
   useEffect(() => {
     if (!config) return
@@ -265,16 +267,8 @@ export function SecuritySection() {
     { disabled: !securityHydrated },
   )
 
-  // Credential add/delete are re-auth gated server-side (ADR-022). Route them
-  // through the re-auth dialog so the 403 surfaces as a password prompt instead
-  // of a confusing generic "no permission" toast.
-  const { runGated: runCredGated, dialog: credReAuthDialog } = useReAuthGate({
-    title: 'Confirm to manage credentials',
-    description: 'Re-type your password to change the encrypted credential vault.',
-  })
-
-  const { mutate: doAddCred, isPending: isAddingCred } = useMutation({
-    mutationFn: () => runCredGated((token) => addCredential(credKey.trim(), credValue, token)),
+  const { mutateAsync: doAddCred, isPending: isAddingCred } = useMutation({
+    mutationFn: (vars: { token?: string }) => addCredential(credKey.trim(), credValue, vars.token),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
       addToast({ message: `Credential "${credKey}" saved`, variant: 'success' })
@@ -283,36 +277,81 @@ export function SecuritySection() {
       setCredValue('')
     },
     onError: (err: unknown) => {
-      if (isReAuthCancelled(err)) return // user dismissed the password prompt — no-op, not an error
       addToast({ message: getErrorMessage(err, 'Save failed'), variant: 'error' })
     },
   })
 
-  const { mutate: doDeleteCred } = useMutation({
-    mutationFn: (key: string) => runCredGated((token) => deleteCredential(key, token)),
-    onSuccess: (_data, key) => {
+  const { mutateAsync: doDeleteCred } = useMutation({
+    mutationFn: (vars: { key: string; token?: string }) => deleteCredential(vars.key, vars.token),
+    onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
-      addToast({ message: `Credential "${key}" removed`, variant: 'success' })
-      setDeletingKey(null)
+      addToast({ message: `Credential "${vars.key}" removed`, variant: 'success' })
     },
     onError: (err: unknown) => {
-      if (isReAuthCancelled(err)) return // user dismissed the password prompt — no-op, not an error
       addToast({ message: getErrorMessage(err, 'Delete failed'), variant: 'error' })
     },
   })
 
-  const { mutate: doRotate, isPending: isRotating } = useMutation({
-    mutationFn: () => runCredGated((token) => rotateCredentials(rotatePassphrase, token)),
+  const { mutateAsync: doRotate, isPending: isRotating } = useMutation({
+    mutationFn: (vars: { token?: string }) => rotateCredentials(rotatePassphrase, vars.token),
     onSuccess: () => {
       addToast({ message: 'Credential vault re-encrypted with the new passphrase', variant: 'success' })
       setRotateModalOpen(false)
       setRotatePassphrase('')
     },
     onError: (err: unknown) => {
-      if (isReAuthCancelled(err)) return
       addToast({ message: getErrorMessage(err, 'Rotation failed'), variant: 'error' })
     },
   })
+
+  // requestAddCredential/requestDeleteCredential/requestRotate each run their
+  // mutation through the step-up gate (ADR-0010 WP3): ReAuthDialog + a
+  // replayed consent token in local mode, ConfirmDialog with no token in
+  // platform mode. The write only fires once the operator stands behind it.
+  function requestAddCredential() {
+    void stepUp
+      .gate(
+        (token) => doAddCred({ token }),
+        {
+          title: 'Store this credential?',
+          body: `${credKey.trim() || 'This key'} is encrypted and written to the vault. Anything already stored under that name is replaced.`,
+          confirmLabel: 'Store credential',
+        },
+      )
+      .catch((err: unknown) => {
+        if (isReAuthCancelled(err)) return
+      })
+  }
+
+  function requestDeleteCredential(key: string) {
+    void stepUp
+      .gate(
+        (token) => doDeleteCred({ key, token }),
+        {
+          title: 'Remove this credential?',
+          body: `${key} is permanently removed from the vault. Anything using it stops working until you store it again.`,
+          confirmLabel: 'Remove credential',
+        },
+      )
+      .catch((err: unknown) => {
+        if (isReAuthCancelled(err)) return
+      })
+  }
+
+  function requestRotate() {
+    void stepUp
+      .gate(
+        (token) => doRotate({ token }),
+        {
+          title: 'Rotate the master key?',
+          body: 'Every stored provider key and connector credential is re-encrypted under a new key. Agents keep running; nothing needs restarting.',
+          confirmLabel: 'Rotate master key',
+        },
+      )
+      .catch((err: unknown) => {
+        if (isReAuthCancelled(err)) return
+      })
+  }
 
   if (isLoading) {
     return <div className="text-sm text-[var(--color-muted)]">Loading...</div>
@@ -652,7 +691,7 @@ export function SecuritySection() {
                 variant="ghost"
                 size="sm"
                 className="h-7 w-7 p-0 text-[var(--color-muted)] hover:text-[var(--color-error)]"
-                onClick={() => setDeletingKey(cred.key)}
+                onClick={() => requestDeleteCredential(cred.key)}
                 data-testid={`delete-cred-${cred.key}`}
                 aria-label={`Remove credential ${cred.key}`}
               >
@@ -664,9 +703,6 @@ export function SecuritySection() {
       </section>
 
       <AuditLogViewer open={auditLogOpen} onOpenChange={setAuditLogOpen} />
-
-      {/* Re-auth dialog for credential add/delete/rotate (B4 + G5). */}
-      {credReAuthDialog}
 
       {/* Rotate master key modal (G5) */}
       <Dialog open={rotateModalOpen} onOpenChange={setRotateModalOpen}>
@@ -697,7 +733,7 @@ export function SecuritySection() {
             <Button variant="outline" size="sm" onClick={() => setRotateModalOpen(false)}>Cancel</Button>
             <Button
               size="sm"
-              onClick={() => doRotate()}
+              onClick={requestRotate}
               disabled={!rotatePassphrase.trim() || isRotating}
               data-testid="rotate-confirm"
             >
@@ -741,8 +777,9 @@ export function SecuritySection() {
             <Button variant="outline" size="sm" onClick={() => setCredModalOpen(false)}>Cancel</Button>
             <Button
               size="sm"
-              onClick={() => doAddCred()}
+              onClick={requestAddCredential}
               disabled={!credKey.trim() || !credValue || isAddingCred}
+              data-testid="add-cred-save"
             >
               {isAddingCred ? 'Saving...' : 'Save'}
             </Button>
@@ -750,27 +787,8 @@ export function SecuritySection() {
         </DialogContent>
       </Dialog>
 
-      {/* Delete confirmation modal */}
-      <Dialog open={!!deletingKey} onOpenChange={() => setDeletingKey(null)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="font-headline text-base">Remove credential?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-[var(--color-muted)] py-2">
-            This will permanently remove <span className="font-mono text-[var(--color-secondary)]">{deletingKey}</span> from the vault. This cannot be undone.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setDeletingKey(null)}>Cancel</Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => deletingKey && doDeleteCred(deletingKey)}
-            >
-              Remove
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ADR-0010 WP3 — one step-up gate per vault operation. */}
+      {stepUp.dialogs}
     </div>
   )
 }

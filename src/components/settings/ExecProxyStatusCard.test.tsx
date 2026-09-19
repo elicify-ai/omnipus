@@ -62,9 +62,21 @@ async function toggleAndConfirm() {
   // The switch renders immediately (before fetchExecProxyStatus resolves) but
   // stays disabled={isLoading || isSaving} until the query settles — wait for
   // it to become enabled, not just present, or the click below is a no-op.
-  await waitFor(() => {
-    expect(screen.getByRole('switch')).not.toBeDisabled()
-  })
+  //
+  // Explicit timeout (not testing-library's 1000ms default): this file's
+  // first test pays the same one-time cold-start transform cost vitest.config.ts
+  // documents for -app-auth/ConnectorsScreen (issue #616) — the mocked query
+  // itself resolves instantly, but the FIRST render in the file can still miss
+  // a 1s window under load, while later tests in the same file (already
+  // warmed up) never do. testTimeout/hookTimeout absorb that cost for whole
+  // tests/hooks; testing-library's own waitFor default is not covered by
+  // either, so it needs its own margin here.
+  await waitFor(
+    () => {
+      expect(screen.getByRole('switch')).not.toBeDisabled()
+    },
+    { timeout: 5000 },
+  )
   fireEvent.click(screen.getByRole('switch'))
 
   await waitFor(() => {

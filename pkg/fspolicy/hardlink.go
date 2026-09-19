@@ -68,7 +68,11 @@ const hardlinkScanBudget = 100_000
 //
 // backups/*.tar.gz is the worst of those: the gateway's own archive of all of
 // $OMNIPUS_HOME, so one alias yields master.key, credentials.json, config.json,
-// cli.token, auth.json and every entity record at once.
+// cli.token, auth.json and every entity record at once. WP4 (ADR-0010): the
+// writer is restored behind the local auth-mode switch, so on a hosted/desktop
+// build the directory never exists in the first place — but pre-existing
+// local-mode installs (and any install that ever ran the older, unswitched
+// code) still have archives on disk — see fspolicy.SecretEntriesAlways.
 //
 // # Why it is checked before the own-tree exception, not inside the loop
 //

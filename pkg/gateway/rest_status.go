@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -238,6 +239,51 @@ func (a *restAPI) videoEmbedHosts() []string {
 	return ResolveVideoEmbedHosts(a.agentLoop.GetConfig())
 }
 
+// identityFromRequest resolves the ADR-0010 `identity` block
+// (docs/specs/login-and-onboarding-spec.md §2.2): which edition this binary
+// was built as, and whether the caller of THIS request is signed in.
+//
+// `mode` and `edition` are read from the stamped config.Edition / the
+// AuthMode it derives — never from anything a request can influence. The
+// boot-time EditionMisbuild tripwire (gateway_boot_credentials.go) already
+// refuses to serve an unknown edition, so by the time this runs Edition is
+// always one of core/desktop/hosted and EditionAuthMode() is never "".
+//
+// `signedIn` is resolved from the request's own context, not a global: GET
+// /api/v1/state is registered withOptionalAuth, so a non-nil
+// *config.UserConfig under UserContextKey is exactly what "signed in" means
+// for this request — there is no separate session lookup to run.
+func identityFromRequest(r *http.Request) (mode, edition string, signedIn bool, label, emailMasked string) {
+	mode = string(config.EditionAuthMode())
+	edition = config.Edition
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if ok && user != nil {
+		signedIn = true
+		label = user.Username
+		emailMasked = maskEmailForIdentity(label)
+	}
+	return mode, edition, signedIn, label, emailMasked
+}
+
+// maskEmailForIdentity masks the local part of an email-shaped label for
+// display in `identity.account.email_masked`: "daniel@elicify.ai" becomes
+// "d•••@elicify.ai". A label that is not email-shaped (no "@", or "@" as the
+// first character) is returned unchanged — Username is not always an email
+// address (a locally chosen username, or the CLI-token synthetic identity).
+func maskEmailForIdentity(label string) string {
+	at := strings.IndexByte(label, '@')
+	if at <= 0 {
+		return label
+	}
+	// The first RUNE, not the first byte: a multi-byte first letter sliced at
+	// [:1] is invalid UTF-8 that the JSON encoder rewrites to U+FFFD.
+	_, size := utf8.DecodeRuneInString(label)
+	if size > at {
+		size = at
+	}
+	return label[:size] + "•••" + label[at:]
+}
+
 // HandleState handles GET/PATCH /api/v1/state (onboarding state).
 func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -250,8 +296,27 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 			lastRun = a.onboardingMgr.LastDoctorRun()
 			lastScore = a.onboardingMgr.LastDoctorScore()
 		}
+		mode, edition, signedIn, label, emailMasked := identityFromRequest(r)
+		identity := map[string]any{
+			"mode":      mode,
+			"edition":   edition,
+			"signed_in": signedIn,
+		}
+		if signedIn {
+			identity["account"] = map[string]any{
+				"label":        label,
+				"email_masked": emailMasked,
+				"org":          nil,
+			}
+		} else {
+			identity["blocked_reason"] = string(gen.AppStateIdentityBlockedReasonSignedOut)
+		}
 		resp := map[string]any{
 			"onboarding_complete": complete,
+			// ADR-0010, login-and-onboarding-spec.md §2.2 — which edition this
+			// binary was built as, and whether THIS request is signed in. The
+			// only field the UI reads to branch on edition or sign-in state.
+			"identity": identity,
 			// ADR-083 CW-3 / EMB-080 — the video-embed allow-list the READER
 			// uses to decide whether to draw a play control at all.
 			//
@@ -292,9 +357,28 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		jsonOK(w, gen.AppState{
+		resp := gen.AppState{
 			OnboardingComplete: true,
-		})
+		}
+		mode, edition, signedIn, label, emailMasked := identityFromRequest(r)
+		resp.Identity.Mode = gen.AppStateIdentityMode(mode)
+		resp.Identity.Edition = gen.AppStateIdentityEdition(edition)
+		resp.Identity.SignedIn = signedIn
+		if signedIn {
+			resp.Identity.Account = &struct {
+				EmailMasked string  `json:"email_masked"`
+				Label       string  `json:"label"`
+				Org         *string `json:"org"`
+			}{
+				EmailMasked: emailMasked,
+				Label:       label,
+				Org:         nil,
+			}
+		} else {
+			reason := gen.AppStateIdentityBlockedReasonSignedOut
+			resp.Identity.BlockedReason = &reason
+		}
+		jsonOK(w, resp)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}

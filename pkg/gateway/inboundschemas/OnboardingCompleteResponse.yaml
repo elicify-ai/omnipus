@@ -1,1 +1,38 @@
-$ref: './LoginResponse.yaml'
+type: object
+description: >
+  Returned on a successful POST /onboarding/complete. WP5 (ADR-0010) composes
+  this by auth mode: `token` is present ONLY in local mode — the caller had
+  no session before this call, so completion bootstraps one via a one-shot
+  bearer token, upstream's behaviour restored. In platform mode the caller
+  already held a session (ADR-0008 ruling 2 — the omnipus.ai account is the
+  login, and completion runs behind that session), so no token is issued and
+  the field is absent. `username` is always present: the account the
+  instance was set up for (the admin username just minted, in local mode; the
+  authenticated account, in platform mode) — echoed back so the SPA does not
+  have to re-read it.
+required:
+  - username
+additionalProperties: false
+properties:
+  username:
+    type: string
+    description: The account the instance was set up for.
+    example: "operator@example.com"
+  token:
+    description: >
+      Local-mode-only bootstrap bearer token for the admin account this
+      completion just created. Absent in platform mode.
+    $ref: './BearerToken.yaml'
+  warning:
+    type: string
+    description: >
+      Non-fatal advisory message, present for either of two independent
+      reasons, mutually exclusive on a single response: (1) the credential
+      store is locked and the API key was stored in plaintext, or (2) the
+      provider API key was submitted but could not be positively verified —
+      the provider was unreachable, the key has no credit, access is
+      regionally/model restricted, or no endpoint was available to probe
+      against. Absent entirely when the key was actively verified as valid.
+      A key the provider actively confirms is WRONG is never represented via
+      this field — that outcome rejects the request with 400 instead.
+    example: "Couldn't reach OpenAI to check the key — check your internet connection. Continuing for now; the key will be used as entered."

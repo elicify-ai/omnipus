@@ -49,7 +49,7 @@ pkg/tools/browser/webrtc/dedicated_input_peer_test.go	TestDedicatedInputPeerChan
 pkg/tools/browser/live_viewport_frame.go	LiveView.applyViewportContextWithConvergence	50
 pkg/agent/attach_hydrate_test.go	TestAttach_EmptyArchiveHydratesStandaloneToolCalls	49
 pkg/plan/store_test.go	TestPlan_RestartTransition_ViaStoreUpdate	49
-cmd/omnipus/internal/doctor/command_libs_linux.go	missingChromeLibsELF	48
+pkg/app/internal/doctor/command_libs_linux.go	missingChromeLibsELF	48
 pkg/records/formula_eval_test.go	TestFormula_AbsencePropagatesAndArithmeticIsExact	48
 pkg/gateway/browser_capture_answer_test.go	TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait	46
 pkg/gateway/rest_task_wire.go	restAPI.toWireTask	46
@@ -115,7 +115,7 @@ pkg/tools/browser/capture_recapture_frame_adapter.go	CaptureSession.RecaptureFra
 pkg/tools/browser/webrtc/viewer_request_test.go	TestViewerRequestNativeSaturationPreservesHealthyPeerAndReusesReleasedSlot	35
 pkg/tools/task.go	taskUpdateToolExecute.buildPatchFields	35
 pkg/tools/web.go	WebFetchTool.Execute	35
-cmd/omnipus/internal/onboard/onboard_test.go	TestRun_FreshInstall_WritesUsableConfig	34
+pkg/app/internal/onboard/onboard_test.go	TestRun_FreshInstall_WritesUsableConfig	34
 pkg/config/context_settings_test.go	TestConfig_NoContextWindowDefaultKey	34
 pkg/gateway/provider_dependents.go	computeProviderDependents	34
 pkg/gateway/rest_plans.go	restAPI.handlePlanPut	34

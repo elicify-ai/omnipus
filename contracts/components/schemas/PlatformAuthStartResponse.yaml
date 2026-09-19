@@ -1,0 +1,31 @@
+type: object
+description: >
+  Where to send the user's system browser to sign in, and the opaque handle
+  that ties the eventual redirect back to this attempt. The PKCE verifier
+  behind it NEVER leaves the gateway — the client sees only the challenge,
+  already embedded in authorize_url.
+required:
+  - authorize_url
+  - state
+additionalProperties: false
+properties:
+  authorize_url:
+    type: string
+    format: uri
+    description: >
+      The platform's authorization URL, complete with client_id, the loopback
+      redirect_uri, response_type=code, the S256 code_challenge, state and the
+      chosen method hint. Open it in the SYSTEM browser, never in an embedded
+      web view (RFC 8252 §8.12).
+    example: "https://api.omnipus.ai/v1/oauth/authorize?client_id=omnipus-desktop&code_challenge=..."
+  state:
+    type: string
+    minLength: 1
+    description: >
+      The single-use, 10-minute anti-forgery value the platform will echo back
+      to /auth/callback. Keep it in memory for as long as the sign-in is in
+      progress: for the 60 seconds after a successful callback it is also what
+      POST /auth/platform/claim accepts to hand the resulting session to the
+      application, so during that window it IS a credential. Do not store it,
+      log it or show it.
+    example: "T1c0bWl0aGVzdGF0ZXZhbHVlZXhhbXBsZQ"
