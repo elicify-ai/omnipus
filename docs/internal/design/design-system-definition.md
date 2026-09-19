@@ -19,6 +19,7 @@ This constitution defines the finished system, not rollout order. Where product 
 5. **Screens use the shared parts.** Buttons, confirms, switches, empty, error, and loading come from the named components. Those replacements keep today’s look.
 6. **Inventing a one-off fails the build.** A new colour, a 10px label, a homemade button, or a one-off gap does not ship unless it is on the exception ledger.
 7. **Touch follows the finger, not the device.** The page looks and behaves like desktop until someone actually touches it. An iPad used with a keyboard and trackpad stays desktop. Rule D17.
+8. **Zooming works the same everywhere.** Graphs, diagrams and images open readable, a pinch zooms the picture and never the page, and one small zoom control sits in the same place. Rule D18.
 
 Screen-by-screen first-run problems (empty Board, empty Library, the model list) are not these rules. They are product findings and are handled separately.
 
@@ -61,6 +62,7 @@ Existing rendered values take precedence over illustrative brand scales or newly
 | D14 | Add a second non-colour series cue on charts | Encoding, not a new palette | Recolouring charts, Mermaid, or syntax themes |
 | D16 | Dark `color-scheme` and semantic heading/form wiring | Native controls and names | A new Settings information architecture |
 | D17 | Touch adaptation follows the input in use; in touch mode, text-entry controls render at `max(16px, current size)`, hover-only controls also appear, and hit regions enlarge invisibly (founder decision 2026-09-19) | Pointer mode is unchanged; touch-mode changes are bounded and verified in context | Resizing dropdown triggers or date pickers (open decision in D17), or any touch-mode reflow the in-context check does not require |
+| D18 | One zoomable-content behaviour for graphs, diagrams and images: readable opening size, one compact zoom control, content-only pinch, a mini-map on large graphs, one zoom range (founder decision 2026-09-19) | Reuses existing canvas and viewer surfaces; adds only the compact control, a team-graph mini-map and corrected opening sizes | Replacing React Flow or Mermaid, or changing node, edge or diagram styling beyond D3/D4 tokens |
 
 Anything not in this table is Invisible by default, or Redesign Risk. Two versions of a foundation (old spacing and new spacing, old type and new type) are not an accepted end state.
 
@@ -380,6 +382,42 @@ Touch mode enlarges invisible hit regions first (D7), so switching modes does no
 **Evidence (facts only).** Eight application source files, plus five test and story files, decide touch adaptation from the device's primary pointer, which an iPad reports as touch even with a keyboard attached. On 2026-07-15, blanket 44px coarse-pointer floors inflated the chat composer controls and cut off the agent picker on iPad; they were removed in commit `80afc1329`. Text inputs compute to 12.25px at the default 14px root, below the 16px threshold at which iOS Safari zooms on focus. No production code observes the input type actually used. The mobile assessment and its independent critique are in `docs/internal/design/evidence/mobile-review-2026-09-19/`.
 
 **Enforcement.** The in-context touch check runs the real application routes from the checked-in inventory as a touch phone and a touch tablet, in both modes, before and after each repair batch. For every visible interactive control it asserts four things: no ancestor that hides overflow clips it; no label or entered text is clipped; hit regions do not overlap; and declared key rows stay within their height budget, measured as numbers. It also completes task flows: choosing a model in the model picker, composing a chat message, and signing in. A failure blocks the batch. The founder reviews only flagged items, each with one explanatory image; this is not a screenshot suite. The typography lock rejects an ad hoc 16px value; only the registered token is allowed. Real iPhone and iPad Safari behaviour, including focus zoom and mode switching, is verified once on real devices before C1 closes, because browser emulation cannot reproduce it.
+
+### D18. Zoomable content behaves one way — added 2026-09-19 by founder decision
+
+**Decision.** Zooming and panning content that is larger than its frame is one named UI job (D5), with one shared component, `ZoomableView`. It covers the workspace task graph, the workspace team graph, Mermaid diagrams, chat images and every future zoomable surface. Gestures are the primary input. The compact zoom control is the required single-pointer alternative (WCAG 2.5.1), not decoration.
+
+- **Opening size.** Fit all content if every label stays at or above the 12px floor (D2) at the fitted scale. Otherwise open at the smallest scale that keeps labels at 12px, anchored at the start of the content: the first node, the top-left of a diagram, or the selected item. Opening and "Fit" frame identically.
+- **Control.** One compact zoom pill: zoom out, the current percentage, zoom in. The percentage opens a menu with Fit, 100% and, on graphs, Zoom to selection. The pill sits in the same corner on every canvas; in the media viewer it lives in the viewer toolbar. Keyboard shortcuts are +, −, 0 for fit and 1 for 100%, shown in tooltips. In touch mode its hit regions are 44px (D17) without enlarging its chrome.
+- **Gestures.** A touch pinch and a trackpad pinch zoom the content only, never the page. Drag pans. The mouse wheel zooms in full-frame canvases and in the media viewer; inside the chat stream it always scrolls the conversation. Double-click or double-tap zooms in at that point; in the media viewer it toggles between fitted and zoomed.
+- **Mini-map.** Graph canvases show a mini-map whenever content exceeds the frame. Clicking it navigates, which is the single-pointer alternative to dragging (WCAG 2.5.7).
+- **One zoom range:** 25% to 400% on every surface.
+- **Inline previews.** Chat diagrams and images stay previews sized to the column. The enlarge action is always visible in touch mode (D17) and opens the media viewer, where every diagram, wide or tall, opens fitted to the screen.
+
+**Defects fixed under this rule.**
+
+- **Wide diagrams in the viewer.** Enlarging a wide Mermaid diagram collapses it to an unreadable strip about 300px wide at every viewport.
+- **The Graph tab at phone width.** At 390px, a tap on the Tasks "Graph" view tab was intercepted by the overlapping "Filter by agent" control in automated emulation. It is confirmed on a real device or by human emulation, then fixed.
+
+Both are in scope for the C3 repair batch. They are fixed, not deferred.
+
+**Visual delta: founder-approved 2026-09-19.** This adds the zoom pill to the media viewer and the team graph, and a mini-map to the team graph. It changes the opening size and anchor of both graphs and the media viewer. Node, edge and diagram styling are otherwise preserved.
+
+**Evidence (facts only).** Live measurement on 2026-09-19, in desktop Chromium and in iPad and iPhone emulation in Chromium and WebKit:
+
+- **Task graph.** It opens at 80%, with 34 of 40 tasks off-screen, centred mid-chain.
+- **Team graph.** It opens at 50%, with labels about 7px effective and agents cut off at top and bottom.
+- **Chat previews.** Inline chat Mermaid renders wide diagrams at 15–32% of natural width.
+- **Media viewer.** It has no zoom control. A touch pinch zooms the media and the page together. Tall diagrams open at 100% cut off, and wide diagrams collapse as described above.
+- **Zoom ranges.** They differ: task graph 20–175%, team graph 50–200%, viewer 50–800%.
+
+Evidence: `docs/internal/design/evidence/zoom-live-2026-09-19/`.
+
+**Enforcement.** `ZoomableView` owns zoom and pan. Surfaces do not configure them directly: a raw React Flow zoom or fit property outside the shared preset, or a bespoke wheel or transform handler, is rejected in review, and by lint once the raw-control lock is extended to it.
+
+- **Storybook** interaction tests cover the pill, the keyboard shortcuts, reset and the menu.
+- **Browser tests** measure the opening scale against the 12px label floor.
+- **The in-context touch check (D17)** runs pinch, pan and opening scale on the real routes at phone and tablet sizes. It asserts that the page's own zoom stays at 1 during a pinch.
 
 ## Non-goals and governance
 

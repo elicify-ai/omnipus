@@ -38,7 +38,7 @@ Storybook is required development verification before screen conversion. It is n
 |---|---|---|
 | C1 | Tokens, 12px floor, 4px / 8px spacing, status colours, and the D17 touch-mode foundations; then activate those four locks | Everything else sits on this |
 | C2 | Raw buttons, dialogs, confirms, switches; then activate the raw-control lock | Destination parts must exist first |
-| C3 | Sheets, forms, overlays | Needs Field / Dialog / Confirm |
+| C3 | Sheets, forms, overlays, and zoomable content (D18) including its two defect fixes | Needs Field / Dialog / Confirm |
 | C4 | Empty, error, loading, save, long-running | Needs the composites |
 | C5 | Domain widgets out of `ui/`; public-import cleanup | After callers use the official parts |
 | C6 | Verify every lock is repository-blocking; empty the exception list | Cutover |
@@ -58,6 +58,18 @@ The founder approved these on 2026-09-19. The rules are definition D17; the evid
 | Open | Whether dropdown triggers and date pickers match the 16px text-entry size in touch mode. They keep their current size until decided. |
 
 Layout follows window width only, so a full-screen iPad keeps the desktop layout. Touch adjustments switch on only while someone is using a finger. The founder reviews only what the in-context touch check flags.
+
+### Zoomable content — founder decisions, 2026-09-19
+
+The founder approved one zoom behaviour for the task graph, the team graph, Mermaid diagrams and chat images; the rule is definition D18. Two defects found in live measurement are part of this program's scope. They are **fixed, not tracked as issues**. Evidence: `docs/internal/design/evidence/zoom-live-2026-09-19/`.
+
+| When | Work |
+|---|---|
+| C3 | Build `ZoomableView`, specified in `docs/internal/design/components/zoomable-view.md`: a shared React Flow preset plus media-viewer zoom, with the compact zoom pill, content-only pinch, the 12px-floor opening rule, one 25–400% range and the graph mini-map. Move the task graph, team graph and media viewer onto it. |
+| C3 | **Fix:** a wide Mermaid diagram enlarged in the media viewer collapses to an unreadable strip about 300px wide at every viewport. Every diagram, wide or tall, opens fitted. |
+| C3 | **Fix:** at 390px width, the Tasks "Graph" view tab tap is intercepted by the "Filter by agent" control. Confirm on a real device or by human emulation first, then fix. |
+| C3, with D17 | The chat diagram and image enlarge action is always visible in touch mode. |
+| Before C3 closes | Extend the in-context touch check with opening-scale, pinch and pan assertions for all four surfaces, including that the page's own zoom stays at 1 during a pinch. |
 
 ## 1b. Execution model — four concurrent agents
 
@@ -318,6 +330,7 @@ Each batch records numerator, denominator, exclusions, command, and artifact for
 | Zoom/reflow | Every applicable inventory mapping passes at 200% zoom and 320px without loss of content/function |
 | Forced colors/reduced motion | Every applicable inventory and public-component mapping passes |
 | Touch and mobile | The D17 in-context touch check passes on every inventoried route in pointer and touch modes at phone and tablet sizes, and the one-time real iPhone and iPad Safari check is recorded |
+| Zoomable content | All four surfaces use `ZoomableView`; labels are at or above 12px at opening; a pinch never changes the page's own zoom; both D18 defects are fixed and covered by regression tests |
 | Visual continuity | Founder sign-off on the running app. No screenshot suite |
 | Storybook coverage | 100% of curated public exports have complete applicable manifests, stories, assertions |
 | Bundle delta | Zero Storybook modules in production; embedded delta measured, explained, within approved budget |

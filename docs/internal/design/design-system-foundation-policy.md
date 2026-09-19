@@ -1,6 +1,6 @@
 # Design-system foundation policy
 
-Status: A1 Encode contract, 2026-09-17; amended 2026-09-19 for founder decision D17 (touch adaptation follows the input in use). This policy implements D1, D2 and D9–D17 of the design-system definition. The machine-readable source is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/design-system/tokens/foundations.json`.
+Status: A1 Encode contract, 2026-09-17; amended 2026-09-19 for founder decisions D17 (touch adaptation follows the input in use) and D18 (zoomable content). This policy implements D1, D2 and D9–D18 of the design-system definition. The machine-readable source is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/design-system/tokens/foundations.json`.
 
 ## Scope and activation
 
@@ -85,6 +85,10 @@ This non-colour package supplies the foundation rules that visualization consume
 ## Forced-colour system palette
 
 In forced-colours mode, the standalone library uses the user's system palette: Canvas for page/surface backgrounds and CanvasText for ordinary secondary and muted text and boundaries. Muted text is ordinary readable content, not disabled content. Focus uses Highlight. Controls with selected, checked or progress states must retain a visible system-colour cue and readable text; the shared surface mapping alone does not prove that. These overrides apply only inside the forced-colours media query and leave normal D3/D4 values unchanged. Browser checks verify the rendered cue and contrast, not merely a state attribute. The repository-wide colour lock must register this narrow system-colour boundary when installed in B.
+
+## Zoomable content
+
+Definition D18 fixes the shared zoom values: one range of 25% to 400% on every zoomable surface, and an opening scale no smaller than the scale at which labels compute to 12px (the D2 floor applied to the fitted scale). A pinch changes the content's zoom, never the page's own zoom. These values live in `ZoomableView`, not in each surface.
 
 ## Enforcement and C1 evidence
 
