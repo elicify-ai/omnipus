@@ -38,7 +38,7 @@ Storybook is required development verification before screen conversion. It is n
 |---|---|---|
 | C1 | Tokens, 12px floor, 4px / 8px spacing, status colours, and the D17 touch-mode foundations; then activate those four locks | Everything else sits on this |
 | C2 | Raw buttons, dialogs, confirms, switches; then activate the raw-control lock | Destination parts must exist first |
-| C3 | Sheets, forms, overlays, and zoomable content (D18) including its two defect fixes | Needs Field / Dialog / Confirm |
+| C3 | Sheets, forms, overlays, and zoomable content (D18) including its three defect fixes | Needs Field / Dialog / Confirm |
 | C4 | Empty, error, loading, save, long-running | Needs the composites |
 | C5 | Domain widgets out of `ui/`; public-import cleanup | After callers use the official parts |
 | C6 | Verify every lock is repository-blocking; empty the exception list | Cutover |
