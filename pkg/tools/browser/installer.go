@@ -177,39 +177,40 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 	}
 
 	downloads, ok := channel.Downloads[build.downloadID]
-	if !ok && build.downloadID != cftDownloadID {
-		// The preferred build has no manifest entry at all (unexpected on a
-		// standard CfT feed) — fall back to chrome-headless-shell rather than
-		// failing a fresh install outright (graceful-degradation fallback
-		// semantics).
-		logger.WarnCF(
-			"browser",
-			"preferred chromium build missing from manifest — falling back to chrome-headless-shell",
-			map[string]any{"preferred_build": build.downloadID},
-		)
-		build = headlessShellBuild()
-		downloads, ok = channel.Downloads[build.downloadID]
-	}
 	if !ok {
-		return "", fmt.Errorf("browser: chrome-for-testing manifest missing %q downloads", build.downloadID)
+		// Squad K (founder ruling 2026-09-19, contract — installer route
+		// only, never the Playwright cache). The previously-shipped
+		// "graceful-degradation fallback to chrome-headless-shell when the
+		// full build is missing from the manifest" silently swapped the
+		// WebRTC-required build for one that cannot capture (headless-shell
+		// lacks chrome.tabCapture entirely — capability.go:35-48), so the
+		// gateway booted, the WebRTC panel opened, the encoder never made
+		// an SDP offer, the viewer leg got nothing, and the failure surfaced
+		// as a downstream symptom ("no decoded frame dimensions" / the
+		// ingest-side DTLS-not-started warning). That is the defect a
+		// silent fallback exists to hide — it must NOT hide. The installer
+		// must report the missing build explicitly so capability.go's
+		// ClassifyVideoCapability can name the real reason in the
+		// not_capable state the SPA surfaces via translateWebRTCFallbackReason,
+		// and so the operator sees the WARN at the same moment the
+		// panel degrades, not after a 45s "Waiting for the first frame…"
+		// timeout.
+		return "", fmt.Errorf(
+			"browser: chrome-for-testing manifest missing %q downloads (live-view requires the full %q build; install a build the manifest ships for this platform or set tools.browser.exec_path to a local full-Chrome binary)",
+			build.downloadID, build.downloadID,
+		)
 	}
 
 	zipURL := zipURLForPlatform(downloads, platform)
-	if zipURL == "" && build.downloadID != cftDownloadID {
-		// Same fallback rationale as above, for a platform-shaped miss (e.g. a
-		// feed that only ships "chrome" for a subset of platforms).
-		logger.WarnCF(
-			"browser",
-			"preferred chromium build has no build for this platform — falling back to chrome-headless-shell",
-			map[string]any{"preferred_build": build.downloadID, "platform": platform},
-		)
-		build = headlessShellBuild()
-		if hsDownloads, hsOK := channel.Downloads[build.downloadID]; hsOK {
-			zipURL = zipURLForPlatform(hsDownloads, platform)
-		}
-	}
 	if zipURL == "" {
-		return "", fmt.Errorf("browser: chrome-for-testing has no %s build for platform %s", build.downloadID, platform)
+		// Same defect class as the build-missing branch above (the manifest
+		// entry exists but does not cover the current platform). Loud error,
+		// never a silent headless-shell swap — see the block above for the
+		// full rationale and the founder ruling citation.
+		return "", fmt.Errorf(
+			"browser: chrome-for-testing has no %s build for platform %s (live-view requires the full %q build; set tools.browser.exec_path to a local full-Chrome binary if the manifest does not ship this platform)",
+			build.downloadID, platform, build.downloadID,
+		)
 	}
 
 	versionDir := filepath.Join(installRoot, channel.Version)

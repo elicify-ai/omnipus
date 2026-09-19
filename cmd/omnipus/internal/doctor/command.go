@@ -160,7 +160,13 @@ func checkBrowserVideoCapability(cfg *config.Config) []warning {
 		}
 	}
 
-	installRoot := browser.InstallRootForProfileDir(b.ProfileDir)
+	installRoot, installRootErr := browser.EffectiveInstallRoot(b.ProfileDir)
+	if installRootErr != nil {
+		return []warning{{
+			code:    "WARN-BROWSER-005",
+			message: fmt.Sprintf("Browser live-view capability check could not resolve the managed install root: %v. The live-view panel will fall back to JPEG screenshots until the install root can be computed.", installRootErr),
+		}}
+	}
 	videoCap := browser.ClassifyVideoCapabilityWithExec(b.ExecPath, installRoot)
 	if !videoCap.Capable {
 		return []warning{

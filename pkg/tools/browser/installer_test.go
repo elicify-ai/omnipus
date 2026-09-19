@@ -283,15 +283,27 @@ func TestInstaller_EnsureChromium_LinuxDownloadsFullChromeByDefault(t *testing.T
 	}
 }
 
-// TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessShell
-// is the graceful-degradation regression: when the manifest carries no
-// "chrome" (full build) entry at all — e.g. a feed that only ships
-// chrome-headless-shell — EnsureChromiumBuild(fullChromeBuild()) must fall
-// back to chrome-headless-shell rather than failing the install outright.
-// This exercises EnsureChromiumBuild's own fallback directly (requesting
-// fullChromeBuild() explicitly) so the assertion holds independent of which
-// build the current platform's selectDownloadBuild() would have picked.
-func TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessShell(t *testing.T) {
+// TestInstaller_SelectDownloadBuild_MissingFromManifest_ReturnsLoudError
+// is the Squad K (founder ruling 2026-09-19) regression: when the
+// chrome-for-testing manifest carries no "chrome" (full build) entry at
+// all — e.g. a feed that only ships chrome-headless-shell — the previously
+// shipped behaviour silently swapped the requested full build for
+// chrome-headless-shell, the gateway booted, the WebRTC panel opened, the
+// encoder never made an SDP offer (headless-shell lacks chrome.tabCapture
+// — capability.go:35-48), the viewer leg got nothing, and the failure
+// surfaced as a downstream symptom 45s later. The defect a silent fallback
+// exists to hide is exactly the defect that must NOT be hidden: the
+// installer must return a loud error so the capability classifier reports
+// not-capable with the real reason, the SPA surfaces it via
+// translateWebRTCFallbackReason, and the operator sees the WARN at the
+// same moment the panel degrades.
+//
+// The chrome-headless-shell entry on the manifest is deliberately still
+// present in the fixture, so the test also proves the function does not
+// silently fall back to it — it returns the loud error even when a
+// usable-looking alternative build is available, because that alternative
+// build cannot satisfy the requested capability (live-view tabCapture).
+func TestInstaller_SelectDownloadBuild_MissingFromManifest_ReturnsLoudError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix-only path layout")
 	}
@@ -312,7 +324,11 @@ func TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessSh
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		// Deliberately no cftFullChromeDownloadID key at all.
+		// Deliberately no cftFullChromeDownloadID key at all — a manifest
+		// that only ships chrome-headless-shell. The loud-error contract
+		// must hold even when a usable-looking lighter alternative IS
+		// available, because the lighter alternative cannot satisfy the
+		// requested capability.
 		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
 			cftDownloadID: srv.URL + "/zip",
 		}))
@@ -321,14 +337,17 @@ func TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessSh
 
 	root := t.TempDir()
 	got, err := EnsureChromiumBuild(context.Background(), root, fullChromeBuild())
-	if err != nil {
-		t.Fatalf("expected fallback to chrome-headless-shell to succeed, got: %v", err)
+	if err == nil {
+		t.Fatalf("expected loud error when full build is missing from manifest, got success: %q", got)
 	}
-	if !strings.HasSuffix(got, headlessShellBinaryName()) {
-		t.Fatalf("expected the fallback chrome-headless-shell binary path, got %q", got)
+	if !strings.Contains(err.Error(), "manifest missing") || !strings.Contains(err.Error(), cftFullChromeDownloadID) {
+		t.Fatalf("expected error to name the missing build %q, got: %v", cftFullChromeDownloadID, err)
 	}
-	if _, statErr := os.Stat(got); statErr != nil {
-		t.Fatalf("expected the fallback binary to exist on disk: %v", statErr)
+	// And no install happened — the loud error must not have left a partial
+	// build on disk that a subsequent findInstalledBuild could mistakenly
+	// treat as "already installed".
+	if entries, readErr := os.ReadDir(root); readErr == nil && len(entries) > 0 {
+		t.Fatalf("expected empty install root after a loud error, found: %v", entries)
 	}
 }
 
