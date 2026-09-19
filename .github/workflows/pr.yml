@@ -1326,7 +1326,7 @@ jobs:
       - name: Run go generate
         run: go generate ./...
 
-      - name: Run go test
+      - name: Run go test (excluding pkg/gateway)
         # Flake filter (mirrors deploy/ci-worker/runci.sh run_gotest): a package
         # that FAILS the full parallel run but PASSES when re-run isolated (-p 1)
         # is a timing flake under GitHub-runner CPU oversubscription, not a real
@@ -1356,20 +1356,39 @@ jobs:
         # same reason: it must not be possible for a real assertion failure
         # elsewhere in the run to be laundered by scoping the check too
         # narrowly.
+        #
+        # pkg/gateway is EXCLUDED from this step and runs in its own step below
+        # with an evidence-backed higher timeout. Reason: pkg/gateway carries
+        # ~3,200 tests across 555 test files (CLAUDE.md "pkg/gateway ~3,200 tests"
+        # — never run whole; CI is the authority). On a 2-core GitHub-hosted
+        # runner those tests run sequentially within one binary and the package
+        # hit the 45m per-package budget on run 35432082880 (FAIL
+        # .../pkg/gateway 2702.664s). One 45m budget cannot fit every other
+        # package AND that one — the others finish in seconds-to-minutes, but
+        # tying them to pkg/gateway's budget forces a longer wait on a
+        # timeout-elsewhere failure. Splitting pkg/gateway out gives it the
+        # time it actually needs while keeping the per-package hang signal
+        # finite for every other package.
         run: |
           set +e
-          # -timeout 45m: go test's DEFAULT is 10 minutes PER PACKAGE, and
-          # pkg/agent has been measured at 752s (12.5 min) on a developer
-          # machine under load. A package that exceeds it fails with
-          # "panic: test timed out after 10m0s" -- a timeout, not an assertion,
-          # and one that looks nothing like the failure it actually is. The
-          # other workflows here already pass -timeout explicitly
-          # (cross-platform.yml, and pr.yml's own e2e steps at 600s/900s/300s);
-          # this step was the one that inherited the default.
-          # The gateway package's own tests now exceed 30m on a two-core
-          # runner. 45m gives that package room while preserving a finite
-          # hang signal for every package.
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 45m ./... 2>&1)
+          # -timeout 10m: explicit, mirrors go test's per-package default. CI
+          # datum: pkg/agent measured 164.947s on run 35432082880 = ~3.6x headroom
+          # under a 10m ceiling. The 752s developer-machine under-load figure
+          # cited in the previous budget's comment is LARGER than 10m — that
+          # figure is what justified the old 45m budget. Under this split
+          # pkg/agent shares 10m with every other non-gateway package: a real
+          # >10m isolated regression in any non-gateway package is a real
+          # failure by design (raise the budget with new evidence, never by
+          # tying this step back to pkg/gateway). The per-package ceiling
+          # applies uniformly across every non-gateway package.
+          pkgs=$(go list ./...) || { echo "go list ./... failed" >&2; exit 1; }
+          pkgs=$(printf '%s\n' "$pkgs" | grep -v '^github\.com/elicify-ai/omnipus/pkg/gateway$' || true)
+          if [ -z "$pkgs" ]; then
+            echo "ERROR: go list ./... produced an empty package set after excluding pkg/gateway." >&2
+            echo "Refusing to run an untargeted 'go test ./...' — it would test pkg/gateway anyway and break the budget split." >&2
+            exit 1
+          fi
+          out=$(go test -tags goolm,stdjson -count=1 -timeout 10m $pkgs 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -1425,10 +1444,158 @@ jobs:
           echo "=== FLAKE FILTER: re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -tags goolm,stdjson -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
+            # The isolated re-run MUST carry the same -timeout as the primary
+            # run above — Go test's per-package default is 10m, and a package
+            # whose flake signature is "hits the 45m timeout under parallel
+            # load" still needs the full 10m budget under -p 1 to classify
+            # itself correctly. Without this, the re-run dies at Go's 10m
+            # default BEFORE it can either pass-clean or stamp "REAL FAILURE
+            # (failed twice)" — every timeout flake gets misclassified as a
+            # real failure (run 35432082880 evidence: pkg/gateway primary
+            # 2702.664s timeout → flake-filter re-run died at exactly 10m03s
+            # → "REAL FAILURE (failed twice)"; the second run had no chance
+            # to finish either way). Mirrors the race step's flake-filter
+            # (file::test-race::Run go test -race::FLAKE FILTER block) which
+            # already passes -timeout 2700s and greps the re-run log for
+            # DATA RACE to match.
+            #
+            # Race-laundering hole fix: a race reported during the re-run that
+            # does not flip go test's exit code must not be stamped "FLAKE
+            # (passed isolated)" and excused — exit code alone cannot detect
+            # it (the race-step's own carve-out documents this). Mirror the
+            # race step's pattern: success requires BOTH a clean exit AND no
+            # DATA RACE marker in the re-run log; failure prints both kinds of
+            # evidence. The two flake-filters stay in lockstep.
+            if go test -tags goolm,stdjson -count=1 -timeout 10m -p 1 "$p" >/tmp/rr.log 2>&1 \
+               && ! grep -aq "DATA RACE" /tmp/rr.log; then
               echo "FLAKE (passed isolated): $p"
             else
-              echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL' /tmp/rr.log | head; rc=1
+              echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr.log | head; rc=1
+            fi
+          done
+          exit $rc
+
+      - name: Run pkg/gateway tests (dedicated step, evidence-backed 75m budget)
+        # WHY this is a separate step:
+        #
+        #   pkg/gateway carries ~3,200 tests across 555 test files (CLAUDE.md
+        #   "pkg/gateway ~3,200 tests — never run whole; CI is the authority").
+        #   On the 2-core GitHub-hosted runner those tests run sequentially
+        #   within a single test binary (Go's default — `-p` is PACKAGE-level
+        #   parallelism, not intra-package, and pkg/gateway has 6 t.Parallel()
+        #   call sites across 555 files), and the cumulative runtime failed
+        #   on run 35432082880:
+        #
+        #     2026-09-19T09:37:09 FAIL .../pkg/gateway 2702.664s
+        #     2026-09-19T09:37:09 === FLAKE FILTER: re-running failed packages
+        #                     isolated (-p 1): .../pkg/gateway ===
+        #     2026-09-19T09:47:12 REAL FAILURE (failed twice): .../pkg/gateway
+        #
+        #   OBSERVED vs INFERRED — read carefully before editing the budget.
+        #   The log shows a bare `FAIL ... 2702.664s` with NO `--- FAIL: <name>`
+        #   line and NO `panic: test timed out after 45m0s` line. A Go test
+        #   binary killed by its OWN `-timeout 45m` ALWAYS prints that panic;
+        #   its absence means the death is NOT confirmed as the per-package
+        #   budget firing. Two live hypotheses:
+        #
+        #     (a) The per-package budget DID fire — the test binary hit its
+        #         own -timeout 45m and the panic went to a stream this run's
+        #         cleaned log does not capture (log truncation, log scrubbing,
+        #         or runner-side buffering). 75m lets that hypothesis be
+        #         tested cheaply: a green run under 75m corroborates (a) and
+        #         shows the prior 45m was simply too tight.
+        #     (b) An external kill (OOM, runner cgroup limit, runner-side
+        #         job timeout, etc.) terminated the binary before it could
+        #         print the panic. 75m does NOT address this. If the next red
+        #         run under 75m again shows bare FAIL with no panic and no
+        #         --- FAIL, hypothesis (a) is dead — escalate to the
+        #         structural pass (shard/split pkg/gateway via scripts/e2e-
+        #         shards.sh), do NOT raise the budget again.
+        #
+        #   The 45m → 10m03s cascade is a separate, confirmed bug: the
+        #   isolated re-run inherited Go test's 10m default and died before
+        #   it could classify the failure either way (fixed in the previous
+        #   step's flake-filter; this step's flake-filter uses -timeout 75m
+        #   to match the budget below and greps the re-run log for DATA RACE
+        #   so a race reported during the re-run can't be laundered as a
+        #   flake).
+        #
+        #   BUDGET: 75m is sized off the 2702.664s measurement (~67% headroom)
+        #   to absorb the documented busy-runner variance (the prior
+        #   budget's comment noted "30m on a two-core runner" — 45m had ~50%
+        #   headroom over that floor; 75m adds another ~30m). Keep this
+        #   budget finite: a real hang in pkg/gateway must still surface as
+        #   a timeout, not a 90-minute silence.
+        #
+        #   ALTERNATIVE considered: sharding pkg/gateway across N parallel
+        #   jobs (repo precedent: scripts/e2e-shards.sh). Not taken here —
+        #   sharding splits one test binary across N regex-matched shards,
+        #   which is the right structural fix long-term (the 3,200 sequential
+        #   tests is the real cause) but adds a new shard plan + matrix + CI
+        #   surface. Out of scope for this targeted fix; tracked for a future
+        #   structural pass.
+        run: |
+          set +e
+          # -timeout 75m: pkg/gateway's evidence-backed per-binary budget. See
+          # the WHY comment above for the measurement (2702.664s on run
+          # 35432082880) and the headroom rationale. Matches this step's
+          # flake-filter re-run below.
+          out=$(go test -tags goolm,stdjson -count=1 -timeout 75m ./pkg/gateway/ 2>&1)
+          code=$?
+          echo "$out"
+          # Same DATA RACE carve-out as the previous step. A race that vanishes
+          # under -p 1 is a real concurrency bug, never a flake; never routed
+          # through the re-run.
+          if [[ $out == *"DATA RACE"* ]]; then
+            echo ""
+            echo "=== DATA RACE detected in pkg/gateway — this is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (data race detected — never excused): $p"
+              done
+            fi
+            exit 1
+          fi
+          # Same --- FAIL carve-out: an assertion failure is never excused by
+          # a second isolated attempt.
+          if [[ $out == *"--- FAIL"* ]]; then
+            echo ""
+            echo "=== --- FAIL detected in pkg/gateway — an assertion failure is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (assertion failure detected — never excused): $p"
+              done
+            fi
+            exit 1
+          fi
+          [ $code -eq 0 ] && exit 0
+          failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+          [ -z "$failed" ] && exit $code
+          echo ""
+          echo "=== FLAKE FILTER (pkg/gateway): re-running failed packages isolated (-p 1): $failed ==="
+          rc=0
+          for p in $failed; do
+            # -timeout 75m: matches the primary run's budget above. The
+            # flake-filter bug this fixes was exactly that the re-run used
+            # Go's 10m default instead of the primary run's budget — see
+            # that bug's evidence (run 35432082880: primary 2702.664s,
+            # re-run 10m03s, "REAL FAILURE (failed twice)"). Don't repeat
+            # it on the dedicated step.
+            #
+            # Race-laundering hole fix (mirrors file::test-race::Run go test
+            # -race::FLAKE FILTER block): a race reported during the re-run
+            # that does not flip go test's exit code must not be stamped
+            # "FLAKE (passed isolated)" and excused — the race step's own
+            # carve-out documents that exit code alone cannot detect a race.
+            # Success requires BOTH a clean exit AND no DATA RACE marker in
+            # the re-run log; failure prints both kinds of evidence.
+            if go test -tags goolm,stdjson -count=1 -timeout 75m -p 1 "$p" >/tmp/rr_gateway.log 2>&1 \
+               && ! grep -aq "DATA RACE" /tmp/rr_gateway.log; then
+              echo "FLAKE (passed isolated): $p"
+            else
+              echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_gateway.log | head; rc=1
             fi
           done
           exit $rc
