@@ -408,8 +408,33 @@ test('proven boolean operands and schema objects are non-paint while unknown sel
   const unknown = `export function Chip() { const active = useStore(s => s.active); return <i className={cn(active, 'text-[var(--color-primary)]')}/> }`
   assert.ok(paintFindings(unknown).some(({ ruleId }) => ruleId === 'ts-colors/unsupported'))
 
-  const schema = `const VaultFilterNode = z.lazy(() => z.object({ color: z.string() })); export const View = z.object({ filter: VaultFilterNode.optional() })`
-  assert.deepEqual(paintFindings(schema), [])
+  // FIX-S (2026-09-20): `z` now requires proof of import from 'zod' — zod
+  // has no ambient-global form, unlike vitest's expect/vi under this repo's
+  // `test.globals = true` (real *.test.tsx files commonly use expect/vi
+  // with no import line at all; zod's real call sites, e.g.
+  // src/lib/api/generated/schemas.ts, always import it explicitly).
+  const schema = `
+    import { z } from 'zod'
+    const VaultFilterNode = z.lazy(() => z.object({ color: z.string() }))
+    export const View = z.object({ filter: VaultFilterNode.optional() })
+  `
+  // FIX-S round 2 (2026-09-20, lead addendum): this EXACT shape is real —
+  // src/lib/api/generated/schemas.ts:5541 has
+  // `filter: VaultFilterNode.optional()` inside a proven `z.object({...})`
+  // shape argument. `filter` is a SCHEMA FIELD NAME here, not the CSS
+  // `filter` property, even though it collides with one of
+  // COLOR_PROPERTIES — isZodShapeArgument stops the shape object from ever
+  // being walked as a style object, so the collision never matters.
+  // `VaultFilterNode` is a plain local alias whose own initializer is a
+  // proven zod chain (zodChainRoot follows the alias, stopping at its
+  // identifier — it does NOT re-walk VaultFilterNode's own definition,
+  // which is independently inspected at its own statement, matching (b)
+  // in the lead's addendum), so `.optional()`'s own (literal-free)
+  // arguments are all that gets scanned. Zero findings is correct, not a
+  // regression: ts-colors/unsupported can never be baselined and must not
+  // appear for provably-safe generated-contract code.
+  const schemaFindings = paintFindings(schema)
+  assert.deepEqual(schemaFindings, [])
 })
 
 test('proven numeric calculations and numeric custom-property serialization are non-paint', () => {
@@ -2548,4 +2573,197 @@ export const statusContract = Object.freeze({ inbox: status('inbox') })
   const findings = r4Findings(source)
   assert.deepEqual(findings, [])
   assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})
+
+// FIX-S (2026-09-20) — confirmed critical false-green close-out.
+//
+// The defect: isNonPaintApiCall/originatesFromNonPaintApi trusted any call
+// rooted at an identifier literally named `z`, `expect` or `vi` as a
+// non-paint API PURELY BY NAME — no check of what that name was actually
+// bound to. `import { z } from 'zod'; z.object({ color: z.string()
+// .default('#ff0000') })` returned [] (a false green): a real default
+// colour, on a real generated-schema field, silently escaped the lock. A
+// local `const z = { object: (o) => o }` (or a same-named shadowed
+// `expect`/`vi`) would hide colours exactly the same way, since nothing
+// ever checked the BINDING.
+//
+// The fix: `expect`/`vi` are trusted only when bound-proven — either never
+// locally bound at all (LOOKUP_MISSING; this repo's vite.config.ts sets
+// `test.globals = true`, so ~650 real *.test.tsx files legitimately use
+// them with no import line) or explicitly imported from 'vitest'/
+// '@vitest/*' (isBoundTestNamespace). `z` has no ambient form — it always
+// requires a real `import { z } from 'zod'` (isBoundZodNamespace) — and,
+// soundness decision, is NEVER given the old blanket "whole call is
+// opaque, skip it" trust at all: a zod schema's literal arguments are real
+// application data, unlike expect/vi's genuinely opaque test fixtures. A
+// zod-rooted call instead gets narrow literal-argument scanning
+// (isProvenZodChain / inspectZodChainLiterals): every literal argument
+// anywhere in the chain is inspected directly, so `.default('#ff0000')`
+// reports ts-colors/raw-color and a `.regex(/pattern/)` RegExp-literal
+// argument (which cannot itself BE a colour value) stays clean with no
+// special-casing needed.
+
+test('FIX-S forbidden: a zod .default(...) literal colour is reported, not silently exempted by the z root name', () => {
+  const source = `
+    import { z } from 'zod'
+    export const badgeThemeSchema = z.object({ color: z.string().default('#ff0000') })
+  `
+  const findings = paintFindings(source)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/raw-color', path, syntax: '#ff0000' }])
+})
+
+test('FIX-S forbidden: a locally bound z never exempts a real style object, regardless of what it is named', () => {
+  const source = `
+    const z = { object: (spec) => spec }
+    export function Swatch() { return <i style={z({ color: '#ff0000' })}/> }
+  `
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/raw-color' && syntax === '#ff0000'))
+})
+
+test('FIX-S forbidden: a locally bound expect never exempts a real style object, regardless of what it is named', () => {
+  const source = `
+    const expect = (value) => ({ toHaveStyle: (style) => style })
+    export function Swatch() { return <i style={expect(1).toHaveStyle({ color: '#ff0000' })}/> }
+  `
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/raw-color' && syntax === '#ff0000'))
+})
+
+test('FIX-S forbidden: a locally bound vi never exempts a real style object, regardless of what it is named', () => {
+  const source = `
+    const vi = { spyOn: () => ({ mockReturnValue: (value) => value }) }
+    export function Swatch() { return <i style={vi.spyOn(X, 'y').mockReturnValue({ color: '#ff0000' })}/> }
+  `
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/raw-color' && syntax === '#ff0000'))
+})
+
+test('FIX-S forbidden: a function parameter shadowing z never exempts a real style object', () => {
+  const source = `
+    export function render(z) { return <i style={z.object({ color: '#ff0000' })}/> }
+  `
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/raw-color' && syntax === '#ff0000'))
+})
+
+test('FIX-S permitted: a proven zod import validating a colour-shaped string via .regex(...) stays clean, including through a trailing .optional()', () => {
+  const source = `
+    import { z } from 'zod'
+    export const AgentColor = z.object({ color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional() })
+  `
+  assert.deepEqual(paintFindings(source), [])
+})
+
+test('FIX-S permitted: a bare proven zod z.string() with no literal argument anywhere stays clean (nothing to hide)', () => {
+  const source = `
+    import { z } from 'zod'
+    export const schema = z.object({ color: z.string() })
+  `
+  assert.deepEqual(paintFindings(source), [])
+})
+
+test('FIX-S permitted: a real vitest expect import recognizes toHaveStyle exactly like the ambient-global case', () => {
+  const source = `
+    import { expect } from 'vitest'
+    test('x', () => { expect(label).toHaveStyle({ color: \`var(\${colorVar})\` }) })
+  `
+  assert.deepEqual(paintFindings(source), [])
+})
+
+test('FIX-S permitted: a real vitest vi import recognizes mockReturnValue exactly like the ambient-global case', () => {
+  const source = `
+    import { vi } from 'vitest'
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ stroke: () => {}, fill: () => {} })
+  `
+  assert.deepEqual(paintFindings(source), [])
+})
+
+test('FIX-S forbidden: an import of z from a non-zod package is never granted zod trust', () => {
+  const source = `
+    import { z } from './local-not-zod'
+    export function render() { return <i style={z.object({ color: '#ff0000' })}/> }
+  `
+  const findings = paintFindings(source)
+  assert.ok(findings.some(({ ruleId, syntax }) => ruleId === 'ts-colors/raw-color' && syntax === '#ff0000'))
+})
+
+// FIX-S round 2 (2026-09-20, lead addendum) — a proven zod SHAPE object
+// (the argument to object/strictObject/extend/merge/partial/pick/omit,
+// rooted at a real `import { z } from 'zod'`, possibly through a local
+// alias) is never walked as a style object again: its keys are schema
+// field names, not CSS properties, even when a field happens to be named
+// `color`/`filter`/etc. Root cause closed: src/lib/api/generated/
+// schemas.ts:5541's real `filter: VaultFilterNode.optional()` inside
+// `z.object({...})` used to report ts-colors/unsupported (COLOR_PROPERTIES
+// matching the SCHEMA field name `filter`, not the CSS property) —
+// unsupported can never be baselined, so that blocked Stage B outright.
+
+test('FIX-S round 2 forbidden: a direct colour literal as a zod shape field value still reports raw-color', () => {
+  const source = `
+    import { z } from 'zod'
+    export const BadgeTheme = z.object({ color: '#ff0000' })
+  `
+  const findings = paintFindings(source)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/raw-color', path, syntax: '#ff0000' }])
+})
+
+test('FIX-S round 2 forbidden: a proven zod chain with .default(...) inside a shape field still reports raw-color', () => {
+  const source = `
+    import { z } from 'zod'
+    export const BadgeTheme = z.object({ color: z.string().default('#ff0000') })
+  `
+  const findings = paintFindings(source)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/raw-color', path, syntax: '#ff0000' }])
+})
+
+test('FIX-S round 2 forbidden: a shape field value from an unresolvable identifier stays unsupported, never silently clean', () => {
+  const source = `
+    import { z } from 'zod'
+    export const BadgeTheme = z.object({ color: someUnknownThing })
+  `
+  const findings = paintFindings(source)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/unsupported', path, syntax: 'someUnknownThing' }])
+})
+
+test('FIX-S round 2 forbidden: a shape field value from an unresolved import stays unsupported, never silently clean', () => {
+  const source = `
+    import { z } from 'zod'
+    import { otherSchema } from './other'
+    export const BadgeTheme = z.object({ color: otherSchema })
+  `
+  const findings = paintFindings(source)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/unsupported', path, syntax: 'otherSchema' }])
+})
+
+test('FIX-S round 2 permitted: the real VaultFilterNode alias shape (src/lib/api/generated/schemas.ts:5541) reports clean', () => {
+  const source = `
+    import { z } from 'zod'
+    const VaultFilterNode = z.lazy(() =>
+      z.object({
+        all: z.array(VaultFilterNode).min(1),
+        any: z.array(VaultFilterNode).min(1),
+        not: VaultFilterNode,
+      }),
+    )
+    export const View = z.object({ filter: VaultFilterNode.optional() })
+  `
+  assert.deepEqual(paintFindings(source), [])
+})
+
+test('FIX-S round 2 permitted: a proven zod chain nested two shape levels deep (extend on an object schema) stays clean while its literal is still caught', () => {
+  const clean = `
+    import { z } from 'zod'
+    const Base = z.object({ id: z.string() })
+    export const Themed = Base.extend({ color: z.string().regex(/^#[0-9A-Fa-f]{6}$/) })
+  `
+  assert.deepEqual(paintFindings(clean), [])
+
+  const dirty = `
+    import { z } from 'zod'
+    const Base = z.object({ id: z.string() })
+    export const Themed = Base.extend({ color: z.string().default('#ff0000') })
+  `
+  const findings = paintFindings(dirty)
+  assert.deepEqual(findings, [{ ruleId: 'ts-colors/raw-color', path, syntax: '#ff0000' }])
 })

@@ -430,15 +430,33 @@ function bindImports(ctx, sf) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
     const bindings = statement.importClause?.namedBindings
     if (!bindings || !ts.isNamedImports(bindings)) continue
+    const specifier = statement.moduleSpecifier.text
     for (const element of bindings.elements) {
-      const declaration = resolveModuleDeclaration(ctx, ctx.path, statement.moduleSpecifier.text, element.propertyName?.text ?? element.name.text)
-      bind(ctx, element.name.text, declaration === LOOKUP_UNBOUND ? LOOKUP_UNBOUND : { kind: IMPORT_BINDING, declaration })
+      const imported = element.propertyName?.text ?? element.name.text
+      const declaration = resolveModuleDeclaration(ctx, ctx.path, specifier, imported)
+      // A specifier ungoverned by governedModulePath (a bare/scoped package
+      // like 'vitest' or 'zod', or a local path this scan's module set does
+      // not carry) resolves to LOOKUP_UNBOUND — conservative/opaque for
+      // every OTHER consumer of bindingValue, unchanged from before. But an
+      // external-package IMPORT is still real, provable binding evidence:
+      // isNonPaintApiCall/originatesFromNonPaintApi need the raw specifier
+      // to tell a genuine `import { z } from 'zod'` apart from a same-named
+      // local shadow (`const z = {...}`) — collapsing straight to the bare
+      // LOOKUP_UNBOUND symbol erases exactly that evidence. Recording it as
+      // an external IMPORT_BINDING and having bindingValue (below) fold it
+      // back to LOOKUP_UNBOUND keeps every other call site byte-for-byte
+      // identical while giving the paint-API recognizers something to
+      // check.
+      bind(ctx, element.name.text, declaration === LOOKUP_UNBOUND
+        ? { kind: IMPORT_BINDING, external: true, specifier, imported }
+        : { kind: IMPORT_BINDING, declaration })
     }
   }
 }
 
 function bindingValue(value) {
   if (!value || typeof value !== 'object' || value.kind !== IMPORT_BINDING) return value
+  if (value.external) return LOOKUP_UNBOUND
   const declaration = value.declaration
   if (ts.isVariableDeclaration(declaration)) return declaration.initializer ?? LOOKUP_UNBOUND
   return declaration
@@ -463,7 +481,8 @@ function inspectNode(node, ctx) {
     inspectPaintAssignment(node, ctx)
   }
   if (ts.isObjectLiteralExpression(node) && !isNonPaintApiObjectArgument(node, ctx)) {
-    inspectStyleObject(node, ctx, new Set(), false)
+    if (isZodShapeArgument(node, ctx)) inspectZodShape(node, ctx)
+    else inspectStyleObject(node, ctx, new Set(), false)
   }
 }
 
@@ -474,7 +493,7 @@ function inspectNode(node, ctx) {
 // that is never applied to anything — most visibly, a fixture object handed
 // directly to a known non-paint API: a jest-dom/testing-library assertion
 // (`expect(el).toHaveStyle({ color: … })`, matching the file's existing
-// `expect`/`z` non-paint recognition below) or a Vitest mock return value
+// `expect` non-paint recognition below) or a Vitest mock return value
 // (`vi.spyOn(...).mockReturnValue({ stroke: () => {} })` — `stroke` there is
 // a Canvas 2D method name, not the SVG colour property it happens to share a
 // name with). Neither can ever reach a real render; skip only the object
@@ -482,13 +501,30 @@ function inspectNode(node, ctx) {
 // argument to such a call (P13 review finding) — this does not touch the
 // object literal's OWN nested values, spreads, or any other object literal
 // found elsewhere in the walk.
+//
+// `z.object({...})` deliberately does NOT get this same whole-object skip
+// (FIX-S, 2026-09-20): unlike an expect/vi fixture, a zod schema's object
+// literal is real application data — `z.object({ color: z.string()
+// .default('#ff0000') })` must still have its `.default(...)` literal
+// inspected. isNonPaintApiCall no longer recognizes a bare `z`-rooted call
+// here at all, so this object literal is walked normally UNLESS
+// isZodShapeArgument (below) recognizes it as a zod SHAPE object, whose
+// keys are schema field names, not CSS properties.
 function isNonPaintApiObjectArgument(node, ctx) {
+  const call = enclosingCallArgument(node)
+  return Boolean(call) && isNonPaintApiCall(call, ctx)
+}
+
+// Shared by isNonPaintApiObjectArgument and isZodShapeArgument: walks an
+// object literal out through a cast/paren/non-null wrapper directly on it
+// (`{…} as unknown as CanvasRenderingContext2D`, a common vitest
+// `mockReturnValue(...)` shape) and, separately, through a single
+// array-literal wrapper (`mockReturnValue([{…}])`), then returns the
+// enclosing CallExpression if the (possibly-wrapped) node is one of its
+// direct arguments — neither wrapper changes which call it is ultimately
+// an argument to.
+function enclosingCallArgument(node) {
   let expr = node
-  // Walk out through a cast/paren/non-null wrapper directly on the object
-  // literal itself (`{…} as unknown as CanvasRenderingContext2D`, a common
-  // vitest `mockReturnValue(...)` shape) and, separately, through a single
-  // array-literal wrapper (`mockReturnValue([{…}])`) — neither changes
-  // which call the object literal is ultimately an argument to.
   while (expr.parent && (ts.isParenthesizedExpression(expr.parent) || ts.isAsExpression(expr.parent)
     || ts.isSatisfiesExpression(expr.parent) || ts.isNonNullExpression(expr.parent))) expr = expr.parent
   let parent = expr.parent
@@ -498,7 +534,64 @@ function isNonPaintApiObjectArgument(node, ctx) {
       || ts.isSatisfiesExpression(expr.parent) || ts.isNonNullExpression(expr.parent))) expr = expr.parent
     parent = expr.parent
   }
-  return Boolean(parent) && ts.isCallExpression(parent) && parent.arguments.includes(expr) && isNonPaintApiCall(parent, ctx)
+  return parent && ts.isCallExpression(parent) && parent.arguments.includes(expr) ? parent : null
+}
+
+// FIX-S round 2 (2026-09-20, lead addendum) — the object literal passed
+// directly to a PROVEN zod shape-building method (object/strictObject/
+// extend/merge/partial/pick/omit — ZOD_SHAPE_METHODS) is a SCHEMA SHAPE,
+// not a style object: its keys are schema field names that can happen to
+// share a name with a CSS colour property (`filter`, `color`, …) without
+// meaning the CSS property at all, and its values are schemas or literal
+// defaults, not CSS values. Root cause of the `VaultFilterNode.optional()`
+// → ts-colors/unsupported regression this closes: `filter:` matched
+// COLOR_PROPERTIES and got walked as a DOM style value. inspectZodShape
+// (below) replaces inspectStyleObject for exactly this object literal.
+function isZodShapeArgument(node, ctx) {
+  const call = enclosingCallArgument(node)
+  if (!call) return false
+  const callee = unwrap(call.expression)
+  if (!ts.isPropertyAccessExpression(callee) || !ZOD_SHAPE_METHODS.has(callee.name.text)) return false
+  return zodChainRoot(call, ctx, new Set())
+}
+
+// For each property of a proven zod shape object: (a)/(b) a value that
+// ITSELF proves zod-rooted (a direct chain like `z.string().default(...)`,
+// OR a bare/called reference to a locally aliased schema constant like
+// `VaultFilterNode` / `VaultFilterNode.optional()` — zodChainRoot treats
+// both uniformly) gets the narrow literal-argument scan
+// (inspectZodChainLiterals): its own literals are reported, an alias's
+// literals are left to its own definition site, never re-proven or
+// silently trusted here. (c) anything else — a direct string/template
+// literal used as a value, a parameter, an unresolvable/non-zod
+// identifier, a non-zod call — stays on the SAME conservative path a real
+// style property would have taken (inspectCssValueExpr): a literal colour
+// still reports ts-colors/raw-color, an unresolvable reference still
+// reports ts-colors/unsupported (fail-closed, unchanged from before this
+// shape/style split).
+function inspectZodShape(obj, ctx) {
+  for (const prop of obj.properties) {
+    if (ts.isSpreadAssignment(prop)) continue
+    let value
+    let keyNode
+    if (ts.isShorthandPropertyAssignment(prop)) {
+      value = prop.name
+      keyNode = prop.name
+    } else if (ts.isPropertyAssignment(prop)) {
+      value = prop.initializer
+      keyNode = prop.name
+    } else {
+      continue
+    }
+    const key = propertyNameOf(keyNode)
+    if (key === null) continue
+    const unwrapped = unwrap(value)
+    if (unwrapped && zodChainRoot(unwrapped, ctx, new Set())) {
+      inspectZodChainLiterals(unwrapped, ctx)
+      continue
+    }
+    if (isColorPropertyName(key)) inspectCssValueExpr(value, ctx, new Set(), paintBoundary(prop, 'dom-style', key))
+  }
 }
 
 function isFunctionLike(node) {
@@ -1348,7 +1441,19 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
     inspectLiteralColorArguments(node, ctx)
     return
   }
-  if (ts.isCallExpression(node) && isNonPaintApiCall(node, ctx)) return
+  if (ts.isCallExpression(node)) {
+    if (isNonPaintApiCall(node, ctx)) return
+    // FIX-S: a proven zod chain (`import { z } from 'zod'`) never gets the
+    // expect/vi blanket skip above — see isProvenZodChain's doc comment.
+    // Instead every literal argument anywhere in the chain (`.default(…)`,
+    // but never a `.regex(/…/)` RegExp literal) is inspected directly, so
+    // this reports ts-colors/raw-color for real colour data and stays
+    // silent only where nothing in the chain is a string/template literal.
+    if (isProvenZodChain(node, ctx)) {
+      inspectZodChainLiterals(node, ctx)
+      return
+    }
+  }
 
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     analyzeCssValue(node.text, ctx, node)
@@ -2236,11 +2341,85 @@ function absenceValue(node, property, ctx) {
   return returns.length > 0 && returns.every(fresh)
 }
 
+// FIX-S (2026-09-20, confirmed-defect closure): `expect`/`vi`/`z` used to be
+// trusted by BARE NAME, with no check of what the name is actually bound to
+// — a same-named local (`const z = { object: (o) => o }`) or a same-named
+// shadowing parameter hid colours exactly as effectively as the real
+// import. isBoundTestNamespace below requires PROOF: the identifier is
+// either never locally bound at all (LOOKUP_MISSING — the legitimate
+// vitest-globals case, since this repo's vite.config.ts sets `test.globals
+// = true` and ~650 real *.test.tsx files use `expect`/`vi` with no import
+// line at all) or explicitly imported from the real package. A local
+// declaration/shadow always binds to something other than LOOKUP_MISSING or
+// a real external IMPORT_BINDING, so it can never satisfy this proof.
+function isBoundTestNamespace(name, ctx) {
+  const binding = lookup(ctx, name)
+  if (binding === LOOKUP_MISSING) return true
+  return Boolean(binding) && typeof binding === 'object' && binding.kind === IMPORT_BINDING
+    && binding.external && (binding.specifier === 'vitest' || binding.specifier.startsWith('@vitest/'))
+}
+
+// zod's `z` has no ambient-global form (unlike vitest's globals) — every
+// legitimate use is `import { z } from 'zod'` (or a `zod/*` subpath), so
+// LOOKUP_MISSING never counts as proof here the way it does for
+// isBoundTestNamespace.
+function isZodImportBinding(binding) {
+  return Boolean(binding) && typeof binding === 'object' && binding.kind === IMPORT_BINDING
+    && binding.external && (binding.specifier === 'zod' || binding.specifier.startsWith('zod/'))
+}
+
+// FIX-S round 2 (2026-09-20, lead addendum): a call/identifier chain
+// originates from zod when it is EITHER rooted directly at a proven `z`
+// import (including a renamed one, `import { z as zz } from 'zod'` —
+// isZodImportBinding checks the BINDING, not the literal text `z`) OR, at
+// any point along its property-access/call spine, hands off to a plain
+// local variable/const whose OWN initializer recursively satisfies the
+// same proof — e.g. `const VaultFilterNode = z.lazy(() => z.object({...}));
+// ... VaultFilterNode.optional()`. This does NOT recurse into the alias's
+// own ARGUMENTS (only through `.expression` hops), so it never re-proves
+// the alias's own literal safety — that is unnecessary: the alias's
+// initializer is a normal statement in the file, independently walked and
+// inspected (via the ordinary tree walk / isZodShapeArgument below) at its
+// OWN definition site. This function only answers "is this identifier
+// eligible for the narrow literal-scan below", never "is this whole call
+// opaque, skip it" — that blanket trust was the FIX-S round 1 defect for a
+// DIRECT `z` root, and would be exactly as unsound one alias hop away.
+// `seen` guards a self-referential/mutually-aliased pair from recursing
+// forever (VaultFilterNode's own definition legitimately references
+// `VaultFilterNode` again inside `z.array(VaultFilterNode)`, but that
+// reference lives in a CALL ARGUMENT this function never descends into, so
+// the guard is a defensive backstop, not something the real shape relies
+// on to terminate).
+function zodChainRoot(node, ctx, seen) {
+  node = unwrap(node)
+  if (!node) return false
+  if (ts.isCallExpression(node)) return zodChainRoot(node.expression, ctx, seen)
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return zodChainRoot(node.expression, ctx, seen)
+  if (!ts.isIdentifier(node)) return false
+  if (seen.has(node.text)) return false
+  seen.add(node.text)
+  const binding = lookup(ctx, node.text)
+  if (isZodImportBinding(binding)) return true
+  if (!binding || binding === LOOKUP_MISSING || binding === LOOKUP_UNBOUND) return false
+  // A DIFFERENT import (governed-local or another external package) and a
+  // function parameter are never assumed to secretly BE zod — only a
+  // plain local variable/const's own initializer (the raw AST node
+  // `lookup`/`bind` store directly for that case, per bindPattern) is
+  // eligible to keep chasing.
+  if (typeof binding === 'object' && (binding.kind === IMPORT_BINDING || binding.kind === PARAMETER_BINDING)) return false
+  return zodChainRoot(binding, ctx, seen)
+}
+
+// The zod builder/combinator methods whose argument is a SHAPE object (its
+// keys are schema field names, its values are schemas or literal defaults)
+// rather than a style/CSS object — even though a field can happen to be
+// named `color` or `filter`, exactly like a real CSS property. Gates
+// isZodShapeArgument below.
+const ZOD_SHAPE_METHODS = new Set(['object', 'strictObject', 'extend', 'merge', 'partial', 'pick', 'omit'])
+
 function isNonPaintApiCall(call, ctx) {
   let expression = unwrap(call.expression)
-  const names = []
   while (ts.isPropertyAccessExpression(expression)) {
-    names.push(expression.name.text)
     expression = unwrap(expression.expression)
     if (ts.isCallExpression(expression)) expression = unwrap(expression.expression)
   }
@@ -2252,7 +2431,19 @@ function isNonPaintApiCall(call, ctx) {
   // fixture/mock data standing in for a real API's shape (P13 review
   // finding — e.g. `vi.spyOn(Canvas...).mockReturnValue({ stroke: () => {} })`,
   // where `stroke` is the Canvas 2D method name, not an SVG colour property).
-  if (root === 'z' || root === 'expect' || root === 'vi' || names.includes('stringMatching')) return true
+  // `expect` (including `expect.stringMatching(...)`, folded into this same
+  // root check — see FIX-S evidence for why the old separate
+  // `names.includes('stringMatching')` branch was unproven and redundant)
+  // is the matching jest-dom/testing-library assertion namespace.
+  //
+  // `z` (zod) is deliberately NOT given this same blanket "the whole call
+  // is opaque, skip it" trust — see FIX-S evidence for the soundness
+  // argument. A zod schema's literal arguments (`.default('#ff0000')`) are
+  // real application data, unlike `expect`/`vi`'s test-only fixtures, so a
+  // zod-rooted call gets narrow literal-argument scanning
+  // (isProvenZodChain / inspectZodChainLiterals in inspectCssValueExpr)
+  // instead of a blanket skip here.
+  if ((root === 'expect' || root === 'vi') && isBoundTestNamespace(root, ctx)) return true
   if (!root || !ctx) return false
   const binding = lookup(ctx, root)
   const value = bindingValue(binding)
@@ -2265,11 +2456,72 @@ function originatesFromNonPaintApi(node, ctx, seen) {
   if (ts.isCallExpression(node)) return originatesFromNonPaintApi(node.expression, ctx, seen)
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return originatesFromNonPaintApi(node.expression, ctx, seen)
   if (!ts.isIdentifier(node)) return false
-  if (node.text === 'z' || node.text === 'expect' || node.text === 'vi') return true
+  // Alias-chasing (`const helper = vi; helper.fn(...)`) stays trusted for
+  // `expect`/`vi` — see isBoundTestNamespace: still binding-proven, not
+  // name-only. `z` is deliberately excluded here too (not just from the
+  // direct check above): an ALIASED zod value (`const S = z; S.object(...)`)
+  // would otherwise get the SAME blanket "whole call is opaque" trust this
+  // function grants expect/vi, undoing the narrow literal-scanning decision
+  // above. Losing alias-chasing for zod is intentionally conservative —
+  // worst case an aliased zod chain reports ts-colors/unsupported instead
+  // of being precisely scanned, never a silent pass.
+  if ((node.text === 'expect' || node.text === 'vi') && isBoundTestNamespace(node.text, ctx)) return true
   if (seen.has(node.text)) return false
   seen.add(node.text)
   const value = bindingValue(lookup(ctx, node.text))
   return Boolean(value && value !== LOOKUP_MISSING && value !== LOOKUP_UNBOUND && originatesFromNonPaintApi(value, ctx, seen))
+}
+
+// Walks the property-access/call spine of a zod chain (`z.string().regex(p)
+// .optional()` → [.optional(), .regex(p), .string()]), stopping at the
+// root identifier. Used to scan every call's OWN direct arguments — never
+// an object literal argument (those are already, independently, walked and
+// inspected by inspectStyleObject through the ordinary tree walk; this
+// function's job is only the literal-arguments-of-a-call-chain shape a
+// normal object-literal walk cannot see, e.g. `.default('#ff0000')`).
+function zodChainCalls(call) {
+  const calls = []
+  let node = unwrap(call)
+  while (node) {
+    if (ts.isCallExpression(node)) {
+      calls.push(node)
+      node = unwrap(node.expression)
+      continue
+    }
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      node = unwrap(node.expression)
+      continue
+    }
+    break
+  }
+  return calls
+}
+
+// A call/identifier chain rooted at a PROVEN zod import — directly
+// (`z....`) or through a plain local alias (zodChainRoot) — eligible for
+// the narrow literal-argument scan below instead of the generic
+// "unresolved dynamic colour expression" fallback every other unrecognized
+// call gets. Being "eligible" here does not mean "safe" — it means every
+// literal argument in the chain (stopping at any alias boundary) gets
+// INSPECTED (inspectZodChainLiterals), which is what actually decides
+// raw-color vs. clean.
+function isProvenZodChain(node, ctx) {
+  return zodChainRoot(node, ctx, new Set())
+}
+
+// A `.regex(/pattern/)` argument is a RegExp literal, not a string/template
+// literal — inspectLiteralColorArguments only ever reports string/no-sub-
+// template-literal arguments (a regex has no way to BE a raw colour value;
+// it is a pattern that validates the SHAPE of a later-supplied string), so
+// running it over every call in the chain already leaves
+// `z.string().regex(/^#[0-9A-Fa-f]{6}$/)` clean with no special-casing.
+// `.default('#ff0000')`, by contrast, supplies a literal the app can go on
+// to paint — inspectLiteralColorArguments reports it exactly like any other
+// raw-colour literal (ts-colors/raw-color), because zod schema DATA is
+// real, unlike expect/vi's opaque test fixtures (soundness decision, FIX-S
+// evidence).
+function inspectZodChainLiterals(call, ctx) {
+  for (const chainCall of zodChainCalls(call)) inspectLiteralColorArguments(chainCall, ctx)
 }
 
 function hasStableRuntimeParameterRoot(node, ctx) {

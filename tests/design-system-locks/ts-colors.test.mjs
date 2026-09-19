@@ -81,8 +81,15 @@ test('non-paint boolean class-builder values and conditional geometry styles sta
   assert.deepEqual(scanSource(source), [])
 })
 
+// FIX-S (2026-09-20): `z` now requires binding proof — zod has no ambient
+// global form (unlike vitest's `expect`/`vi`, real under `test.globals =
+// true` with no import line at all), so every real call site imports it
+// explicitly (matches src/lib/api/generated/schemas.ts's real
+// `z.string().regex(/^#[0-9A-Fa-f]{6}$/)` shape). `expect` stays ambient
+// here on purpose — real *.test.tsx files commonly use it with no import.
 test('schema and assertion APIs that validate colour-shaped strings are not paint', () => {
   const source = `
+    import { z } from 'zod'
     export const schema = { color: z.string().regex(/^#[0-9A-Fa-f]{6}$/) }
     expect(value.color).toEqual(expect.stringMatching(/^#[0-9A-Fa-f]{6}$/))
   `
