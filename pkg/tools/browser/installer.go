@@ -195,9 +195,23 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 		// and so the operator sees the WARN at the same moment the
 		// panel degrades, not after a 45s "Waiting for the first frame…"
 		// timeout.
+		//
+		// The "live-view requires the full 'chrome' build" parenthetical is
+		// gated on `build.downloadID == cftFullChromeDownloadID` because
+		// it is only true for the full build. A caller that asked for
+		// chrome-headless-shell and got a manifest-without-headless-shell
+		// error MUST NOT see "live-view requires the full build" — that
+		// reading would be a lie (live-view does not require the lighter
+		// build; the lighter build just happens to be what was requested
+		// for the non-video-capable case). The two error sites below
+		// hold the same gate.
+		var liveViewHint string
+		if build.downloadID == cftFullChromeDownloadID {
+			liveViewHint = fmt.Sprintf(" (live-view requires the full %q build", build.downloadID)
+		}
 		return "", fmt.Errorf(
-			"browser: chrome-for-testing manifest missing %q downloads (live-view requires the full %q build; install a build the manifest ships for this platform or set tools.browser.exec_path to a local full-Chrome binary)",
-			build.downloadID, build.downloadID,
+			"browser: chrome-for-testing manifest missing %q downloads%s; install a build the manifest ships for this platform or set tools.browser.exec_path to a local full-Chrome binary)",
+			build.downloadID, liveViewHint,
 		)
 	}
 
@@ -206,10 +220,16 @@ func EnsureChromiumBuild(ctx context.Context, installRoot string, build chromium
 		// Same defect class as the build-missing branch above (the manifest
 		// entry exists but does not cover the current platform). Loud error,
 		// never a silent headless-shell swap — see the block above for the
-		// full rationale and the founder ruling citation.
+		// full rationale and the founder ruling citation. The "live-view
+		// requires" parenthetical is gated identically to the
+		// build-missing branch.
+		var liveViewHint string
+		if build.downloadID == cftFullChromeDownloadID {
+			liveViewHint = fmt.Sprintf(" (live-view requires the full %q build", build.downloadID)
+		}
 		return "", fmt.Errorf(
-			"browser: chrome-for-testing has no %s build for platform %s (live-view requires the full %q build; set tools.browser.exec_path to a local full-Chrome binary if the manifest does not ship this platform)",
-			build.downloadID, platform, build.downloadID,
+			"browser: chrome-for-testing has no %s build for platform %s%s; set tools.browser.exec_path to a local full-Chrome binary if the manifest does not ship this platform)",
+			build.downloadID, platform, liveViewHint,
 		)
 	}
 
@@ -361,12 +381,19 @@ func writeManagedInstallManifest(build chromiumBuild, installRoot, binaryPath st
 
 // EnsureChromium ensures the agent's default managed Chromium binary is
 // present under installRoot, per selectDownloadBuild: the full "chrome"
-// build on linux (WebRTC tabCapture needs full Chrome's capture stack — see
-// ClassifyVideoCapability), chrome-headless-shell everywhere else. Falls
-// back to chrome-headless-shell (via EnsureChromiumBuild's own fallback)
-// when the full build is unavailable on linux — graceful degradation: the
-// host still browses, and ClassifyVideoCapability reports not-capable. See
-// EnsureChromiumBuild.
+// build on linux and darwin (WebRTC tabCapture needs full Chrome's capture
+// stack — see ClassifyVideoCapability), chrome-headless-shell on
+// Windows and every other platform. When the requested build is
+// unavailable on the manifest (missing build entry, missing platform
+// zip, integrity failure), EnsureChromiumBuild returns an explicit
+// error rather than silently swapping to the lighter build — the
+// capability classifier reports not-capable with the real reason, the
+// SPA surfaces it via translateWebRTCFallbackReason, and the operator
+// sees the WARN at the same moment the panel degrades, not 45s later via
+// a first-frame deadline. Squad K (founder ruling 2026-09-19) deleted
+// the prior silent-fallback contract because a silent swap to
+// chrome-headless-shell would hide the very defect (no tabCapture
+// surface) the swap exists to mask.
 func EnsureChromium(ctx context.Context, installRoot string) (string, error) {
 	return EnsureChromiumBuild(ctx, installRoot, selectDownloadBuild())
 }
@@ -420,11 +447,16 @@ var selectDownloadBuildGOOS = runtime.GOOS
 // darwinAudioVerified=true before advertising Capable, so a darwin host
 // with the full build installed but the spike still pending correctly stays
 // not-capable (AC-5). Windows and every other platform stay on the lighter
-// headlessShellBuild() until Phase 4. EnsureChromiumBuild's own fallback
-// separately drops linux/darwin to headlessShellBuild() gracefully when the
-// full build is missing from the manifest or unavailable for the current
-// platform — that's a distinct, later fallback from this initial
-// platform-based selection. The per-OS switch consults selectDownloadBuildGOOS.
+// headlessShellBuild() until Phase 4. When the requested build is missing
+// from the manifest or unavailable for the current platform,
+// EnsureChromiumBuild now returns an explicit error naming the missing
+// build/platform — Squad K (founder ruling 2026-09-19) deleted the prior
+// silent-fallback-to-headless-shell contract because a silent swap to a
+// build that cannot capture would hide the very defect the swap exists
+// to mask. The capability classifier surfaces the real reason via
+// `Reason`, the SPA renders it via translateWebRTCFallbackReason, and
+// the operator sees the WARN at the same moment the panel degrades.
+// The per-OS switch consults selectDownloadBuildGOOS.
 func selectDownloadBuild() chromiumBuild {
 	switch selectDownloadBuildGOOS {
 	case "linux", "darwin":

@@ -199,14 +199,14 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 	defer srv.Close()
 
 	// Squad K (founder ruling 2026-09-19): selectDownloadBuild defaults to
-	// full chrome on linux AND darwin, and EnsureChromiumBuild now fails
-	// LOUD on a manifest that lacks the requested build. This test
-	// exercises the DOWNLOAD path, not the build-resolution policy, so
-	// we hand the manifest BOTH entries (full chrome and headless-shell)
-	// pointing at the same headless-shell fixture zip — whichever build
-	// the test host's selectDownloadBuild() asks for finds its entry, the
-	// download+extract completes, and the test verifies the on-disk
-	// binary the test was designed around.
+	// full chrome on linux AND darwin; on any other platform it picks
+	// headless-shell. The test forces headless-shell selection via the
+	// selectDownloadBuildGOOS seam (just below) so the test exercises the
+	// DOWNLOAD path on a headless-shell zip fixture, host-agnostically.
+	// The manifest therefore only needs the headless-shell entry — the
+	// (prior commit's) full-chrome entry was cosmetic dead config because
+	// the test never asks for the full build, and (per the A4 advisory)
+	// it has been removed.
 	manifest := cftManifest{
 		Channels: map[string]struct {
 			Version   string                              `json:"version"`
@@ -215,8 +215,7 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 			cftChannel: {
 				Version: "131.0.6778.999",
 				Downloads: map[string][]cftManifestDownloadRef{
-					cftFullChromeDownloadID: {{Platform: platform, URL: srv.URL + "/zip"}},
-					cftDownloadID:           {{Platform: platform, URL: srv.URL + "/zip"}},
+					cftDownloadID: {{Platform: platform, URL: srv.URL + "/zip"}},
 				},
 			},
 		},
