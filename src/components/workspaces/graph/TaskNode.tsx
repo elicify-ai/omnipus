@@ -143,7 +143,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
               aria-hidden
               className={cn(
                 'h-1.5 w-1.5 rounded-full',
-                visual.animated && 'animate-pulse',
+                visual.animated ? 'animate-pulse' : undefined,
               )}
               style={{ backgroundColor: visual.color }}
             />

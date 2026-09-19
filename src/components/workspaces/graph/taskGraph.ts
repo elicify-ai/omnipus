@@ -73,7 +73,14 @@ export function taskNodeVisual(task: Pick<Task, 'status' | 'cancel_reason'>): St
     // backgroundColor declaration (Gate-2 finding #1, same bug class as
     // TaskCard/PlansFilterBand/WorkspaceGraphTab — see statusColors.ts's
     // TASK_CANCELLED_COLOR doc comment).
-    return { ...base, label: 'Cancelled', color: TASK_CANCELLED_COLOR }
+    // Only reached when status is 'failed', so the non-overridden fields are
+    // exactly STATUS_VISUALS.failed's (written out rather than spread).
+    return {
+      label: 'Cancelled',
+      color: TASK_CANCELLED_COLOR,
+      animated: STATUS_VISUALS.failed.animated,
+      muted: STATUS_VISUALS.failed.muted,
+    }
   }
   return base
 }
