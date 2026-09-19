@@ -76,9 +76,18 @@ func TestUserProfilePerAgentFileIsIgnored(t *testing.T) {
 	}
 }
 
-// TestUserProfileLegacyFallback covers content written before the fix. It is
-// read, never written, so an existing install is not silently orphaned.
-func TestUserProfileLegacyFallback(t *testing.T) {
+// TestUserProfileLegacyPathIsIgnored is the regression guard for ADR-067
+// SC-009 in pkg/config/userprofile.go. Before the guard, ReadUserProfile fell
+// back to <OMNIPUS_HOME>/workspace/USER.md when the global file did not exist —
+// exactly the legacy migration machinery ADR-067 retired from pkg/config
+// (check-greenfield-providers.sh). The new behavior is that the legacy location
+// is ignored: a USER.md sitting in <OMNIPUS_HOME>/workspace/ must not be
+// returned, the global path wins whenever the global file exists, and a fresh
+// install with neither file is silent (covered separately by
+// TestUserProfileMissingIsNotAnError below). If this test ever starts passing
+// content or path from the legacy location, the greenfield guard has been
+// bypassed — fix in the tree, not by exempt-listing this file.
+func TestUserProfileLegacyPathIsIgnored(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OMNIPUS_HOME", home)
 
@@ -90,23 +99,37 @@ func TestUserProfileLegacyFallback(t *testing.T) {
 		t.Fatalf("seed legacy: %v", err)
 	}
 
+	// (a) Legacy file exists, no global — ReadUserProfile must return
+	//     ("", "", nil). Empty content, no error, the legacy path MUST NOT
+	//     appear in the returned path. A return of ("legacy content" or
+	//     the legacy path) is the bypass.
 	path, content, err := config.ReadUserProfile()
 	if err != nil {
-		t.Fatalf("ReadUserProfile: %v", err)
+		t.Fatalf("ReadUserProfile with legacy-only file: %v", err)
 	}
-	if content != "legacy content" {
-		t.Errorf("legacy content not returned: got %q", content)
+	if content != "" {
+		t.Errorf("legacy-only: legacy content leaked into ReadUserProfile: got %q, want \"\"", content)
 	}
-	if path != filepath.Join(legacyDir, "USER.md") {
-		t.Errorf("path = %q, want the legacy location", path)
+	if path != "" {
+		t.Errorf("legacy-only: legacy path leaked into ReadUserProfile: got %q, want \"\"", path)
+	}
+	if path == filepath.Join(legacyDir, "USER.md") {
+		t.Fatalf("legacy-only: ReadUserProfile returned the legacy path %q — the ADR-067 fallback is back", path)
 	}
 
-	// The global file must win the moment it exists.
+	// (b) Global file also present — global wins on both content and path.
 	if writeErr := os.WriteFile(config.UserProfilePath(), []byte("new content"), 0o600); writeErr != nil {
 		t.Fatalf("seed global: %v", writeErr)
 	}
-	if _, content, err = config.ReadUserProfile(); err != nil || content != "new content" {
-		t.Errorf("global did not take precedence: content=%q err=%v", content, err)
+	path, content, err = config.ReadUserProfile()
+	if err != nil {
+		t.Fatalf("ReadUserProfile with both files: %v", err)
+	}
+	if content != "new content" {
+		t.Errorf("global did not win on content: got %q, want %q", content, "new content")
+	}
+	if path != config.UserProfilePath() {
+		t.Errorf("global did not win on path: got %q, want %q", path, config.UserProfilePath())
 	}
 }
 

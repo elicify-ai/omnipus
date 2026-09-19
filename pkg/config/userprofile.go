@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -29,17 +30,6 @@ import (
 // agents" reached no agent at all except the legacy `main` singleton.
 const userProfileFileName = "USER.md"
 
-// legacyUserProfileDirName is the pre-fix location: the default agent's
-// workspace directory, which is named "workspace". It is read ONLY as a
-// fallback so that content written before the fix is not silently orphaned.
-// Nothing writes here any more.
-//
-// This covers the shipped default. An installation that customised
-// `agents.defaults.workspace` and has USER.md content there must move the file
-// by hand; the fallback deliberately does not guess at a configured path,
-// because guessing wrong means reading an unrelated file as the user's profile.
-const legacyUserProfileDirName = "workspace"
-
 // UserProfilePath returns the one global USER.md path. This is the path that is
 // written, and the path that should be shown to a user who asks where their
 // profile lives.
@@ -47,37 +37,22 @@ func UserProfilePath() string {
 	return filepath.Join(OmnipusHomeDir(), userProfileFileName)
 }
 
-// legacyUserProfilePath returns the pre-fix location. Read-only.
-func legacyUserProfilePath() string {
-	return filepath.Join(OmnipusHomeDir(), legacyUserProfileDirName, userProfileFileName)
-}
-
 // ReadUserProfile returns the user's profile content and the path it came from.
-//
-// It prefers the global path and falls back to the legacy per-workspace
-// location when the global file does not exist. A missing profile is not an
-// error: it returns ("", "", nil), because an installation that has never
-// opened Settings has no profile and that is normal.
+// A missing profile is not an error: it returns ("", "", nil), because an
+// installation that has never opened Settings has no profile and that is normal.
 //
 // Every reader — the agent context builder and the REST layer alike — must go
 // through this function. Two callers resolving USER.md independently is exactly
 // how the original defect happened.
 func ReadUserProfile() (path string, content string, err error) {
 	global := UserProfilePath()
-	switch data, readErr := os.ReadFile(global); {
+	data, readErr := os.ReadFile(global)
+	switch {
 	case readErr == nil:
 		return global, string(data), nil
-	case !os.IsNotExist(readErr):
+	case errors.Is(readErr, os.ErrNotExist):
+		return "", "", nil
+	default:
 		return "", "", readErr
 	}
-
-	legacy := legacyUserProfilePath()
-	switch data, readErr := os.ReadFile(legacy); {
-	case readErr == nil:
-		return legacy, string(data), nil
-	case !os.IsNotExist(readErr):
-		return "", "", readErr
-	}
-
-	return "", "", nil
 }

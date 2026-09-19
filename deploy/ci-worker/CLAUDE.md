@@ -10,7 +10,7 @@ false sense of completeness (2026-07-26 — a green worker verdict was reported 
 as if it were a full pass):
 
 1. ~~**There is no `-race` gate here at all.**~~ **Fixed 2026-08-10 — there is now a `go-race`
-   gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 900s`,
+   gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 2700s`,
    `CGO_ENABLED=1` and DATA RACE carve-out verbatim; keep the two in lockstep, because a worker
    gate that measures something GitHub does not is how a green local verdict stops predicting the
    real one — including pr.yml's **flake filter**, which the gate initially shipped without and which
