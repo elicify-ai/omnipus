@@ -1578,19 +1578,31 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
       // onto the SAME never-reassigned binding. Require the same
       // never-mutated proof the imported branch below already carries.
       const localDeclaration = lexical?.declaration ?? topLevelConstDeclaration(unwrapped.text)
-      if (!localDeclaration || !absenceBindingUsesSafe(localDeclaration, false, true)) return null
+      // LEAD DECISION (round 3, derived-value escape proof): never-mutated
+      // (absenceBindingUsesSafe) is not enough — REC's own record binding
+      // being safe says nothing about a NESTED value read off it (`REC.a`)
+      // escaping into a container/call/return/reassignment elsewhere in
+      // scope and being mutated THROUGH that alias. See
+      // derivedValueEscapeSafe's doc comment.
+      if (!localDeclaration || !absenceBindingUsesSafe(localDeclaration, false, true) || !derivedValueEscapeSafe(localDeclaration, [local])) return null
       return local
     }
     const importedDecl = importedDeclaration(unwrapped, moduleContext)
     if (importedDecl && ts.isVariableDeclaration(importedDecl) && importedDecl.initializer
-      && (importedDecl.parent.flags & ts.NodeFlags.Const) && absenceBindingUsesSafe(importedDecl, false, true)
-      // LEAD DECISION (Finding 2 fix, round 2): never-mutated-in-its-own-module
-      // is not enough — a DIFFERENT importer can still mutate the exported
-      // record's members from its own `ts.SourceFile`, invisible to the
-      // check above. Require the same proof across every governed module.
-      && exportNeverMutatedByImporters(importedDecl, moduleContext)) {
+      && (importedDecl.parent.flags & ts.NodeFlags.Const) && absenceBindingUsesSafe(importedDecl, false, true)) {
       const imported = unwrapStatic(importedDecl.initializer)
-      if (imported && ts.isObjectLiteralExpression(imported)) return imported
+      const importedContainers = imported && ts.isObjectLiteralExpression(imported) ? [imported] : null
+      if (importedContainers
+        // LEAD DECISION (Finding 2 fix, round 2): never-mutated-in-its-own-module
+        // is not enough — a DIFFERENT importer can still mutate the exported
+        // record's members from its own `ts.SourceFile`, invisible to the
+        // check above. Require the same proof across every governed module.
+        // Round 3: exportNeverMutatedByImporters now also runs the
+        // derived-value escape proof per importer (containers threaded
+        // through); the EXPORTING module's own copy of that same proof
+        // still runs here too.
+        && exportNeverMutatedByImporters(importedDecl, moduleContext, importedContainers)
+        && derivedValueEscapeSafe(importedDecl, importedContainers)) return imported
     }
     return null
   }
@@ -1683,6 +1695,11 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     if (owner.declaration && !absenceBindingUsesSafe(owner.declaration, false, true)) return null
     const leaves = classCarryingLeaves(owner.expr)
     if (!leaves) return null
+    // Round 3: same derived-value escape proof as resolveRecordObjectLiteral
+    // — the identifier hop's binding being never-reassigned/mutated says
+    // nothing about a nested (non-primitive) value read off it escaping
+    // into a container/call/return/reassignment elsewhere in scope.
+    if (owner.declaration && !derivedValueEscapeSafe(owner.declaration, leaves)) return null
     let missingLeaf = false
     const values = []
     for (const leaf of leaves) {
@@ -1724,10 +1741,15 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
     // enough — a DIFFERENT importer can still mutate the exported record's
     // members from its own file, invisible to absenceBindingUsesSafe above.
     if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer
-      || !(declaration.parent.flags & ts.NodeFlags.Const) || !absenceBindingUsesSafe(declaration, false, true)
-      || !exportNeverMutatedByImporters(declaration, moduleContext)) return null
+      || !(declaration.parent.flags & ts.NodeFlags.Const) || !absenceBindingUsesSafe(declaration, false, true)) return null
     const object = unwrapStatic(declaration.initializer)
     if (!ts.isObjectLiteralExpression(object) || object.properties.some((property) => ts.isSpreadAssignment(property))) return null
+    // Round 3: derived-value escape proof — a nested (non-primitive)
+    // property value enumerated here can still escape into a container/
+    // call/return/reassignment elsewhere in scope, either in this file or
+    // (threaded through as `containers`) in the exporting module/another
+    // importer's own scope.
+    if (!exportNeverMutatedByImporters(declaration, moduleContext, [object]) || !derivedValueEscapeSafe(declaration, [object])) return null
     const values = []
     for (const property of object.properties) {
       if (ts.isPropertyAssignment(property)) values.push(property.initializer)
@@ -1799,7 +1821,27 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
       const declaration = lexical?.declaration ?? topLevelConstDeclaration(expression.text)
       if (!declaration || !absenceBindingUsesSafe(declaration, false, true)) return []
       const resolved = unwrapStatic(initializer)
-      return resolved ? localCandidates(resolved, seen) : []
+      if (!resolved) return []
+      // Round 3: derived-value escape proof — never-mutated (absenceBindingUsesSafe)
+      // proves nobody wrote through THIS binding's own name; it says nothing
+      // about a nested (non-primitive) value read off it (`REC.a`) escaping
+      // into a container/call/return/reassignment elsewhere in scope and
+      // being mutated through THAT alias instead (cross-scanner-false-green
+      // "array alias mutation of a nested object"). `containers` must be the
+      // FULLY reduced object-literal leaf set `resolved` structurally holds
+      // (classCarryingLeaves — the same general ternary/`??`/call/dynamic-
+      // index-into-another-record reducer classCarryingLeaves/resolveProvenPropertyAccess
+      // already use elsewhere in this file), NOT `resolved` itself: an
+      // unresolved intermediate shape (a ConditionalExpression like
+      // PolicyBadge's `inert ? {...} : {...}`, or a dynamic-key element
+      // access like `POLICY_CONFIGS[policy]`) is not a container
+      // derivedMemberTargets can traverse and was wrongly treated as an
+      // unresolvable escape (found via the round-3 lane audit comparison:
+      // PolicyBadge.tsx `cfg.activeColor`/`cfg.color`, TablePart.tsx
+      // `inertProps.className` — real-tree false positives, not real debt).
+      const structuralLeaves = classCarryingLeaves(resolved)
+      if (!derivedValueEscapeSafe(declaration, structuralLeaves && structuralLeaves.length > 0 ? structuralLeaves : [resolved])) return []
+      return localCandidates(resolved, seen)
     }
     if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
       const owners = localCandidates(expression.expression, new Set(seen))
@@ -2545,7 +2587,16 @@ function dynamicImportProvenNotOrigin(modulePath, argument, origin) {
 // assume safety — a dynamic import PROVABLY reaching some OTHER module is
 // not this record's concern (dynamicImportProvenNotOrigin above) and must
 // not poison every unrelated exported record in the governed tree.
-function exportNeverMutatedByImporters(declaration, context) {
+// `containers`, when supplied, is the record value(s) `declaration` is
+// already known (by the caller) to structurally hold — threaded through so
+// EACH importer's specifier binding also passes the round-3 derived-value
+// escape proof (parity with ts-colors.mjs's knownClassExportUsesSafe, which
+// pairs absenceBindingUsesSafe with knownClassDerivedUsesSafe per importer,
+// not just on the exporting declaration): a nested value read off a
+// never-reassigned import specifier can escape into a container/call/
+// return/reassignment in the IMPORTER's own scope exactly as it can in the
+// exporting module's scope.
+function exportNeverMutatedByImporters(declaration, context, containers = null) {
   const statement = declaration.parent?.parent
   if (!statement || !ts.isVariableStatement(statement)) return false
   if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return true
@@ -2568,7 +2619,7 @@ function exportNeverMutatedByImporters(declaration, context) {
       if (clause.name || (named && !ts.isNamedImports(named))) return false
       if (named) for (const specifier of named.elements) {
         if (specifier.isTypeOnly || (specifier.propertyName?.text ?? specifier.name.text) !== declaration.name.text) continue
-        if (!absenceBindingUsesSafe(specifier, false, true)) return false
+        if (!absenceBindingUsesSafe(specifier, false, true) || (containers && !derivedValueEscapeSafe(specifier, containers))) return false
       }
     }
     let dynamic = false
@@ -2639,7 +2690,13 @@ function resolveImportedExpression(node, context, seen = new Set()) {
     // (`LIBRARY_ICON_BTN`/`LINK_CLASS`/`priorityBadge.className`-shaped
     // constants newly, wrongly flagged unsupported).
     const isRecordLiteral = initializer && (ts.isObjectLiteralExpression(initializer) || ts.isArrayLiteralExpression(initializer))
-    if (isRecordLiteral && (!absenceBindingUsesSafe(declaration, false, true) || !exportNeverMutatedByImporters(declaration, context))) return null
+    // Round 3: derived-value escape proof, same as resolveRecordObjectLiteral
+    // — required alongside the never-mutated proofs above whenever the
+    // resolved value is a record whose nested members could carry a live
+    // reference out through a container/call/return/reassignment elsewhere
+    // in this (exporting) module's scope.
+    if (isRecordLiteral && (!absenceBindingUsesSafe(declaration, false, true) || !exportNeverMutatedByImporters(declaration, context, [initializer])
+      || !derivedValueEscapeSafe(declaration, [initializer]))) return null
     return resolveImportedExpression(initializer, context, seen) ?? initializer
   }
   if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
@@ -3028,6 +3085,173 @@ function absenceBindingUsesSafe(declaration, factory, indexedReads = false) {
           || ((ts.isForOfStatement(use) || ts.isForInStatement(use)) && use.initializer === expression)
           || ts.isDeleteExpression(use) || ts.isPrefixUnaryExpression(use) || ts.isPostfixUnaryExpression(use)
           || (ts.isCallExpression(use) && use.expression === expression)) { safe = false; return }
+      }
+    }
+    node.forEachChild(visit)
+  }
+  visit(scope)
+  return safe
+}
+
+// ---------------------------------------------------------------------------
+// Derived-value escape proof (round 3). Ported from ts-colors.mjs's
+// knownClassDerivedUsesSafe/primitiveLeaf/resolveMemberTargets — the leg
+// absenceBindingUsesSafe above deliberately does NOT cover: a nested
+// (non-primitive) value read off an already-trusted record is exactly as
+// mutable, through the SAME record binding, as a direct member write.
+// `const list = [REC.a]; list[0].cls = 'text-[10px]'` hands out a LIVE
+// reference to REC's own nested `{ cls }` object the instant `REC.a` is
+// evaluated — nothing about a property-write proof scanning for
+// assignment/delete/call syntax on the RECEIVER traces where that reference
+// is handed off to (cross-scanner-false-green.test.mjs "array alias
+// mutation of a nested object", the one remaining shared-suite failure this
+// round closes).
+//
+// A fixed literal value can never carry a mutable reference back to
+// anything (parity with ts-colors' primitiveLeaf base case) — a
+// ternary/`??`/`||` chain composed entirely of such leaves is exactly as
+// immutable. Deliberately narrower than absenceValue/classCarryingLeaves:
+// an object/array literal is NOT a safe leaf here, unlike those proofs —
+// it can still be captured by a separate alias and mutated elsewhere, which
+// is exactly the escape this proof exists to catch.
+function primitiveLeaf(value) {
+  value = unwrapStatic(value)
+  if (!value) return false
+  if (ts.isStringLiteralLike(value) || ts.isNumericLiteral(value) || ts.isTemplateExpression(value)
+    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(value.kind)) return true
+  if (ts.isConditionalExpression(value)) return primitiveLeaf(value.whenTrue) && primitiveLeaf(value.whenFalse)
+  if (ts.isBinaryExpression(value) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(value.operatorToken.kind)) {
+    return primitiveLeaf(value.left) && primitiveLeaf(value.right)
+  }
+  return false
+}
+
+// The static string/numeric key a single property/element access step
+// selects, or null when the key is dynamic/computed (unresolvable at that
+// step — derivedMemberTargets below enumerates every value in that case,
+// mirroring ts-colors' resolveMemberTargets dynamic-key fallback).
+function memberAccessKey(member) {
+  if (ts.isPropertyAccessExpression(member)) return member.name.text
+  const argument = member.argumentExpression ? unwrapStatic(member.argumentExpression) : null
+  return argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument) || ts.isNumericLiteral(argument)) ? argument.text : null
+}
+
+// Structural (safety-independent) resolution of ONE static-or-dynamic
+// property/element key step against a set of candidate container value
+// nodes, returning the resolved target node(s). A spread anywhere in a
+// candidate container, an omitted array element, or a non-container
+// candidate reached mid-chain all fail closed to null — always treated by
+// the caller as "not proven primitive" (requires capture), never as
+// absence. A dynamic key (key === null) enumerates every value the
+// container holds, the same live-reference risk Object.values/entries carry
+// (own doc comment on NESTED_REFERENCE_RETURNING_STATIC_METHODS in
+// ts-colors.mjs) — and the same reason a real dynamic-key record read like
+// `STATUS_BADGE[status].dot` must still resolve safely when its OWN further
+// static key (`dot`) is primitive on every branch.
+function derivedMemberTargets(containers, key) {
+  const next = []
+  for (const container of containers) {
+    const resolved = unwrapStatic(container)
+    if (!resolved) return null
+    if (ts.isObjectLiteralExpression(resolved)) {
+      if (resolved.properties.some((property) => ts.isSpreadAssignment(property))) return null
+      if (key === null) {
+        for (const property of resolved.properties) {
+          if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return null
+          next.push(ts.isPropertyAssignment(property) ? property.initializer : property.name)
+        }
+        continue
+      }
+      const value = objectProperty(resolved, key)
+      if (value) { next.push(value); continue }
+      // Proven-absent standard, parity with absenceValue elsewhere in this
+      // file (the LEAD DECISION ts-colors null-prototype standard): a
+      // property missing from a plain object literal is provably nothing
+      // to escape ONLY when the literal itself proves a null prototype —
+      // otherwise it is a non-null-prototype object any caller can extend,
+      // UNRESOLVED rather than proven-safe, and must fail closed exactly
+      // like any other unresolvable step (`return null`, not a silent skip).
+      if (absenceValue(resolved, key)) continue
+      return null
+    }
+    if (ts.isArrayLiteralExpression(resolved)) {
+      if (resolved.elements.some((element) => ts.isSpreadElement(element))) return null
+      if (key !== null && /^\d+$/.test(key)) {
+        const element = resolved.elements[Number(key)]
+        if (element && !ts.isOmittedExpression(element)) next.push(element)
+        else if (element) return null // an omitted array hole is unresolved, not proven-empty
+        continue // an out-of-bounds index on a literal array is provably nothing
+      }
+      for (const element of resolved.elements) {
+        if (ts.isOmittedExpression(element)) return null
+        next.push(element)
+      }
+      continue
+    }
+    return null
+  }
+  return next
+}
+
+// EVERY occurrence of `declaration`'s name used in a property/element-access
+// chain whose resolved target(s) (traced structurally from `containers` —
+// the record value(s) this declaration currently, provably, holds) are not
+// ALL primitive leaves must be captured — immediately, with nothing else in
+// between but a `??`/ternary fallback wrapper — by a fresh `const` variable
+// declaration whose OWN downstream uses recursively pass this same proof.
+// Placed into an array/object/Map/Set literal, passed as a call argument,
+// returned, assigned to an existing binding, or spread are all NOT that
+// shape (the climb below stops at the first non-property/element-access
+// parent, and the capture check that follows requires that parent to be
+// exactly a fresh `const` VariableDeclaration initializer) and fail closed.
+// Consumed purely as a JSX tag name is the one terminal-render exception
+// (isJsxTagName), matching the JSX-tag carve-out absenceBindingUsesSafe
+// already grants member reads.
+//
+// `targets === null` (derivedMemberTargets hit something structurally
+// unresolvable) always requires capture — conservative, "when in doubt,
+// treat it as an escape". `targets.length === 0`, by contrast, is ONLY ever
+// produced by derivedMemberTargets when every step that found nothing was
+// INDEPENDENTLY proven absent (the same null-prototype standard
+// absenceValue already enforces elsewhere in this file) — there is
+// genuinely nothing there to escape, so this does NOT require capture.
+// This is a deliberate, narrower reading than ts-colors.mjs's
+// knownClassDerivedUsesSafe (whose own resolveMemberTargets can return an
+// empty array for reasons OTHER than proven absence, so it must keep
+// `targets.length === 0` as a trigger) — needed here because typography's
+// resolveProvenPropertyAccess funnels its OWN already-proven-absent reads
+// (missingLeaf && absenceValue, e.g. "a helper whose branches ALL prove the
+// read property absent resolves as a safe no-op") through this same
+// `owner.declaration` gate; without this, a genuinely absent property was
+// wrongly relabelled unsupported by the derived-value escape proof itself.
+function derivedValueEscapeSafe(declaration, containers, seen = new Set()) {
+  if (!declaration.name || !ts.isIdentifier(declaration.name) || seen.has(declaration)) return false
+  const next = new Set(seen).add(declaration)
+  let scope = declaration.parent
+  while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+  if (!scope) return false
+  let safe = true
+  const visit = (node) => {
+    if (!safe) return
+    if (ts.isIdentifier(node) && node.text === declaration.name.text && node !== declaration.name) {
+      let member = node.parent
+      if ((ts.isPropertyAccessExpression(member) || ts.isElementAccessExpression(member)) && member.expression === node) {
+        const keys = [memberAccessKey(member)]
+        while ((ts.isPropertyAccessExpression(member.parent) || ts.isElementAccessExpression(member.parent)) && member.parent.expression === member) {
+          member = member.parent
+          keys.push(memberAccessKey(member))
+        }
+        let targets = containers
+        for (const key of keys) targets = targets ? derivedMemberTargets(targets, key) : null
+        if ((!targets || (targets.length > 0 && !targets.every((value) => primitiveLeaf(value)))) && !isJsxTagName(member)) {
+          let derived = member
+          while ((ts.isBinaryExpression(derived.parent) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(derived.parent.operatorToken.kind))
+            || (ts.isConditionalExpression(derived.parent) && (derived.parent.whenTrue === derived || derived.parent.whenFalse === derived))) derived = derived.parent
+          const alias = derived.parent
+          if (!ts.isVariableDeclaration(alias) || alias.initializer !== derived
+            || !(alias.parent.flags & ts.NodeFlags.Const) || !absenceBindingUsesSafe(alias, false, true)
+            || !targets || !derivedValueEscapeSafe(alias, targets, next)) { safe = false; return }
+        }
       }
     }
     node.forEachChild(visit)

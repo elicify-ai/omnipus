@@ -794,3 +794,62 @@ describe('independent review round 2: record-mutation and recursion-cycle guards
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// Round 3: derived-value escape proof (ported from ts-colors.mjs's
+// knownClassDerivedUsesSafe/primitiveLeaf — see derivedValueEscapeSafe's doc
+// comment in typography.mjs). Closes the one remaining shared-suite failure
+// tests/design-system-locks/cross-scanner-false-green.test.mjs flagged for
+// typography: `const list = [REC.a]; list[0].cls = 'text-[10px]'` hands out a
+// LIVE reference to REC's own nested `{ cls }` object the instant `REC.a` is
+// evaluated — the property-write proof alone (absenceBindingUsesSafe) only
+// watches the RECEIVER's own name, not where a nested read of it is handed
+// off to. Every FORBIDDEN case below is a different container/call/return
+// shape the same live reference can escape through; the PERMITTED case
+// proves an ordinary, non-escaping nested read still resolves.
+// ---------------------------------------------------------------------------
+describe('capability: derived-value escape proof (round 3 — nested record member escapes a mutable container)', () => {
+  it('FORBIDDEN: a nested record value placed into an array literal and mutated through the array alias fails closed', () => {
+    expectOne(
+      'const REC = { a: { cls: "text-sm" } }\nconst list = [REC.a]; list[0].cls = "text-[10px]"\nexport function V(){ return <i className={REC.a.cls}/> }',
+      'typography/unsupported-text-utility',
+      'REC.a.cls',
+    )
+  })
+
+  it('FORBIDDEN: a nested record value placed into an object-literal container property and mutated through that alias fails closed', () => {
+    expectOne(
+      'const REC = { a: { cls: "text-sm" } }\nconst box = { v: REC.a }; box.v.cls = "text-[10px]"\nexport function V(){ return <i className={REC.a.cls}/> }',
+      'typography/unsupported-text-utility',
+      'REC.a.cls',
+    )
+  })
+
+  it('FORBIDDEN: a nested record value placed into a Map and mutated through the Map alias fails closed', () => {
+    expectOne(
+      'const REC = { a: { cls: "text-sm" } }\nconst m = new Map([["a", REC.a]]); m.get("a").cls = "text-[10px]"\nexport function V(){ return <i className={REC.a.cls}/> }',
+      'typography/unsupported-text-utility',
+      'REC.a.cls',
+    )
+  })
+
+  it('FORBIDDEN: a nested record value passed to a local function that mutates it fails closed', () => {
+    expectOne(
+      'const REC = { a: { cls: "text-sm" } }\nfunction mutate(o) { o.cls = "text-[10px]" }\nmutate(REC.a)\nexport function V(){ return <i className={REC.a.cls}/> }',
+      'typography/unsupported-text-utility',
+      'REC.a.cls',
+    )
+  })
+
+  it('FORBIDDEN: a nested record value returned from a helper and then mutated through the returned alias fails closed', () => {
+    expectOne(
+      'const REC = { a: { cls: "text-sm" } }\nfunction getA() { return REC.a }\nconst x = getA(); x.cls = "text-[10px]"\nexport function V(){ return <i className={REC.a.cls}/> }',
+      'typography/unsupported-text-utility',
+      'REC.a.cls',
+    )
+  })
+
+  it('PERMITTED (positive control): an ordinary nested record read with no escape anywhere in scope still resolves cleanly', () => {
+    expectClean('const REC = { a: { cls: "flex items-center" } }\nexport function V(){ return <i className={REC.a.cls}/> }')
+  })
+})
