@@ -916,8 +916,19 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
     return
   }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
-    const targets = resolveMemberTargets(node, ctx, stack)
-    if (targets.length) for (const target of targets) inspectCssValueExpr(target, ctx, stack, boundary)
+    // A resolution tracker MUST be passed here (parity with inspectClassExpr's
+    // member-access branch): without one, resolveMemberTargets's fast
+    // single-target path (resolveMember) silently skips the spread/computed
+    // key incompleteness check that its own multi-object fallback performs,
+    // so a call-derived receiver with an opaque spread/computed key would
+    // resolve to whatever explicit property happens to exist and be reported
+    // clean instead of unsupported.
+    const resolution = { incomplete: false }
+    const targets = resolveMemberTargets(node, ctx, stack, resolution)
+    if (targets.length) {
+      for (const target of targets) inspectCssValueExpr(target, ctx, stack, boundary)
+      if (resolution.incomplete) emitUnsupported(ctx, node)
+    }
     else if (boundary && isDirectRuntimeRead(node) && boundary.owner !== 'anonymous') emitRuntimePaintBoundary(ctx, node, boundary)
     else emitUnsupported(ctx, node)
     return
@@ -1982,6 +1993,13 @@ function resolveDestructuredTargets(ident, ctx, stack) {
   const { declaration, key } = found
   const resolution = { incomplete: false }
   const objects = resolveToObjects(unwrap(declaration.initializer), ctx, stack, resolution)
+  // Same incompleteness rule resolveMemberTargets enforces for ordinary
+  // member access: a spread or computed key on ANY candidate object means
+  // ECMAScript could resolve the target property from an opaque runtime
+  // value (a later spread overrides an earlier explicit property), so the
+  // whole destructuring proof must be voided, not silently first-match-won.
+  if (objects.some(obj => obj.properties.some(member =>
+    !ts.isPropertyAssignment(member) || ts.isComputedPropertyName(member.name)))) resolution.incomplete = true
   if (resolution.incomplete || objects.length === 0) return { resolved: false }
   const targets = []
   for (const obj of objects) {
@@ -2104,7 +2122,15 @@ function collectReturns(declaration) {
 function functionReturns(call, ctx, stack) {
   const declaration = calleeDeclaration(call, ctx, stack)
   if (!isLocalFunction(declaration)) return null
-  const marker = `${declaration.getSourceFile().fileName}#${ts.isIdentifier(unwrap(call.expression)) ? unwrap(call.expression).text : declaration.pos}`
+  // Position-keyed on the resolved declaration (calleeDeclaration already
+  // performs proper scope-based identifier resolution) rather than the
+  // callee identifier's bare text — two distinct declarations that happen to
+  // share a name (e.g. a shadowed same-named local function) must not
+  // collide on this cycle-breaking marker. Keying on the declaration (not
+  // the call site) is intentional here, unlike the sibling object/array/call
+  // markers: this marker exists to break recursion through a shared callee,
+  // which every call site into that same declaration must detect alike.
+  const marker = `${declaration.getSourceFile().fileName}#${declaration.pos}`
   if (stack.has(marker)) return []
   stack.add(marker)
   const returns = collectReturns(declaration)
@@ -2119,7 +2145,10 @@ function functionReturns(call, ctx, stack) {
 function withCalleeFrame(call, ctx, stack, body) {
   const declaration = calleeDeclaration(call, ctx, stack)
   if (!isLocalFunction(declaration)) return null
-  const marker = `${declaration.getSourceFile().fileName}#${ts.isIdentifier(unwrap(call.expression)) ? unwrap(call.expression).text : declaration.pos}`
+  // Position-keyed on the resolved declaration — see functionReturns' marker
+  // comment for why this must be the declaration, not the callee text or the
+  // call site.
+  const marker = `${declaration.getSourceFile().fileName}#${declaration.pos}`
   if (stack.has(marker)) return []
   stack.add(marker)
   ctx.callFrames.push({ declaration, call })

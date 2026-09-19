@@ -1150,6 +1150,196 @@ test('an unproven-type numeric template is unaffected by the destructured-litera
   assert.deepEqual(findings.map((f) => f.ruleId), ['ts-colors/unsupported'])
 })
 
+// ── Round-3 fix: destructuring/member-access incompleteness parity ──────
+// Independent adversarial review (dist/design-system-baseline/cli-lanes/
+// claude-ts-colors-review/review.md, Finding 1 and Finding 2) found that
+// resolveDestructuredTargets did not reproduce resolveMemberTargets's
+// spread/computed-key incompleteness guard, and that inspectCssValueExpr's
+// plain property-access branch called resolveMemberTargets without a
+// resolution tracker at all — both let a real raw-colour override reach a
+// paint sink while the scanner reported the file completely clean. Every
+// test below is a false green on HEAD b57bd04a3 (confirmed via an isolated
+// probe against a frozen pre-fix copy of the scanner:
+// dist/design-system-baseline/cli-lanes/claude-ts-colors-fix3/red-check/).
+const spreadPolicy = { tokenCssNames: ['--color-safe'], resolvedTokens: {} }
+
+test('destructuring: an opaque spread AFTER a governed literal blocks in CLASS mode (Finding 1)', () => {
+  const source = [
+    "function fileTypeMeta(overrides) {",
+    "  return { color: 'text-[var(--color-safe)]', ...overrides }",
+    "}",
+    "export function View({ overrides }) {",
+    "  const { color } = fileTypeMeta(overrides)",
+    "  return <i className={color}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: spreadPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1,
+    'a spread sibling could override color at runtime — this must never resolve to a clean class value')
+})
+
+test('destructuring: an opaque spread AFTER a governed literal blocks in CSS-VALUE mode (Finding 1)', () => {
+  const source = [
+    "function fileTypeMeta(overrides) {",
+    "  return { color: 'var(--color-safe)', ...overrides }",
+    "}",
+    "export function View({ overrides }) {",
+    "  const { color } = fileTypeMeta(overrides)",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: spreadPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1,
+    'a spread sibling could override color at runtime — this must never resolve to a clean style value')
+})
+
+test('destructuring: an opaque spread AFTER a governed literal blocks through the CAP-B template-splice escape hatch (Finding 1)', () => {
+  const source = [
+    "function fileTypeMeta(overrides) {",
+    "  return { color: 'var(--color-safe)', ...overrides }",
+    "}",
+    "export function View({ overrides }) {",
+    "  const { color } = fileTypeMeta(overrides)",
+    "  return <i style={{ backgroundColor: `${color}22` }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: spreadPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === '`${color}22`').length, 1,
+    'the template base must never be trusted enough to splice when its source object carries an opaque spread')
+})
+
+test('plain member access on a call-derived object with an opaque spread blocks in CSS-VALUE mode (Finding 2)', () => {
+  // Same shape as the destructuring test above, read via `c.color` instead
+  // of `const { color } = ...` — this exercises inspectCssValueExpr's plain
+  // property-access branch directly, independent of resolveDestructuredTargets.
+  const source = [
+    "function fileTypeMeta(overrides) {",
+    "  return { color: 'var(--color-safe)', ...overrides }",
+    "}",
+    "export function View({ overrides }) {",
+    "  const c = fileTypeMeta(overrides)",
+    "  return <i style={{ color: c.color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: spreadPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'c.color').length, 1,
+    'CSS-value mode member access must apply the same incompleteness guard class mode already applies')
+})
+
+test('destructuring: a spread BEFORE the governed literal still blocks (order-agnostic parity with resolveMemberTargets)', () => {
+  // ECMAScript resolves this specific literal object safely (the later
+  // explicit `color` always wins over an earlier spread) — but
+  // resolveMemberTargets, the sibling function for plain member access,
+  // does not attempt order-aware reasoning either: ANY spread or computed
+  // key anywhere in a candidate object marks the whole resolution
+  // incomplete, regardless of position. Making destructuring order-aware
+  // while member access stays order-blind would itself be a soundness
+  // asymmetry between the two paths, so this stays unsupported by design.
+  const source = [
+    "import { dangerousOverrides } from '@/somewhere'",
+    "function fileTypeMeta() {",
+    "  return { ...dangerousOverrides, color: 'var(--color-safe)' }",
+    "}",
+    "export function View() {",
+    "  const { color } = fileTypeMeta()",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const destructured = scan({ path, source, policy: spreadPolicy })
+  const memberSource = source
+    .replace('const { color } = fileTypeMeta()', 'const c = fileTypeMeta()')
+    .replace('style={{ color }}', 'style={{ color: c.color }}')
+  const memberAccess = scan({ path, source: memberSource, policy: spreadPolicy })
+  assert.equal(destructured.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(memberAccess.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'c.color').length, 1)
+})
+
+test('destructuring: a nested spread (spread-of-a-spread) still blocks', () => {
+  // The immediate object literal's own property list already contains a
+  // SpreadAssignment member (`...{ ...dangerousOverrides }`), which is
+  // sufficient to trip the incompleteness guard without needing to recurse
+  // into what the inner spread itself contains.
+  const source = [
+    "import { dangerousOverrides } from '@/somewhere'",
+    "function fileTypeMeta() {",
+    "  return { color: 'var(--color-safe)', ...{ ...dangerousOverrides } }",
+    "}",
+    "export function View() {",
+    "  const { color } = fileTypeMeta()",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: spreadPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+})
+
+test('destructuring: a spread of a provably disjoint-key const literal still blocks (deliberately not proven safe — see comment)', () => {
+  // SAFE_EXTRA is a local const object literal with no 'color' key at all,
+  // so this specific spread genuinely cannot override `color` at runtime —
+  // in principle this case COULD be proven safe. It is deliberately NOT
+  // special-cased here: resolveMemberTargets (the sibling function this fix
+  // brings resolveDestructuredTargets into parity with) has no such
+  // per-key-disjointness proof either, and never inlines a spread's source
+  // to check it. Adding that proof only on the destructuring path would
+  // reopen exactly the class-of-asymmetry this fix exists to close, for a
+  // pattern with no evidence of real-world need (the spot-checked real
+  // factories in the tree use no spread at all). Fails closed, not guessed.
+  const source = [
+    "const SAFE_EXTRA = { label: 'x' }",
+    "function fileTypeMeta() {",
+    "  return { color: 'var(--color-safe)', ...SAFE_EXTRA }",
+    "}",
+    "export function View() {",
+    "  const { color } = fileTypeMeta()",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: spreadPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+})
+
+test('destructuring: a computed key that could dynamically alias the target property still blocks in CLASS mode, matching plain member access', () => {
+  const source = [
+    "function fileTypeMeta(dynamicKey) {",
+    "  return { color: 'text-[var(--color-safe)]', [dynamicKey]: 'text-red-500' }",
+    "}",
+    "export function View({ dynamicKey }) {",
+    "  const { color } = fileTypeMeta(dynamicKey)",
+    "  return <i className={color}/>",
+    "}",
+  ].join('\n')
+  const memberSource = [
+    "function fileTypeMeta(dynamicKey) {",
+    "  return { color: 'text-[var(--color-safe)]', [dynamicKey]: 'text-red-500' }",
+    "}",
+    "export function View({ dynamicKey }) {",
+    "  const meta = fileTypeMeta(dynamicKey)",
+    "  return <i className={meta.color}/>",
+    "}",
+  ].join('\n')
+  const destructured = scan({ path, source, policy: spreadPolicy })
+  const memberAccess = scan({ path, source: memberSource, policy: spreadPolicy })
+  assert.equal(destructured.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(memberAccess.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'meta.color').length, 1)
+})
+
+test('destructuring without any spread or computed key still resolves cleanly (regression pin — the fix must not over-block)', () => {
+  const source = [
+    "function fileTypeMeta(name) {",
+    "  if (name.endsWith('.pdf')) return { color: '#E5484D' }",
+    "  return { color: '#64748B' }",
+    "}",
+    "export function View({ entry }) {",
+    "  const { color } = fileTypeMeta(entry.filename)",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: spreadPolicy })
+  assert.deepEqual(
+    findings.map(({ ruleId, syntax }) => `${ruleId}|${syntax}`).sort(),
+    ['ts-colors/raw-color|#64748b', 'ts-colors/raw-color|#e5484d'],
+  )
+})
 
 // ── Pass-2 capability suite ─────────────────────────────────────────────
 // Six structural fixes to the "is this chained-member receiver stable"
