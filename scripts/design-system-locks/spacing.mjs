@@ -239,6 +239,8 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
       return
     }
     const dispatcher = resolveDispatcherMember(expr, ctx)
+      ?? resolveDestructuredDispatcherMember(expr, ctx)
+      ?? resolveRecordChainMember(expr, ctx)
     if (dispatcher) {
       if (dispatcher.allAbsent) return
       for (const value of dispatcher.values) visitClassBuilderArg(value, ctx, value.getSourceFile(), location)
@@ -247,6 +249,11 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     const resolved = resolveExpr(expr, ctx)
     if (resolved === UNRESOLVED_EXPR) {
       if (isCssModuleClassReference(expr, sourceFile)) return
+      const embeddingCall = chainHasDynamicElementAccess(expr) ? directClassBuilderCallEmbed(expr, ctx) : null
+      if (embeddingCall) {
+        pushFinding(ctx, RULE.unsupported, `className: ${embeddingCall.getText(sourceFile)}`, 'Unsupported spacing expression; a dynamic-key record read embedded directly in a class-builder call could not be proven safe.', withOrigin(location, embeddingCall))
+        return
+      }
       pushFinding(ctx, RULE.unsupported, `className: ${expr.getText(sourceFile)}`, 'Unsupported spacing expression; dynamic or cyclic class aliases cannot be verified against the D10 scale.', withOrigin(location, expr))
       return
     }
@@ -686,6 +693,20 @@ function dispatcherBindingUsesSafe(owner, declarationName, name) {
     if (!safe) return
     if (ts.isIdentifier(node) && node.text === name && node !== declarationName) {
       const parent = node.parent
+      // Ported from ts-colors.mjs::absenceBindingUsesSafe's own destructuring
+      // exemption (CAP-E2, colour pass-2): `const { Icon } = cfg` only ever
+      // READS cfg's own properties out into fresh bindings -- destructuring
+      // can never mutate cfg or hand out a live reference back into it, so it
+      // is exactly as safe as a `.member` read, not an escape. Without this,
+      // one unrelated sibling property consumed by destructuring (`Icon`,
+      // never itself a className) blanket-blocked every OTHER property drawn
+      // from the SAME dispatcher-result binding (`config.accentClass`,
+      // `config.pulse`). Scoped to a simple, non-rest, non-default pattern —
+      // mirrors destructuredPatternUsesSafe, but does not need to recurse
+      // into how each extracted local is later used: unlike a `.member`
+      // alias (which still holds a path back to cfg), a destructured local
+      // is a copied value with no path back to the receiver at all.
+      if (ts.isVariableDeclaration(parent) && parent.initializer === node && destructuredBindingPatternUsesSafe(parent.name)) return
       if ((!ts.isPropertyAccessExpression(parent) && !ts.isElementAccessExpression(parent)) || parent.expression !== node) { safe = false; return }
       const property = ts.isPropertyAccessExpression(parent) ? parent.name.text : null
       if (!property || ['__proto__', 'prototype', 'constructor'].includes(property)) { safe = false; return }
@@ -708,6 +729,18 @@ function dispatcherBindingUsesSafe(owner, declarationName, name) {
   }
   visit(owner.body)
   return safe
+}
+
+// Ported from ts-colors.mjs::destructuredPatternUsesSafe (CAP-E2). Only a
+// simple (non-rest, non-default, non-nested, unrenamed-or-renamed) object
+// binding pattern qualifies — a rest element could capture an unbounded,
+// unclassified slice of the receiver, a default value introduces its own
+// (unrelated) expression to prove, and a nested pattern is out of scope for
+// this narrow exemption.
+function destructuredBindingPatternUsesSafe(pattern) {
+  if (!ts.isObjectBindingPattern(pattern)) return false
+  return pattern.elements.every((element) => ts.isBindingElement(element)
+    && !element.dotDotDotToken && !element.initializer && ts.isIdentifier(element.name))
 }
 
 // Resolves `node` to the closed set of object literals it could evaluate to,
@@ -979,6 +1012,239 @@ function clauseReturnExpression(clause) {
   if (ts.isThrowStatement(last)) return leadingStatementsAreSafe() ? CLAUSE_NEVER_RETURNS : null
   if (!ts.isReturnStatement(last) || !last.expression) return null
   return leadingStatementsAreSafe() ? last.expression : null
+}
+
+// --- Capability port: dynamic-key record fan-out + ??/|| record-value
+// chaining. Purely additive alongside resolveDispatcherMember/
+// collectDispatchedObjectLiterals/dispatcherBindingUsesSafe above -- none of
+// those three is modified by anything below, so every existing switch/
+// ternary/IIFE-callee dispatcher test keeps exercising exactly the code it
+// always has. Ported capabilities:
+//   - ts-colors.mjs::resolveMemberTargets's ElementAccessExpression branch:
+//     a non-literal (dynamic) key against a directly-resolvable record
+//     cannot be narrowed to one property, so every one of the record's own
+//     property values becomes a candidate branch -- the P7 triage's named
+//     capability, closing the recurring `RECORD[dynamicKey]` shape
+//     (STATUS_BADGE[run.status], MODE_CHIP_CLASS[m], TONE_ICON_CLASS[copy.
+//     tone], sizeClasses[size], sideVariants[side], PRIORITY_CLASS[priority],
+//     PRIORITY_CONFIG[p], ...).
+//   - ts-colors.mjs::resolveToObjects's BinaryExpression (??/||) branch:
+//     either operand could be the live record-shaped value, so both
+//     contribute -- closes the recurring `const badge = PRIORITY_BADGE[a] ??
+//     PRIORITY_BADGE[b]` shape (ListView.tsx/TaskCard.tsx/
+//     CreateTaskSlideOver.tsx/TaskRunsList.tsx/TaskRunStatusField.tsx).
+// Neither ported capability is a wholesale rewrite of resolveExpr or the
+// dispatcher machinery: this is a SEPARATE, additive traversal that only
+// ever augments what those already prove, reusing their exact building
+// blocks (classifyDispatcherProperty, hasNullPrototypeLiteral,
+// dispatcherBindingUsesSafe, resolveExpr, isPrimitiveLeafNode) rather than
+// re-deriving any escape proof of its own.
+//
+// Escape safety (two tiers, matching whichever of this file's two existing
+// record-safety guards actually applies to the binding in question):
+//   - a MODULE-level (SourceFile-scoped) record identifier defers entirely
+//     to resolveExpr's own identifier branch -- round 4's recordBindingEscapes,
+//     the stricter, whole-module/whole-import-chain escape walk this file
+//     already uses for every other record read at that scope. Nothing here
+//     re-implements or loosens that guard; it is only ever consulted.
+//   - a FUNCTION-scoped alias bound to this chain's own result (`const badge
+//     = PRIORITY_BADGE[a] ?? PRIORITY_BADGE[b]`) is safe unconditionally
+//     when every one of its resolved candidates is a primitive leaf (a
+//     `const` primitive binding cannot itself carry a mutable reference back
+//     into the source record, however it is later read); when a candidate is
+//     still object-shaped (e.g. PRIORITY_BADGE's own `{ label, className }`
+//     branch, still reachable and mutable), the alias's own later uses are
+//     proven exactly like any other dispatcher-result binding, via
+//     dispatcherBindingUsesSafe (round 3), reused unmodified.
+// Returns null (never []) the instant any branch cannot be classified --
+// never a partial/best-effort subset, matching every other finite-branch
+// proof in this file.
+function resolveRecordChain(node, ctx, seen) {
+  const expr = unwrap(node)
+  if (!expr) return null
+  if (ts.isObjectLiteralExpression(expr)) return [expr]
+  if (ts.isConditionalExpression(expr)) {
+    const whenTrue = resolveRecordChain(expr.whenTrue, ctx, seen)
+    if (!whenTrue) return null
+    const whenFalse = resolveRecordChain(expr.whenFalse, ctx, seen)
+    if (!whenFalse) return null
+    return [...whenTrue, ...whenFalse]
+  }
+  if (ts.isBinaryExpression(expr) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(expr.operatorToken.kind)) {
+    const left = resolveRecordChain(expr.left, ctx, seen)
+    if (!left) return null
+    const right = resolveRecordChain(expr.right, ctx, seen)
+    if (!right) return null
+    return [...left, ...right]
+  }
+  if (ts.isCallExpression(expr)) return collectFiniteDispatcherReturns(expr, ctx, seen)
+  if (ts.isIdentifier(expr)) return resolveRecordChainIdentifier(expr, ctx, seen)
+  if (ts.isElementAccessExpression(expr) || ts.isPropertyAccessExpression(expr)) {
+    const propertyName = ts.isPropertyAccessExpression(expr) ? staticPropertyName(expr.name) : null
+    if (propertyName !== null && ['__proto__', 'prototype', 'constructor'].includes(propertyName)) return null
+    const keyExpr = ts.isElementAccessExpression(expr) ? unwrap(expr.argumentExpression) : null
+    const staticKey = propertyName ?? ((keyExpr && (ts.isStringLiteral(keyExpr) || ts.isNoSubstitutionTemplateLiteral(keyExpr) || ts.isNumericLiteral(keyExpr))) ? keyExpr.text : null)
+    const receivers = resolveRecordChain(expr.expression, ctx, seen)
+    if (!receivers) return null
+    const results = []
+    for (const receiver of receivers) {
+      if (!ts.isObjectLiteralExpression(receiver)) return null
+      if (staticKey !== null) {
+        const classified = classifyDispatcherProperty(receiver, staticKey)
+        if (classified.kind === 'unknown') return null
+        if (classified.kind === 'present') { results.push(classified.initializer); continue }
+        if (!hasNullPrototypeLiteral(receiver)) return null
+        continue
+      }
+      // Dynamic key: fan out over every enumerable branch -- the ported
+      // capability itself. A spread/method/getter/computed-key branch could
+      // shadow an arbitrary key, so it aborts the whole proof rather than
+      // being silently skipped.
+      for (const prop of receiver.properties) {
+        if (ts.isShorthandPropertyAssignment(prop)) { results.push(prop.name); continue }
+        if (!ts.isPropertyAssignment(prop) || ts.isComputedPropertyName(prop.name)) return null
+        results.push(prop.initializer)
+      }
+    }
+    return results.length ? results : null
+  }
+  return null
+}
+
+function resolveRecordChainIdentifier(identifier, ctx, seen) {
+  const binding = findLexicalBinding(identifier, identifier.text)
+  if (binding && binding.initializer && ts.isVariableDeclaration(binding.declaration) && isConstVariableDeclaration(binding.declaration)) {
+    if (seen.has(binding.declaration)) return null // cycle guard, keyed on the declaration (not the occurrence) — see resolveRecordChain's own header comment
+    let owner = binding.declaration.parent
+    while (owner && !ts.isFunctionLike(owner)) owner = owner.parent
+    if (owner) {
+      const next = new Set(seen); next.add(binding.declaration)
+      const candidates = resolveRecordChain(binding.initializer, ctx, next)
+      if (!candidates) return null
+      if (candidates.every((value) => isPrimitiveLeafNode(value))) return candidates
+      if (!dispatcherBindingUsesSafe(owner, binding.declaration.name, identifier.text)) return null
+      return candidates
+    }
+  }
+  // Module-level (SourceFile-scoped) or cross-module record: defer entirely
+  // to resolveExpr's own identifier branch (round 4's recordBindingEscapes).
+  const resolved = resolveExpr(identifier, ctx, new Set())
+  if (resolved === UNRESOLVED_EXPR || !resolved || resolved === identifier) return null
+  if (ts.isObjectLiteralExpression(resolved)) return [resolved]
+  return null
+}
+
+// Top-level entry point, wired alongside resolveDispatcherMember in
+// visitClassBuilderArg: `expr` may be a bare identifier (`badgeClass`, once
+// its own chain resolves to nothing but primitive leaves), or a `.prop`/
+// `[key]` access on top of one (`badge.className`, `TONE_ICON_CLASS[copy.
+// tone]`, `PRIORITY_CONFIG[p]?.color`).
+function resolveRecordChainMember(expr, ctx) {
+  const values = resolveRecordChain(expr, ctx, new Set())
+  if (!values || values.length === 0) return null
+  return { allAbsent: false, values }
+}
+
+// SP-RECOVER completion (not present in the lost session's own log — its
+// last probe of this exact shape errored on a concurrent `npm ci` corrupting
+// node_modules before it ever got a real result back; see the recovery
+// evidence dir for the transcript). Neither resolveRecordChain's own
+// dynamic-key fan-out nor recordBindingEscapes/dynamicTailEmbedIsSafe (both
+// faithfully recovered from the session log) push a finding themselves --
+// they only ever return null/UNRESOLVED_EXPR and let visitClassBuilderArg's
+// generic UNRESOLVED_EXPR fallback report `expr.getText()`, i.e. the bare
+// `sizeClasses[size]` fragment. The orphaned tests in this port's own diff
+// (spacing.test.mjs's "dynamic-key record read passed as a bare
+// class-builder argument" describe block) instead expect the finding
+// attributed to the WHOLE class-builder call
+// (`cn('base', sizeClasses[size])`), mirroring the one PRE-EXISTING
+// precedent in this file for call-level attribution (the reassigned
+// call-expression alias case, "still drills into a reassigned `let`
+// call-expression alias..." in spacing-adversarial.test.mjs, which resolves
+// THROUGH to `cn(...)`'s own text via recursion). Scoped narrowly to avoid
+// touching the many EXISTING passing tests that embed a *pure* property
+// chain with no dynamic element access directly in a class-builder call and
+// expect the bare chain's own text (`config.textClass`, not the call) --
+// chainHasDynamicElementAccess requires an actual non-literal `[key]` hop
+// somewhere in the chain, which none of those cases have.
+function chainHasDynamicElementAccess(node) {
+  let current = unwrap(node)
+  while (current) {
+    if (ts.isPropertyAccessExpression(current)) { current = unwrap(current.expression); continue }
+    if (ts.isElementAccessExpression(current)) {
+      const keyExpr = unwrap(current.argumentExpression)
+      const staticKey = keyExpr && (ts.isStringLiteral(keyExpr) || ts.isNoSubstitutionTemplateLiteral(keyExpr) || ts.isNumericLiteral(keyExpr))
+      if (!staticKey) return true
+      current = unwrap(current.expression)
+      continue
+    }
+    return false
+  }
+  return false
+}
+
+function directClassBuilderCallEmbed(node, ctx) {
+  const parent = node.parent
+  if (!parent || !ts.isCallExpression(parent) || !parent.arguments.includes(node)) return null
+  if (!CLASS_BUILDERS.has(calleeName(parent.expression)) && !guardClassBuilder(parent.expression, ctx)) return null
+  return parent
+}
+
+// --- Capability port: destructured-member resolution through a provably-
+// finite dispatcher call (ts-colors.mjs's CAP-A: "destructured-member
+// resolution through a provably-finite object source", e.g. `const { color }
+// = fileTypeMeta(...)`). `resolveDispatcherMember` above only fires for a
+// PropertyAccessExpression (`x.prop`); `const { className } =
+// describeNonActiveState(status)` never reaches it at all, because the READ
+// SITE is the bare local `className`, not a further `.prop` access — the
+// destructuring already performed the member extraction at the DECLARATION.
+// `destructuredDispatcherElement` finds that declaration (mirroring
+// findLexicalBinding's own nearest-enclosing-block walk, restricted to a
+// simple — non-rest, non-default, non-nested — object-binding element) and
+// `resolveDestructuredDispatcherMember` classifies the extracted property
+// across the SAME finite-dispatcher call resolution
+// (collectDispatchedObjectLiterals, reused unmodified) resolveDispatcherMember
+// already uses for the property-access shape. No additional escape guard is
+// needed for the destructured local itself: unlike a `.member` alias (which
+// still holds a live path back to the receiver), destructuring COPIES a
+// value out — there is no path back into the dispatcher's return object for
+// anything done to the local afterward, and the local's own binding is
+// `const` (enforced below), so it cannot be reassigned either.
+function destructuredDispatcherElement(identifier) {
+  const name = identifier.text
+  for (let scope = identifier.parent; scope; scope = scope.parent) {
+    if (ts.isFunctionLike(scope) && scope.parameters.some((parameter) => findNamedBinding(parameter.name, name))) return null
+    if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue
+    for (const statement of scope.statements) {
+      if (!ts.isVariableStatement(statement)) continue
+      for (const declaration of statement.declarationList.declarations) {
+        if (!isConstVariableDeclaration(declaration) || !declaration.initializer || !ts.isObjectBindingPattern(declaration.name)) continue
+        for (const element of declaration.name.elements) {
+          if (!ts.isBindingElement(element) || element.dotDotDotToken || element.initializer || !ts.isIdentifier(element.name) || element.name.text !== name) continue
+          return { element, source: declaration.initializer }
+        }
+      }
+    }
+  }
+  return null
+}
+
+function resolveDestructuredDispatcherMember(expr, ctx) {
+  if (!ts.isIdentifier(expr)) return null
+  const found = destructuredDispatcherElement(expr)
+  if (!found) return null
+  const propertyName = found.element.propertyName ? staticPropertyName(found.element.propertyName) : found.element.name.text
+  if (propertyName === null || ['__proto__', 'prototype', 'constructor'].includes(propertyName)) return null
+  const objects = collectDispatchedObjectLiterals(found.source, ctx, new Set())
+  if (!objects || objects.length === 0) return null
+  const values = []
+  for (const obj of objects) {
+    const classified = classifyDispatcherProperty(obj, propertyName)
+    if (classified.kind === 'unknown') return null
+    if (classified.kind === 'present') { values.push(classified.initializer); continue }
+    if (!hasNullPrototypeLiteral(obj)) return null
+  }
+  return { allAbsent: values.length === 0, values }
 }
 
 function visitClassObject(expr, ctx, sourceFile) {
@@ -1799,6 +2065,67 @@ function structuralValueAtPath(root, path) {
   return current
 }
 
+// Companion to chainPropertyPath/structuralValueAtPath for
+// recordBindingEscapes's container-escape check, closing a gap the dynamic-
+// key fan-out capability (resolveRecordChain, above) exposed: the MOST
+// COMMON real shape for a dynamic-key record read is `cn(RECORD[dynamicKey])`
+// -- passed straight into a class-builder call as a bare argument, which
+// recordBindingEscapes's embeds check requires to structurally prove a
+// PRIMITIVE at one exact path. chainPropertyPath cannot express a dynamic
+// key at all (it has no static string to push), so every such embed
+// unconditionally failed the primitive proof and blocked resolution, even
+// though the record itself is exactly as safe as any other primitive-only
+// record. This does not touch chainPropertyPath/structuralValueAtPath's own
+// contract or loosen the primitive-leaf requirement anywhere -- it is a
+// SEPARATE, narrower proof tried only as a fallback: every segment up to
+// (not including) the FINAL hop must still be a fully static path, and that
+// final hop must be a dynamic ElementAccessExpression landing exactly on
+// `climbed` (i.e., nothing else happens to the dynamically-selected value
+// before the embed) -- when so, the embedded value is SOME property of the
+// object literal the static prefix resolves to, safe to embed exactly when
+// EVERY one of that object's own properties is independently a primitive
+// leaf (mirrors this file's dynamic-key fan-out capability's own "no call
+// name is safe to whitelist... only a primitive leaf" contract, applied at
+// the embed site instead of the read site). A spread/method/getter/
+// computed-key branch, or any non-primitive property, still fails closed.
+function dynamicTailEmbedIsSafe(occurrence, climbed, rootInitializer) {
+  const path = []
+  let current = occurrence
+  while (current !== climbed) {
+    const parent = current.parent
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === current) {
+      path.push(parent.name.text)
+      current = parent
+      continue
+    }
+    if (ts.isElementAccessExpression(parent) && parent.expression === current) {
+      const keyExpr = unwrap(parent.argumentExpression)
+      const key = keyExpr && (ts.isStringLiteral(keyExpr) || ts.isNoSubstitutionTemplateLiteral(keyExpr) || ts.isNumericLiteral(keyExpr))
+        ? keyExpr.text
+        : null
+      if (key === null) {
+        if (parent !== climbed) return false // a dynamic key must be the FINAL hop to qualify for this proof
+        const target = structuralValueAtPath(rootInitializer, path)
+        if (!target || !ts.isObjectLiteralExpression(target)) return false
+        return target.properties.every((prop) => {
+          if (ts.isShorthandPropertyAssignment(prop)) return isPrimitiveLeafNode(prop.name)
+          if (!ts.isPropertyAssignment(prop) || ts.isComputedPropertyName(prop.name)) return false
+          return isPrimitiveLeafNode(prop.initializer)
+        })
+      }
+      path.push(key)
+      current = parent
+      continue
+    }
+    if (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isNonNullExpression(parent)) {
+      current = parent
+      continue
+    }
+    return false
+  }
+  return false // reached climbed via a fully-static path -- chainPropertyPath already covers that case; nothing new to prove here
+}
+
 // Nearest enclosing Block/SourceFile a binding's mutations could occur in --
 // same shape as the declaration-scope walks already used throughout this
 // file (e.g. wholeValueWritesAbsent's sibling in ts-colors.mjs). A parameter
@@ -1875,7 +2202,7 @@ function recordBindingEscapes(scope, name, rootInitializer, cacheKey) {
       if (embeds) {
         const path = chainPropertyPath(node, climbed)
         const value = path && rootInitializer ? structuralValueAtPath(rootInitializer, path) : null
-        if (!value || !isPrimitiveLeafNode(value)) { unsafe = true; return }
+        if ((!value || !isPrimitiveLeafNode(value)) && !dynamicTailEmbedIsSafe(node, climbed, rootInitializer)) { unsafe = true; return }
       }
       return
     }
@@ -1888,6 +2215,94 @@ function recordBindingEscapes(scope, name, rootInitializer, cacheKey) {
     byScope.set(scope, unsafe)
   }
   return unsafe
+}
+
+// SP-FALSE-GREEN fix (lead review of SP-RECOVER): ported from
+// ts-colors.mjs::knownClassExportUsesSafe and its dynamic-import helper
+// (dynamicImportProvenNotOrigin, simplified below to a fail-closed check --
+// this file has no existing template-literal-head analysis to reuse and the
+// repro shapes this closes never need one). recordBindingEscapes above only
+// ever walks ONE scope: the declaring module (for a same-file read) or the
+// reading module (for an already-imported read). Neither walk looks at
+// OTHER files in the `modules` context that import the SAME exported record
+// and mutate it there -- an `export let`/`export const` record is reachable
+// from any module via a named import, a namespace import, or a re-export.
+// This is the missing check: for an EXPORTED record declaration, walk every
+// JS/TS module in `ctx.modules`, and for each one that imports from the
+// declaring module, either recurse into recordBindingEscapes for a named
+// import's own local binding (reusing the exact same escape/mutation proof
+// already used for the direct-importer case), or fail closed outright for a
+// namespace import, a re-export, or a dynamic import()/require() that could
+// resolve to the origin -- none of those can be traced by this scanner. A
+// declaration with no `export` modifier returns true immediately (nothing
+// to check); a missing `modules` context on an exported declaration returns
+// false (fail closed -- matches ts-colors' own ordering).
+const EXPORTED_RECORD_SAFE_CACHE = new WeakMap()
+
+function isJsModulePath(modulePath) {
+  const ext = path.posix.extname(modulePath).toLowerCase()
+  return ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx'
+}
+
+function recordExportedUsesSafe(declaration, ctx, rootInitializer) {
+  if (!ts.isVariableDeclaration(declaration) || !ts.isIdentifier(declaration.name)) return true
+  const statement = declaration.parent?.parent
+  if (!statement || !ts.isVariableStatement(statement) || !statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) return true
+  if (EXPORTED_RECORD_SAFE_CACHE.has(declaration)) return EXPORTED_RECORD_SAFE_CACHE.get(declaration)
+  const result = computeRecordExportedUsesSafe(declaration, ctx, rootInitializer)
+  EXPORTED_RECORD_SAFE_CACHE.set(declaration, result)
+  return result
+}
+
+function computeRecordExportedUsesSafe(declaration, ctx, rootInitializer) {
+  if (!ctx.modules) return false
+  const origin = declaration.getSourceFile().fileName
+  const exportedName = declaration.name.text
+  for (const modulePath of Object.keys(ctx.modules)) {
+    if (!isJsModulePath(modulePath)) continue
+    const record = moduleRecord(ctx, modulePath)
+    if (!record?.valid) return false
+    for (const item of record.sourceFile.statements) {
+      if ((!ts.isImportDeclaration(item) && !ts.isExportDeclaration(item)) || !item.moduleSpecifier || !ts.isStringLiteral(item.moduleSpecifier)) continue
+      if (governedModulePath(modulePath, item.moduleSpecifier.text, ctx.modules) !== origin) continue
+      if (ts.isExportDeclaration(item)) {
+        // A re-export (`export { M } from './P'`/`export * from './P'`)
+        // hands the record to WHATEVER re-imports it from here, arbitrarily
+        // far downstream -- untraceable, so it fails closed unconditionally
+        // (a type-only re-export carries no runtime value to mutate).
+        if (!item.isTypeOnly) return false
+        continue
+      }
+      const clause = item.importClause
+      if (!clause || clause.isTypeOnly) continue
+      const bindings = clause.namedBindings
+      // A default import binding on this statement, or a namespace import
+      // (`* as NS`) instead of named imports, cannot be traced by name at
+      // all -- fail closed exactly like ts-colors' own check.
+      if (clause.name || (bindings && !ts.isNamedImports(bindings))) return false
+      if (bindings) for (const specifier of bindings.elements) {
+        if (specifier.isTypeOnly || (specifier.propertyName?.text ?? specifier.name.text) !== exportedName) continue
+        if (recordBindingEscapes(record.sourceFile, specifier.name.text, rootInitializer, specifier)) return false
+      }
+    }
+    let dynamic = false
+    const visitDynamic = (node) => {
+      if (dynamic) return
+      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
+        const argument = node.arguments[0]
+        const literal = argument ? unwrap(argument) : null
+        if (!argument) dynamic = true
+        else if (literal && (ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal))) {
+          if (governedModulePath(modulePath, literal.text, ctx.modules) === origin) dynamic = true
+        } else dynamic = true // any non-literal dynamic import()/require() argument is conservatively treated as possibly-origin
+      }
+      if (!dynamic) ts.forEachChild(node, visitDynamic)
+    }
+    visitDynamic(record.sourceFile)
+    if (dynamic) return false
+  }
+  return true
 }
 
 function resolveExpr(expr, ctx, seen = new Set()) {
@@ -1917,6 +2332,11 @@ function resolveExpr(expr, ctx, seen = new Set()) {
     if (literalRoot && binding) {
       const scope = recordDeclarationScope(resolvedBinding.declaration)
       if (recordBindingEscapes(scope, node.text, literalRoot, resolvedBinding.declaration)) return UNRESOLVED_EXPR
+      // Same-file declaration and read: the walk above only ever sees THIS
+      // module. If the declaration is itself exported, a DIFFERENT module in
+      // `ctx.modules` can still import and mutate it without ever touching
+      // this file at all (SP-FALSE-GREEN fix) -- check every importer too.
+      if (!recordExportedUsesSafe(resolvedBinding.declaration, ctx, literalRoot)) return UNRESOLVED_EXPR
     } else if (literalRoot && imported) {
       // The LOCAL import specifier's own binding, scoped to the whole
       // IMPORTING module -- `SIZES.small = '...'`/`Object.values(SIZES)...`
@@ -1934,6 +2354,9 @@ function resolveExpr(expr, ctx, seen = new Set()) {
         const exportingScope = exportingDeclaration.getSourceFile()
         if (recordBindingEscapes(exportingScope, exportingDeclaration.name.text, literalRoot, exportingDeclaration)) return UNRESOLVED_EXPR
       }
+      // A THIRD module (neither this reader nor the declaring module) can
+      // also import and mutate the same export (SP-FALSE-GREEN fix).
+      if (!recordExportedUsesSafe(resolvedBinding.declaration, ctx, literalRoot)) return UNRESOLVED_EXPR
     } else if (binding && isReassignedWithin(node.getSourceFile(), node.text)) {
       return UNRESOLVED_EXPR
     }
@@ -2193,10 +2616,27 @@ function calleeName(expr) {
   return ''
 }
 
+// Ported from ts-colors.mjs::propertyNameOf's ComputedPropertyName branch: a
+// computed key (`[expr]: value`) that is itself a string literal — only
+// wrapped in a type assertion the real codebase actually uses to satisfy a
+// CSSProperties-style index signature, e.g. `['--kb-reading-measure' as
+// string]: '72ch'` — is exactly as static as an ordinary quoted key once the
+// assertion is stripped via `unwrap`. Deliberately does NOT recurse into
+// this same function for the unwrapped expression (that would wrongly
+// resolve a bare identifier reference, e.g. `[key]: value`, to the
+// identifier's own NAME as if it were the key's runtime VALUE — the exact
+// distinction ts-colors.mjs's propertyNameOf preserves by checking only for
+// a StringLiteral/NoSubstitutionTemplateLiteral directly, never recursing).
+// A numeric literal is deliberately excluded too, matching ts-colors.mjs
+// exactly, not a proven-safe shape to add on top of the ported capability.
 function staticPropertyName(name) {
   if (!name) return null
   if (ts.isIdentifier(name) || ts.isPrivateIdentifier(name)) return name.text
   if (ts.isStringLiteral(name) || ts.isNumericLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) return name.text
+  if (ts.isComputedPropertyName(name)) {
+    const expr = unwrap(name.expression)
+    if (expr && (ts.isStringLiteral(expr) || ts.isNoSubstitutionTemplateLiteral(expr))) return expr.text
+  }
   return null
 }
 

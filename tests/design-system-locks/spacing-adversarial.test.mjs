@@ -719,3 +719,205 @@ describe('record-binding escape guard is scoped to record-shaped initializers on
     expectClean('src/components/Adversarial.tsx', source, 'Object.freeze-wrapped record initializer')
   })
 })
+
+describe('dynamic-key record fan-out — adversarial shapes (closes STATUS_BADGE[run.status]-shaped unsupported debt)', () => {
+  const scanConsumer = (source, extraModules = {}) => scan({
+    path: 'src/components/Adversarial.tsx',
+    source,
+    policy: POLICY,
+    modules: { 'src/components/Adversarial.tsx': source, ...extraModules },
+  })
+
+  it('aborts the whole fan-out when one branch is a spread (cannot rule out a shadowed key)', () => {
+    const source = "const base = { a: 'p-[var(--space-2)]' }\nconst REC = { ...base, b: 'p-[var(--space-2)]' }\nexport function V({k}){ return <i className={REC[k]}/> }"
+    assert.deepEqual(scanConsumer(source).map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC[k]' }])
+  })
+
+  it('aborts the whole fan-out when one branch has a computed key (cannot rule out a match)', () => {
+    const source = "const key = 'b'\nconst REC = { a: 'p-[var(--space-2)]', [key]: 'p-[var(--space-2)]' }\nexport function V({k}){ return <i className={REC[k]}/> }"
+    assert.deepEqual(scanConsumer(source).map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC[k]' }])
+  })
+
+  it('aborts the whole fan-out when one branch is a method (not a plain data property)', () => {
+    const source = "const REC = { a: 'p-[var(--space-2)]', b() { return '' } }\nexport function V({k}){ return <i className={REC[k]}/> }"
+    assert.deepEqual(scanConsumer(source).map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC[k]' }])
+  })
+
+  it('still catches a mutation of the record after its declaration even though the read uses a dynamic key (round 4 guard composes with the new fan-out)', () => {
+    const source = "const REC = { a: 'p-[var(--space-2)]', b: 'p-[var(--space-3)]' }\nREC.a = 'p-[7px]'\nexport function V({k}){ return <i className={REC[k]}/> }"
+    assert.deepEqual(scanConsumer(source).map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC[k]' }])
+  })
+
+  it('resolves a shorthand-property branch through the dynamic-key fan-out', () => {
+    const a = 'p-[var(--space-2)]'
+    void a
+    const source = "const a = 'p-[var(--space-2)]'\nconst REC = { a, b: 'p-[var(--space-3)]' }\nexport function V({k}){ return <i className={REC[k]}/> }"
+    expectClean('src/components/Adversarial.tsx', source, 'shorthand branch resolves like an ordinary property')
+  })
+
+  it('resolves a cross-module dynamic-key record cleanly when every branch is on-scale', () => {
+    const result = scanConsumer("import { REC } from '../lib/rec'\nexport function V({k}){ return <i className={REC[k]}/> }", {
+      'src/lib/rec.ts': "export const REC = { a: 'p-[var(--space-2)]', b: 'p-[var(--space-3)]' }",
+    })
+    assert.deepEqual(result, [])
+  })
+})
+
+describe('destructured-member resolution — adversarial shapes (CAP-A port scope limits)', () => {
+  const fixturePath = 'src/components/Fixture.tsx'
+  const helper = "function describeState(state) {\n  switch (state) {\n    case 'a': return { className: 'p-[7px]' }\n    default: return { className: 'p-[8px]' }\n  }\n}\n"
+
+  const runWith = (source) => scan({ path: fixturePath, source: helper + source, policy: POLICY, modules: { [fixturePath]: helper + source } })
+
+  it('keeps a rest-destructured local unsupported (cannot bound what the rest captures)', () => {
+    const source = "export const X = ({state}) => { const { ...rest } = describeState(state); return <p className={rest.className}/> }"
+    const findings = runWith(source)
+    assert.ok(findings.some((f) => f.ruleId === 'spacing/unsupported'), 'a rest element must not be resolved by the destructuring capability')
+  })
+
+  it('keeps a defaulted destructured local unsupported (the default introduces its own unproven expression)', () => {
+    const source = "export const X = ({state}) => { const { className = 'p-[7px]' } = describeState(state); return <p className={className}/> }"
+    assert.deepEqual(runWith(source).filter((f) => f.ruleId === 'spacing/unsupported').map((f) => f.syntax), ['className: className'])
+  })
+
+  it('keeps a nested-pattern destructured local unsupported', () => {
+    const helperNested = "function describeState(state) {\n  switch (state) {\n    case 'a': return { style: { className: 'p-[7px]' } }\n    default: return { style: { className: 'p-[8px]' } }\n  }\n}\n"
+    const source = "export const X = ({state}) => { const { style: { className } } = describeState(state); return <p className={className}/> }"
+    const result = scan({ path: fixturePath, source: helperNested + source, policy: POLICY, modules: { [fixturePath]: helperNested + source } })
+    assert.deepEqual(result.filter((f) => f.ruleId === 'spacing/unsupported').map((f) => f.syntax), ['className: className'])
+  })
+
+  it('keeps a shadowing function parameter of the same name from being mistaken for the destructured local', () => {
+    const source = "export const X = ({state}) => { const { className } = describeState(state); return <Inner className={className}/> }\nfunction Inner({className}) { return <p className={className}/> }"
+    const result = runWith(source)
+    // Inner's OWN `className` is a forwarded parameter (extension-boundary), not a dispatcher destructure — must not collapse the two proofs.
+    assert.ok(result.some((f) => f.ruleId === 'spacing/extension-boundary'), 'Inner must still be classified as a forwarded className parameter')
+  })
+})
+
+describe('dispatcherBindingUsesSafe destructuring exemption — adversarial shapes (CAP-E2 port scope limits)', () => {
+  const fixturePath = 'src/components/Fixture.tsx'
+  const getConfigHelper = "function getConfig(s) { switch (s) { case 'a': return { accentClass: 'p-[7px]', Icon: 1 }; default: return { accentClass: 'p-[8px]', Icon: 2 } } }\n"
+  const runWith = (source) => scan({ path: fixturePath, source: getConfigHelper + source, policy: POLICY, modules: { [fixturePath]: getConfigHelper + source } })
+
+  it('resolves a sibling property once an unrelated property is consumed only via simple destructuring', () => {
+    const source = "export function V({status}) { const cfg = getConfig(status); const { Icon } = cfg; void Icon; return <div className={cfg.accentClass}/> }"
+    const findings = runWith(source)
+    assert.deepEqual(findings.filter((f) => f.ruleId === 'spacing/unsupported'), [])
+    assert.deepEqual(findings.filter((f) => f.ruleId === 'spacing/off-scale').map((f) => f.syntax), ['p-[7px]'])
+  })
+
+  it('keeps the receiver blocking when the destructuring pattern itself is a rest capture', () => {
+    const source = "export function V({status}) { const cfg = getConfig(status); const { ...rest } = cfg; void rest; return <div className={cfg.accentClass}/> }"
+    assert.deepEqual(runWith(source).filter((f) => f.ruleId === 'spacing/unsupported').map((f) => f.syntax), ['className: cfg.accentClass'])
+  })
+
+  it('keeps the receiver blocking when the destructuring pattern has a default value', () => {
+    const source = "export function V({status}) { const cfg = getConfig(status); const { Icon = 1 } = cfg; void Icon; return <div className={cfg.accentClass}/> }"
+    assert.deepEqual(runWith(source).filter((f) => f.ruleId === 'spacing/unsupported').map((f) => f.syntax), ['className: cfg.accentClass'])
+  })
+})
+
+describe('computed property name resolution — adversarial shapes (staticPropertyName port scope limits)', () => {
+  it('keeps a non-literal computed style key unsupported (identifier expression, not a string literal)', () => {
+    const findings = scan({
+      path: 'src/x.tsx',
+      source: "const key = 'padding'\nexport const X = () => <div style={{ [key]: '13px' }}/>",
+      policy: POLICY,
+    })
+    assert.deepEqual(findings.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: '[computed]' }])
+  })
+
+  it('keeps a template-literal-with-substitution computed key unsupported', () => {
+    const findings = scan({
+      path: 'src/x.tsx',
+      source: "const side = 'Top'\nexport const X = () => <div style={{ [`padding${side}`]: '13px' }}/>",
+      policy: POLICY,
+    })
+    assert.deepEqual(findings.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: '[computed]' }])
+  })
+
+  it('resolves a computed key that is a plain quoted string literal (no assertion needed)', () => {
+    const findings = scan({
+      path: 'src/x.tsx',
+      source: "export const X = () => <div style={{ ['padding']: '13px' }}/>",
+      policy: POLICY,
+    })
+    assert.deepEqual(syntaxes(findings, 'spacing/off-scale'), ['padding: 13px'])
+  })
+})
+
+describe('exported record readable from another module — false-green fix (ported ts-colors.mjs::knownClassExportUsesSafe)', () => {
+  // SP-FALSE-GREEN (lead review of SP-RECOVER): a record DECLARED, EXPORTED
+  // and READ in the SAME file only ever had its OWN file's scope walked by
+  // recordBindingEscapes (same-file case) or the reading file's scope walked
+  // (already-imported case) -- neither walk ever considered a DIFFERENT
+  // module in `modules` that imports the export by name and mutates it
+  // there. Reproduces with `export let` and `export const`, and with both a
+  // fixed-key (`M.a`) and a dynamic-key (`M[k]`) read -- HEAD already had
+  // the fixed-key hole; CAP1's dynamic-key fan-out (this session) extended
+  // it to dynamic keys too, since both funnel through the SAME resolveExpr
+  // identifier branch for a module-level record. ts-colors.mjs blocks every
+  // one of these variants via knownClassExportUsesSafe, checking every
+  // importer in the modules context for a write; this ports that check.
+  const good = 'p-[var(--space-2)]'
+  const bad = 'p-[7px]'
+  const pPath = 'src/components/P.tsx'
+  const qPath = 'src/components/Q.tsx'
+
+  const declareAndRead = (kind, key) => {
+    const read = key === 'fixed' ? 'M.a' : 'M[k]'
+    const params = key === 'fixed' ? '' : '{k}'
+    return `export ${kind} M = { a: '${good}' }\nexport function V(${params}){ return <i className={${read}}/> }`
+  }
+
+  for (const kind of ['let', 'const']) {
+    for (const key of ['fixed', 'dynamic']) {
+      it(`keeps a same-file ${kind}, ${key}-key read of an exported record unsupported when a DIFFERENT module imports it by name and writes to it`, () => {
+        const source = declareAndRead(kind, key)
+        const q = `import { M } from './P'\nexport function hack(){ M.a = '${bad}' }`
+        const result = scan({ path: pPath, source, policy: POLICY, modules: { [pPath]: source, [qPath]: q } })
+        assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), `${kind}/${key}: a cross-module write through a named import must block`)
+      })
+    }
+  }
+
+  it('keeps the read unsupported when a different module imports it via a NAMESPACE import (untraceable -- blocks even though it only reads through the namespace)', () => {
+    const source = declareAndRead('const', 'fixed')
+    const q = `import * as NS from './P'\nexport function readViaNamespace(){ return NS.M.a }`
+    const result = scan({ path: pPath, source, policy: POLICY, modules: { [pPath]: source, [qPath]: q } })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), 'a namespace import cannot be traced by name and must block unconditionally, matching ts-colors')
+  })
+
+  it('keeps the read unsupported when a different module RE-EXPORTS it (untraceable -- blocks even with no explicit write anywhere)', () => {
+    const source = declareAndRead('const', 'fixed')
+    const rPath = 'src/components/R.tsx'
+    const reExport = `export { M } from './P'`
+    const result = scan({ path: pPath, source, policy: POLICY, modules: { [pPath]: source, [rPath]: reExport } })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), 're-exporting the declaring module hands the record arbitrarily far downstream and must block unconditionally')
+  })
+
+  it('keeps the read unsupported when no modules context is supplied at all (cannot rule out any importer of an exported record)', () => {
+    const source = declareAndRead('const', 'fixed')
+    const result = scan({ path: pPath, source, policy: POLICY })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), 'a missing modules context cannot prove no importer mutates the export')
+  })
+
+  it('stays clean when the only other module that imports it by name only ever READS it (no write, no namespace import, no re-export)', () => {
+    const source = declareAndRead('const', 'fixed')
+    const q = `import { M } from './P'\nexport function readIt(){ return M.a }`
+    const result = scan({ path: pPath, source, policy: POLICY, modules: { [pPath]: source, [qPath]: q } })
+    assert.deepEqual(result, [], 'a read-only importer must not block resolution')
+  })
+
+  it('CONTROL: an UNEXPORTED same-file record needs no cross-module check at all, even with an unrelated other module present', () => {
+    const source = `const M = { a: '${good}' }\nexport function V(){ return <i className={M.a}/> }`
+    const q = `export function unrelated(){ return 1 }`
+    const result = scan({ path: pPath, source, policy: POLICY, modules: { [pPath]: source, [qPath]: q } })
+    assert.deepEqual(result, [], 'an unexported record cannot be imported anywhere, so no importer check applies')
+  })
+})
+
+function syntaxes(findings, ruleId) {
+  return findings.filter((finding) => finding.ruleId === ruleId).map((finding) => finding.syntax)
+}

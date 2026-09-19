@@ -694,9 +694,19 @@ describe('class array joins and unresolved indexed reads', () => {
     }
   })
 
-  it('does not silently accept a runtime-indexed class map', () => {
+  it('does not silently accept a runtime-indexed class map — fans out to every branch instead of staying unsupported', () => {
+    // Capability port (ts-colors.mjs::resolveMemberTargets's non-literal
+    // ElementAccessExpression branch, closing the P7 triage's named
+    // capability): a dynamic key against a directly-resolvable, unmutated
+    // record cannot be narrowed to one property, so every one of the
+    // record's own values becomes its own precise finding — this is the
+    // intended "unsupported becomes a real finding" outcome, not a silent
+    // accept: `bad` is still caught, now as an exact off-scale finding
+    // instead of a blanket unsupported one; `good` is a proven clean pass
+    // because it genuinely is on-scale, not because the key went unchecked.
     const findings = tsx(`const styles = { bad: 'p-[13px]', good: 'p-[8px]' }; export const X = () => <div className={styles[state]} />`)
-    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: styles[state]'])
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [], 'the dynamic key itself no longer blocks resolution')
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'], 'the off-scale branch must still be caught, just more precisely')
   })
 
   it('resolves an in-bounds numeric literal index on a proven class array', () => {
@@ -715,6 +725,170 @@ describe('class array joins and unresolved indexed reads', () => {
   it('does not hide a dynamic spread inside a joined class array', () => {
     const findings = tsx(`export const X = () => <div className={['p-[8px]', ...external].join(' ')} />`)
     assert.equal(byRule(findings, RULE.unsupported).length, 1)
+  })
+})
+
+describe('dynamic-key record read passed as a bare class-builder argument (cn(RECORD[dynamicKey]) shape — most real occurrences)', () => {
+  // Real-world addendum to the dynamic-key fan-out: the round-4
+  // recordBindingEscapes container-escape check requires a call-argument
+  // embed to structurally prove one exact PRIMITIVE at a STATIC path
+  // (chainPropertyPath cannot express a dynamic key at all). Every real
+  // avatar.tsx/GoalOutcomeRow.tsx/EdgeModeEditor.tsx-shaped finding passes
+  // the dynamic-key record DIRECTLY into `cn(...)`, so without
+  // dynamicTailEmbedIsSafe's narrower, additional proof (every property of
+  // the record is independently primitive, so ANY dynamically-selected one
+  // is too), the fan-out capability closes nothing in real usage.
+  it('resolves a dynamic-key record passed straight into cn(...) when every branch is primitive', () => {
+    const findings = tsx(`
+      const sizeClasses = { sm: 'p-[13px]', md: 'p-[8px]' }
+      export function Avatar({ size }) { return <div className={cn('base', sizeClasses[size])}/> }
+    `)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [])
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'])
+  })
+
+  it('resolves a static prefix followed by a trailing dynamic hop (CONFIG.outer[size] shape)', () => {
+    const findings = tsx(`
+      const CONFIG = { outer: { sm: 'p-[13px]', md: 'p-[8px]' } }
+      export function Avatar({ size }) { return <div className={cn('base', CONFIG.outer[size])}/> }
+    `)
+    // The dynamic key is still the FINAL hop (on CONFIG.outer); the static
+    // prefix ('outer') resolves first via structuralValueAtPath, exactly as
+    // it would for any other embedded primitive.
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [])
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'])
+  })
+
+  it('keeps the embed unsupported when the dynamic hop is NOT the final one (a further static property follows it)', () => {
+    const findings = tsx(`
+      const sizeClasses = { sm: { cls: 'p-[13px]' }, md: { cls: 'p-[8px]' } }
+      export function Avatar({ size }) { return <div className={cn('base', sizeClasses[size].cls)}/> }
+    `)
+    // dynamicTailEmbedIsSafe only proves a dynamic key that lands EXACTLY on
+    // `climbed` (nothing else happens to the selected value before the
+    // embed) -- here `.cls` is read afterward, which is a different,
+    // untouched shape this session did not implement (a two-hop dynamic
+    // chain terminating at the embed site).
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: cn(\'base\', sizeClasses[size].cls)'])
+  })
+
+  it('keeps the embed unsupported when the record has a non-primitive branch', () => {
+    const findings = tsx(`
+      const sizeClasses = { sm: { cls: 'p-[13px]' }, md: 'p-[8px]' }
+      export function Avatar({ size }) { return <div className={cn('base', sizeClasses[size])}/> }
+    `)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: cn(\'base\', sizeClasses[size])'])
+  })
+
+  it('keeps the embed unsupported when the record has a spread branch', () => {
+    const findings = tsx(`
+      const base = { md: 'p-[8px]' }
+      const sizeClasses = { sm: 'p-[13px]', ...base }
+      export function Avatar({ size }) { return <div className={cn('base', sizeClasses[size])}/> }
+    `)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: cn(\'base\', sizeClasses[size])'])
+  })
+
+  it('still catches a real mutation of the record even though it is embedded via a dynamic tail', () => {
+    const findings = tsx(`
+      const sizeClasses = { sm: 'p-[13px]', md: 'p-[8px]' }
+      sizeClasses.sm = 'p-[7px]'
+      export function Avatar({ size }) { return <div className={cn('base', sizeClasses[size])}/> }
+    `)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: cn(\'base\', sizeClasses[size])'])
+  })
+})
+
+describe('dynamic record chain: ??/|| of two dynamic-key branches through a const alias (STATUS_BADGE/PRIORITY_BADGE shape)', () => {
+  // Capability port: ts-colors.mjs::resolveToObjects's BinaryExpression
+  // (??/||) branch, layered on top of the dynamic-key fan-out above. Real
+  // shape: `const badgeClass = STATUS_BADGE[run.status] ?? STATUS_BADGE.inbox`
+  // then `badgeClass` read bare (TaskRunsList.tsx/TaskRunStatusField.tsx), or
+  // `const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]` then
+  // `badge.className` (ListView.tsx/TaskCard.tsx/CreateTaskSlideOver.tsx).
+  it('resolves a bare alias to a primitive-only record chain (STATUS_BADGE shape)', () => {
+    const source = `
+      const STATUS_BADGE = { inbox: 'p-[8px]', done: 'p-[13px]' }
+      export const X = ({run}) => { const badgeClass = STATUS_BADGE[run.status] ?? STATUS_BADGE.inbox; return <div className={badgeClass}/> }
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [])
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'])
+  })
+
+  it('resolves a member access on an object-shaped alias to a ??-chained record (PRIORITY_BADGE shape)', () => {
+    const source = `
+      const PRIORITY_BADGE = { 1: { label: 'P1', className: 'p-[13px]' }, 3: { label: 'P3', className: 'p-[8px]' } }
+      export const X = ({priority}) => { const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]; return <span className={badge.className}>{badge.label}</span> }
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [])
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'])
+  })
+
+  it('keeps a member-mutated object-shaped alias unsupported (dispatcherBindingUsesSafe still applies when a candidate is not a primitive leaf)', () => {
+    const source = `
+      const PRIORITY_BADGE = { 1: { label: 'P1', className: 'p-[13px]' }, 3: { label: 'P3', className: 'p-[8px]' } }
+      export const X = ({priority}) => { const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]; badge.className = 'p-[7px]'; return <span className={badge.className}/> }
+    `
+    assert.deepEqual(syntaxes(tsx(source), RULE.unsupported), ['className: badge.className'])
+  })
+
+  // NOT tested here: a reassigned `let` alias to this shape
+  // (`let badgeClass = STATUS_BADGE[a] ?? STATUS_BADGE.b; badgeClass =
+  // 'extra'`). Investigated and found to expose a PRE-EXISTING gap in
+  // resolveExpr's fallback for a non-record-literal alias (recordLiteralRoot
+  // only recognizes an object/array-literal initializer; a ??/binary
+  // initializer falls to the older, narrower isReassignedWithin(sourceFile,
+  // name) check, which — like the bug recordBindingEscapes/
+  // dispatcherBindingUsesSafe were built to fix elsewhere in this file —
+  // stops descending at the first function-like node, so a reassignment
+  // INSIDE the consuming component is invisible to it). Reproduced with ZERO
+  // involvement of this capability or any record/dynamic-key shape at all:
+  // `let x = true ? 'p-[7px]' : 'p-[8px]'; x = 'p-[999px]'` already resolves
+  // to a `spacing/off-scale: p-[7px]` finding today, on main, before this
+  // port — this is not a regression this session introduced. The proper fix
+  // (descending isReassignedWithin into nested functions the way this file's
+  // OTHER two escape guards already do) was attempted and reverted: it flips
+  // the existing, deliberately-titled test "still drills into a reassigned
+  // `let` call-expression alias at its definition site rather than
+  // collapsing to a generic unsupported" (spacing-adversarial.test.mjs) to a
+  // generic `className: btn`-shaped finding instead of its required
+  // `className: cn(...)` one — a real, existing test this port must not
+  // break. Left as a documented pre-existing gap for the lead, out of scope
+  // for this capability port (none of the ported colour capabilities touch
+  // isReassignedWithin either).
+})
+
+describe('destructured-member resolution through a provably-finite dispatcher call (CAP-A port: closes GoalIndicator.tsx-shaped className debt)', () => {
+  // Capability port: ts-colors.mjs's CAP-A ("destructured-member resolution
+  // through a provably-finite object source"). resolveDispatcherMember only
+  // fires for `x.prop`; `const { className } = describeState(status)` never
+  // reaches it because the read site is the bare destructured local.
+  const source = `
+    function describeState(state) {
+      switch (state) {
+        case 'a': return { testId: 'a', className: 'p-[13px]' }
+        default: return { testId: 'b', className: 'p-[8px]' }
+      }
+    }
+    export const X = ({state}) => { const { testId, className } = describeState(state); return <p data-testid={testId} className={className}/> }
+  `
+
+  it('resolves a destructured local drawn from a switch-shaped dispatcher call', () => {
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [])
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'])
+  })
+
+  it('proves absence for a destructured local never assigned in any branch (null-prototype guarded)', () => {
+    const absentSource = `
+      function describeState(state) {
+        switch (state) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } }
+      }
+      export const X = ({state}) => { const { className } = describeState(state); return <p className={className}/> }
+    `
+    assert.deepEqual(tsx(absentSource), [])
   })
 })
 
