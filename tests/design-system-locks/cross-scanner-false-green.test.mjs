@@ -328,6 +328,58 @@ const CASES = [
       }
     },
   },
+  {
+    id: 'exported local record mutated by a downstream importer (const, fixed key)',
+    build: (good, bad) => {
+      const pPath = MAIN_PATH
+      const qPath = 'src/lib/q.ts'
+      const pSource = "export const M = { a: '" + good + "' }\nexport function V(){ return <i className={M.a}/> }"
+      const qSource = "import { M } from '../components/Probe'\nexport function hack(){ M.a = '" + bad + "' }"
+      return {
+        source: pSource,
+        modules: Object.freeze({ [pPath]: pSource, [qPath]: qSource }),
+      }
+    },
+  },
+  {
+    id: 'exported local record mutated by a downstream importer (const, dynamic key)',
+    build: (good, bad) => {
+      const pPath = MAIN_PATH
+      const qPath = 'src/lib/q.ts'
+      const pSource = "export const M = { a: '" + good + "' }\nexport function V({ k }){ return <i className={M[k]}/> }"
+      const qSource = "import { M } from '../components/Probe'\nexport function hack(){ M.a = '" + bad + "' }"
+      return {
+        source: pSource,
+        modules: Object.freeze({ [pPath]: pSource, [qPath]: qSource }),
+      }
+    },
+  },
+  {
+    id: 'exported local record mutated by a downstream importer (let, fixed key)',
+    build: (good, bad) => {
+      const pPath = MAIN_PATH
+      const qPath = 'src/lib/q.ts'
+      const pSource = "export let M = { a: '" + good + "' }\nexport function V(){ return <i className={M.a}/> }"
+      const qSource = "import { M } from '../components/Probe'\nexport function hack(){ M.a = '" + bad + "' }"
+      return {
+        source: pSource,
+        modules: Object.freeze({ [pPath]: pSource, [qPath]: qSource }),
+      }
+    },
+  },
+  {
+    id: 'exported local record mutated by a downstream importer (let, dynamic key)',
+    build: (good, bad) => {
+      const pPath = MAIN_PATH
+      const qPath = 'src/lib/q.ts'
+      const pSource = "export let M = { a: '" + good + "' }\nexport function V({ k }){ return <i className={M[k]}/> }"
+      const qSource = "import { M } from '../components/Probe'\nexport function hack(){ M.a = '" + bad + "' }"
+      return {
+        source: pSource,
+        modules: Object.freeze({ [pPath]: pSource, [qPath]: qSource }),
+      }
+    },
+  },
 ]
 
 function runScan(scan, input) {
