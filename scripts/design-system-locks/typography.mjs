@@ -100,6 +100,83 @@ const REMAPPED_FAMILY_UTILITIES = new Set(['mono', 'headline', 'body'])
 
 const CLASS_BUILDERS = new Set(['cn', 'clsx', 'cva', 'twMerge', 'classnames', 'classNames'])
 
+// P10 precision fix: a CLASS_BUILDER's OWN definition — `export function
+// cn(...inputs: ClassValue[]) { return twMerge(clsx(inputs)) }`
+// (src/lib/utils.ts) — is not a live class value to prove. `visit()` walks
+// EVERY call to a CLASS_BUILDERS-named function anywhere in the file, not
+// just inside a className/cn() call site, so `cn`'s own body — which itself
+// calls `twMerge`/`clsx`, both CLASS_BUILDERS members — was being walked as
+// though it were a real usage, and its own rest parameter flagged as an
+// unresolved dynamic class expression. Every REAL class argument is already
+// proven at each actual call site elsewhere; the definition itself only
+// repackages/joins whatever was passed in. Narrow and structural (never a
+// name allowlist beyond the already-trusted CLASS_BUILDERS set): the
+// enclosing function's own resolvable declaration name must itself be a
+// CLASS_BUILDER, it must take exactly one parameter (plain or rest), its
+// body must be nothing but a single return of a chain of CLASS_BUILDER
+// calls, and the identifier under test must be that same parameter forwarded
+// unchanged (whole or spread) as a bare argument somewhere in that chain.
+// Anything else — extra statements, a differently-named receiver, a
+// non-CLASS_BUILDER callee anywhere in the chain — is left exactly as
+// unproven as before (falls through to the existing proofs / emitUnsupported).
+function classBuilderOwnParameterForward(identifier) {
+  let fn = identifier.parent
+  while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+  if (!fn || fn.parameters.length !== 1) return false
+  const parameter = fn.parameters[0]
+  if (!ts.isIdentifier(parameter.name) || parameter.name.text !== identifier.text) return false
+  const declarationName = classBuilderDeclarationName(fn)
+  if (!declarationName || !CLASS_BUILDERS.has(declarationName)) return false
+  const returned = classBuilderSingleReturnExpression(fn)
+  if (!returned) return false
+  return classBuilderChainForwardsParameter(returned, parameter.name.text, new Set())
+}
+
+// The stable name a function-like node is declared under — a function
+// declaration's own name, or the identifier of a `const NAME = (...) => ...`
+// / `const NAME = function (...) {...}` it is the initializer of. Anything
+// else (a method, an inline callback, an unnamed export default) is not a
+// recognizable CLASS_BUILDERS declaration and returns null.
+function classBuilderDeclarationName(fn) {
+  if (ts.isFunctionDeclaration(fn)) return fn.name ? fn.name.text : null
+  const parent = fn.parent
+  return parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name) && parent.initializer === fn
+    ? parent.name.text
+    : null
+}
+
+// A function-like node's body reduced to its single meaningful expression:
+// a block whose only statement is `return <expr>`, or an arrow function's
+// direct expression body. Any other shape (multiple statements, no return,
+// a non-expression return) is not provably transparent and returns null.
+function classBuilderSingleReturnExpression(fn) {
+  if (!fn.body) return null
+  if (!ts.isBlock(fn.body)) return fn.body
+  if (fn.body.statements.length !== 1) return null
+  const statement = fn.body.statements[0]
+  return ts.isReturnStatement(statement) && statement.expression ? statement.expression : null
+}
+
+// True when `expression` — after unwrapping parens/as/satisfies/non-null —
+// is either the bare parameter identifier itself, or a call to a
+// CLASS_BUILDERS-named function where at least one argument recursively
+// forwards it the same way. `seen` guards against a call chain that somehow
+// revisits the same node. Deliberately NOT extended to a spread argument
+// (`clsx(...inputs)`): the general class-expression walker has no
+// SpreadElement case at all (falls to its default emitUnsupported before
+// this proof is ever consulted for one), so claiming spread support here
+// would be dead code proving something the walker cannot reach — cn()'s
+// real shape (src/lib/utils.ts) passes the whole array (`clsx(inputs)`),
+// never a spread.
+function classBuilderChainForwardsParameter(expression, parameterName, seen) {
+  const unwrapped = unwrapStatic(expression)
+  if (!unwrapped || seen.has(unwrapped)) return false
+  seen.add(unwrapped)
+  if (ts.isIdentifier(unwrapped)) return unwrapped.text === parameterName
+  if (!ts.isCallExpression(unwrapped) || !ts.isIdentifier(unwrapped.expression) || !CLASS_BUILDERS.has(unwrapped.expression.text)) return false
+  return unwrapped.arguments.some((argument) => classBuilderChainForwardsParameter(argument, parameterName, seen))
+}
+
 // A parameter/property name carries a whole CSS class value, not just the
 // literal `className`/`class` (react-day-picker's `Chevron: ({ className:
 // chevronClassName })`, sheet.tsx's `widthClass`, smart-select's
@@ -1354,6 +1431,11 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
         return
       case ts.SyntaxKind.Identifier:
         if (node.text === 'undefined') return
+        // P10: this identifier IS the parameter of the CLASS_BUILDER
+        // function currently being DEFINED, forwarded unchanged into
+        // another CLASS_BUILDER call — the definition site itself, not a
+        // live call-site usage. See classBuilderOwnParameterForward.
+        if (classBuilderOwnParameterForward(node)) return
         {
           const boundary = forwardedClassBoundary(node)
           if (boundary) {
@@ -2251,13 +2333,37 @@ function createStyleVerdictEmitter({ report }) {
 
 
 
+// P11 precision fix: a computed property key that is itself a string
+// literal, just wrapped by a cast/assertion (`['fontSize' as string]: …`,
+// `(['fontSize'])`, `!` non-null, `satisfies`), was invisible to this
+// dispatcher — `ts.isComputedPropertyName(name)` matched, but neither the
+// plain-literal nor the two-literal-PlusToken branch fired for an
+// AsExpression-wrapped literal, so `stylePropertyName` returned null and
+// `walkStyleProperty` silently skipped the property entirely (a
+// `fontSize`/`fontFamily`/`font`/role value written this way was never
+// checked against the D2 floor or the D9 token set at all — a bigger gap
+// than an over-block, and strictly a coverage GAIN to close, never a
+// loosening of fail-closed). `unwrapStatic` is the same cast-stripping this
+// file already trusts everywhere else (class expressions, imported
+// records); using it here just makes the computed-key reader consistent
+// with the rest of the scanner. Only the identifier NAME becomes resolvable
+// — the property's VALUE still goes through the exact same reportStyleSize/
+// reportStyleFamily/reportRoleValue checks as a plain `fontSize: …` key, so
+// a key that resolves to a name typography does not track (e.g. `'color'`)
+// is unaffected: it still matches none of the STYLE_*_PROPERTY_NAMES /
+// STYLE_ROLE_PROPERTIES sets and stays silently out of scope, exactly as a
+// literal `color: …` key already is today.
 function stylePropertyName(node) {
   const name = node.name
   if (ts.isIdentifier(name)) return name.text
   if (ts.isStringLiteral(name)) return name.text
-  if (ts.isComputedPropertyName(name) && ts.isBinaryExpression(name.expression) && name.expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const left = name.expression.left; const right = name.expression.right
-    if (ts.isStringLiteral(left) && ts.isStringLiteral(right)) return left.text + right.text
+  if (ts.isComputedPropertyName(name)) {
+    const expression = unwrapStatic(name.expression)
+    if (expression && (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression))) return expression.text
+    if (expression && ts.isBinaryExpression(expression) && expression.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = unwrapStatic(expression.left); const right = unwrapStatic(expression.right)
+      if (left && right && ts.isStringLiteral(left) && ts.isStringLiteral(right)) return left.text + right.text
+    }
   }
   return null
 }

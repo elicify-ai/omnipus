@@ -821,10 +821,28 @@ describe('class builders route every reachable string through the rules', () => 
     ])
   })
 
+  // P10 precision fix (dist/design-system-baseline/cli-lanes/claude-codemods/triage.json,
+  // pattern P10): `(...inputs) => twMerge(clsx(inputs))` is cn()'s OWN
+  // canonical definition shape (src/lib/utils.ts) — its own parameter
+  // forwarded unchanged through a chain of CLASS_BUILDER calls, not a live
+  // class value. This used to be pinned here as an (incorrect) unsupported
+  // finding on `inputs`; the dedup behaviour the test title actually cares
+  // about — nested CLASS_BUILDER calls around one unprovable value report
+  // ONE finding, not two — is now proven with `OTHER`, a value that is NOT
+  // the enclosing function's own transparently-forwarded parameter and so
+  // must still fail closed exactly once.
   it('reports one source occurrence when class builders are nested', () => {
-    assert.deepEqual(findings(`export const cn = (...inputs) => twMerge(clsx(inputs))`).map(({ ruleId, syntax }) => ({ ruleId, syntax })), [
-      { ruleId: 'typography/unsupported-text-utility', syntax: 'inputs' },
+    assert.deepEqual(findings(`export const cn = (...inputs) => twMerge(clsx(OTHER))`).map(({ ruleId, syntax }) => ({ ruleId, syntax })), [
+      { ruleId: 'typography/unsupported-text-utility', syntax: 'OTHER' },
     ])
+  })
+
+  // P10 precision fix: cn()'s own definition site is a transparent
+  // pass-through of its own parameter, never a class value to prove —
+  // src/lib/utils.ts's real shape (`function cn(...inputs) { return
+  // twMerge(clsx(inputs)) }`) now scans clean.
+  it('does not flag a CLASS_BUILDER function forwarding its own parameter at its definition site (cn()/utils.ts shape)', () => {
+    assert.deepEqual(findings(`export function cn(...inputs) { return twMerge(clsx(inputs)) }`), [])
   })
 
   it('flags a conditional class inside cn()', () => {

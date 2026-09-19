@@ -964,3 +964,177 @@ export function V({ state }) {
 }`, 'typography/unsupported-text-utility', 'config.cls')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Lane L8b precision fixes (dist/design-system-baseline/cli-lanes/claude-codemods/triage.json
+// patterns P10/P11/P13). Fairness controls mirror
+// dist/design-system-baseline/cli-lanes/fanout/COMMON-RULES.md: the clean
+// value alone gives [], the bad value written directly gives a finding, for
+// each capability probed below.
+// ---------------------------------------------------------------------------
+
+describe('P10 precision fix: a CLASS_BUILDER function definition forwarding its OWN parameter is not a live class value', () => {
+  it('fairness control: the clean baseline (a real, registered class attribute, no class builder involved) gives no findings', () => {
+    expectClean('export const x = <p className="text-[length:var(--type-body-compact-size)]" />', {
+      policy: { tokenCssNames: ['--type-body-compact-size'], resolvedTokens: {} },
+    })
+  })
+
+  it('fairness control: a plain arbitrary-size violation written directly still gives a finding', () => {
+    expectOne('export const x = <p className="text-[10px]" />', 'typography/arbitrary-text-size', 'text-[10px]')
+  })
+
+  it('PERMITTED: cn()\'s real definition shape (src/lib/utils.ts) — a rest parameter forwarded through a chain of two CLASS_BUILDER calls — scans clean', () => {
+    expectClean('export function cn(...inputs) { return twMerge(clsx(inputs)) }')
+  })
+
+  it('PERMITTED: the arrow-function form of the same shape scans clean', () => {
+    expectClean('export const cn = (...inputs) => twMerge(clsx(inputs))')
+  })
+
+  it('PERMITTED: a plain (non-rest) single parameter forwarded through one CLASS_BUILDER call scans clean', () => {
+    expectClean('export function cn(input) { return clsx(input) }')
+  })
+
+  it('PERMITTED: a REAL class argument alongside the definition-site pass-through is still classified normally at its own call site', () => {
+    expectOne(`export function cn(...inputs) { return twMerge(clsx(inputs)) }
+export const x = <p className={cn('text-[10px]')} />`, 'typography/arbitrary-text-size', 'text-[10px]')
+  })
+
+  it('FORBIDDEN: the enclosing function\'s own name is not a CLASS_BUILDER — the transparent-definition proof is scoped to the trusted CLASS_BUILDERS set, not any rest-forwarding function', () => {
+    expectOne('export function wrap(...inputs) { return twMerge(clsx(inputs)) }', 'typography/unsupported-text-utility', 'inputs')
+  })
+
+  it('FORBIDDEN: an extra statement before the return breaks the single-statement transparency proof', () => {
+    expectOne('export function cn(...inputs) { logIt(inputs); return twMerge(clsx(inputs)) }', 'typography/unsupported-text-utility', 'inputs')
+  })
+
+  it('FORBIDDEN: forwarding a DIFFERENT identifier than the function\'s own parameter is not a pass-through', () => {
+    expectOne('export const cn = (...inputs) => twMerge(clsx(OTHER))', 'typography/unsupported-text-utility', 'OTHER')
+  })
+
+  it('FORBIDDEN: more than one parameter is not the cn()/clsx() rest-forwarding shape', () => {
+    expectOne('export function cn(inputs, extra) { return twMerge(clsx(inputs)) }', 'typography/unsupported-text-utility', 'inputs')
+  })
+
+  it('FORBIDDEN (mutation proof): reverting the fix\'s name-gate to accept ANY enclosing function name would silently pass this — pinning `wrap` (not a CLASS_BUILDER) as still-unsupported is the sentinel that would catch that mutation', () => {
+    // Mirrors the "enclosing function's own name is not a CLASS_BUILDER" case
+    // above under a name a human is likelier to mistake for a real builder.
+    expectOne('export function classNamesHelper(...inputs) { return twMerge(clsx(inputs)) }', 'typography/unsupported-text-utility', 'inputs')
+  })
+})
+
+describe('P11 precision fix: a computed object-literal key that is itself a string literal cast (`as string`) is now evaluated', () => {
+  const REGISTERED_POLICY = { tokenCssNames: ['--type-caption-size'], resolvedTokens: {} }
+
+  it('fairness control: the clean value written as a direct (non-computed) fontSize key gives no findings', () => {
+    expectClean('export const x = <span style={{ fontSize: \'14px\' }} />')
+  })
+
+  it('fairness control: the bad value written as a direct (non-computed) fontSize key gives a finding', () => {
+    expectOne('export const x = <span style={{ fontSize: \'8px\' }} />', 'typography/font-size-below-floor', 'fontSize: 8px')
+  })
+
+  it('FORBIDDEN: the SAME below-floor value written through an `as string`-cast computed key now resolves and fails the D2 floor — previously silently invisible (stylePropertyName returned null and walkStyleProperty skipped the property outright)', () => {
+    expectOne('export const x = <span style={{ [\'fontSize\' as string]: \'8px\' }} />', 'typography/font-size-below-floor', 'fontSize: 8px')
+  })
+
+  it('PERMITTED: the same computed-key shape with a registered token resolves cleanly (proves the fix reads the VALUE through the normal token check, not just the key name)', () => {
+    expectClean('export const x = <span style={{ [\'fontSize\' as string]: \'var(--type-caption-size)\' }} />', { policy: REGISTERED_POLICY })
+  })
+
+  it('PERMITTED: a `satisfies string` computed key is evaluated the same way as `as string`', () => {
+    expectOne('export const x = <span style={{ [\'fontSize\' satisfies string]: \'8px\' }} />', 'typography/font-size-below-floor', 'fontSize: 8px')
+  })
+
+  it('FORBIDDEN (fontFamily variant): a computed `as string` key resolving to `fontFamily` is now checked against the D9 token set', () => {
+    expectOne('export const x = <span style={{ [\'fontFamily\' as string]: \'Comic Sans\' }} />', 'typography/font-family-literal', 'fontFamily: Comic Sans')
+  })
+
+  it('control: a computed key resolving to a name typography does not track (e.g. `color`) stays out of scope — same as a literal `color:` key today, not a new widening', () => {
+    expectClean('export const x = <span style={{ [\'color\' as string]: \'red\' }} />')
+  })
+
+  it('control: a GENUINELY dynamic (non-literal) computed key is still not evaluated — this fix only teaches the reader static string-literal casts, never arbitrary expressions (a separate, pre-existing gap out of this precision fix\'s scope)', () => {
+    expectClean('const key = dynamicKey(); export const x = <span style={{ [key]: \'8px\' }} />')
+  })
+
+  it('mutation proof: reverting the fix (dropping unwrapStatic from the computed-key branch) makes the FORBIDDEN as-string case above silently pass again — that is exactly the regression this fixture is pinned to catch', () => {
+    // Same fixture as the FORBIDDEN case above, restated as an explicit
+    // one-assertion mutation sentinel: it must keep finding exactly one
+    // font-size-below-floor result, never zero.
+    const found = findings('export const x = <span style={{ [\'fontSize\' as string]: \'8px\' }} />')
+    assert.equal(found.length, 1)
+    assert.equal(found[0].ruleId, 'typography/font-size-below-floor')
+  })
+})
+
+// P13 re-check: "the scanner matches a non-style-bearing identifier/expression
+// (url, boolean store selector, dedup filter callback, error message string,
+// mock factory, parametrized test table) — AST matcher is over-broad for
+// this call site." The concrete triage.json P13 instances are all
+// ts-colors/unsupported findings (ChatScreen.tsx's m.url and boolean store
+// selector, TokenCounter.tsx's boolean selector, GenericToolCall.tsx's
+// error?.message, LibraryPdfPreview.test.tsx's vi.mock factory,
+// DiagnosticsSection.test.tsx's it.each table, status.ts's string-case
+// normalization, omnipus-runtime.ts's dedup filter) — ts-colors.mjs is a
+// different scanner, out of this lane's ownership. Re-checked against
+// typography.mjs directly (scripts/design-system-locks/typography.mjs, this
+// lane's only owned scanner): none of the 27 current typography/unsupported
+// findings in dist/design-system-baseline/cli-lanes/claude-lead/audit-ty-port.json
+// exhibit this shape (they are P1 dead-reads on toolStatusConfig's
+// textClass, P3/P4 component-boundary className/style passthroughs, and one
+// P7 finite-record-proof gap — each already correctly left unsupported/
+// deferred to its own pattern, not this one), and constructing the same
+// seven non-style shapes ts-colors.mjs mismatched shows typography.mjs
+// already scans every one of them clean. No source or test change was made
+// for P13: there is nothing to fix, and this block locks that verified
+// absence so a future change to typography.mjs cannot silently introduce
+// the ts-colors-style over-broad match without breaking a test here.
+describe('P13 re-check: typography.mjs does not match a non-style-bearing identifier/expression the way ts-colors.mjs did', () => {
+  it('PERMITTED: a URL field read off an array-callback element and used as an <img>/<a> attribute (ChatScreen.tsx m.url shape) is not walked as class content', () => {
+    expectClean(`export function Attachments({ items }) {
+  return <>{items.map((m) => <img key={m.id} src={m.url} alt="" />)}</>
+}`)
+  })
+
+  it('PERMITTED: a boolean store selector used to gate an early return (TokenCounter.tsx/ChatScreen.tsx shape) is not walked as class content', () => {
+    expectClean(`import { useChatStore } from '../store'
+export function Panel() {
+  const isLoading = useChatStore((s) => s.isLoading)
+  if (isLoading) return null
+  return <div>ready</div>
+}`)
+  })
+
+  it('PERMITTED: an error message rendered as text content (GenericToolCall.tsx error?.message shape) is not walked as class content', () => {
+    expectClean(`export function ToolError({ error }) {
+  return <span>{error?.message ?? 'unknown error'}</span>
+}`)
+  })
+
+  it('PERMITTED: an empty arrow function inside a vi.mock(...) factory (LibraryPdfPreview.test.tsx shape) is not walked as class content', () => {
+    expectClean(`import { vi } from 'vitest'
+vi.mock('pdfjs-dist', () => ({ getDocument: () => {} }))
+`, { path: 'src/fixture.test.tsx' })
+  })
+
+  it('PERMITTED: an it.each(...) parametrized test table (DiagnosticsSection.test.tsx shape) is not walked as class content', () => {
+    expectClean(`import { it } from 'vitest'
+const cases = [{ score: 1, colorVar: '--color-error' }, { score: 9, colorVar: '--color-success' }]
+it.each(cases)('scores \${score}', ({ score, colorVar }) => {})
+`, { path: 'src/fixture.test.tsx' })
+  })
+
+  it('PERMITTED: a dedup filter callback over an id array (omnipus-runtime.ts shape) is not walked as class content', () => {
+    expectClean(`export function dedupeIds(calls) {
+  return calls.filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i)
+}`)
+  })
+
+  it('PERMITTED: string-case normalization inside a status module (status.ts shape) is not walked as class content', () => {
+    expectClean(`export function normalizeStatus(input) {
+  return input.toLowerCase().trim()
+}`)
+  })
+})
