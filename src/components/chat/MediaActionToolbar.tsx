@@ -4,6 +4,7 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react'
 import { Check } from '@phosphor-icons/react'
 import { useUiStore } from '@/store/ui'
+import { clsx } from 'clsx'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -151,7 +152,7 @@ export function MediaActionToolbar({
     <div
       role="group"
       aria-label="Media actions"
-      className={`${containerClasses} ${className}`}
+      className={clsx(`${containerClasses}`, className)}
     >
       {actions.map((action) => (
         <ActionButton key={action.label} action={action} variant={variant} />

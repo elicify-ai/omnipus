@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
 import { Button } from './button'
+import { clsx } from 'clsx'
 
 type EmptyStateAction =
   | { actionLabel: string; onAction: () => void }
@@ -14,7 +15,7 @@ export type EmptyStateProps = {
 
 export function EmptyState({ icon, message, actionLabel, onAction, className }: EmptyStateProps) {
   return (
-    <div className={`flex flex-col items-center justify-center py-16 gap-3 text-center ${className ?? ''}`}>
+    <div className={clsx("flex flex-col items-center justify-center py-16 gap-3 text-center", className)}>
       <div className="text-[var(--color-border)]" aria-hidden="true">{icon}</div>
       <p className="text-sm text-[var(--color-muted)]">{message}</p>
       {actionLabel && onAction ? <Button size="sm" variant="outline" onClick={onAction}>{actionLabel}</Button> : null}

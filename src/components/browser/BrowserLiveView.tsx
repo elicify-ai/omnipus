@@ -2575,6 +2575,11 @@ export function BrowserLiveView({
       current.id ? { captureId: current.id, generation: current.generation } : undefined)
   }
 
+  const resolvedClassName = cn(
+                      'flex min-w-0 flex-1 items-center gap-1.5',
+                      connected ? 'cursor-pointer' : 'cursor-not-allowed',
+                      'disabled:cursor-not-allowed',
+                    )
   return (
     <div data-input-mode="dedicated" data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
@@ -2642,11 +2647,7 @@ export function BrowserLiveView({
                     onClick={() => handleTabSwitch(tab.index)}
                     title={tab.title || tab.url || 'New tab'}
                     data-testid={`browser-tab-${tab.index}`}
-                    className={cn(
-                      'flex min-w-0 flex-1 items-center gap-1.5',
-                      connected ? 'cursor-pointer' : 'cursor-not-allowed',
-                      'disabled:cursor-not-allowed',
-                    )}
+                    className={resolvedClassName}
                   >
                     <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
                     <span className={cn('min-w-0 flex-1 truncate', active ? 'font-medium' : undefined)}>{label}</span>

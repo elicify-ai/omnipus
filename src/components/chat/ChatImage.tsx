@@ -20,6 +20,7 @@ import {
   fetchImageBlob,
   fetchImagePng,
 } from './media-actions'
+import { clsx } from 'clsx'
 
 export interface ChatImageProps {
   src: string
@@ -151,7 +152,7 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
   }
 
   return (
-    <div className={`relative group/chatimg inline-block${className ? ` ${className}` : ''}`}>
+    <div className={clsx("relative group/chatimg inline-block", className)}>
       <img
         src={src}
         alt={alt || ''}

@@ -492,20 +492,148 @@ function isTransparentJoinerCallee(calleeName, source) {
   return false
 }
 
-/** True when no Identifier anywhere in `node`'s subtree has text matching a
- * name in `forbidden` — a conservative (never under-refuses) free-variable
- * check for "this expression cannot depend on the array callback's own
- * parameters". */
-function referencesAny(node, forbidden) {
-  let found = false
+/** Every Identifier in `node` that is a VALUE REFERENCE, not a property key
+ * — skips a PropertyAccessExpression's `.name` and a non-computed
+ * PropertyAssignment's key, but keeps a ShorthandPropertyAssignment's name
+ * (`{ foo }` reads `foo`) and a computed key's expression. Deliberately NOT
+ * exhaustive of every TS syntax kind — real hoist targets are className
+ * expressions (identifiers, templates, conditionals, array/object literals,
+ * calls), not arbitrary code. */
+function freeIdentifiers(node) {
+  const idents = []
   const visit = (n) => {
-    if (found || !n) return
-    if (ts.isIdentifier(n) && forbidden.has(n.text)) { found = true; return }
+    if (!n) return
+    if (ts.isPropertyAccessExpression(n)) { visit(n.expression); return }
+    if (ts.isPropertyAssignment(n)) {
+      if (ts.isComputedPropertyName(n.name)) visit(n.name.expression)
+      visit(n.initializer)
+      return
+    }
+    if (ts.isShorthandPropertyAssignment(n)) { idents.push(n.name); return }
+    if (ts.isIdentifier(n)) { idents.push(n); return }
     ts.forEachChild(n, visit)
   }
   visit(node)
-  return found
+  return idents
 }
+
+function bindingNameMatches(nameNode, name) {
+  if (ts.isIdentifier(nameNode)) return nameNode.text === name ? nameNode : null
+  if (ts.isObjectBindingPattern(nameNode) || ts.isArrayBindingPattern(nameNode)) {
+    for (const element of nameNode.elements) {
+      if (!ts.isBindingElement(element)) continue
+      const found = bindingNameMatches(element.name, name)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+function findDeclarationInStatements(statements, name) {
+  for (const statement of statements) {
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        const found = bindingNameMatches(declaration.name, name)
+        if (found) return declaration
+      }
+    } else if (ts.isFunctionDeclaration(statement) && statement.name && statement.name.text === name) {
+      return statement
+    } else if (ts.isClassDeclaration(statement) && statement.name && statement.name.text === name) {
+      return statement
+    }
+  }
+  return null
+}
+
+/** The nearest enclosing declaration of `name`, resolved the way JS actually
+ * scopes it: walk from `identifier`'s own position out through enclosing
+ * blocks/functions, innermost scope checked first (respects shadowing).
+ * Returns null when nothing in THIS FILE binds the name — a global or an
+ * import, both effectively available everywhere the codemod could ever
+ * insert a hoisted `const`, so null is always safe. */
+function resolveDeclaration(identifier, name) {
+  let scope = identifier.parent
+  while (scope) {
+    if (ts.isBlock(scope) || ts.isSourceFile(scope)) {
+      const found = findDeclarationInStatements(scope.statements, name)
+      if (found) return found
+    }
+    if (isFunctionLike(scope)) {
+      for (const parameter of scope.parameters) {
+        const found = bindingNameMatches(parameter.name, name)
+        if (found) return parameter
+      }
+    }
+    if (ts.isCatchClause(scope) && scope.variableDeclaration) {
+      const found = bindingNameMatches(scope.variableDeclaration.name, name)
+      if (found) return found
+    }
+    scope = scope.parent
+  }
+  return null
+}
+
+/** Lead review 2026-09-19 (PT-REVIEW full-tree audit, real `tsc` diagnostics
+ * — dist/design-system-baseline/cli-lanes/fanout/PT-REVIEW/evidence/
+ * typecheck-all.log): the ORIGINAL check here only looked at the `.map()`
+ * callback's own PARAMETER names — it missed a `const` declared INSIDE the
+ * callback body that the hoisted expression depends on (CalendarToolbar.tsx
+ * `const isActive = view === currentView`, Sidebar.tsx/AltitudeToggle.tsx/
+ * WorkspaceTabBar.tsx/WorkspaceTasksTab.tsx/KnowledgeViewsList.tsx/
+ * BrowserLiveView.tsx — 7 real files, all `TS2304: Cannot find name`).
+ * `isActive` isn't a parameter, so it sailed through, and the hoisted
+ * `const resolvedClassName = cn(..., isActive ? ... : ...)` landed BEFORE
+ * `isActive` was even declared.
+ *
+ * The real fix: resolve EVERY free identifier in the call's arguments to its
+ * actual declaring node (not just name-match against the parameter list),
+ * and require that declaration to be positioned STRICTLY BEFORE the
+ * insertion point. This single position check subsumes "not a parameter of
+ * the callback" AND "not any other local the callback declares" AND "not
+ * declared later in an outer scope, after the insertion point" — anything
+ * declared inside the callback, or anywhere textually after the insertion
+ * point, necessarily has a start offset >= insertionPointStart, since AST
+ * node positions are monotonic in source order and the callback itself only
+ * begins at/after the `.map(` call the insertion point precedes. */
+function canHoistArguments(call, insertionPointStart) {
+  for (const argument of call.arguments) {
+    for (const identifier of freeIdentifiers(argument)) {
+      const declaration = resolveDeclaration(identifier, identifier.text)
+      if (declaration && declaration.getStart() >= insertionPointStart) {
+        return { ok: false, reason: `\`${identifier.text}\` resolves to a declaration that is not in scope (or not yet declared) at the hoist insertion point — declared inside the .map() callback, or later in the same scope` }
+      }
+    }
+  }
+  return { ok: true }
+}
+
+/** The insertion point must sit directly inside a `{ ... }` block's own
+ * statement list. Lead review: a braceless single-statement body (`if (cond)
+ * return x`) has room for exactly ONE statement — splicing a second
+ * `const ... =` in front of it without adding braces would silently make
+ * the SECOND statement (the original one) run unconditionally, changing
+ * control flow rather than merely computing a value earlier. */
+function isBracedInsertionPoint(containingStatement) {
+  return Boolean(containingStatement.parent) && ts.isBlock(containingStatement.parent)
+}
+
+// A "hoist across a ternary/&&/||/?? boundary" guard was tried and removed:
+// it refused a real, previously fully-verified-safe site (ChipListInput.tsx
+// — the whole chip list, `.map()` included, sits behind `values.length > 0
+// && (...)`), a genuine regression against Correction Round 2's evidence
+// (scratch-applied, real-scanner-validated, lead-accepted). Re-derived why
+// it isn't needed: EVERY call this transform ever hoists is proven, by
+// `isTransparentJoinerCallee`, to be `cn`/`clsx` or a locally-defined
+// rest-param `filter(Boolean).join(sep)` helper — mechanically pure, no
+// side effects, cannot throw given valid string/undefined inputs. Combined
+// with `canHoistArguments` (every free identifier proven ALREADY in scope,
+// same visibility as at the original call site), moving WHEN a pure,
+// always-successful computation runs — earlier in the same function, still
+// after every guard its own inputs actually depend on — changes nothing
+// observable, unlike a hook call or a call with side effects. The braced-
+// insertion-point check above is the guard that catches the genuinely
+// unsafe "different block" shape (a braceless single-statement body, where
+// splicing in a second statement corrupts control flow, not just timing).
 
 function findMapCallback(node) {
   let current = node.parent
@@ -601,21 +729,24 @@ function planHoistOutOfMapRewrites(repoRoot, filePath, text, paramName = 'classN
       const mapCallback = findMapCallback(call)
       if (!mapCallback) { ts.forEachChild(node, visit); return } // not inside a .map() callback — not this transform's target
 
-      const paramNames = new Set(mapCallback.parameters.map((p) => (ts.isIdentifier(p.name) ? p.name.text : null)).filter(Boolean))
-      const dependsOnCallback = call.arguments.some((arg) => referencesAny(arg, paramNames))
-      if (dependsOnCallback) {
-        refusals.push({ file: relative(repoRoot, filePath), loc: locStr, syntax: call.getText(source), reason: 'at least one argument references the .map() callback\'s own parameter — cannot hoist (result genuinely varies per element)' })
+      const containingStatement = statementEnclosingMapCall(mapCallback)
+      if (!containingStatement) {
+        refusals.push({ file: relative(repoRoot, filePath), loc: locStr, syntax: call.getText(source), reason: 'could not resolve an enclosing statement to hoist above' })
+        return
+      }
+      if (!isBracedInsertionPoint(containingStatement)) {
+        refusals.push({ file: relative(repoRoot, filePath), loc: locStr, syntax: call.getText(source), reason: 'the hoist target statement is not inside a braced block (e.g. a braceless `if (cond) return ...` body) — inserting an extra statement there would silently change control flow' })
+        return
+      }
+      const safety = canHoistArguments(call, containingStatement.getStart(source))
+      if (!safety.ok) {
+        refusals.push({ file: relative(repoRoot, filePath), loc: locStr, syntax: call.getText(source), reason: safety.reason })
         return
       }
       const containsClassNameForward = call.arguments.some((arg) => {
         const unwrapped = unwrapParens(arg)
         return ts.isIdentifier(unwrapped) && unwrapped.text === paramName
       })
-      const containingStatement = statementEnclosingMapCall(mapCallback)
-      if (!containingStatement) {
-        refusals.push({ file: relative(repoRoot, filePath), loc: locStr, syntax: call.getText(source), reason: 'could not resolve an enclosing statement to hoist above' })
-        return
-      }
       const name = deriveHoistName(call, usedNames)
       const key = containingStatement.getStart(source)
       const bucket = byStatement.get(key) ?? { containingStatement, items: [] }
@@ -692,7 +823,16 @@ function planParamDestructureHoistRewrites(repoRoot, filePath, text) {
           refusals.push({ file: relative(repoRoot, filePath), loc: locStr, syntax: propsName, reason: `\`${propsName}\` is referenced ${referenceCount} times in the body (expected exactly 1, the destructuring statement) — not safe to remove` })
         } else {
           const pattern = first.declarationList.declarations[0].name
-          edits.push({ start: propsParam.getStart(source), end: propsParam.getEnd(), replacement: pattern.getText(source), loc: locStr, syntax: propsParam.getText(source) })
+          // Keep the parameter's own type annotation when it has one — lead
+          // review 2026-09-19: dropping `: X` from `(props: X, ref) => {...}`
+          // left the destructured `children`/`...rest` untyped in
+          // ChatScreen.goalCommandMarker.live.test.tsx's mock Viewport
+          // (`props: React.PropsWithChildren<Record<string, unknown>>`),
+          // producing a NEW TS2339 ("Property 'children' does not exist on
+          // type '{}'") that wasn't there before. `({ children, ...rest }: X, ref)`
+          // is exactly as valid TS as `(props: X, ref)` was.
+          const replacement = propsParam.type ? `${pattern.getText(source)}: ${propsParam.type.getText(source)}` : pattern.getText(source)
+          edits.push({ start: propsParam.getStart(source), end: propsParam.getEnd(), replacement, loc: locStr, syntax: propsParam.getText(source) })
           // Remove the WHOLE line, not just the statement's own token range:
           // node.getStart() excludes leading trivia (the line's indentation
           // whitespace), so stopping there would leave that indentation

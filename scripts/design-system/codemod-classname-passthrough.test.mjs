@@ -325,7 +325,7 @@ export function PerItem({ values, chipClassName }: { values: string[], chipClass
   const { edits, refusals } = planFileEdits(root, path)
   assert.equal(edits.length, 0)
   assert.equal(refusals.length, 1)
-  assert.match(refusals[0].reason, /own parameter/)
+  assert.match(refusals[0].reason, /not in scope/)
 })
 
 test('NO-MATCH (hoist-out-of-map): className call OUTSIDE any .map() callback is untouched', () => {
@@ -341,6 +341,123 @@ export function NotInMap({ chipClassName }: { chipClassName: string }) {
   assert.equal(edits.length, 0)
   assert.equal(refusals.length, 0)
   assert.equal(text, before)
+})
+
+// ── Lead review 2026-09-19 (PT-REVIEW full-tree audit): regression tests for
+// the two structural bugs a real-tsc typecheck caught — real shape/names
+// (CalendarToolbar.tsx's `const isActive = view === currentView`, real
+// TS2304 in 7 files) reproduced directly, not paraphrased. ─────────────────
+
+test('REFUSED (hoist-out-of-map): a map-LOCAL derived const (not a parameter) blocks the hoist (CalendarToolbar.tsx shape — real TS2304 site)', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/calendar/CalendarToolbar.tsx', `
+import { cn } from '@/lib/utils'
+export function CalendarToolbar({ views, currentView }: { views: string[], currentView: string }) {
+  return (
+    <div>
+      {views.map((view) => {
+        const isActive = view === currentView
+        return (
+          <button
+            key={view}
+            className={cn(
+              'flex items-center gap-1 px-2.5 h-7 rounded text-xs font-medium',
+              isActive ? ['bg-[var(--color-surface-3)]', 'text-[var(--color-accent)]'] : ['text-[var(--color-muted)]'],
+            )}
+          />
+        )
+      })}
+    </div>
+  )
+}
+`)
+  const before = readFileSync(path, 'utf8')
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  // Before the fix this was silently HOISTED — `isActive` isn't a `.map()`
+  // parameter, so the old paramNames-only check never saw it, and the
+  // resulting `const resolvedClassName = cn(..., isActive ? ... : ...)`
+  // landed BEFORE `isActive` existed (real tsc: TS2304 "Cannot find name
+  // 'isActive'", typecheck-all.log). It must now be refused, not "fixed
+  // differently" — the callback-local dependency makes it genuinely
+  // per-element, exactly like depending on the callback's own parameter.
+  assert.equal(edits.filter((e) => e.transform === 'hoist-out-of-map').length, 0)
+  assert.ok(refusals.some((r) => r.transform === 'hoist-out-of-map' && /not in scope/.test(r.reason)))
+  assert.equal(text, before)
+})
+
+test('REFUSED (hoist-out-of-map): two SIBLING maps each with their own map-local `isActive` are refused independently — no cross-contamination', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/layout/Sidebar.tsx', `
+import { cn } from '@/lib/utils'
+export function Sidebar({ projects, tabs, currentView }: { projects: string[], tabs: string[], currentView: string }) {
+  return (
+    <nav>
+      {projects.map((view) => {
+        const isActive = view === currentView
+        return <div key={view} className={cn('flex items-center gap-2', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')} />
+      })}
+      {tabs.map((view) => {
+        const isActive = view === currentView
+        return <div key={view} className={cn('flex items-center gap-3 rounded-lg', isActive ? 'bg-[var(--color-surface-2)]' : 'text-[var(--color-muted)]')} />
+      })}
+    </nav>
+  )
+}
+`)
+  const before = readFileSync(path, 'utf8')
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  assert.equal(edits.filter((e) => e.transform === 'hoist-out-of-map').length, 0)
+  const hoistRefusals = refusals.filter((r) => r.transform === 'hoist-out-of-map')
+  assert.equal(hoistRefusals.length, 2, 'each map is evaluated — and refused — on its own, independently of the other')
+  assert.equal(text, before)
+})
+
+test('REFUSED (hoist-out-of-map): a braceless `if (cond) return ...` body is not a safe insertion point', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/workspaces/Braceless.tsx', `
+function classes(...parts: (string | undefined)[]): string { return parts.filter(Boolean).join(' ') }
+export function Braceless({ cond, values, chipClassName }: { cond: boolean, values: string[], chipClassName: string }) {
+  if (cond) return <div>{values.map((v) => <span key={v} className={classes('base', chipClassName)} />)}</div>
+  return null
+}
+`)
+  const before = readFileSync(path, 'utf8')
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  assert.equal(edits.filter((e) => e.transform === 'hoist-out-of-map').length, 0)
+  assert.ok(refusals.some((r) => r.transform === 'hoist-out-of-map' && /braced block/.test(r.reason)))
+  assert.equal(text, before)
+})
+
+test('MATCH (hoist-out-of-map): a .map() reached through `values.length > 0 && (...)` still hoists (ChipListInput.tsx\'s REAL shape — a `crossesConditionalBoundary` guard was tried here and reverted: it refused this genuinely-safe, previously fully-verified site)', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/workspaces/ChipListInput.tsx', `
+function classes(...parts: (string | undefined)[]): string { return parts.filter(Boolean).join(' ') }
+const CHIP_BASE_CLASS = 'inline-flex items-center'
+export function ChipListInput({ values, chipClassName }: { values: string[], chipClassName: string }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {values.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-1">
+          {values.map((value, index) => (
+            <span key={\`\${index}:\${value}\`} className={classes(CHIP_BASE_CLASS, chipClassName)} />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+`)
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  assert.equal(refusals.length, 0)
+  assert.ok(edits.some((e) => e.transform === 'hoist-out-of-map'))
+  assert.match(text, /const resolvedChipClassName = classes\(CHIP_BASE_CLASS, chipClassName\)/)
+  assert.match(text, /className=\{resolvedChipClassName\}/)
+  // hoisted above the WHOLE conditional wrapper, at the top-level return —
+  // `classes()` is a proven-pure join with no side effects and every free
+  // identifier (CHIP_BASE_CLASS, chipClassName) is already in scope there,
+  // so running it unconditionally (even when values.length === 0) is
+  // provably invisible.
+  assert.ok(text.indexOf('resolvedChipClassName =') < text.indexOf('values.length > 0'))
 })
 
 // ── Transform D: PARAM-DESTRUCTURE-HOIST ────────────────────────────────
@@ -386,6 +503,29 @@ const Wrapped = React.forwardRef((props, ref) => {
   const { edits, refusals } = planFileEdits(root, path)
   assert.equal(edits.filter((e) => e.transform === 'param-destructure-hoist').length, 0)
   assert.ok(refusals.some((r) => r.transform === 'param-destructure-hoist' && /referenced 2 times/.test(r.reason)))
+})
+
+test('MATCH (param-destructure-hoist): an EXPLICITLY TYPED props parameter keeps its type annotation (ChatScreen.goalCommandMarker.live.test.tsx mock Viewport shape — real TS2339 site)', () => {
+  const root = fixtureRepo()
+  const path = write(root, 'src/components/chat/MockViewport.tsx', `
+import * as React from 'react'
+export const Viewport = React.forwardRef((props: React.PropsWithChildren<Record<string, unknown>>, ref: React.Ref<HTMLDivElement>) => {
+  const { children, ...rest } = props
+  return React.createElement('div', { ...rest, ref }, children)
+})
+`)
+  const before = readFileSync(path, 'utf8')
+  const { edits, refusals, after: text } = planFileEdits(root, path)
+  assert.equal(refusals.length, 0)
+  assert.equal(edits.filter((e) => e.transform === 'param-destructure-hoist').length, 2)
+  // Before the fix this DROPPED `: React.PropsWithChildren<Record<string,
+  // unknown>>` entirely, leaving `({ children, ...rest }, ref: ...)` — the
+  // destructured `children`/`rest` then inferred as `{}`, a real NEW
+  // TS2339 ("Property 'children' does not exist on type '{}'",
+  // typecheck-ChatScreen.goalCommandMarker.log) that wasn't there before.
+  assert.match(text, /React\.forwardRef\(\(\{ children, \.\.\.rest \}: React\.PropsWithChildren<Record<string, unknown>>, ref: React\.Ref<HTMLDivElement>\) => \{/)
+  assert.doesNotMatch(text, /const \{ children, \.\.\.rest \} = props/)
+  assert.notEqual(text, before)
 })
 
 // ── Idempotency, scope, and coverage of the codemod driver ─────────────

@@ -68,6 +68,11 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
 
   if (children.length === 0) return null
 
+  const resolvedClassName = cn(
+              'w-full flex items-center gap-1.5 rounded px-1.5 py-1 text-left',
+              'text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+              'hover:bg-[var(--color-surface-2)] transition-colors',
+            )
   return (
     // A native <ul>/<li> pair gives the list/listitem semantics for free —
     // putting `role="listitem"` directly ON the row <button> (the previous
@@ -85,11 +90,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
               e.stopPropagation()
               onChildClick(child)
             }}
-            className={cn(
-              'w-full flex items-center gap-1.5 rounded px-1.5 py-1 text-left',
-              'text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-              'hover:bg-[var(--color-surface-2)] transition-colors',
-            )}
+            className={resolvedClassName}
             aria-label={`Subtask: ${child.title} — ${STATUS_LABEL[child.status]}`}
           >
             {/* Status dot */}

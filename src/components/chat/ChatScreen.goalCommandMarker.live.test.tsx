@@ -50,8 +50,7 @@ vi.mock('@assistant-ui/react', () => {
     useThreadViewportStore: () => ({ getState: () => ({ isAtBottom: true }) }),
     ThreadPrimitive: {
       Root: passthrough('div'),
-      Viewport: React.forwardRef((props: React.PropsWithChildren<Record<string, unknown>>, ref: React.Ref<HTMLDivElement>) => {
-        const { children, ...rest } = props
+      Viewport: React.forwardRef(({ children, ...rest }: React.PropsWithChildren<Record<string, unknown>>, ref: React.Ref<HTMLDivElement>) => {
         return React.createElement('div', { ...(rest as React.HTMLAttributes<HTMLDivElement>), ref }, children)
       }),
       Messages: () => null,

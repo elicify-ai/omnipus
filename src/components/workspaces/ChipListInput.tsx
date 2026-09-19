@@ -126,6 +126,8 @@ export function ChipListInput({
     onChange(values.filter((_, i) => i !== index))
   }
 
+  const resolvedChipClassName = classes(CHIP_BASE_CLASS, chipClassName)
+  const resolvedChipRemoveClassName = classes('shrink-0', chipRemoveClassName)
   return (
     <div className="flex flex-col gap-1.5" data-testid={testId}>
       <div className="flex items-center gap-2">
@@ -169,7 +171,7 @@ export function ChipListInput({
               // state onto the wrong copy.
               key={`${index}:${value}`}
               data-testid={chipTestId}
-              className={classes(CHIP_BASE_CLASS, chipClassName)}
+              className={resolvedChipClassName}
               title={value}
             >
               {/* Truncation is plain end-truncation with the full value on
@@ -180,7 +182,7 @@ export function ChipListInput({
                 type="button"
                 onClick={() => remove(index)}
                 aria-label={`Remove ${noun} ${value}`}
-                className={classes('shrink-0', chipRemoveClassName)}
+                className={resolvedChipRemoveClassName}
               >
                 <X size={9} />
               </button>

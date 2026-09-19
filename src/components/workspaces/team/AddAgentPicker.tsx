@@ -69,6 +69,10 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [agents, memberIds, query])
 
+  const resolvedClassName = cn(
+                  'flex w-full items-center gap-2.5 px-2.5 py-2 text-left transition-colors',
+                  'hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)]',
+                )
   return (
     <Popover
       open={open}
@@ -136,10 +140,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                   setOpen(false)
                   setQuery('')
                 }}
-                className={cn(
-                  'flex w-full items-center gap-2.5 px-2.5 py-2 text-left transition-colors',
-                  'hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)]',
-                )}
+                className={resolvedClassName}
               >
                 <div
                   className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-[var(--color-secondary)]"

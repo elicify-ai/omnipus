@@ -122,7 +122,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         // without one (repo convention — see tabindex-convention.test.ts).
         // Placed before {...props} so a caller-supplied tabIndex wins.
         tabIndex={0}
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(buttonVariants({ variant, size }), className)}
         ref={ref}
         {...props}
         {...(!asChild ? { type: type ?? 'button', disabled: disabled || pending } : { type })}
