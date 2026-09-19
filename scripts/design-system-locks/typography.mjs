@@ -3048,6 +3048,28 @@ function isReadonlyObjectStaticCallArgument(node) {
     && READONLY_OBJECT_STATIC_METHODS.has(callee.name.text)
 }
 
+// A simple, non-rest, non-default, non-nested object-destructuring read of a
+// stable receiver (`const { Icon } = config`) is safe when every extracted
+// local is itself only ever used safely (recursing through this same
+// property-or-terminal-JSX-tag proof) — the same "read-only, never a whole
+// mutable escape" guarantee absenceBindingUsesSafe already proves for a
+// plain member-access alias, just entered through a binding pattern instead
+// of a `const x = y.z` initializer. Ported from ts-colors.mjs's
+// destructuredPatternUsesSafe (CAP-E2, parity) — without this, a
+// destructured extraction consumed only as a JSX tag (GoalPillTray's
+// `const { Icon } = config` feeding `<Icon/>`) is neither a further
+// `.member` read nor a JSX tag name itself, so it blanket-blocked every
+// OTHER, unrelated property read off the SAME record (`config.accentClass`)
+// purely because destructuring wasn't a recognized safe use at all.
+function destructuredPatternUsesSafe(pattern) {
+  if (!ts.isObjectBindingPattern(pattern)) return false
+  for (const element of pattern.elements) {
+    if (element.dotDotDotToken || !ts.isIdentifier(element.name) || element.initializer) return false
+    if (!absenceBindingUsesSafe(element, false, true)) return false
+  }
+  return true
+}
+
 // A receiver may only be read through properties; a factory may only be
 // called. Whole-object references, aliases, writes, deletes, increments and
 // calls through its members escape the proof. Scanning the enclosing block
@@ -3068,6 +3090,7 @@ function absenceBindingUsesSafe(declaration, factory, indexedReads = false) {
         if (!ts.isCallExpression(parent) || parent.expression !== node) { safe = false; return }
       } else {
         if (isJsxTagName(node)) return
+        if (ts.isVariableDeclaration(parent) && parent.initializer === node && destructuredPatternUsesSafe(parent.name)) return
         if (isReadonlyObjectStaticCallArgument(node)) return
         if ((!ts.isPropertyAccessExpression(parent) && !ts.isElementAccessExpression(parent)) || parent.expression !== node) { safe = false; return }
         const argument = ts.isElementAccessExpression(parent) && parent.argumentExpression ? unwrapStatic(parent.argumentExpression) : null
@@ -3167,12 +3190,28 @@ function derivedMemberTargets(containers, key) {
       // Proven-absent standard, parity with absenceValue elsewhere in this
       // file (the LEAD DECISION ts-colors null-prototype standard): a
       // property missing from a plain object literal is provably nothing
-      // to escape ONLY when the literal itself proves a null prototype —
-      // otherwise it is a non-null-prototype object any caller can extend,
-      // UNRESOLVED rather than proven-safe, and must fail closed exactly
-      // like any other unresolvable step (`return null`, not a silent skip).
+      // to escape ONLY when the literal itself proves a null prototype.
       if (absenceValue(resolved, key)) continue
-      return null
+      // CAP-G (ported from ts-colors.mjs's resolution.incomplete /
+      // knownClassDerivedUsesSafe): an unprovable absence on THIS ONE
+      // container — a property genuinely omitted on some branch of a
+      // finite union, but without the null-prototype proof above — is a
+      // value-completeness concern already independently enforced at that
+      // property's OWN emission site (resolveProvenPropertyAccess's
+      // missingLeaf/absenceValue gate; still correctly unsupported there,
+      // unaffected by this change). It is not evidence this receiver could
+      // be mutated, so it must not discard whatever OTHER containers in the
+      // same union already proved primitive and blanket-block an unrelated,
+      // fully-resolvable sibling property purely because this OTHER
+      // property couldn't prove absence on every branch (GoalPillTray's
+      // `config.pulse`, omitted on most of describePillState's switch
+      // branches with no `__proto__: null`, used to block the
+      // fully-resolvable sibling `config.accentClass`). Skip this
+      // container's contribution — same as the proven-absent branch above —
+      // rather than failing the whole chain closed; a genuinely
+      // non-container/spread/computed shape below still fails closed
+      // unchanged.
+      continue
     }
     if (ts.isArrayLiteralExpression(resolved)) {
       if (resolved.elements.some((element) => ts.isSpreadElement(element))) return null

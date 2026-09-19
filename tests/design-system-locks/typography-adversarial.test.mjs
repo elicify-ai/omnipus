@@ -853,3 +853,114 @@ describe('capability: derived-value escape proof (round 3 — nested record memb
     expectClean('const REC = { a: { cls: "flex items-center" } }\nexport function V(){ return <i className={REC.a.cls}/> }')
   })
 })
+
+// ---------------------------------------------------------------------------
+// Capability-port pass (claude-typography-port lane): two capabilities
+// ts-colors.mjs already has and had independently tested, ported here while
+// keeping every existing guard (null-prototype absence rule, mutation/
+// importer checks, cycle guard, round-3 derived-value escape proof) intact.
+//
+// CAP-E2 — destructuredPatternUsesSafe (ts-colors.mjs parity, round 2):
+// a simple, non-rest, non-default, non-nested object-destructuring read of a
+// stable receiver (`const { Icon } = config`) is as safe as a JSX-tag member
+// read (already-ported CAP-E1/isJsxTagName) when every extracted local is
+// itself only ever used safely. Closes GoalPillTray.tsx's real
+// `config.accentClass` finding: `const { Icon } = config` followed by
+// `<Icon/>` used to be neither a further `.member` read nor a JSX tag name
+// ITSELF, so it blanket-blocked the unrelated, fully-resolvable
+// `config.accentClass` sibling purely because destructuring wasn't a
+// recognized safe use of the receiver at all.
+//
+// CAP-G — an unprovable absence on ONE container of a finite union must not
+// discard values already proven primitive on OTHER containers (ts-colors.mjs
+// parity: resolution.incomplete dropped from knownClassDerivedUsesSafe's
+// escape trigger). Closes the SECOND half of the same real
+// `config.accentClass` finding: describePillState's `pulse?: boolean` is
+// omitted (not `false`) on 11 of 13 switch branches, and none of those
+// branches carry `__proto__: null`, so `config.pulse`'s own absence can
+// never be proven — before this fix, derivedMemberTargets aborted the WHOLE
+// resolution the instant it hit that one unprovable branch, discarding the
+// `true` values it had already found on the other two branches, which then
+// (via the capture-required-but-not-captured path) blocked the sibling
+// `config.accentClass` a second, independent way. `config.pulse` itself is
+// unaffected and still correctly reported on its own terms wherever it is
+// actually classified as a class value (it is not, here — `config.pulse &&
+// 'animate-pulse'` skips the boolean guard's left operand entirely, the
+// same as any other `&&` guard in this file).
+// ---------------------------------------------------------------------------
+describe('capability: destructured JSX-tag sibling does not block a fully-resolvable class property (CAP-E2, ts-colors.mjs parity)', () => {
+  it('PERMITTED: `const { Icon } = config` consumed only as `<Icon/>` does not block config.cls (GoalPillTray.tsx shape)', () => {
+    expectClean(`function describe(state) {
+  if (state === 'a') return { cls: 'flex items-center', Icon: IconA }
+  return { cls: 'flex items-center gap-1', Icon: IconB }
+}
+export function V({ state }) {
+  const config = describe(state)
+  const { Icon } = config
+  return <div><Icon/><i className={config.cls}/></div>
+}`)
+  })
+
+  it('FORBIDDEN: a rest element in the destructuring pattern is not the narrow safe shape and still blocks the sibling', () => {
+    expectOne(`function describe(state) {
+  if (state === 'a') return { cls: 'flex items-center', Icon: IconA }
+  return { cls: 'flex items-center gap-1', Icon: IconB }
+}
+export function V({ state }) {
+  const config = describe(state)
+  const { Icon, ...rest } = config
+  useRest(rest)
+  return <div><Icon/><i className={config.cls}/></div>
+}`, 'typography/unsupported-text-utility', 'config.cls')
+  })
+
+  it('FORBIDDEN: an escaped destructured local (passed whole to an external function, not read-only) still blocks the sibling — the exemption recurses the SAME safety proof per extracted local, not a blanket pass', () => {
+    expectOne(`function describe(state) {
+  if (state === 'a') return { cls: 'flex items-center', Icon: IconA }
+  return { cls: 'flex items-center gap-1', Icon: IconB }
+}
+export function V({ state }) {
+  const config = describe(state)
+  const { Icon } = config
+  mutate(Icon)
+  return <i className={config.cls}/>
+}`, 'typography/unsupported-text-utility', 'config.cls')
+  })
+})
+
+describe('capability: an unprovable-absent sibling does not block a fully-resolvable class property (CAP-G, ts-colors.mjs parity)', () => {
+  it('PERMITTED: a boolean sibling omitted (never `false`) on some branches, with no __proto__: null anywhere, does not block config.cls (GoalPillTray.tsx config.pulse shape)', () => {
+    expectClean(`function describe(state) {
+  if (state === 'a') return { cls: 'flex items-center', pulse: true }
+  return { cls: 'flex items-center gap-1' }
+}
+export function V({ state }) {
+  const config = describe(state)
+  return <i className={cn(config.cls, config.pulse && 'animate-pulse')}/>
+}`)
+  })
+
+  it('FORBIDDEN: a non-primitive sibling present on one branch (and genuinely, unprovably absent on another) still blocks when it escapes through a mutated alias — CAP-G exempts only unprovable ABSENCE, never a found non-primitive value', () => {
+    expectOne(`function describe(state) {
+  if (state === 'a') return { cls: 'flex items-center', meta: { deep: true } }
+  return { cls: 'flex items-center gap-1' }
+}
+export function V({ state }) {
+  const config = describe(state)
+  const box = [config.meta]
+  box[0].deep = false
+  return <i className={config.cls}/>
+}`, 'typography/unsupported-text-utility', 'config.cls')
+  })
+
+  it('FORBIDDEN (control): a spread on one branch of the union is a genuinely different, structural failure and still fails the whole chain closed — CAP-G does not relax the pre-existing spread guard', () => {
+    expectOne(`function describe(state) {
+  if (state === 'a') return { cls: 'flex items-center', ...extra }
+  return { cls: 'flex items-center gap-1', pulse: true }
+}
+export function V({ state }) {
+  const config = describe(state)
+  return <i className={cn(config.cls, config.pulse && 'animate-pulse')}/>
+}`, 'typography/unsupported-text-utility', 'config.cls')
+  })
+})
