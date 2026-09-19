@@ -307,9 +307,7 @@ export function BasePreview({
   // hover tab list below hangs off (EMB-046) — harmless when there is no
   // such tab list to reveal (embed.showViewSwitcher === false).
   const containerClass =
-    (variant === 'inline'
-      ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)]`
-      : 'flex h-full min-h-0 flex-col') + (embed ? ' group' : '')
+    variant === 'inline' ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)]${(embed ? ' group' : '')}` : `flex h-full min-h-0 flex-col${(embed ? ' group' : '')}`
   // ── 1. Which views this .base owns, and where they run ────────────────────
   const viewsQuery = useQuery({
     queryKey: ['library', workspaceId, 'knowledge', 'base-views', entry.path],
