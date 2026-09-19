@@ -1436,3 +1436,169 @@ describe('finite-dispatcher binding safety — mutation-isolated variants (each 
     assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
   })
 })
+
+describe('finite-dispatcher FUNCTION binding safety (round 3 — closes the callee-reassignment gap the independent re-review found)', () => {
+  // Two rounds of fixes (bb1fd56b2, 94024689e) each guarded the dispatcher-
+  // RESULT binding (`cfg`, via dispatcherBindingUsesSafe) but never the
+  // dispatcher FUNCTION's own binding. The independent re-review (dist/
+  // design-system-baseline/cli-lanes/claude-spacing-rereview/review.md,
+  // finding 1) found that a top-level `function` declaration creates a
+  // mutable, reassignable binding: `getConfig = altGetConfig` anywhere in
+  // the module leaves resolveDispatcherMember proving `allAbsent: true`
+  // against the ORIGINAL, never-executed declaration while the REAL
+  // (reassigned) function always returns an off-scale class — reaching a
+  // className with ZERO findings on an unconditional violation. Reference:
+  // ts-colors.mjs::absenceFactory calls absenceBindingUsesSafe(declaration,
+  // true) — factory mode — on the callee's own binding; spacing.mjs's
+  // dispatcherFunctionFactoryUsesSafe (scripts/design-system-locks/
+  // spacing.mjs) now mirrors that. The two fixtures below are the lead's
+  // reproduction (dist/design-system-baseline/cli-lanes/claude-lead/
+  // dispatcher-reassign-repro.mjs) and the re-review's second probe
+  // (attack.json: exported_function_declaration_dispatcher_reassigned).
+  const fixturePath = 'src/components/Fixture.tsx'
+
+  function runWith(source) {
+    return run(fixturePath, source, policy, { [fixturePath]: source })
+  }
+
+  it('keeps a bare top-level function dispatcher unsupported once its own binding is reassigned (rereview probe 1)', () => {
+    const source = "function getConfig(status) {\n  switch (status) { case 'a': return { __proto__: null }; default: return { __proto__: null } }\n}\ngetConfig = function altGetConfig(status) { return { textClass: 'p-[7px]' } }\nexport function Component({ status }) {\n  const cfg = getConfig(status)\n  return <div className={cfg.textClass} />\n}"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'a reassigned dispatcher-function binding must never let the ORIGINAL declaration prove allAbsent for a real, always-off-scale value')
+  })
+
+  it('keeps an exported top-level function dispatcher unsupported once a called helper reassigns its own binding (rereview probe 2)', () => {
+    const source = "export function getConfig(status) {\n  switch (status) { case 'a': return { __proto__: null }; default: return { __proto__: null } }\n}\nexport function corrupt() { getConfig = () => ({ textClass: 'p-[7px]' }) }\ncorrupt()\nfunction Component({ status }) {\n  const cfg = getConfig(status)\n  return <div className={cfg.textClass} />\n}"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'a reassignment performed from inside a SEPARATE called helper is exactly as real as one on the next statement')
+  })
+
+  it('resolves a bare, unreassigned top-level function dispatcher cleanly (positive control — the fix must not become blanket-conservative)', () => {
+    const source = "function getConfig(status) {\n  switch (status) { case 'a': return { __proto__: null }; default: return { __proto__: null } }\n}\nexport function Component({ status }) {\n  const cfg = getConfig(status)\n  return <div className={cfg.textClass} />\n}"
+    assert.deepEqual(runWith(source), [])
+  })
+})
+
+describe('finite-dispatcher FUNCTION binding safety — mutation-isolated variants (round 3, guard PARITY with ts-colors.mjs::absenceFactory)', () => {
+  // Same self-verification discipline as the "mutation-isolated variants"
+  // block above: every fixture here uses a __proto__: null dispatcher (or,
+  // for the ambiguity cases, a second declaration whose OWN branches are
+  // the only source of an off-scale value) so that hasNullPrototypeLiteral
+  // can never mask the guard under test — the mutation proof in this
+  // round's evidence directory (dist/design-system-baseline/cli-lanes/
+  // claude-spacing-fix3/mutants/) confirms each guard, disabled alone on an
+  // isolated copy, flips exactly the corresponding fixture below (and only
+  // that one) to a false green.
+  const fixturePath = 'src/components/Fixture.tsx'
+  const nullProtoTop = "function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }\n"
+
+  function runWith(source) {
+    return run(fixturePath, source, policy, { [fixturePath]: source })
+  }
+
+  it('isolates dispatcherFunctionFactoryUsesSafe: a bare reassignment of an otherwise-resolvable null-prototype top-level dispatcher', () => {
+    const source = `${nullProtoTop}getConfig = function alt() { return { textClass: 'p-[7px]' } }\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates dispatcherFunctionFactoryUsesSafe: a plain (non-call) reference to an otherwise-resolvable null-prototype top-level dispatcher', () => {
+    const source = `${nullProtoTop}const alias = getConfig\nvoid alias\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'the dispatcher function binding may only ever appear as the callee of a call expression — a bare value reference is an escape too')
+  })
+
+  it('rejects two top-level declarations sharing the dispatcher name (dispatcherFunctionLexicalBinding ambiguity)', () => {
+    // Function declarations at the same scope: the LAST one is what JS
+    // actually executes (hoisting overwrites the first before any code
+    // runs). The first declaration here is the otherwise-resolvable
+    // null-prototype shape (would resolve cleanly under a "first match
+    // wins" walk); the second — the one really called at runtime — sets
+    // textClass to an off-scale value. A "first match wins" resolution
+    // would silently prove absence against a declaration nothing ever
+    // actually executes.
+    //
+    // NOT independently mutation-isolated: disabling ONLY the
+    // matches.length ambiguity check in dispatcherFunctionLexicalBinding
+    // still leaves this fixture correctly unsupported, because
+    // dispatcherFunctionFactoryUsesSafe's whole-scope scan (proven above)
+    // treats the SECOND declaration's own name node as a non-call
+    // occurrence of "getConfig" and fails the proof for that reason alone
+    // — confirmed via the mutation runner (dist/design-system-baseline/
+    // cli-lanes/claude-spacing-fix3/mutation-proof.log, mutant M3). This is
+    // an inherent, intentional overlap between the two guards (any second
+    // declaration sharing a name is ALSO, unavoidably, a non-call textual
+    // reference to that name) — ts-colors.mjs has the identical overlap
+    // between absenceLexicalBinding's own ambiguity check and
+    // absenceBindingUsesSafe(declaration, true)'s factory-mode walk, for
+    // the same structural reason. The dedicated ambiguity check stays for
+    // parity, readability and as a fail-safe should the factory-safety
+    // scan's shape ever change; this test documents the resolver's
+    // behavior on this shape, not that one specific guard is solely
+    // responsible for it.
+    const source = `${nullProtoTop}function getConfig(s) { switch (s) { case 'a': return { __proto__: null, textClass: 'p-[7px]' }; default: return { __proto__: null, label: 'B' } } }\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates the import path\'s LOCAL specifier safety check: an imported dispatcher whose local binding is itself reassigned', () => {
+    const helperSource = "export function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }"
+    const source = "import { getConfig } from './helper'\ngetConfig = function alt() { return { textClass: 'p-[7px]' } }\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    const modules = { [fixturePath]: source, 'src/components/helper.tsx': helperSource }
+    assert.deepEqual(syntaxes(run(fixturePath, source, policy, modules), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates the import path\'s EXPORTING-module safety check: the target module reassigns its own exported dispatcher', () => {
+    const helperSource = "export function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }\nexport function corrupt() { getConfig = () => ({ textClass: 'p-[7px]' }) }\ncorrupt()"
+    const source = "import { getConfig } from './helper'\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    const modules = { [fixturePath]: source, 'src/components/helper.tsx': helperSource }
+    assert.deepEqual(syntaxes(run(fixturePath, source, policy, modules), RULE.unsupported), ['className: cfg.textClass'],
+      'a reassignment inside the EXPORTING module itself must be exactly as visible as one in the importing module')
+  })
+
+  it('isolates the export-modifier check: an imported name whose target-module match is not actually exported', () => {
+    const helperSource = "function getConfig(s) { switch (s) { case 'a': return { __proto__: null, textClass: 'p-[7px]' }; default: return { __proto__: null, label: 'B' } } }\nexport const other = 1"
+    const source = "import { getConfig } from './helper'\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    const modules = { [fixturePath]: source, 'src/components/helper.tsx': helperSource }
+    assert.deepEqual(syntaxes(run(fixturePath, source, policy, modules), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates the target-module parse-diagnostics check: an imported dispatcher whose module fails to parse', () => {
+    // The malformed statement is a SEPARATE, trailing function ("broken")
+    // so that getConfig itself still parses as a complete, valid,
+    // null-prototype-absent switch dispatcher — isolating the
+    // parse-diagnostics guard from the switch-shape checks downstream
+    // (collectFiniteDispatcherReturns' own `last is a SwitchStatement`
+    // requirement would otherwise independently reject a getConfig whose
+    // OWN body was corrupted by the same parse failure, masking this guard
+    // — confirmed while building the mutation proof, dist/
+    // design-system-baseline/cli-lanes/claude-spacing-fix3/mutation-proof.log).
+    const helperSource = "export function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }\nfunction broken( {"
+    const source = "import { getConfig } from './helper'\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    const modules = { [fixturePath]: source, 'src/components/helper.tsx': helperSource }
+    assert.deepEqual(syntaxes(run(fixturePath, source, policy, modules), RULE.unsupported), ['className: cfg.textClass'],
+      'a module with a parse error anywhere in it must never be trusted for an absence proof, even when the dispatcher function itself parsed cleanly')
+  })
+
+  it('rejects two exported declarations sharing the imported name (target-module ambiguity)', () => {
+    // NOT independently mutation-isolated, for the same structural reason
+    // as the local-scope ambiguity test above: dispatcherFunctionFactoryUsesSafe
+    // re-applied to matches[0] (the "EXPORTING-module safety check" above)
+    // already treats the SECOND exported declaration's own name node as a
+    // non-call occurrence and fails the proof on its own — confirmed via
+    // the mutation runner (mutant M4). The dedicated check stays for
+    // parity with ts-colors.mjs's own `matches.length !== 1` check and as
+    // a fail-safe; this test documents the resolver's behavior on this
+    // shape.
+    const helperSource = `${nullProtoTop.replace('function getConfig', 'export function getConfig')}export function getConfig(s) { switch (s) { case 'a': return { __proto__: null, textClass: 'p-[7px]' }; default: return { __proto__: null, label: 'B' } } }`
+    const source = "import { getConfig } from './helper'\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    const modules = { [fixturePath]: source, 'src/components/helper.tsx': helperSource }
+    assert.deepEqual(syntaxes(run(fixturePath, source, policy, modules), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('resolves a clean, unambiguous, unmutated, exported null-prototype dispatcher through an import (positive control)', () => {
+    const helperSource = nullProtoTop.replace('function getConfig', 'export function getConfig')
+    const source = "import { getConfig } from './helper'\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    const modules = { [fixturePath]: source, 'src/components/helper.tsx': helperSource }
+    assert.deepEqual(run(fixturePath, source, policy, modules), [],
+      'the import-path guards must not become blanket-conservative for a genuinely safe imported dispatcher')
+  })
+})

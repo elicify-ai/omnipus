@@ -747,7 +747,7 @@ function collectDispatchedObjectLiterals(node, ctx, seen) {
 // nested inside the very component being analyzed could close over local
 // mutable state the proof cannot see.
 function collectFiniteDispatcherReturns(call, ctx, seen) {
-  const declaration = functionDeclarationFor(call.expression, ctx)
+  const declaration = dispatcherFunctionDeclarationFor(call.expression, ctx)
   if (!declaration || !declaration.body || !ts.isBlock(declaration.body)) return null
   if (!isTopLevelFiniteDispatcherFunction(declaration)) return null
   if (seen.has(declaration)) return null
@@ -788,6 +788,167 @@ function isTopLevelFiniteDispatcherFunction(declaration) {
       && ts.isSourceFile(variable.parent.parent.parent)
   }
   return false
+}
+
+// --- Dispatcher-FUNCTION binding safety (round 3: guard parity with
+// ts-colors.mjs::absenceFactory, closing the gap the independent re-review
+// found — dist/design-system-baseline/cli-lanes/claude-spacing-rereview/
+// review.md, finding 1). Everything above this point proves the shape of the
+// switch statement; everything below proves the CALLEE NAME used to reach it
+// can be trusted at all — a `function` declaration creates a mutable,
+// reassignable binding (unlike a `const` arrow/function-expression), so
+// `getConfig = altGetConfig` anywhere in the module made the two rounds of
+// fixes before this one resolve `allAbsent: true` against the ORIGINAL,
+// never-executed declaration while the REAL, reassigned function always
+// returned an off-scale class. Deliberately kept separate from
+// functionDeclarationFor (shared with the unrelated style-helper proof,
+// pureFunctionReturns) so this stricter proof can never change that
+// consumer's behavior — see the "not found" GitNexus impact check + grep
+// caller sweep recorded in this round's evidence (parity.md).
+
+function dispatcherFunctionBindingHasName(name, text) {
+  if (ts.isIdentifier(name)) return name.text === text
+  return (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name))
+    && name.elements.some((element) => ts.isBindingElement(element) && dispatcherFunctionBindingHasName(element.name, text))
+}
+
+// Sentinel: more than one declaration for the callee's name was found in a
+// single lexical scope — an AST-level duplicate the type checker would
+// reject, but not something a pure-parse proof may silently resolve via a
+// "first match wins" walk (a stray second declaration must never smuggle a
+// different function behind a name the switch-shape proof already trusts).
+const DISPATCHER_FUNCTION_AMBIGUOUS = Symbol('dispatcher function binding ambiguous')
+
+// Mirrors ts-colors.mjs::absenceLexicalBinding: resolves the nearest lexical
+// declaration for `identifier`'s name without falling through a nearer
+// opaque scope (module/class/for-loop bodies, or a same-named function
+// parameter/catch binding, are deliberately outside this proof). A
+// CaseBlock is handled separately, just below the loop's own disqualifying
+// checks, rather than as a blanket wall like the reference: spacing.mjs's
+// finite-dispatcher feature explicitly supports one switch-case RETURNING a
+// call to another dispatcher (collectFiniteDispatcherReturns's own nested-
+// dispatch support, and clauseReturnExpression's bare-leading-statement
+// shape) — a callee identifier living inside a case clause's return
+// statement is completely ordinary here, not opaque, so treating CaseBlock
+// as an unconditional wall (as the reference does, since ts-colors.mjs has
+// no switch-based dispatcher-calls-dispatcher shape at all) would wrongly
+// reject the "follows one dispatcher delegating to another" capability.
+// Only a BARE (non-block-wrapped) declaration sharing the name directly
+// under a sibling case clause is genuinely hazardous — switch clauses
+// without their own `{ }` share one lexical scope, so such a declaration
+// could shadow the real target — and that alone still disqualifies.
+function dispatcherFunctionLexicalBinding(identifier) {
+  const name = identifier.text
+  for (let scope = identifier.parent; scope; scope = scope.parent) {
+    if (ts.isCaseBlock(scope)) {
+      for (const clause of scope.clauses) {
+        for (const statement of clause.statements) {
+          if (ts.isVariableStatement(statement)) {
+            for (const declaration of statement.declarationList.declarations) {
+              if (dispatcherFunctionBindingHasName(declaration.name, name)) return null
+            }
+          } else if (statement.name && ts.isIdentifier(statement.name) && statement.name.text === name) return null
+        }
+      }
+      continue
+    }
+    if (ts.isModuleBlock(scope) || ts.isClassDeclaration(scope)
+      || ts.isClassExpression(scope) || ts.isForStatement(scope) || ts.isForInStatement(scope)
+      || ts.isForOfStatement(scope)) return null
+    if (ts.isFunctionLike(scope) && scope.parameters.some((parameter) => dispatcherFunctionBindingHasName(parameter.name, name))) return null
+    if (ts.isCatchClause(scope) && scope.variableDeclaration && dispatcherFunctionBindingHasName(scope.variableDeclaration.name, name)) return null
+    if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue
+    const matches = []
+    for (const statement of scope.statements) {
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          if (dispatcherFunctionBindingHasName(declaration.name, name)) matches.push(declaration)
+        }
+      } else if (statement.name && ts.isIdentifier(statement.name) && statement.name.text === name) matches.push(statement)
+      else if (ts.isImportDeclaration(statement)) {
+        const clause = statement.importClause
+        if (clause?.name?.text === name) matches.push(clause)
+        const bindings = clause?.namedBindings
+        if (bindings && ts.isNamedImports(bindings)) {
+          for (const element of bindings.elements) if (element.name.text === name) matches.push(element)
+        } else if (bindings?.name?.text === name) matches.push(bindings)
+      }
+    }
+    if (matches.length) return matches.length === 1 ? matches[0] : DISPATCHER_FUNCTION_AMBIGUOUS
+  }
+  return null
+}
+
+// Mirrors ts-colors.mjs::absenceBindingUsesSafe(declaration, true) (factory
+// mode): the dispatcher FUNCTION's own binding may only ever appear as the
+// callee of a call expression (`name(...)`) anywhere it is lexically
+// visible in `declaration`'s enclosing block/module scope. Any other
+// occurrence — reassignment, a bare reference, a property read/write on the
+// function object, being passed as a value, aliased into another binding,
+// spread, etc. — fails the proof. This is what was missing: two prior fixes
+// each guarded the dispatcher-RESULT binding (`cfg`, via
+// dispatcherBindingUsesSafe above) but never the dispatcher FUNCTION's own
+// name.
+function dispatcherFunctionFactoryUsesSafe(declaration) {
+  if (!declaration.name || !ts.isIdentifier(declaration.name)) return false
+  const name = declaration.name.text
+  let scope = declaration.parent
+  while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+  if (!scope) return false
+  let safe = true
+  const visit = (node) => {
+    if (!safe) return
+    if (ts.isIdentifier(node) && node.text === name && node !== declaration.name) {
+      const parent = node.parent
+      if (ts.isImportSpecifier(parent) && parent === declaration) return
+      if (!ts.isCallExpression(parent) || parent.expression !== node) { safe = false; return }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(scope)
+  return safe
+}
+
+// Resolves a finite-dispatcher call's callee to its own declaration under
+// the same proof strength ts-colors.mjs::absenceFactory demands of a colour
+// dispatcher's callee: an unambiguous lexical resolution
+// (dispatcherFunctionLexicalBinding), the resolved binding's own name used
+// ONLY as `name(...)` anywhere it is visible (dispatcherFunctionFactoryUsesSafe
+// — this is the guard the independent re-review found missing), and — for an
+// imported dispatcher — the SAME two proofs re-applied to the EXPORTING
+// module's own top-level declaration (the local import specifier is checked
+// first via the shared pre-check above, the module is then loaded and its
+// export re-checked import-side), gated on the module parsing clean, on
+// exactly one matching top-level function declaration existing in it, and on
+// that declaration actually carrying an `export` modifier.
+function dispatcherFunctionDeclarationFor(node, ctx) {
+  const callee = unwrap(node)
+  if (!callee || !ts.isIdentifier(callee)) return null
+  let declaration = dispatcherFunctionLexicalBinding(callee)
+  if (!declaration || declaration === DISPATCHER_FUNCTION_AMBIGUOUS) return null
+  if (!dispatcherFunctionFactoryUsesSafe(declaration)) return null
+  if (ts.isImportSpecifier(declaration)) {
+    const statement = declaration.parent.parent.parent
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) return null
+    const modulePath = governedModulePath(callee.getSourceFile().fileName, statement.moduleSpecifier.text, ctx.modules)
+    const record = modulePath && moduleRecord(ctx, modulePath)
+    if (!record || (record.sourceFile.parseDiagnostics ?? []).length) return null
+    const imported = declaration.propertyName?.text ?? declaration.name.text
+    const matches = record.sourceFile.statements.filter((statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === imported)
+    if (matches.length !== 1) return null
+    declaration = matches[0]
+    if (!declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)
+      || !dispatcherFunctionFactoryUsesSafe(declaration)) return null
+    return declaration
+  }
+  if (ts.isFunctionDeclaration(declaration)) return ts.isSourceFile(declaration.parent) ? declaration : null
+  if (ts.isVariableDeclaration(declaration)) {
+    if (!isConstVariableDeclaration(declaration) || !ts.isVariableDeclarationList(declaration.parent)
+      || !ts.isVariableStatement(declaration.parent.parent) || !ts.isSourceFile(declaration.parent.parent.parent)) return null
+    const initializer = unwrap(declaration.initializer)
+    if (initializer && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) return initializer
+  }
+  return null
 }
 
 // Sentinel: a clause that provably never returns a value (an
