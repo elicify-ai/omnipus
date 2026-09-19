@@ -291,7 +291,7 @@ export function DiagnosticsSection() {
                         <IssueCard
                           key={issue.id}
                           issue={issue}
-                          config={cfg}
+                          severity={severity}
                           expanded={expandedIssue === issue.id}
                           onToggle={() =>
                             setExpandedIssue(expandedIssue === issue.id ? null : issue.id)
@@ -327,15 +327,16 @@ export function DiagnosticsSection() {
 
 function IssueCard({
   issue,
-  config,
+  severity,
   expanded,
   onToggle,
 }: {
   issue: DoctorIssue
-  config: (typeof SEVERITY_CONFIG)[keyof typeof SEVERITY_CONFIG]
+  severity: keyof typeof SEVERITY_CONFIG
   expanded: boolean
   onToggle: () => void
 }) {
+  const config = SEVERITY_CONFIG[severity]
   return (
     <div
       role="button"
