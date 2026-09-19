@@ -13,9 +13,12 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // stopGracePeriod is how long Stop waits for taskkill to take effect.
@@ -25,77 +28,56 @@ var stopGracePeriod = 3 * time.Second
 // pollInterval is how often Stop polls for process death.
 var pollInterval = 100 * time.Millisecond
 
-// errWmicUnavailable is returned by wmicCheckProcess when wmic is not on PATH.
-// Callers use it to distinguish "tool missing" from "process not found".
-var errWmicUnavailable = errors.New("daemon: wmic not found on PATH")
-
-// wmicCheckProcess invokes wmic to check whether pid is alive and belongs to
-// an omnipus binary.
-//
-// Return values:
-//   - (true, true, nil)   — pid is alive and is an omnipus process
-//   - (true, false, nil)  — pid is alive but is NOT an omnipus process
-//   - (false, false, nil) — pid does not exist (wmic reported no rows)
-//   - (false, false, err) — identity could NOT be determined (wmic missing or
-//     unexpected exec error); callers MUST treat this as "unknown" (fail-safe)
-//     and MUST NOT act as if the process were dead.
-func wmicCheckProcess(pid int) (alive bool, isOmnipus bool, err error) {
-	// Detect wmic absence before invoking it. Win11 24H2+ removed wmic.
-	if _, lookErr := exec.LookPath("wmic"); lookErr != nil {
-		return false, false, errWmicUnavailable
-	}
-
-	pidStr := fmt.Sprintf("%d", pid)
-	out, execErr := exec.Command(
-		"wmic", "process", "where",
-		fmt.Sprintf("ProcessId=%s", pidStr),
-		"get", "Name",
-	).Output()
-	if execErr != nil {
-		// wmic returns non-zero when the PID does not exist AND on some
-		// error conditions (e.g. WMI service not running). Distinguish them
-		// by inspecting the output: a clean "no instance" from wmic produces
-		// an exit code but specific output; any other failure is unknown.
-		outStr := strings.ToLower(strings.TrimSpace(string(out)))
-		if strings.Contains(outStr, "no instance") || strings.Contains(outStr, "not found") {
-			// Clean "process does not exist" path.
-			return false, false, nil
+// processImageName reports whether pid exists and, when readable, the name of
+// its executable. It uses the Windows process API directly because wmic is
+// deprecated and is no longer installed on current Windows runners and
+// consumer installs.
+func processImageName(pid int) (alive bool, exeName string, err error) {
+	handle, openErr := windows.OpenProcess(
+		windows.PROCESS_QUERY_LIMITED_INFORMATION,
+		false,
+		uint32(pid),
+	)
+	if openErr != nil {
+		// Windows reports an invalid PID as an invalid parameter. Treat that
+		// as a confirmed dead process; any other OpenProcess failure remains
+		// unknown so callers continue to fail safe.
+		if errors.Is(openErr, windows.ERROR_INVALID_PARAMETER) {
+			return false, "", nil
 		}
-		// Unexpected wmic failure — we cannot determine the process state.
-		return false, false, fmt.Errorf("daemon: wmic query failed: %w", execErr)
+		return false, "", fmt.Errorf("daemon: open process %d: %w", pid, openErr)
 	}
+	defer windows.CloseHandle(handle)
 
-	// wmic output example when the process exists:
-	//   Name
-	//   omnipus.exe
-	lines := strings.Split(string(out), "\n")
-	for _, line := range lines[1:] { // skip header row
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		return true, strings.Contains(strings.ToLower(line), "omnipus"), nil
+	var size uint32 = 32768
+	buffer := make([]uint16, size)
+	if queryErr := windows.QueryFullProcessImageName(handle, 0, &buffer[0], &size); queryErr != nil {
+		return true, "", fmt.Errorf("daemon: query process image %d: %w", pid, queryErr)
 	}
-	// No data rows after the header → process does not exist.
-	return false, false, nil
+	return true, filepath.Base(windows.UTF16ToString(buffer[:size])), nil
 }
 
 // checkProcess returns (alive, isOmnipus, identityErr).
 //
-// On Windows we use wmic to check process existence and name. When wmic is
-// absent (Win11 24H2+) or returns an unexpected error, identity CANNOT be
-// determined — identityErr is set to the underlying error, signalling to
-// Status and Stop that they must fail safe (refuse to act, do not clear the
+// Windows can deny even limited access to a live process. In that case identity
+// CANNOT be determined — identityErr is set to the underlying error, signalling
+// to Status and Stop that they must fail safe (refuse to act, do not clear the
 // PID file, return an error to the caller).
 func checkProcess(pid int) (alive bool, isOmnipus bool, identityErr error) {
-	a, o, err := wmicCheckProcess(pid)
+	alive, exeName, err := processImageName(pid)
 	if err != nil {
 		slog.Warn("daemon: cannot determine process identity — failing safe",
 			"pid", pid, "error", err)
 		// Return identityErr so callers can distinguish "unknown" from "not ours".
 		return false, false, fmt.Errorf("daemon: process identity check failed: %w", err)
 	}
-	return a, o, nil
+	if !alive {
+		return false, false, nil
+	}
+	if exeName == "" {
+		return false, false, nil
+	}
+	return true, strings.Contains(strings.ToLower(exeName), "omnipus"), nil
 }
 
 // spawnProcess launches exe with the given args in a new process group using
