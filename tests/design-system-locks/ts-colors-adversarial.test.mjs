@@ -861,3 +861,291 @@ export const X = ({ r }) => {
   // to unsupported|hasDetail (the pre-fix behaviour).
   assert.deepEqual(scan({ path, source, policy: collisionPolicy }).map(({ ruleId, syntax }) => `${ruleId}|${syntax}`), [])
 })
+
+// Nested-helper parameter-frame propagation (lead probe "nested-frame",
+// glm-colours-collision-lead-probes.json, still failing at handover: the
+// identifier reentrancy marker in inspectClassExpr/inspectCssValueExpr keyed
+// itself on the identifier's bare text, so two distinct parameters that
+// happen to share a name (outer(c) forwarding into inner(c)) collided on the
+// same marker and the second, correctly-resolvable occurrence was reported
+// as a false self-cycle (ts-colors/unsupported|c) instead of resolving
+// through to the raw call argument. The module-scope `c` token must never be
+// substituted for the call argument either — that would be a silent pass.
+
+test('nested helper parameter frame propagates the raw call argument through two pure levels', () => {
+  const source = `const c = '${GOV}'
+function inner(c) { return c }
+function outer(c) { return inner(c) }
+export function View() { return <i className={outer('text-red-500')}/> }`
+  const findings = scan({ path, source, policy: collisionPolicy })
+  assert.deepEqual(findings.map(({ ruleId, syntax }) => `${ruleId}|${syntax}`), ['ts-colors/raw-color|text-red-500'])
+  assert.ok(!findings.some((f) => f.ruleId === 'ts-colors/unsupported'), 'must not fall back to false self-cycle on the shared parameter name')
+})
+
+test('nested helper parameter frame propagates the raw call argument through three pure levels', () => {
+  const source = `const c = '${GOV}'
+function innermost(c) { return c }
+function inner(c) { return innermost(c) }
+function outer(c) { return inner(c) }
+export function View() { return <i className={outer('text-red-500')}/> }`
+  assert.deepEqual(
+    scan({ path, source, policy: collisionPolicy }).map(({ ruleId, syntax }) => `${ruleId}|${syntax}`),
+    ['ts-colors/raw-color|text-red-500'],
+  )
+})
+
+test('nested helper parameter shadowing a governed module const still reports the raw call argument, never the shadowed token', () => {
+  // Same shape as the two-level case, restated to make the fail-closed
+  // requirement explicit: the module-scope `c` is governed (GOV); if the
+  // nested-frame resolution ever fell back to the name-keyed module map
+  // instead of the positional call-argument frame, this would silently pass
+  // clean instead of reporting the raw argument actually painted at runtime.
+  const source = `const c = '${GOV}'
+function inner(c) { return c }
+function outer(c) { return inner(c) }
+export function View() { return <i className={outer('text-red-500')}/> }`
+  const findings = scan({ path, source, policy: collisionPolicy })
+  assert.equal(findings.length, 1, 'the shadowed module token must not suppress the raw call-argument finding')
+  assert.deepEqual(findings.map((f) => `${f.ruleId}|${f.syntax}`), ['ts-colors/raw-color|text-red-500'])
+})
+
+test('nested helper parameter shadowing a raw module const stays clean when the call argument is governed', () => {
+  const source = `const c = 'text-red-500'
+function inner(c) { return c }
+function outer(c) { return inner(c) }
+export function View() { return <i className={outer('${GOV}')}/> }`
+  assert.deepEqual(scan({ path, source, policy: collisionPolicy }), [])
+})
+
+test('nested helper self-recursion blocks fail-closed without hanging', () => {
+  const source = `function loop(c) { return loop(c) }
+export function View() { return <i className={loop('text-red-500')}/> }`
+  const findings = scan({ path, source, policy: collisionPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+test('nested helper mutual recursion blocks fail-closed without hanging', () => {
+  const source = `function pingpong(c) { return pong(c) }
+function pong(c) { return pingpong(c) }
+export function View() { return <i className={pingpong('text-red-500')}/> }`
+  const findings = scan({ path, source, policy: collisionPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+test('opaque argument at the inner nested level blocks without leaking the outer call argument', () => {
+  // outer forwards an opaque call (unknown()) into inner, not its own
+  // parameter; the raw literal reaching outer() must never be substituted
+  // for the genuinely unresolved inner argument.
+  const source = `function inner(c) { return c }
+function outer(x) { return inner(unknown()) }
+export function View() { return <i className={outer('text-red-500')}/> }`
+  const findings = scan({ path, source, policy: collisionPolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+// Destructured-binding member resolution (Task 2 capability, worklist pattern
+// `const { color } = fileTypeMeta(...)`; also GoalIndicator.tsx's
+// `const { className } = describeNonActiveState(...)`): an object-destructured
+// local whose source resolves to a finite set of provably-literal candidate
+// objects (a local/imported pure factory's return branches, or a plain
+// object literal) is proven per property, the same way a direct
+// `config.textClass` member access already is — declarationInit's scalar
+// contract can't express this (see destructuredBindingElement's header
+// comment), so it is proven separately and only consulted after the ordinary
+// LOOKUP_UNBOUND path has already failed.
+const destructurePolicy = { tokenCssNames: ['--color-muted', '--color-border'], resolvedTokens: {} }
+
+test('destructured member from a local factory call resolves to its raw literal at a style paint sink', () => {
+  const source = [
+    "function fileTypeMeta(name) {",
+    "  if (name.endsWith('.pdf')) return { icon: 'pdf', color: '#E5484D' }",
+    "  return { icon: 'file', color: '#64748B' }",
+    "}",
+    "export function View({ entry }) {",
+    "  const { icon, color } = fileTypeMeta(entry.filename)",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy })
+  assert.deepEqual(
+    findings.map(({ ruleId, syntax }) => `${ruleId}|${syntax}`).sort(),
+    ['ts-colors/raw-color|#64748b', 'ts-colors/raw-color|#e5484d'],
+  )
+})
+
+test('destructured member resolving to a governed token in every branch is clean', () => {
+  const source = [
+    "function describeState(state) {",
+    "  if (state === 'a') return { className: 'text-[var(--color-muted)]' }",
+    "  return { className: 'text-[var(--color-border)]' }",
+    "}",
+    "export function View({ state }) {",
+    "  const { className } = describeState(state)",
+    "  return <span className={className}/>",
+    "}",
+  ].join('\n')
+  assert.deepEqual(scan({ path, source, policy: destructurePolicy }), [])
+})
+
+test('a destructured default value stays unsupported, never the default silently substituted', () => {
+  const source = [
+    "function fileTypeMeta() { return {} }",
+    "export function View() {",
+    "  const { color = '#E5484D' } = fileTypeMeta()",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+test('a property missing from at least one candidate branch stays unsupported, never partially proven', () => {
+  // Property key `tone`, not `color` (see the mutated/unknown-source
+  // template test below for why): isolates this from the independent
+  // static-object-literal scan so the assertion verifies only the
+  // partial-coverage question.
+  const source = [
+    "function fileTypeMeta(name) {",
+    "  if (name.endsWith('.pdf')) return { tone: '#E5484D' }",
+    "  return { icon: 'file' }",
+    "}",
+    "export function View({ entry }) {",
+    "  const { tone: color } = fileTypeMeta(entry.filename)",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+test('a destructured binding reassigned after declaration voids the proof (mutated variant)', () => {
+  // Property key `tone`, not `color`, for the same static-scan-isolation
+  // reason as above.
+  const source = [
+    "function fileTypeMeta() { return { tone: '#E5484D' } }",
+    "export function View({ override }) {",
+    "  let { tone: color } = fileTypeMeta()",
+    "  if (override) { color = override }",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+test('destructuring from an unresolvable external module call stays unsupported (unknown-source variant)', () => {
+  const source = [
+    "import { fileTypeMeta } from '@/missing'",
+    "export function View({ entry }) {",
+    "  const { color } = fileTypeMeta(entry.filename)",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy, modules: { [path]: source } })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+test('array-destructured bindings stay unsupported — index is not a stable key', () => {
+  const source = [
+    "function fileTypeMeta() { return ['#E5484D', 'pdf'] }",
+    "export function View() {",
+    "  const [color] = fileTypeMeta()",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+test('nested destructured patterns stay unsupported — only a simple top-level binding is proven', () => {
+  // Property key `tone`, not `color` (see the mutated/unknown-source
+  // template test above for why): isolates this from the independent
+  // static-object-literal scan so the assertion verifies only the
+  // nested-pattern question.
+  const source = [
+    "function fileTypeMeta() { return { meta: { tone: '#E5484D' } } }",
+    "export function View() {",
+    "  const { meta: { tone: color } } = fileTypeMeta()",
+    "  return <i style={{ color }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy })
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'color').length, 1)
+  assert.equal(findings.filter((f) => f.ruleId === 'ts-colors/raw-color').length, 0)
+})
+
+// css-value template splicing of a destructured base (Task 2 capability,
+// worklist pattern `${color}22`): only a base that resolves to a plain
+// string literal in EVERY branch is safe to splice into a compound css-value
+// template — see literalDestructuredTemplateTargets's header comment for why
+// this is deliberately narrower than class-mode's template fan-out.
+
+test('a template alpha suffix on a destructured literal base reports the proven raw values, not the whole template', () => {
+  const source = [
+    "function fileTypeMeta(name) {",
+    "  if (name.endsWith('.pdf')) return { color: '#E5484D' }",
+    "  return { color: '#64748B' }",
+    "}",
+    "export function View({ entry }) {",
+    "  const { color } = fileTypeMeta(entry.filename)",
+    "  return <i style={{ backgroundColor: `${color}22` }}/>",
+    "}",
+  ].join('\n')
+  const findings = scan({ path, source, policy: destructurePolicy })
+  assert.deepEqual(
+    findings.map(({ ruleId, syntax }) => `${ruleId}|${syntax}`).sort(),
+    ['ts-colors/raw-color|#64748b', 'ts-colors/raw-color|#e5484d'],
+  )
+})
+
+test('a template alpha suffix on an unproven (non-destructured) value stays unsupported, never spliced', () => {
+  const source = [
+    'export function View({ color }) {',
+    '  return <i style={{ backgroundColor: `${color}22` }}/>',
+    '}',
+  ].join('\n')
+  assert.deepEqual(scan({ path, source, policy: destructurePolicy }).map((f) => f.ruleId), ['ts-colors/unsupported'])
+})
+
+test('a template alpha suffix on a destructured non-literal value stays unsupported (mutated/unknown-source variant)', () => {
+  // Property key `tone`, not `color`: keeps this isolated from the
+  // independent static-object-literal scan (inspectNode fires
+  // inspectStyleObject on EVERY object literal with a colour-shaped key,
+  // anywhere it is written, regardless of how it is later read) so the
+  // assertion below verifies only the template-splice question — the base
+  // resolves via a rename (`tone: color`) to a literal in one branch and an
+  // opaque parameter in the other, so it is not provably literal-only and
+  // must never be spliced.
+  const source = [
+    "function fileTypeMeta(name, unresolvedTone) {",
+    "  if (name.endsWith('.pdf')) return { tone: '#E5484D' }",
+    "  return { tone: unresolvedTone }",
+    "}",
+    "export function View({ entry, tone }) {",
+    "  const { tone: color } = fileTypeMeta(entry.filename, tone)",
+    "  return <i style={{ backgroundColor: `${color}22` }}/>",
+    "}",
+  ].join('\n')
+  assert.deepEqual(scan({ path, source, policy: destructurePolicy }).map((f) => f.ruleId), ['ts-colors/unsupported'])
+})
+
+test('an unproven-type numeric template is unaffected by the destructured-literal escape hatch (regression pin)', () => {
+  // Guards the named-numeric-proof adversarial suite above: `value` here is
+  // a destructured PARAMETER (not a destructured local variable), so
+  // destructuredBindingElement's function-parameter bail-out means
+  // literalDestructuredTemplateTargets must return null and this must fall
+  // straight through to the pre-existing numeric-proof/unresolved path,
+  // unchanged by either Task 2 capability.
+  const policy = { tokenCssNames: ['--color-primary'], resolvedTokens: {} }
+  const source = 'interface Props { value: string }; function Range({ value }: Props) { return <i style={{ background: `linear-gradient(var(--color-primary) ${value}%, transparent)` }}/> }'
+  const findings = scan({ path, source, policy })
+  assert.deepEqual(findings.map((f) => f.ruleId), ['ts-colors/unsupported'])
+})

@@ -890,10 +890,23 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
       return
     }
     if (init === LOOKUP_MISSING || init === LOOKUP_UNBOUND || !init) {
+      const destructured = resolveDestructuredTargets(node, ctx, stack)
+      if (destructured) {
+        if (!destructured.resolved) { emitUnsupported(ctx, node); return }
+        for (const target of destructured.targets) inspectCssValueExpr(target, ctx, stack, boundary)
+        return
+      }
       emitUnsupported(ctx, node)
       return
     }
-    const marker = `${node.getSourceFile().fileName}#${node.text}`
+    // Marker keyed by this identifier occurrence's own source position, not
+    // its bare text: two distinct bindings that happen to share a name
+    // (e.g. a parameter forwarded into a nested helper's same-named
+    // parameter) are different positions and must not collide. A genuine
+    // resolution cycle always revisits the same declaring node (and so the
+    // same position) and is still caught (nested-helper parameter-frame
+    // propagation fix, glm-colours-collision-lead-probes "nested-frame").
+    const marker = `${node.getSourceFile().fileName}#${node.pos}`
     if (stack.has(marker)) emitUnsupported(ctx, node)
     else {
       stack.add(marker)
@@ -994,10 +1007,23 @@ function inspectClassExpr(node, ctx, stack, boundary = null) {
       return
     }
     if (init === LOOKUP_MISSING || init === LOOKUP_UNBOUND || !init) {
+      const destructured = resolveDestructuredTargets(node, ctx, stack)
+      if (destructured) {
+        if (!destructured.resolved) { emitUnsupported(ctx, node); return }
+        for (const target of destructured.targets) inspectClassExpr(target, ctx, stack)
+        return
+      }
       emitUnsupported(ctx, node)
       return
     }
-    const marker = `${node.getSourceFile().fileName}#${node.text}`
+    // Marker keyed by this identifier occurrence's own source position, not
+    // its bare text: two distinct bindings that happen to share a name
+    // (e.g. a parameter forwarded into a nested helper's same-named
+    // parameter) are different positions and must not collide. A genuine
+    // resolution cycle always revisits the same declaring node (and so the
+    // same position) and is still caught (nested-helper parameter-frame
+    // propagation fix, glm-colours-collision-lead-probes "nested-frame").
+    const marker = `${node.getSourceFile().fileName}#${node.pos}`
     if (stack.has(marker)) emitUnsupported(ctx, node)
     else {
       stack.add(marker)
@@ -1469,11 +1495,30 @@ function inspectTemplate(node, ctx, mode, stack) {
   for (const span of node.templateSpans) {
     const text = tryString(span.expression, ctx, stack)
     if (text === null) {
+      // Narrow escape hatch (Task 2 capability), deliberately NOT a mirror of
+      // class mode's per-span fan-out below: a css-value template can
+      // assemble a compound functional value (e.g. linear-gradient(...)), so
+      // an unverified RUNTIME value (parameter, opaque call, extension
+      // boundary) must never be spliced into it — that would be genuine
+      // CSS-syntax-injection surface, unlike a whitespace-separated Tailwind
+      // class list. Only a destructured member whose every resolved source
+      // object is provably fixed at build time (a plain string literal in
+      // every branch of a local/imported pure factory — the fileTypeMeta
+      // shape: `const { color } = fileTypeMeta(...)`) counts as "the base
+      // value is proven"; a bare `${value}` reaching a parameter/boundary
+      // keeps the unconditional numeric-proof requirement below untouched
+      // (named numeric proof adversarial suite). css-decl and css-text also
+      // stay untouched: a template there can span multiple declarations or
+      // property names, which this literal-only proof does not model.
+      const literalTargets = mode === 'css' ? literalDestructuredTemplateTargets(span.expression, ctx, stack) : null
       if (mode === 'class') {
         const expression = unwrap(span.expression)
         const binding = ts.isIdentifier(expression) ? resolveIdentInit(expression, ctx, stack) : null
         if (isParameterBinding(binding) && binding.forwardClassName) emitUnsupported(ctx, expression)
         else inspectClassExpr(span.expression, ctx, stack)
+      }
+      else if (literalTargets) {
+        for (const target of literalTargets) analyzeCssValue(target.text, ctx, target)
       }
       else if (!isDefinitelyNumeric(span.expression, ctx)) unresolved = true
       parts.push('')
@@ -1692,6 +1737,142 @@ function declarationInit(declaration, ident, ctx, stack) {
   return declaration
 }
 
+// Object-destructured local bindings (`const { color } = factory()`) are
+// never valued by positionalInit/declarationInit above — a pattern
+// declaration.name always returns LOOKUP_UNBOUND there (declarationInit's
+// `!ts.isIdentifier(declaration.name)` guard) because that path's contract is
+// one scalar continuation node, and a destructured member's value depends on
+// which property of which resolved SOURCE object, not a single node. This is
+// proven separately, as a finite fan-out over every statically-resolvable
+// source object — resolveToObjects already covers literal objects, `as
+// const` records, and calls to local/imported pure factory functions with
+// multiple return branches (worklist pattern: `const { color } = fileTypeMeta(...)`
+// reaching a style paint sink). Called by class/css-value identifier
+// resolution only AFTER the ordinary LOOKUP_UNBOUND path has already failed,
+// so it changes nothing about existing name-keyed, parameter, or plain
+// single-identifier resolution.
+function destructuredBindingElement(ident) {
+  const name = ident.text
+  for (let scope = ident.parent; scope; scope = scope.parent) {
+    if (ts.isCaseBlock(scope) || ts.isModuleBlock(scope) || ts.isClassDeclaration(scope)
+      || ts.isClassExpression(scope) || ts.isForStatement(scope) || ts.isForInStatement(scope)
+      || ts.isForOfStatement(scope)) return null
+    if (isFunctionLike(scope) && scope.parameters.some(parameter => absenceBindingHasName(parameter.name, name))) return null
+    if (ts.isCatchClause(scope) && scope.variableDeclaration && absenceBindingHasName(scope.variableDeclaration.name, name)) return null
+    if (!ts.isBlock(scope) && !ts.isSourceFile(scope)) continue
+    const matches = []
+    for (const statement of scope.statements) {
+      if (!ts.isVariableStatement(statement)) continue
+      for (const declaration of statement.declarationList.declarations) {
+        if (absenceBindingHasName(declaration.name, name)) matches.push(declaration)
+      }
+    }
+    if (matches.length) {
+      if (matches.length !== 1) return null
+      const declaration = matches[0]
+      if (ts.isIdentifier(declaration.name)) return null
+      return destructuredElementOf(declaration, declaration.name, name)
+    }
+  }
+  return null
+}
+
+// Only a simple, unrenamed-or-renamed, non-rest, non-default, non-nested
+// element is a stable proof target. A rest collection, a default fallback
+// value, or a nested sub-pattern each carry aggregation/fallback semantics
+// this proof does not model, so they stay unsupported (never guessed at).
+function destructuredElementOf(declaration, pattern, name) {
+  if (!ts.isObjectBindingPattern(pattern)) return null // array patterns: index is not a stable key
+  for (const element of pattern.elements) {
+    if (!ts.isBindingElement(element)) continue
+    if (element.dotDotDotToken) { if (absenceBindingHasName(element.name, name)) return null; continue }
+    if (!ts.isIdentifier(element.name)) { if (absenceBindingHasName(element.name, name)) return null; continue }
+    if (element.name.text !== name) continue
+    if (element.initializer) return null
+    const key = element.propertyName ? propertyNameOf(element.propertyName) : element.name.text
+    if (key === null) return null
+    if (destructuredElementReassigned(declaration, element)) return null
+    return { declaration, key }
+  }
+  return null
+}
+
+// Same write-detection shape as wholeValueWritesAbsent, applied to the
+// destructured local name itself: a downstream reassignment of the binding
+// would silently replace the proven value with something unproven, so it
+// must void the proof rather than resolve against stale data.
+function destructuredElementReassigned(declaration, element) {
+  const name = element.name.text
+  let scope = declaration.parent
+  while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+  if (!scope) return true
+  let unsafe = false
+  const visit = node => {
+    if (unsafe) return
+    if (ts.isIdentifier(node) && node.text === name && node !== element.name) {
+      let expression = node
+      while (expression.parent && (ts.isParenthesizedExpression(expression.parent)
+        || ts.isAsExpression(expression.parent) || ts.isNonNullExpression(expression.parent))) expression = expression.parent
+      const use = expression.parent
+      if ((ts.isBinaryExpression(use) && use.left === expression && use.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && use.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+        || ((ts.isForOfStatement(use) || ts.isForInStatement(use)) && use.initializer === expression)
+        || ts.isDeleteExpression(use)
+        || (ts.isPrefixUnaryExpression(use) && (use.operator === ts.SyntaxKind.PlusPlusToken || use.operator === ts.SyntaxKind.MinusMinusToken))
+        || (ts.isPostfixUnaryExpression(use) && (use.operator === ts.SyntaxKind.PlusPlusToken || use.operator === ts.SyntaxKind.MinusMinusToken))) { unsafe = true; return }
+    }
+    if (!unsafe) ts.forEachChild(node, visit)
+  }
+  visit(scope)
+  return unsafe
+}
+
+// Resolve a destructured identifier to the finite set of property-value
+// expressions across every statically-provable source object. Returns null
+// when this identifier is not a destructuring case at all (callers fall
+// through to their existing LOOKUP_UNBOUND handling unchanged); returns
+// { resolved: false } when it IS a destructuring case but cannot be proven
+// (unresolvable source, incomplete member coverage, or the property is
+// missing from at least one candidate branch — never guessed, never
+// defaulted) — callers must still block. { resolved: true, targets } is only
+// returned when the named property is present in every resolved candidate.
+function resolveDestructuredTargets(ident, ctx, stack) {
+  const found = destructuredBindingElement(ident)
+  if (!found) return null
+  const { declaration, key } = found
+  const resolution = { incomplete: false }
+  const objects = resolveToObjects(unwrap(declaration.initializer), ctx, stack, resolution)
+  if (resolution.incomplete || objects.length === 0) return { resolved: false }
+  const targets = []
+  for (const obj of objects) {
+    const value = propertyInit(obj, key)
+    if (!value) return { resolved: false }
+    targets.push(value)
+  }
+  return { resolved: true, targets }
+}
+
+// Only a bare string literal (or no-substitution template) is fixed at
+// build time and therefore safe to splice into a larger css-value template
+// with no runtime-injection surface — see inspectTemplate's css-mode branch.
+function isLiteralCssValue(node) {
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
+}
+
+// css-value template escape hatch for a destructured identifier span (Task 2
+// capability): returns the finite set of literal target nodes only when the
+// span is a bare identifier resolving, via resolveDestructuredTargets, to
+// values that are ALL plain string literals — never a parameter, call, or
+// any other runtime-shaped value. Returns null otherwise (not this case at
+// all, or resolved to something not provably literal), so the caller falls
+// back to the pre-existing numeric-proof/unresolved behavior unchanged.
+function literalDestructuredTemplateTargets(expression, ctx, stack) {
+  const node = unwrap(expression)
+  if (!ts.isIdentifier(node)) return null
+  const destructured = resolveDestructuredTargets(node, ctx, stack)
+  if (!destructured?.resolved || !destructured.targets.every(isLiteralCssValue)) return null
+  return destructured.targets
+}
+
 // A parameter is owned by its function; its runtime value comes from the
 // active caller/callee frame's call argument, or the parameter default, or —
 // when no frame is being resolved — the walk-time binding of that same
@@ -1863,7 +2044,9 @@ function resolveToArrays(node, ctx, stack, resolution = null) {
   node = unwrap(node)
   if (ts.isArrayLiteralExpression(node)) return [node]
   if (ts.isIdentifier(node)) {
-    const marker = `${node.getSourceFile().fileName}#array:${node.text}`
+    // Position-keyed, not text-keyed — see inspectClassExpr's identifier
+    // marker for the shadowing rationale (nested-helper parameter-frame fix).
+    const marker = `${node.getSourceFile().fileName}#array:${node.pos}`
     if (!stack.has(marker)) {
       const next = new Set(stack).add(marker)
       const init = resolveIdentInit(node, ctx, next)
@@ -1879,7 +2062,9 @@ function resolveToObjects(node, ctx, stack, resolution = null) {
   node = unwrap(node)
   if (ts.isObjectLiteralExpression(node)) return [node]
   if (ts.isIdentifier(node)) {
-    const marker = `${node.getSourceFile().fileName}#object:${node.text}`
+    // Position-keyed, not text-keyed — see inspectClassExpr's identifier
+    // marker for the shadowing rationale (nested-helper parameter-frame fix).
+    const marker = `${node.getSourceFile().fileName}#object:${node.pos}`
     if (!stack.has(marker)) {
       const next = new Set(stack).add(marker)
       const init = resolveIdentInit(node, ctx, next)
