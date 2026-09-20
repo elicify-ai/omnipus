@@ -12,6 +12,7 @@ Scripts are applied ONE AT A TIME by the lead, because 255 of the 302 affected f
 |---|---|---|---|---|---|---|---|
 | 1 | codemod-status-source --literal | 13 ledger items (status hexes -> the governed source) | 2 files, 15 edits, 0 refusals; re-run plans 0 | exit 0 | 707/707 related | PASS, 0 errors; debt 3451 -> 3380 (71 removed, 0 added), 0 unsupported | see below |
 | 2 | codemod-type-properties (main pass) | weight, line height, letter spacing, family, plus the inert line-height in 12 logo files | 34 files, 51 edits, 16 refusals; re-run plans 0 | exit 0 | 3068/3068 related | PASS, 0 errors; debt 3341 (39 removed, 0 added), 0 unsupported | this commit |
+| 3 | codemod-type-scale-css | text sizes and families in CSS files and inline styles | 9 files, 36 edits, 10 refusals; re-run plans 0 | exit 0 | 2332/2332 related | PASS, 0 errors; debt 3321 (20 removed, 0 added), 0 unsupported | this commit |
 
 **Row 1 note — applied twice.** The first attempt was reverted by this gate: it produced 17 `unsupported` findings, because neither scanner could read `statusContract.<status>.resolvedColor`, the governed source the repair moves code onto. Fixed in commit fc33bb643 (both scanners now resolve that read structurally, and a second dispatcher handling the `${color}1a` tint idiom was wired in too), then re-applied byte-identically. Three tests compared hex strings exactly and failed on letter case alone (`#9CA3AF` vs `#9ca3af`, the same colour); they now compare case-insensitively.
 

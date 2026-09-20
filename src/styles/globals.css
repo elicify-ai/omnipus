@@ -193,7 +193,7 @@ body {
   margin: 0;
   background-color: var(--color-primary);
   color: var(--color-secondary);
-  font-family: var(--font-body);
+  font-family: var(--font-family-body);
   line-height: var(--font-line-height-body);
   /* THE iOS scroll lock (stable version). overflow:hidden alone does not
      stop iPad/iOS Safari from PANNING THE VISUAL VIEWPORT when a scroll
@@ -218,13 +218,13 @@ body {
 
 /* Typography utilities */
 .font-headline {
-  font-family: var(--font-headline);
+  font-family: var(--font-family-heading);
 }
 .font-body {
-  font-family: var(--font-body);
+  font-family: var(--font-family-body);
 }
 .font-mono {
-  font-family: var(--font-mono);
+  font-family: var(--font-family-mono);
 }
 
 /* Scrollbar styling */

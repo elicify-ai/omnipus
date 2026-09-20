@@ -231,7 +231,7 @@ export function ShikiCodeBlock({ language, code }: { language: string | undefine
       className="!bg-[var(--color-surface-2)] !rounded-b-md overflow-x-auto block w-full"
       style={{
         padding: '0.75rem 1rem',
-        fontSize: '11px',
+        fontSize: 'var(--type-code-size)',
         lineHeight: '1.65',
         fontFamily: 'var(--type-code-family)',
         margin: 0,

@@ -15,7 +15,7 @@ export function BrandDisclaimer({ className }: BrandDisclaimerProps) {
     <p
       className={className}
       style={{
-        fontSize: '0.75rem',
+        fontSize: 'var(--type-utility-xs-size)',
         lineHeight: 'var(--font-line-height-compact)',
         color: 'var(--color-secondary, #E2E8F0)',
         opacity: 0.55,

@@ -64,7 +64,7 @@
 .sovereign-flow .react-flow__attribution a {
   color: var(--color-muted);
   opacity: 0.5;
-  font-size: 9px;
+  font-size: var(--type-caption-size);
 }
 
 /* ── Handles ───────────────────────────────────────────────────────────────── */
@@ -86,7 +86,7 @@
   border: none;
   padding: 0;
   width: auto;
-  font-family: var(--font-body, 'Inter', sans-serif);
+  font-family: var(--font-family-body);
 }
 
 /* Hide the default selection outline; the node draws its own gold ring. */

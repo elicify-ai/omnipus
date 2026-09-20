@@ -192,7 +192,7 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
       {timeText && (
         <span
           style={{
-            fontSize: '0.65rem',
+            fontSize: 'var(--type-caption-size)',
             fontWeight: 'var(--font-weight-medium)',
             flexShrink: 0,
             color: CHIP_TEXT_COLOR,
@@ -203,7 +203,7 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
       )}
       <span
         style={{
-          fontSize: '0.7rem',
+          fontSize: 'var(--type-caption-size)',
           fontWeight: 'var(--font-weight-semibold)',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
@@ -290,8 +290,8 @@ function EmptyHint() {
       <p
         style={{
           color: 'var(--color-muted)',
-          fontSize: '0.875rem',
-          fontFamily: 'var(--font-body)',
+          fontSize: 'var(--type-body-compact-size)',
+          fontFamily: 'var(--font-family-body)',
           background: 'var(--color-surface-1)',
           padding: '8px 16px',
           borderRadius: '6px',
@@ -402,7 +402,7 @@ export function FullCalendarView({
         datesSet={handleDatesSet}
         // List-view empty text — themed via CSS (v6 uses noEventsContent, not noEventsText)
         noEventsContent={() => (
-          <span style={{ color: 'var(--color-muted)', fontSize: '0.875rem' }}>
+          <span style={{ color: 'var(--color-muted)', fontSize: 'var(--type-body-compact-size)' }}>
             No scheduled items
           </span>
         )}

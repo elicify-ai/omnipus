@@ -58,7 +58,7 @@
 /* ------------------------------------------------------------------ */
 
 .fc {
-  font-family: var(--font-body);
+  font-family: var(--font-family-body);
   color: var(--color-secondary);
 }
 
@@ -95,7 +95,7 @@
 
 .fc .fc-col-header-cell-cushion {
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -144,7 +144,7 @@
 .fc .fc-daygrid-day-number,
 .fc .fc-daygrid-day-top a {
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
   text-decoration: none;
 }
 
@@ -170,9 +170,9 @@
   border-radius: 9999px;
   background-color: var(--color-accent);
   color: #0a0a0b;
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
   font-weight: var(--font-weight-bold);
-  font-family: var(--font-body);
+  font-family: var(--font-family-body);
 }
 
 .fc-sovereign-day-number {
@@ -184,8 +184,8 @@
   padding: 0 4px;
   border-radius: 9999px;
   color: var(--color-muted);
-  font-size: 0.75rem;
-  font-family: var(--font-body);
+  font-size: var(--type-utility-xs-size);
+  font-family: var(--font-family-body);
 }
 
 /* ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@
   position: absolute;
   bottom: 4px;
   right: 6px;
-  font-size: 0.85rem;
+  font-size: var(--type-caption-size);
   font-weight: var(--font-weight-semibold);
   color: var(--color-accent);
   opacity: 0.45;
@@ -278,7 +278,7 @@
 }
 
 .fc .fc-timegrid-slot-label-cushion {
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   color: var(--color-muted);
   font-weight: var(--font-weight-regular);
 }
@@ -312,7 +312,7 @@
   flex-shrink: 0;
   margin-left: 6px;
   padding: 0 4px;
-  font-size: 0.65rem;
+  font-size: var(--type-caption-size);
   font-weight: var(--font-weight-semibold);
   line-height: 1;
   color: var(--fc-now-indicator-color);
@@ -375,7 +375,7 @@
 .fc .fc-list-day th {
   background: var(--color-surface-2);
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
   font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -393,7 +393,7 @@
 
 .fc .fc-list-event-time {
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
 }
 
 .fc .fc-list-event:hover td {
@@ -408,8 +408,8 @@
 
 .fc .fc-list-empty-cushion {
   color: var(--color-muted);
-  font-size: 0.875rem;
-  font-family: var(--font-body);
+  font-size: var(--type-body-compact-size);
+  font-family: var(--font-family-body);
 }
 
 /* ------------------------------------------------------------------ */
@@ -435,7 +435,7 @@
   border-radius: 6px 6px 0 0 !important;
   border-bottom: 1px solid var(--color-border) !important;
   padding: 4px 8px !important;
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -467,7 +467,7 @@
 /* "more" link that opens the popover */
 .fc .fc-daygrid-more-link {
   color: var(--color-accent) !important;
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   font-weight: var(--font-weight-semibold);
 }
 
@@ -543,7 +543,7 @@
 
 @media (max-width: 640px) {
   .fc .fc-col-header-cell-cushion {
-    font-size: 0.65rem;
+    font-size: var(--type-caption-size);
     letter-spacing: var(--font-letter-spacing-normal);
     padding: 4px 2px;
   }
@@ -551,12 +551,12 @@
   .fc .fc-daygrid-day-number,
   .fc .fc-sovereign-day-number,
   .fc .fc-sovereign-today-pill {
-    font-size: 0.65rem;
+    font-size: var(--type-caption-size);
     min-width: 20px;
     min-height: 20px;
   }
 
   .fc-sovereign-chip span {
-    font-size: 0.6rem;
+    font-size: var(--type-caption-size);
   }
 }

@@ -25,7 +25,7 @@ describe('Badge presentation contract', () => {
 describe('Badge error contrast contract', () => {
   it.each(['error', 'destructive'] as const)('uses the accessible label token while preserving the %s tint', (variant) => {
     render(<Badge variant={variant}>Attention</Badge>)
-    expect(screen.getByText('Attention')).toHaveClass('text-[var(--badge-error-foreground)]', 'bg-[var(--color-error)]/20')
+    expect(screen.getByText('Attention')).toHaveClass('text-[color:var(--badge-error-foreground)]', 'bg-[var(--color-error)]/20')
     expect(screen.getByText('Attention')).not.toHaveClass('text-[var(--color-error)]')
   })
 })
