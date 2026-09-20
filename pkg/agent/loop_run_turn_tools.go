@@ -1756,10 +1756,6 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 		return agentLoopRunTurnToolsExecuteReturn
 	}
 
-	if steerMsgs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
-		ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
-	}
-
 	// C2 (ADR-057 UAT 2026-08-03): a successful message_parent(kind=
 	// question, wait=true) call parks the CALLING child's own durable
 	// LifecycleRecord in needs_input (pkg/tools/message_parent.go's
@@ -1773,6 +1769,35 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	// FIRST (highest priority) because a park must win over an
 	// in-flight steering message or graceful interrupt too.
 	parked := ex.toolResult.ParksTurn
+
+	// Steering-queue dequeue (the issue #760 fix). The parking
+	// early-return at the end of this function does NOT carry
+	// pendingMessages out of the turnResult — a parked turn's
+	// turnResult has followUps/turnFailed but no pendingMessages
+	// field. A naive "always dequeue here" therefore drains
+	// steering messages into a buffer that nobody reads when the
+	// tool parks, AND processTurn's post-turn drain
+	// (session_worker.go:543, `for al.pendingSteeringCountForScope
+	// (target.SessionKey) > 0`) sees the queue empty and skips
+	// Continue. The resume message is silently dropped — exactly
+	// the founder's "answering the AskUserQuestion card kills the
+	// running turn; answers only surface on the next prompt"
+	// symptom in pkg/agent/loop_run_turn_tools.go:1759-1761 (pre-fix).
+	// Gate the dequeue on !parked so a parked tool leaves the
+	// steering queue intact for the post-turn drain to drive the
+	// resume turn via AgentLoop.Continue
+	// (pkg/agent/steering.go:378) — which dequeues the message,
+	// calls runAgentLoop with InitialSteeringMessages=[msg], and
+	// the resume turn runs as a normal continuation of the parked
+	// session's LLM history. The user-initiated §0.2 correlated
+	// user-role resume message reaches the chat target's next
+	// turn, and the parked turn's waiter resolves instead of
+	// dying. ASKUSER-FIX.
+	if !parked {
+		if steerMsgs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
+		}
+	}
 
 	// ADR-088 FR-010: the question door was genuinely taken on a
 	// narrowed goal turn — bump the persisted per-generation
