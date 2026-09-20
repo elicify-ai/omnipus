@@ -145,19 +145,29 @@ EXIT_CODE=$?
 assert_exit_code "pre-d1-exit" 0 "$EXIT_CODE"
 assert_output_contains "pre-d1-message" "has not shipped" "$OUTPUT"
 
-# ─── Case 2: post-D1, closure (a) missing — E1 capability gate ────────────
+# ─── Case 2: E1 capability gate — RETIRED 2026-09-20 by issue #761 ────────
+#
+# This case asserted that a missing verifier_capability_gate.go failed the
+# guard. That closure implemented JUDGE-FR-057 (the Judge refusing to
+# adjudicate under god mode). God mode now floors only the GLOBAL policy
+# layer, so the verifier keeps its read-only ceiling, FR-057's premise
+# failed, the refusal was removed and the file was deleted. The guard no
+# longer checks for it, so there is nothing left to self-test here.
+#
+# Replaced by the inverse assertion: the guard must PASS on a tree with
+# every other closure present and no capability gate — the shape HEAD now
+# has. This fails if the retired check is ever re-added.
 
 echo ""
-echo "Case 2: post-D1 with the E1 capability-gate closure missing is caught and named"
+echo "Case 2: post-D1 with NO capability gate still passes (E1 retired, issue #761)"
 reset_tree
 write_core_go_post_d1
 write_all_closures_present
 rm -f "${TMP_DIR}/pkg/agent/verifier_capability_gate.go"
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
-assert_exit_code "missing-capgate-exit" 1 "$EXIT_CODE"
-assert_output_contains "missing-capgate-named" "E1 god-mode/capability gate" "$OUTPUT"
-assert_output_contains "missing-capgate-file" "verifier_capability_gate.go" "$OUTPUT"
+assert_exit_code "retired-capgate-exit" 0 "$EXIT_CODE"
+assert_output_contains "retired-capgate-ok" "OK" "$OUTPUT"
 
 # ─── Case 3: post-D1, closure (b) missing — E0 read confinement ───────────
 
@@ -223,7 +233,7 @@ write_all_closures_present
 OUTPUT=$(REPO_ROOT="$TMP_DIR" bash "$GUARD_SCRIPT" 2>&1)
 EXIT_CODE=$?
 assert_exit_code "all-present-exit" 0 "$EXIT_CODE"
-assert_output_contains "all-present-message" "all four closure prerequisites are present" "$OUTPUT"
+assert_output_contains "all-present-message" "all three remaining closure prerequisites are present" "$OUTPUT"
 
 # ─── Case 7: the honesty line — this guard must describe itself as ────────
 # co-presence-only, never as a merge-order enforcer (OQ-13).

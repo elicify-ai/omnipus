@@ -658,7 +658,7 @@ Code: `pkg/agent/task_run_loop.go`; `pkg/agent/goal_loop.go::checkGoalLoopAfterT
 
 **What this retires.** The Judge spec's **JUDGE-FR-057 and FR-057a are superseded** — the refusal and its distinct operator-visible state. Both existed only because god mode was believed to erase the Judge's read-only ceiling. It does not, so there is nothing left to refuse. System agents keep their deliberately narrow ceilings under god mode: the Judge's `mcp_*: deny` and its deny-all-except-read-only seed (D10's other closures, which are doing the work), PlanSupervisor's single-tool grant, and so on.
 
-**What stays, deliberately.** `judge_refused_god_mode` remains a value of `GoalStatusFrame.state` in the contract, marked **deprecated and never emitted**. Removing it would narrow a published wire enum, which is a breaking change for any client already parsing it; leaving it costs nothing and nothing produces it.
+**What was removed.** `judge_refused_god_mode` has been deleted from `GoalStatusFrame.state` in both contract copies, from the generated Go and TypeScript clients, and from the SPA's pill and indicator render branches. Nothing can emit it, so a deprecated-but-present value would have been dead weight in every client's type. Founder decision, 2026-09-20: remove it outright rather than deprecate. Do not re-add it.
 
 **The caveat worth keeping.** God mode still removes the operator's global protections everywhere else — the kernel sandbox, outbound-network restriction and shell guard are still switched off for every agent, and the global permission prompt is still gone. This amendment narrows one claim about tool policy; it does not make god mode safe.
 

@@ -100,9 +100,19 @@ report() {
   missing=1
 }
 
-if [ ! -f "$CAP_GATE_GO" ] || ! grep -q 'func VerifierGodModeRefusalReason' "$CAP_GATE_GO" 2>/dev/null; then
-  report "E1 god-mode/capability gate — func VerifierGodModeRefusalReason not found in $CAP_GATE_GO"
-fi
+# E1 god-mode/capability gate — RETIRED 2026-09-20 by issue #761.
+#
+# This used to require func VerifierGodModeRefusalReason in $CAP_GATE_GO. That
+# function implemented JUDGE-FR-057: the Judge refused to adjudicate whenever
+# god mode was on, because god mode was believed to floor EVERY tool at "allow"
+# and so erase the verifier's read-only ceiling.
+#
+# God mode now floors only the GLOBAL policy layer and leaves the per-agent
+# policy in force, so the verifier KEEPS its deny-all-except-read-only surface
+# under god mode. FR-057's premise failed, the refusal was removed, and
+# verifier_capability_gate.go was deleted with it. Requiring a deleted symbol
+# would fail this guard forever. FR-057/FR-057a are marked superseded in the
+# judge-active-reviewer spec and ADR-084 §12. Do not re-add this check.
 
 if [ ! -f "$RESOLVEPATH_GO" ] \
   || ! grep -q 'func WithReadConfined' "$RESOLVEPATH_GO" 2>/dev/null \
@@ -130,8 +140,8 @@ if [ "$missing" -ne 0 ]; then
 fi
 
 echo "check-adr084-closures: OK — ADR-084 D1 has shipped ($CORE_GO's rubric no longer carries"
-echo "  the pre-D1 prohibition) and all four closure prerequisites are present:"
-echo "  - E1 god-mode/capability gate ($CAP_GATE_GO)"
+echo "  the pre-D1 prohibition) and all three remaining closure prerequisites are present"
+echo "  (E1 god-mode/capability gate retired by issue #761):"
 echo "  - E0 read confinement ($RESOLVEPATH_GO)"
 echo "  - E2 verifier budget ($BUDGET_GO)"
 echo "  - E2 tool-result capture seam ($ADMIT_GO)"

@@ -177,7 +177,7 @@ Doing 3 before 2 fails validation with every endpoint rejected, and the error re
 
 > The full state set is 14 values: active, queued, waiting, judging, done, failed, blocked, expired, cleared, replanning, claim-overturned, judge-unavailable, judge-cas-loss, judge-refused-god-mode. A-3 covers the happy path; the rest are covered by B-track evals and edge cases.
 >
-> **Correction 2026-09-20 (issue #761):** 13 of those 14 are testable. `judge-refused-god-mode` is **deprecated and never emitted** — the Judge no longer refuses to adjudicate under god mode — so there is nothing to exercise and no tester should wait for it. The value stays in the wire contract only to avoid a breaking change. Under god mode, expect the ordinary `judging` → `done` path. See [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md).
+> **Correction 2026-09-20 (issue #761):** The set is now 13 values. `judge-refused-god-mode` has been **removed from the wire contract entirely** — the Judge no longer refuses to adjudicate under god mode, so nothing can emit it and there is nothing to exercise. Under god mode, expect the ordinary `judging` → `done` path. See [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md).
 
 ### A-4 · The agent asks rather than guesses
 

@@ -162,16 +162,11 @@ describe('GoalIndicator — cleared state', () => {
   })
 })
 
-// Five states added by the joint ADR-084/ADR-085/ADR-086 delivery (C-39).
-describe('GoalIndicator — judge_refused_god_mode state (JUDGE-FR-057a)', () => {
-  it('shows a distinct, operator-actionable line naming god mode as the cause', () => {
-    render(<GoalIndicator goalStatus={makeGoal({ state: 'judge_refused_god_mode' })} />)
-    const line = screen.getByTestId('goal-indicator-judge-refused-god-mode')
-    expect(line).toHaveTextContent('god mode')
-    expect(screen.queryByTestId('goal-indicator-paused')).not.toBeInTheDocument()
-  })
-})
-
+// Four states added by the joint ADR-084/ADR-085/ADR-086 delivery (C-39). A
+// fifth, `judge_refused_god_mode` (JUDGE-FR-057a), was removed from the wire
+// contract on 2026-09-20 by issue #761 — the Judge no longer refuses to
+// adjudicate under god mode, so nothing can emit it and there is no state to
+// render. Do not re-add it.
 describe('GoalIndicator — judge_cas_loss state (JUDGE-FR-083)', () => {
   it('shows a distinct line, not the judge_unavailable one', () => {
     render(<GoalIndicator goalStatus={makeGoal({ state: 'judge_cas_loss' })} />)
