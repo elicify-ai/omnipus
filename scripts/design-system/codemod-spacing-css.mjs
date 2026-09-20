@@ -69,7 +69,7 @@ import {
   ALLOWED_ROOTS, applyEdits, isInAllowedRoot, parseCodemodArgs, readFile, unifiedDiff, writeFileAtomic,
 } from './codemod-lib.mjs'
 
-export const DEFAULT_MAPPING_PATH = 'dist/design-system-baseline/cli-lanes/c1-prep/M1/mapping.json'
+export const DEFAULT_MAPPING_PATH = 'design-system/repair/spacing-mapping.json'
 
 const SKIP_DIR_NAMES = new Set(['node_modules', 'dist', '.git'])
 const SCANNED_EXTENSIONS = new Set(['.css', '.ts', '.tsx'])

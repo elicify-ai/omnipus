@@ -73,7 +73,7 @@ import {
   parseSourceFile, readFile, unifiedDiff, writeFileAtomic,
 } from './codemod-lib.mjs'
 
-export const DEFAULT_MAPPING_PATH_REL = 'dist/design-system-baseline/cli-lanes/c1-prep/M1/mapping.json'
+export const DEFAULT_MAPPING_PATH_REL = 'design-system/repair/spacing-mapping.json'
 
 export const OWNED_PATTERNS = new Set([
   'arbitrary-bracket-px',

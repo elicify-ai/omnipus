@@ -1,0 +1,329 @@
+{
+  "generatedBy": "Lane COLOUR-SPLIT — safe/needs-decision split of M4's colour mapping, re-derived against design-system/tokens/colors.json",
+  "sourceMapping": "dist/design-system-baseline/cli-lanes/c1-prep/M4/mapping.json",
+  "verifiedAgainst": "design-system/tokens/colors.json",
+  "safe": {
+    "tsVarSubstrings": [
+      {
+        "id": "ts-undefined-forge-gold",
+        "find": "var(--forge-gold)",
+        "replace": "var(--color-accent)",
+        "reason": "var(--forge-gold) is not a registered token; the name unambiguously names the Forge Gold accent, and --color-accent resolves to the identical #D4AF37."
+      },
+      {
+        "id": "ts-undefined-primary-fg-comma-nospace",
+        "find": "var(--color-primary-fg,var(--color-secondary))",
+        "replace": "var(--color-secondary)",
+        "reason": "var(--color-primary-fg) is not a registered token, so its explicit CSS fallback var(--color-secondary) already wins today; dropping the dead name is a no-op collapse."
+      },
+      {
+        "id": "ts-undefined-primary-fg-comma-space",
+        "find": "var(--color-primary-fg, var(--color-secondary))",
+        "replace": "var(--color-secondary)",
+        "reason": "Same as ts-undefined-primary-fg-comma-nospace, tolerating a space after the comma."
+      },
+      {
+        "id": "ts-undefined-primary-fg-bare",
+        "find": "var(--color-primary-fg)",
+        "replace": "var(--color-secondary)",
+        "reason": "var(--color-primary-fg) alone (no fallback) is an undefined token; the sibling call site shows --color-secondary is the intended value."
+      }
+    ],
+    "cssThemeBlockPrimitiveSwap": {
+      "file": "src/styles/globals.css",
+      "properties": [
+        {
+          "prop": "--color-primary",
+          "expectedHex": "#0a0a0b",
+          "replacement": "var(--primitive-color-surface-0)",
+          "reason": "--color-primary: #0a0a0b is byte-identical to --primitive-color-surface-0 (#0A0A0B); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-secondary",
+          "expectedHex": "#e2e8f0",
+          "replacement": "var(--primitive-color-silver)",
+          "reason": "--color-secondary: #e2e8f0 is byte-identical to --primitive-color-silver (#E2E8F0); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-accent",
+          "expectedHex": "#d4af37",
+          "replacement": "var(--primitive-color-gold)",
+          "reason": "--color-accent: #d4af37 is byte-identical to --primitive-color-gold (#D4AF37); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-success",
+          "expectedHex": "#10b981",
+          "replacement": "var(--primitive-color-green)",
+          "reason": "--color-success: #10b981 is byte-identical to --primitive-color-green (#10B981); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-error",
+          "expectedHex": "#ef4444",
+          "replacement": "var(--primitive-color-red)",
+          "reason": "--color-error: #ef4444 is byte-identical to --primitive-color-red (#EF4444); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-warning",
+          "expectedHex": "#eab308",
+          "replacement": "var(--primitive-color-amber)",
+          "reason": "--color-warning: #eab308 is byte-identical to --primitive-color-amber (#EAB308); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-info",
+          "expectedHex": "#3b82f6",
+          "replacement": "var(--primitive-color-blue)",
+          "reason": "--color-info: #3b82f6 is byte-identical to --primitive-color-blue (#3B82F6); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-accent-hover",
+          "expectedHex": "#c49e2f",
+          "replacement": "var(--primitive-color-gold-hover)",
+          "reason": "--color-accent-hover: #c49e2f is byte-identical to --primitive-color-gold-hover (#C49E2F); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-error-hover",
+          "expectedHex": "#dc2626",
+          "replacement": "var(--primitive-color-red-hover)",
+          "reason": "--color-error-hover: #dc2626 is byte-identical to --primitive-color-red-hover (#DC2626); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-mount",
+          "expectedHex": "#8ea3bd",
+          "replacement": "var(--primitive-color-mount)",
+          "reason": "--color-mount: #8ea3bd is byte-identical to --primitive-color-mount (#8EA3BD); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-surface-0",
+          "expectedHex": "#0a0a0b",
+          "replacement": "var(--primitive-color-surface-0)",
+          "reason": "--color-surface-0: #0a0a0b is byte-identical to --primitive-color-surface-0 (#0A0A0B); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-surface-1",
+          "expectedHex": "#111113",
+          "replacement": "var(--primitive-color-surface-1)",
+          "reason": "--color-surface-1: #111113 is byte-identical to --primitive-color-surface-1 (#111113); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-surface-2",
+          "expectedHex": "#141416",
+          "replacement": "var(--primitive-color-surface-2)",
+          "reason": "--color-surface-2: #141416 is byte-identical to --primitive-color-surface-2 (#141416); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-surface-3",
+          "expectedHex": "#222228",
+          "replacement": "var(--primitive-color-surface-3)",
+          "reason": "--color-surface-3: #222228 is byte-identical to --primitive-color-surface-3 (#222228); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-muted",
+          "expectedHex": "#9ca3af",
+          "replacement": "var(--primitive-color-grey)",
+          "reason": "--color-muted: #9ca3af is byte-identical to --primitive-color-grey (#9CA3AF); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-border",
+          "expectedHex": "#2d3748",
+          "replacement": "var(--primitive-color-border)",
+          "reason": "--color-border: #2d3748 is byte-identical to --primitive-color-border (#2D3748); this line duplicates src/styles/tokens.theme.generated.css's own generated declaration, which already reads exactly this."
+        },
+        {
+          "prop": "--color-cancelled",
+          "expectedHex": "#f97316",
+          "refuse": true,
+          "reason": "globals.css declares --color-cancelled: #f97316, but the registered color.cancelled/--color-status-cancelled token is #eab308 (amber). #f97316 equals Blocked-orange instead. A byte-exact token swap would visibly recolour this — status-mismatch bug, needs a human decision, never auto-applied."
+        }
+      ]
+    },
+    "cssVarIndirectionUnwrap": {
+      "files": [
+        "src/styles/fullcalendar-theme.css"
+      ]
+    },
+    "cssVarFallbackDropTokenValues": {
+      "--primitive-color-surface-0": "#0a0a0b",
+      "--primitive-color-surface-1": "#111113",
+      "--primitive-color-surface-2": "#141416",
+      "--primitive-color-surface-3": "#222228",
+      "--primitive-color-silver": "#e2e8f0",
+      "--primitive-color-grey": "#9ca3af",
+      "--primitive-color-border": "#2d3748",
+      "--primitive-color-gold": "#d4af37",
+      "--primitive-color-gold-hover": "#c49e2f",
+      "--primitive-color-green": "#10b981",
+      "--primitive-color-amber": "#eab308",
+      "--primitive-color-red": "#ef4444",
+      "--primitive-color-red-hover": "#dc2626",
+      "--primitive-color-destructive-action-hover": "#ea2626",
+      "--primitive-color-blue": "#3b82f6",
+      "--primitive-color-orange": "#f97316",
+      "--primitive-color-mount": "#8ea3bd",
+      "--primitive-color-grey-tint": "#9ca3af1a",
+      "--primitive-color-grey-hover": "#9ca3af26",
+      "--primitive-color-blue-tint": "#3b82f61a",
+      "--primitive-color-blue-hover": "#3b82f626",
+      "--primitive-color-gold-tint": "#d4af371a",
+      "--primitive-color-gold-status-hover": "#d4af3726",
+      "--primitive-color-orange-tint": "#f973161a",
+      "--primitive-color-orange-hover": "#f9731626",
+      "--primitive-color-green-tint": "#10b9811a",
+      "--primitive-color-green-hover": "#10b98126",
+      "--primitive-color-red-tint": "#ef44441a",
+      "--primitive-color-red-status-hover": "#ef444426",
+      "--primitive-color-amber-tint": "#eab3081a",
+      "--primitive-color-amber-hover": "#eab30826",
+      "--primitive-color-red-label": "#f87171",
+      "--color-primary": "#0a0a0b",
+      "--color-surface-0": "#0a0a0b",
+      "--color-surface-1": "#111113",
+      "--color-surface-2": "#141416",
+      "--color-surface-3": "#222228",
+      "--color-secondary": "#e2e8f0",
+      "--color-muted": "#9ca3af",
+      "--color-border": "#2d3748",
+      "--color-accent": "#d4af37",
+      "--color-accent-hover": "#c49e2f",
+      "--color-success": "#10b981",
+      "--color-warning": "#eab308",
+      "--color-error": "#ef4444",
+      "--color-error-hover": "#dc2626",
+      "--color-destructive-action-hover": "#ea2626",
+      "--color-info": "#3b82f6",
+      "--color-blocked": "#f97316",
+      "--color-cancelled": "#eab308",
+      "--color-mount": "#8ea3bd",
+      "--color-status-inbox": "#9ca3af",
+      "--color-status-inbox-background": "#9ca3af1a",
+      "--color-status-inbox-hover": "#9ca3af26",
+      "--color-status-next": "#3b82f6",
+      "--color-status-next-background": "#3b82f61a",
+      "--color-status-next-hover": "#3b82f626",
+      "--color-status-in-progress": "#d4af37",
+      "--color-status-in-progress-background": "#d4af371a",
+      "--color-status-in-progress-hover": "#d4af3726",
+      "--color-status-blocked": "#f97316",
+      "--color-status-blocked-background": "#f973161a",
+      "--color-status-blocked-hover": "#f9731626",
+      "--color-status-done": "#10b981",
+      "--color-status-done-background": "#10b9811a",
+      "--color-status-done-hover": "#10b98126",
+      "--color-status-failed": "#ef4444",
+      "--color-status-failed-background": "#ef44441a",
+      "--color-status-failed-hover": "#ef444426",
+      "--color-status-cancelled": "#eab308",
+      "--color-status-cancelled-background": "#eab3081a",
+      "--color-status-cancelled-hover": "#eab30826",
+      "--status-inbox-foreground": "#9ca3af",
+      "--status-inbox-background": "#9ca3af1a",
+      "--status-inbox-border": "#9ca3af",
+      "--status-inbox-icon": "#9ca3af",
+      "--status-inbox-label": "#9ca3af",
+      "--status-inbox-hover": "#9ca3af26",
+      "--status-inbox-focus": "#9ca3af",
+      "--status-next-foreground": "#3b82f6",
+      "--status-next-background": "#3b82f61a",
+      "--status-next-border": "#3b82f6",
+      "--status-next-icon": "#3b82f6",
+      "--status-next-label": "#3b82f6",
+      "--status-next-hover": "#3b82f626",
+      "--status-next-focus": "#3b82f6",
+      "--status-in-progress-foreground": "#d4af37",
+      "--status-in-progress-background": "#d4af371a",
+      "--status-in-progress-border": "#d4af37",
+      "--status-in-progress-icon": "#d4af37",
+      "--status-in-progress-label": "#d4af37",
+      "--status-in-progress-hover": "#d4af3726",
+      "--status-in-progress-focus": "#d4af37",
+      "--status-blocked-foreground": "#f97316",
+      "--status-blocked-background": "#f973161a",
+      "--status-blocked-border": "#f97316",
+      "--status-blocked-icon": "#f97316",
+      "--status-blocked-label": "#f97316",
+      "--status-blocked-hover": "#f9731626",
+      "--status-blocked-focus": "#f97316",
+      "--status-done-foreground": "#10b981",
+      "--status-done-background": "#10b9811a",
+      "--status-done-border": "#10b981",
+      "--status-done-icon": "#10b981",
+      "--status-done-label": "#10b981",
+      "--status-done-hover": "#10b98126",
+      "--status-done-focus": "#10b981",
+      "--status-failed-foreground": "#ef4444",
+      "--status-failed-background": "#ef44441a",
+      "--status-failed-border": "#ef4444",
+      "--status-failed-icon": "#ef4444",
+      "--status-failed-label": "#ef4444",
+      "--status-failed-hover": "#ef444426",
+      "--status-failed-focus": "#ef4444",
+      "--status-cancelled-foreground": "#eab308",
+      "--status-cancelled-background": "#eab3081a",
+      "--status-cancelled-border": "#eab308",
+      "--status-cancelled-icon": "#eab308",
+      "--status-cancelled-label": "#eab308",
+      "--status-cancelled-hover": "#eab30826",
+      "--status-cancelled-focus": "#eab308",
+      "--color-text-on-status-fill": "#0a0a0b",
+      "--status-inbox-filled-foreground": "#0a0a0b",
+      "--status-next-filled-foreground": "#0a0a0b",
+      "--status-in-progress-filled-foreground": "#0a0a0b",
+      "--status-blocked-filled-foreground": "#0a0a0b",
+      "--status-done-filled-foreground": "#0a0a0b",
+      "--status-failed-filled-foreground": "#0a0a0b",
+      "--status-cancelled-filled-foreground": "#0a0a0b",
+      "--color-text-error": "#f87171",
+      "--badge-error-foreground": "#f87171"
+    }
+  },
+  "alwaysRefuse": {
+    "governedDataFiles": [
+      "src/lib/statusColors.ts",
+      "src/lib/planStateColors.ts",
+      "src/lib/constants.ts",
+      "src/components/chat/mermaid-renderer.tsx",
+      "src/components/library/preview/LibrarySignaturePad.tsx",
+      "src/components/library/preview/LibraryPdfPreview.tsx",
+      "src/components/chat/tools/BashOutput.tsx",
+      "src/components/chat/tools/FileReadPreview.tsx",
+      "src/components/ui/brand-icon.tsx",
+      "src/components/chat/AttachmentCard.tsx",
+      "src/components/chat/ComposerMediaLibrary.tsx",
+      "src/components/library/preview/LibraryDownloadCard.tsx",
+      "src/components/library/LibraryEntryRow.tsx"
+    ],
+    "alphaConcatenationKnownSites": [
+      "src/components/workspaces/TaskCard.tsx",
+      "src/components/workspaces/WorkspaceGraphTab.tsx",
+      "src/components/workspaces/PlansFilterBand.tsx",
+      "src/components/workspaces/RollupBadge.tsx",
+      "src/components/workspaces/graph/TaskNode.tsx"
+    ],
+    "tailwindPaletteHues": [
+      "red",
+      "orange",
+      "amber",
+      "yellow",
+      "lime",
+      "green",
+      "emerald",
+      "teal",
+      "cyan",
+      "sky",
+      "blue",
+      "indigo",
+      "violet",
+      "purple",
+      "fuchsia",
+      "pink",
+      "rose",
+      "slate",
+      "gray",
+      "grey",
+      "zinc",
+      "neutral",
+      "stone",
+      "white",
+      "black"
+    ]
+  }
+}

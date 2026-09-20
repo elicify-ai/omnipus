@@ -66,7 +66,7 @@ import {
   parseCodemodArgs, parseSourceFile, readFile, unifiedDiff, writeFileAtomic,
 } from './codemod-lib.mjs'
 
-export const DEFAULT_MAPPING_REL = 'dist/design-system-baseline/cli-lanes/c1-prep/M1/mapping.json'
+export const DEFAULT_MAPPING_REL = 'design-system/repair/spacing-mapping.json'
 export const TARGET_PATTERNS = new Set(['tailwind-fraction-utility', 'variant-prefixed-tailwind-fraction-utility'])
 export const DEFAULT_ALLOWED_GROUPS = Object.freeze(['IDENTICAL', 'NORMALIZED'])
 

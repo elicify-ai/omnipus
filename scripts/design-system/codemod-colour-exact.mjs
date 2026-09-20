@@ -95,7 +95,7 @@ import {
   ALLOWED_ROOTS, applyEdits, isInAllowedRoot, parseCodemodArgs, readFile, unifiedDiff, writeFileAtomic,
 } from './codemod-lib.mjs'
 
-export const DEFAULT_SAFE_SPLIT_PATH = 'dist/design-system-baseline/cli-lanes/c1-prep/COLOUR-SPLIT/safe-split.json'
+export const DEFAULT_SAFE_SPLIT_PATH = 'design-system/repair/colour-safe-split.json'
 
 const SKIP_DIR_NAMES = new Set(['node_modules', 'dist', '.git'])
 const SCANNED_EXTENSIONS = new Set(['.css', '.ts', '.tsx'])
