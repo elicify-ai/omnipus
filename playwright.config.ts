@@ -155,6 +155,25 @@ const CHROMIUM_SUITE_ARGS = [
   '--disable-renderer-backgrounding',
   '--disable-backgrounding-occluded-windows',
   '--disable-background-timer-throttling',
+  // Square 12 / round-11 mDNS theory cure: Chrome 110+ defaults
+  // `WebRtcHideLocalIpsWithMdns` to enabled, which obfuscates the
+  // viewer's local IP behind an mDNS `.local` hostname in the SDP it
+  // offers. The gateway's pion ICE stack then sees only `.local`
+  // candidates, and CI containers have no mDNS responder — pion
+  // cannot resolve `.local` to a candidate pair, ICE never completes,
+  // videoWidth stays 0, and the take-control gesture never reaches
+  // the page (the round-11 /square 12 hard signature: "no decoded
+  // frame dimensions", panel stuck in viewport-handoff). Disabling
+  // the feature forces the viewer to advertise its real local IP,
+  // which is the only thing containerised CI can route to the
+  // gateway. The flag is harmless for non-WebRTC specs — it only
+  // affects how SDP candidates are formatted; everything else in the
+  // chromium runtime is identical. Applied to the default project
+  // (the WebRTC suite: browser-live-video, browser-control-handover,
+  // UAT-13/14/15/16) and to the preview-headed project per the
+  // brief; isolation matrix projects stay unchanged so the three
+  // engines remain as identical as the matrix can make them.
+  '--disable-features=WebRtcHideLocalIpsWithMdns',
 ];
 
 export default defineConfig({
@@ -247,7 +266,20 @@ export default defineConfig({
       use: {
         browserName: 'chromium',
         headless: false,
-        launchOptions: { args: [] },
+        // Square 12 / round-11: same `--disable-features=
+        // WebRtcHideLocalIpsWithMdns` rationale as the default project
+        // (see CHROMIUM_SUITE_ARGS above). preview-headed runs the
+        // browser headed to test Chromium's own PDF handling
+        // (preview-pdf-toplevel, preview-pdf-viewer-control) — the
+        // flag is harmless for those specs, but applying it here
+        // keeps the entire Chromium launch surface uniform against
+        // the gateway's ICE stack and matches the brief's "every
+        // project that drives the live panel" instruction. The
+        // isolation projects deliberately do NOT receive it (see
+        // the CHROMIUM_SUITE_ARGS comment block above — three
+        // engines launched as identically as the matrix can make
+        // them).
+        launchOptions: { args: ['--disable-features=WebRtcHideLocalIpsWithMdns'] },
       },
     },
   ],
