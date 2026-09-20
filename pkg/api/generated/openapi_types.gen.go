@@ -12595,12 +12595,12 @@ type ContextSettings struct {
 
 // ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	AbsoluteTriggerChars *int `json:"absolute_trigger_chars,omitempty"`
-	BuiltinFailureCap    *int `json:"builtin_failure_cap,omitempty"`
-	BuiltinSuccessCap    *int `json:"builtin_success_cap,omitempty"`
-	DefaultContextWindow *int `json:"default_context_window,omitempty"`
-	IngestBoundBytes     *int `json:"ingest_bound_bytes,omitempty"`
-	McpResultCap         *int `json:"mcp_result_cap,omitempty"`
+	AbsoluteTriggerChars *int                    `json:"absolute_trigger_chars,omitempty"`
+	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
+	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
+	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
+	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
+	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
 	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
 }
 
@@ -13242,7 +13242,7 @@ type EntitlementResponse struct {
 	Cached bool `json:"cached"`
 
 	// CheckedAt When the live listing call was made (the cached result keeps the original time).
-	CheckedAt time.Time `json:"checked_at"`
+	CheckedAt time.Time          `json:"checked_at"`
 	Models    []EntitlementModel `json:"models"`
 }
 
@@ -17309,8 +17309,8 @@ type ProviderDeleteRequest struct {
 // ProviderDeleteResponse Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is true on success (HTTP 200); on a failed step the server responds 500 with deleted false and a retryable state. dependents lists every reference that was cleared (agent primaries cleared, fallback entries removed) — nothing is re-pointed silently. There is no Undo: the stored key is gone.
 type ProviderDeleteResponse struct {
 	// DefaultChanged True when new_default was applied before the removal.
-	DefaultChanged bool `json:"default_changed"`
-	Deleted        bool `json:"deleted"`
+	DefaultChanged bool                `json:"default_changed"`
+	Deleted        bool                `json:"deleted"`
 	Dependents     []ProviderDependent `json:"dependents"`
 
 	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
@@ -17373,7 +17373,7 @@ type ProviderValidation struct {
 type ProvidersCatalog struct {
 	// DefaultResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
 	DefaultResizeLimits CatalogResizeLimits `json:"default_resize_limits"`
-	Providers []CatalogProvider `json:"providers"`
+	Providers           []CatalogProvider   `json:"providers"`
 
 	// SchemaVersion Document schema version. Only "2.0.0" is accepted on load (FR-001).
 	SchemaVersion ProvidersCatalogSchemaVersion `json:"schema_version"`
@@ -22518,7 +22518,7 @@ type Workspace struct {
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Message *string `json:"message,omitempty"`
+	Message       *string                           `json:"message,omitempty"`
 
 	// Mounts Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
 	Mounts *[]struct {
@@ -22600,9 +22600,9 @@ type WorkspaceDelegation struct {
 	DefaultDepth int `json:"default_depth"`
 
 	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
-	Edges []WorkspaceDelegationEdge `json:"edges"`
-	ErrorStage *string `json:"error_stage,omitempty"`
-	Message    *string `json:"message,omitempty"`
+	Edges      []WorkspaceDelegationEdge `json:"edges"`
+	ErrorStage *string                   `json:"error_stage,omitempty"`
+	Message    *string                   `json:"message,omitempty"`
 
 	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
 	PersistenceStatus *WorkspaceDelegationPersistenceStatus `json:"persistence_status,omitempty"`
@@ -22754,9 +22754,9 @@ type WorkspaceUpdateRequest struct {
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Name     *string `json:"name,omitempty"`
-	PinOrder *int    `json:"pin_order,omitempty"`
-	Pinned   *bool   `json:"pinned,omitempty"`
+	Name          *string                           `json:"name,omitempty"`
+	PinOrder      *int                              `json:"pin_order,omitempty"`
+	Pinned        *bool                             `json:"pinned,omitempty"`
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
