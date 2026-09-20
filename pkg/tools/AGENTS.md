@@ -27,13 +27,25 @@ fail-closed per-agent deny backfill (`RepairIncompleteToolPolicyCoverage`,
 `compositor.go::EffectiveToolPolicy` precisely so the two verdicts cannot
 drift.
 
-## God mode floors everything
+## God mode floors the GLOBAL layer, not the agent's own
 
-`ToolPolicyCfg.GodMode` short-circuits the merge: every tool resolves
-"allow" (O14), non-destructively — the policy maps are not mutated, so
-clearing GodMode restores prior decisions exactly. Second, independent
-site: `ExecToolDeps.GodMode` in shell.go skips ApplyChildHardening/
-sandbox.Run entirely (and the egress proxy), resolved ONCE at wiring time.
+`ToolPolicyCfg.GodMode` sets the GLOBAL side of the merge to "allow" for
+every tool and then runs the normal global×agent merge unchanged (O14, as
+amended by issue #761). So no GLOBAL "ask" or "deny" survives, but a
+PER-AGENT one does: god mode lifts the operator's restrictions, never an
+agent's own ceiling. A system agent's narrow surface (the Judge's
+`"mcp_*": deny`, PlanSupervisor's, …) stays in force under god mode.
+
+It does NOT short-circuit the merge, and `agentToolsCfgToPolicy`
+(pkg/agent/instance.go) MUST populate both policy maps under god mode — a
+nil agent map resolves to "" and `case a == "": return g` would hand back
+the god-mode "allow" for everything, relocating the defect a layer up.
+
+Non-destructive throughout: the policy maps are not mutated (only the
+local global verdict is replaced), so clearing GodMode restores prior
+decisions exactly. Second, independent site: `ExecToolDeps.GodMode` in
+shell.go skips ApplyChildHardening/sandbox.Run entirely (and the egress
+proxy), resolved ONCE at wiring time — that one is unchanged by #761.
 `compositor.go::BuildFallbackPolicyCfg` deliberately never sets GodMode.
 
 ## Wildcards: rejected at write time, still parsed at resolution
