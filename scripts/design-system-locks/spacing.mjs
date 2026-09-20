@@ -7,6 +7,18 @@ const CONSTITUTIONAL_SCALE = [0, 4, 8, 16, 24, 32, 40, 48, 64]
 const SCALE_EPSILON = 1e-6
 const SCALE_TEXT = '0, 4, 8, 16, 24, 32, 40, 48, and 64px'
 
+// D10's own words: "Hairlines and 1px borders stay 1px." The registered
+// border-width token below is the one sanctioned 1px exception a spacing
+// position may hold -- used verbatim (not through calc arithmetic, and not
+// as a stand-in for any other border-width token) so a 1px gap/padding/
+// margin/inline-style value can be expressed with a real token instead of
+// a raw literal, without inventing a spacing-scale rung the scale
+// deliberately does not have. Resolved defensively against the live token
+// pixel value, not just its name, so the exception self-revokes if the
+// token registry ever redefines it away from 1px.
+const HAIRLINE_SPACING_TOKEN = '--border-width-hairline'
+const HAIRLINE_SPACING_PX = 1
+
 const RULE = {
   offScale: 'spacing/off-scale',
   rootDependent: 'spacing/root-dependent',
@@ -2542,7 +2554,7 @@ function analyzeVar(args, ctx, syntax, loc) {
     pushFinding(ctx, RULE.invalidVar, syntax, `Unknown spacing custom property ${name}; it is not a registered token.`, loc)
     return
   }
-  if (!isSpacingTokenName(name)) {
+  if (!isSpacingTokenName(name) && !isHairlineSpacingException(name, ctx)) {
     pushFinding(ctx, RULE.unsupported, syntax, `Custom property ${name} is registered but is not a D10 spacing token.`, loc)
   }
   if (parts[1]) analyzeSpacingTerm(parts[1], ctx, syntax, loc, { unitlessIsPx: false })
@@ -2774,6 +2786,16 @@ function isUnitlessNumber(term) {
 
 function isSpacingTokenName(name) {
   return name.startsWith('--space-') || (name.startsWith('--density-') && name.includes('gap'))
+}
+
+// The D10 hairline exception: only the exact registered token, only when
+// its resolved value is genuinely 1px. Does not cover the token appearing
+// inside calc() -- evalNamedCalcFn intentionally has no equivalent check,
+// so a hairline combined arithmetically with anything else stays
+// unsupported, same as before this exception existed.
+function isHairlineSpacingException(name, ctx) {
+  if (name !== HAIRLINE_SPACING_TOKEN) return false
+  return ctx.tokenPx.get(name) === HAIRLINE_SPACING_PX
 }
 
 function isBalanced(text) {

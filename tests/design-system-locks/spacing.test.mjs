@@ -1794,3 +1794,97 @@ describe('finite-dispatcher FUNCTION binding safety — mutation-isolated varian
       'the import-path guards must not become blanket-conservative for a genuinely safe imported dispatcher')
   })
 })
+
+// FIX-HAIRLINE (lane): D10's own text says "Hairlines and 1px borders stay
+// 1px." Two C1 repair codemods mapped every literal 1px spacing value onto
+// the already-registered `--border-width-hairline` token (design-system/
+// tokens/foundations.json, 1px, primitive dimension) to preserve rendering
+// exactly. That produced 16 real spacing/unsupported findings because the
+// lock only accepted tokens from the `--space-*` / density-gap family in a
+// spacing position. This block proves the narrow fix: the lock now accepts
+// that one named token, verified against its live resolved pixel value, only
+// as a whole term outside calc() -- never any other border-width token,
+// never an unregistered name, and never the token participating in calc()
+// arithmetic.
+describe('D10 hairline spacing exception (--border-width-hairline)', () => {
+  it('confirms the oracle: the registered hairline token resolves to 1px', () => {
+    assert.equal(policy.resolvedTokens['border.width.hairline'], '1px')
+    assert.ok(policy.tokenCssNames.includes('--border-width-hairline'))
+  })
+
+  it('permits the hairline token alone in CSS padding, margin, and gap', () => {
+    const source = '.box {\n  padding: var(--border-width-hairline);\n  margin: var(--border-width-hairline);\n  gap: var(--border-width-hairline);\n}'
+    assert.deepEqual(css(source), [])
+  })
+
+  it('permits the hairline token mixed with a real space token in one shorthand (FullCalendarView.tsx shape)', () => {
+    // Real applied shape: padding: 'var(--border-width-hairline) var(--space-1)'
+    const source = ".box {\n  padding: var(--border-width-hairline) var(--space-1);\n}"
+    assert.deepEqual(css(source), [])
+  })
+
+  it('permits the hairline token as an inline style value', () => {
+    const source = "export const X = () => <div style={{ padding: 'var(--border-width-hairline)' }} />"
+    assert.deepEqual(tsx(source), [])
+  })
+
+  it('permits the hairline token in a Tailwind arbitrary utility (GoalOutcomeRow.tsx shape)', () => {
+    // Real applied shape: className={cn('mt-[var(--border-width-hairline)] shrink-0', ...)}
+    const source = "export const X = () => <div className=\"mt-[var(--border-width-hairline)] shrink-0\" />"
+    assert.deepEqual(tsx(source), [])
+  })
+
+  it('permits the hairline token in py-, gap-, and other axis utilities (UntrustedChildText.tsx / CalendarPart.tsx shapes)', () => {
+    const source = "export const X = () => <div className=\"py-[var(--border-width-hairline)] gap-[var(--border-width-hairline)]\" />"
+    assert.deepEqual(tsx(source), [])
+  })
+
+  it('still rejects a different registered border-width token in a spacing position', () => {
+    const source = '.box {\n  padding: var(--border-width-strong);\n  margin: var(--border-width-none);\n}'
+    const findings = css(source)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [
+      'padding: var(--border-width-strong)',
+      'margin: var(--border-width-none)',
+    ])
+    assert.equal(findings.length, 2, 'only the hairline token is the sanctioned exception, not the whole border-width family')
+  })
+
+  it('still rejects an unregistered variable that merely resembles the hairline token name', () => {
+    const source = '.box { padding: var(--border-width-hairline-ish); }'
+    assert.deepEqual(syntaxes(css(source), RULE.invalidVar), ['padding: var(--border-width-hairline-ish)'])
+  })
+
+  it('still rejects the hairline token used inside calc() arithmetic', () => {
+    const source = '.box {\n  padding: calc(var(--border-width-hairline) + var(--space-2));\n  margin: calc(var(--border-width-hairline) * 2);\n  gap: calc(var(--border-width-hairline));\n}'
+    const findings = css(source)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [
+      'padding: calc(var(--border-width-hairline) + var(--space-2))',
+      'margin: calc(var(--border-width-hairline) * 2)',
+      'gap: calc(var(--border-width-hairline))',
+    ])
+  })
+
+  it('still rejects the hairline token inside an arbitrary-utility calc()', () => {
+    const source = "export const X = () => <div className=\"p-[calc(var(--border-width-hairline)_+_var(--space-2))]\" />"
+    assert.deepEqual(syntaxes(tsx(source), RULE.unsupported), ['p-[calc(var(--border-width-hairline)_+_var(--space-2))]'])
+  })
+
+  it('revokes the exception if the token registry ever redefines the hairline away from 1px', () => {
+    // Defensive: the exception is bound to the live resolved pixel value, not
+    // just the token name, so it cannot silently start covering a different
+    // width if foundations.json ever changes without this lock being revisited.
+    const mutated = {
+      tokenCssNames: policy.tokenCssNames,
+      resolvedTokens: { ...policy.resolvedTokens, 'border.width.hairline': '2px' },
+    }
+    const findings = run('src/fixture.css', '.box { padding: var(--border-width-hairline); }', mutated)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['padding: var(--border-width-hairline)'])
+  })
+
+  it('does not relax the still-forbidden raw 1px literal in a spacing position', () => {
+    // The sanctioned expression of a 1px spacing value is the token, never a
+    // bare literal -- D10's scale still has no 1px rung of its own.
+    const source = '.box { padding: 1px; }'
+    assert.deepEqual(syntaxes(css(source), RULE.offScale), ['padding: 1px'])
+  })
+})
