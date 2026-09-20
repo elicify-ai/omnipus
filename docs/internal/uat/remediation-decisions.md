@@ -425,7 +425,7 @@ Already folded: UX-9 (→O6), MIN-7 (→O5 save feedback), UX-11 (onboarding gat
 God-mode = **Claude Code "bypass-permissions" as ONE global switch.** It removes capability restraints and
 gives agents full freedom.
 - **Effect (locked):**
-  - **Every agent's tools flip "ask" → "allow"** (no permission prompts) — the #1 effect.
+  - **Every agent's tools flip "ask" → "allow"** (no permission prompts) — the #1 effect. **[Narrowed 2026-09-20, issue #761 — see the last bullet of O14: this is the *global* tool policy only; a per-agent `deny` or `ask` survives god-mode.]**
   - **Kernel sandbox → off** (full host fs + syscalls); **network egress → open**; **shell guard /
     deny-patterns → off**.
   - **Audit logging stays ON** (proposed — confirm).
@@ -435,7 +435,8 @@ gives agents full freedom.
   2. **Boot flag / env var** (keep `--allow-god-mode`-style) for **headless** runs (no UI / no password).
   Replaces the *old* model where the boot flag was the ONLY way AND coupled sandbox editing to a restart.
 - **Non-destructive override** — god-mode ignores per-agent settings while on, **remembers and restores**
-  them when switched off.
+  them when switched off. **[Narrowed 2026-09-20, issue #761 — see the last bullet of O14: for tool
+  policy it no longer ignores per-agent settings. Non-destructive is unchanged.]**
 - **Step-up-auth pattern (reusable):** high-blast-radius settings require password re-entry to change
   (god-mode is the first; pattern applies to other sensitive settings).
 - **Borderline items — LOCKED (2026-06-20):** (a) **audit logging always ON** (never disabled); (b)
@@ -443,6 +444,18 @@ gives agents full freedom.
   freedom); (c) **per-agent sandbox `off` is DROPPED** — per-agent profiles are `workspace / workspace+net /
   host`; "no sandbox" is reachable only via the global god-mode switch; (d) **keep the `nogodmode` hardened
   build** (god-mode compiled out for locked-down deployments). **O14 fully locked.**
+- **Narrowed 2026-09-20 (issue #761) — two clauses above no longer describe the shipped product.**
+  God-mode's tool-policy effect is now scoped to the **global** layer: it sets the global policy to
+  `allow` for every tool and removes global permission prompting. The per-agent policy still
+  applies. So an agent is never granted a tool its own policy denies, and a per-agent `ask` still
+  asks. That narrows *"every agent's tools flip ask → allow"* and *"god-mode ignores per-agent
+  settings while on"* in the two bullets above. **The override is still non-destructive** — neither
+  policy map is written to, so switching god-mode off restores the previous decision exactly. The
+  reason for the narrowing: as originally built, god-mode also erased the deliberately narrow tool
+  ceilings that system agents (Judge, PlanSupervisor) carry, which made the Judge refuse to
+  adjudicate and left completed plan tasks stuck as failed. Everything else in O14 is unchanged.
+  Recorded in [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md). **This narrows
+  a decision the founder locked on 2026-06-20; it is flagged here rather than silently rewritten.**
 
 ---
 

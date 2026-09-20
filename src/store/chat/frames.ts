@@ -56,7 +56,7 @@ export function __resetFinishedTurnIdsForTests(): void {
 // (ADR-086 GOAL-FR-028: the 7-day idle-expiry sweep, D-A — the fourth
 // distinguishable terminal ending, ADDED by this delivery). All other
 // states (queued/active/waiting_on_user/judge_unavailable/re-planning/
-// judging/judge_refused_god_mode/judge_cas_loss/blocked/claim_overturned)
+// judging/judge_cas_loss/blocked/claim_overturned)
 // are non-terminal: the goal can still receive another frame. `blocked`
 // and `claim_overturned` deliberately do NOT join this set (plan OQ-17,
 // C-17) even though both "park" the goal — the goal is still live and a

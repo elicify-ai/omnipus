@@ -905,7 +905,6 @@ func judgeUnavailableNeedsOperator(reason string) bool {
 	for _, prefix := range []string{
 		JudgeMisconfiguredReasonPrefix,
 		JudgeOutputTruncatedReasonPrefix,
-		VerifierGodModeRefusalReasonPrefix,
 	} {
 		if strings.HasPrefix(reason, prefix) {
 			return true
@@ -919,7 +918,6 @@ func judgeOperatorFix(reason string) string {
 	for _, prefix := range []string{
 		JudgeMisconfiguredReasonPrefix,
 		JudgeOutputTruncatedReasonPrefix,
-		VerifierGodModeRefusalReasonPrefix,
 	} {
 		if after, ok := strings.CutPrefix(reason, prefix); ok {
 			return strings.TrimSpace(after)

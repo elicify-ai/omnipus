@@ -165,19 +165,29 @@ func resolveEffectivePolicyWith(
 	toolName string,
 	agentWildcards, globalWildcards []wildcardEntry,
 ) config.ToolPolicy {
-	// God-mode override (O14): the global "bypass-permissions" switch floors
-	// EVERY tool's effective policy at "allow" — no permission prompts, no
-	// deny. This is the #1 effect of god mode and intentionally short-circuits
-	// the normal global×agent merge below. It is the single resolution-time
-	// hook for the tool-policy half of god mode, so both ResolveEffectivePolicy
-	// and FilterToolsByPolicy honor it identically. The override is
-	// non-destructive: cfg.Policies / cfg.GlobalPolicies are NOT mutated, so
-	// clearing cfg.GodMode restores the prior decision exactly.
-	if cfg.GodMode {
-		return config.ToolPolicyAllow
-	}
 	g := resolveFromMap(toolName, cfg.GlobalPolicies, globalWildcards)
 	a := resolveFromMap(toolName, cfg.Policies, agentWildcards)
+	// God-mode override (O14): the global "bypass-permissions" switch floors
+	// the GLOBAL layer at "allow" for every tool — it lifts the operator's
+	// global ceiling and removes global permission prompting — and then lets
+	// the normal global×agent merge below run UNCHANGED. It does NOT grant an
+	// agent a tool its own per-agent policy denies, and does not downgrade a
+	// per-agent "ask" to "allow": a system agent's deliberately narrow ceiling
+	// (the Judge's "mcp_*": deny, PlanSupervisor's, and so on) survives god
+	// mode intact. That is the intended contract — god mode relaxes the
+	// OPERATOR's restrictions, never an agent's own. With the merge unchanged
+	// that gives: global allow × agent deny → deny; × agent ask → ask; × agent
+	// allow → allow; × no agent entry → allow (the global side alone decides).
+	// Because the global side is never empty under god mode, neither the
+	// no-coverage Error/fail-closed branch nor the g == "" branch below can
+	// fire here. This is the single resolution-time hook for the tool-policy
+	// half of god mode, so both ResolveEffectivePolicy and FilterToolsByPolicy
+	// honor it identically. The override stays non-destructive: only the local
+	// g is replaced — cfg.Policies / cfg.GlobalPolicies are NOT mutated, so
+	// clearing cfg.GodMode restores the prior decision exactly.
+	if cfg.GodMode {
+		g = config.ToolPolicyAllow
+	}
 	switch {
 	case g == "" && a == "":
 		// Structurally impossible once boot/write-time coverage validation is
@@ -391,11 +401,15 @@ type ToolPolicyCfg struct {
 	GlobalPolicies map[string]config.ToolPolicy // per-tool global overrides (supports wildcards)
 
 	// GodMode, when true, activates the O14 global "bypass-permissions"
-	// override: every tool's effective policy is floored at "allow" — no tool
-	// can remain "ask" or "deny". Set by agentToolsCfgToPolicy when
-	// sandbox.god_mode is on AND god mode is available (build supports it +
-	// --allow-god-mode passed). Non-destructive: the underlying policy maps are
-	// untouched, so clearing this restores the prior decisions exactly.
+	// override: the GLOBAL layer is floored at "allow" for every tool, and the
+	// normal global×agent merge then runs unchanged — so no GLOBAL "ask" or
+	// "deny" survives, but a PER-AGENT one does. God mode lifts the operator's
+	// restrictions; it never hands an agent a tool the agent's own policy
+	// denies (see resolveEffectivePolicyWith for the full contract). Set by
+	// agentToolsCfgToPolicy when sandbox.god_mode is on AND god mode is
+	// available (build supports it + --allow-god-mode passed). Non-destructive:
+	// the underlying policy maps are untouched, so clearing this restores the
+	// prior decisions exactly.
 	GodMode bool
 }
 

@@ -268,8 +268,7 @@ type JudgeCriteriaResult struct {
 	// only an operator can clear (JudgeMisconfiguredReasonPrefix — unknown
 	// provider, no model, unknown context window, rejected credentials), (c)
 	// its verdict was cut off at the output-token limit
-	// (JudgeOutputTruncatedReasonPrefix), (d) god mode is active
-	// (VerifierGodModeRefusalReasonPrefix), or (e) a concurrent adjudication
+	// (JudgeOutputTruncatedReasonPrefix), or (d) a concurrent adjudication
 	// holds the unit. See verifier_adjudication.go's "Judge-unavailable
 	// classification" section (UAT E-7).
 	Unavailable bool

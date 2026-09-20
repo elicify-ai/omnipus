@@ -97,6 +97,8 @@ func TestBashSubstitutionGuard_BenignSubstitutionsAllowed(t *testing.T) {
 			"a BALANCED ')' before a substitution is not a case label"},
 		{"two_quoted_substitutions", `echo "$(date)-$(hostname)"`,
 			"concatenating two expansions in one quoted word"},
+		{"legacy_backtick_date", "echo `date`",
+			"issue #767 routes legacy substitutions through the same structural checks as $(...)"},
 		// Asymmetry proof: awk/sed/find are permitted at the TOP LEVEL (piped
 		// into, or run directly) even though they are denied INSIDE a
 		// substitution. The text-tools-with-exec-forms asymmetry is documented
@@ -242,8 +244,8 @@ func TestBashSubstitutionGuard_DangerousSubstitutionsBlocked(t *testing.T) {
 		{"exec_env_wrapper", "env FOO=1 sh -c $(echo bHM=)", "wrapper chain into an interpreter"},
 
 		// --- Pre-existing baseline rules that must survive the change.
-		{"legacy_backtick", "echo `date`",
-			"backticks stay blanket-denied; $( ) is the supported spelling"},
+		{"legacy_backtick_dangerous_find", "echo `find . -name '*.go'`",
+			"legacy substitutions still block dangerous inner commands"},
 		{"legacy_brace_expansion_var", "echo ${PATH}", "the ${} blanket rule is untouched"},
 		{"legacy_master_key", "echo $(cat master.key)", "secrets-subtree guard"},
 		{"legacy_fork_bomb", ":(){ :|:& };:", "fork-bomb regex is untouched"},

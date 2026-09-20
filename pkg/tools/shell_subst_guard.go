@@ -69,12 +69,10 @@
 // That direction of error only ever ADDS a check (a false block, never a false
 // pass), which is the correct way to be wrong in a security guard.
 //
-// Backticks (`` `…` ``) remain blanket-denied by defaultDenyPatterns and are
-// intentionally NOT relaxed here: they are the legacy, non-nesting spelling of
-// the same construct, `$( … )` is always available instead, and leaving them
-// fully denied is strictly more restrictive. R3 nevertheless also triggers on a
-// backtick so that the exfiltration rule does not silently disappear if that
-// blanket rule is ever revisited.
+// Backticks (`` `…` ``) are the legacy, non-nesting spelling of the same
+// construct. They pass through the same R1/R2/R3 checks rather than a blanket
+// text match: executable or dangerous substitutions remain denied, while
+// backticks used as prose delimiters are deliberately allowed (issue #767).
 
 package tools
 
@@ -84,9 +82,9 @@ import (
 	"strings"
 )
 
-// shellSubstitution is one `$( … )` command substitution found in a command
-// string. start is the byte index of the '$'; body is the text between the
-// outer parentheses (exclusive).
+// shellSubstitution is one `$( … )` or legacy backtick command substitution.
+// start is the byte index of the opening '$' or backtick; body excludes the
+// delimiters.
 type shellSubstitution struct {
 	start int
 	body  string
@@ -268,9 +266,7 @@ var substitutionHostileHosts = func() map[string]bool {
 func substitutionGuard(command string) string {
 	lower := lowerASCII(command)
 	subs := extractCommandSubstitutions(lower)
-	// Backticks are already blanket-denied by defaultDenyPatterns; they are
-	// included here so R3 keeps holding if that ever changes (see file doc).
-	if len(subs) == 0 && strings.IndexByte(lower, '`') < 0 {
+	if len(subs) == 0 {
 		return ""
 	}
 
@@ -300,8 +296,9 @@ func substitutionGuard(command string) string {
 
 // extractCommandSubstitutions returns every `$( … )` in s, including nested
 // ones (each nesting level is reported separately, because the scan walks the
-// whole string). Parenthesis depth is tracked so `$(echo $(date))` yields both
-// bodies rather than one truncated at the first ')'.
+// whole string), plus every legacy backtick pair. Parenthesis depth is tracked
+// so `$(echo $(date))` yields both bodies rather than one truncated at the
+// first ')'. Backticks do not nest, so they are paired from left to right.
 //
 // An unterminated `$(` is reported with the remainder of the string as its
 // body — fail closed rather than ignoring it.
@@ -332,6 +329,19 @@ func extractCommandSubstitutions(s string) []shellSubstitution {
 			continue
 		}
 		out = append(out, shellSubstitution{start: i, body: s[i+2 : end]})
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] != '`' {
+			continue
+		}
+		end := strings.IndexByte(s[i+1:], '`')
+		if end < 0 {
+			out = append(out, shellSubstitution{start: i, body: s[i+1:]})
+			break
+		}
+		end += i + 1
+		out = append(out, shellSubstitution{start: i, body: s[i+1 : end]})
+		i = end
 	}
 	return out
 }

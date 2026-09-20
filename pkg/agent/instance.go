@@ -1076,17 +1076,24 @@ func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) 
 	if cfg != nil {
 		out.MCPServers = tools.CloneMCPBindings(cfg.MCP.Servers)
 	}
-	// O14 god-mode: when the global switch is active, floor every tool's
-	// effective policy at "allow" (no prompts, no deny) and skip the admin-ask
-	// fence. Set the flag and return early — the per-agent and global policy
-	// maps are deliberately left unpopulated so the override is total and
-	// non-destructive (the on-disk policies are untouched and restored verbatim
-	// the moment god mode is switched off, because this snapshot is rebuilt from
-	// config on every TriggerReload).
-	if GodModeActive(globalCfg) {
-		out.GodMode = true
-		return out
-	}
+	// O14 god-mode: when the global switch is active, set the flag and carry
+	// on — the policy maps below MUST still be populated (issue #761).
+	//
+	// This used to return early with both maps left nil, on the reasoning that
+	// the override was "total". That silently defeated the fix in
+	// resolveEffectivePolicyWith: god mode floors the GLOBAL layer at "allow"
+	// and then runs the normal global×agent merge, so a per-agent "deny" is
+	// meant to survive. With the maps nil the agent side resolves to "" and
+	// `case a == "": return g` hands back the god-mode "allow" for every tool —
+	// exactly the behaviour the merge was changed to prevent, just relocated a
+	// layer up. Every system agent's deliberately narrow ceiling (the Judge's
+	// "mcp_*": deny, PlanSupervisor's, and so on) was lost that way.
+	//
+	// Non-destructiveness is unaffected and never depended on the early return:
+	// this snapshot is rebuilt from config on every TriggerReload, the on-disk
+	// policies are never written here, and resolveEffectivePolicyWith replaces
+	// only its local copy of the global verdict.
+	out.GodMode = GodModeActive(globalCfg)
 	if cfg != nil {
 		// cfg.Builtin.Policies is already map[string]config.ToolPolicy (typed at
 		// the config layer) — a direct copy, no string round-trip needed now

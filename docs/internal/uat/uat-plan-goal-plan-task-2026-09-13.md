@@ -176,6 +176,8 @@ Doing 3 before 2 fails validation with every endpoint rejected, and the error re
 **FAIL if:** it sticks on `active` after the work is plainly finished, or jumps to `done` without ever judging.
 
 > The full state set is 14 values: active, queued, waiting, judging, done, failed, blocked, expired, cleared, replanning, claim-overturned, judge-unavailable, judge-cas-loss, judge-refused-god-mode. A-3 covers the happy path; the rest are covered by B-track evals and edge cases.
+>
+> **Correction 2026-09-20 (issue #761):** The set is now 13 values. `judge-refused-god-mode` has been **removed from the wire contract entirely** — the Judge no longer refuses to adjudicate under god mode, so nothing can emit it and there is nothing to exercise. Under god mode, expect the ordinary `judging` → `done` path. See [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md).
 
 ### A-4 · The agent asks rather than guesses
 

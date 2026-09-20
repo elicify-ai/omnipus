@@ -107,7 +107,6 @@ properties:
       - done
       - failed
       - cleared
-      - judge_refused_god_mode
       - judge_cas_loss
       - blocked
       - claim_overturned
@@ -139,11 +138,11 @@ properties:
       "failed/cancelled/timed_out → failed" rule for the specific case of
       a human choosing to stop; the frontend does not disambiguate via
       `latest_reason`, so the wire state itself must carry the distinction.
-      **Five values ADDED by this delivery (joint ADR-084/ADR-086/ADR-085
-      plan, C-39):** `judge_refused_god_mode` (JUDGE-FR-057a) — the Judge's
-      adjudication was refused because `cfg.GodMode` is true, a distinct
-      operator-actionable state, NOT `judge_unavailable` (which the
-      operator cannot fix by waiting). `judge_cas_loss` (JUDGE-FR-083,
+      **Four values ADDED by this delivery (joint ADR-084/ADR-086/ADR-085
+      plan, C-39):** (a fifth, `judge_refused_god_mode` for JUDGE-FR-057a,
+      was added by that delivery and REMOVED on 2026-09-20 by issue #761 —
+      the Judge no longer refuses to adjudicate under god mode, so nothing
+      could ever emit it; do not re-add it.) `judge_cas_loss` (JUDGE-FR-083,
       named here; the underlying machine-readable reason string stays
       `cas_loss`) — a `verifier_registry` compare-and-swap loss, a real
       concurrency event distinguishable from a provider outage, NOT

@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -130,11 +131,25 @@ func (h *WSHandler) broadcastAskUserCard(card generated.AskUserQuestionCard) {
 	}
 	raw, err := json.Marshal(frame)
 	if err != nil {
-		slog.Error("ws: marshal ask_user_question", "error", err)
+		slog.Error("ws: marshal ask_user_question", "card_id", card.CardId, "error", err)
 		return
 	}
-	h.broadcastRaw(raw, "ws: ask_user_question dropped — send buffer full",
-		"card_id", card.CardId)
+	// This caller reports one aggregate lifecycle outcome, so suppress the
+	// shared helper's per-connection warning. The per-connection counters are
+	// still incremented inside broadcastRaw.
+	fanoutCount, dropCount := h.broadcastRaw(raw, "")
+	attrs := []any{
+		"card_id", card.CardId,
+		"status", card.Status,
+		"fanout_count", fanoutCount,
+		"enqueued_count", fanoutCount - dropCount,
+		"drop_count", dropCount,
+	}
+	if dropCount > 0 {
+		slog.Warn("ws: ask_user_question broadcast", attrs...)
+		return
+	}
+	slog.Info("ws: ask_user_question broadcast", attrs...)
 }
 
 // askUserCardSink adapts the registry's CardSink seam onto the WS broadcast.
@@ -185,7 +200,13 @@ func resumeIsUserInitiated(set *askuser.PendingSet) bool {
 
 func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resumeText string) error {
 	if d.msgBus == nil {
-		return errors.New("askuser: resume dispatcher has no message bus")
+		err := errors.New("askuser: resume dispatcher has no message bus")
+		slog.Warn("ws: ask_user resume dispatch completed",
+			"card_id", set.CardID,
+			"answer_count", len(set.Answers),
+			"outcome", "stranded",
+			"reason", "no_message_bus")
+		return err
 	}
 	userInitiated := resumeIsUserInitiated(set)
 	msg := bus.InboundMessage{
@@ -204,7 +225,63 @@ func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resume
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return d.msgBus.PublishInbound(ctx, msg)
+	err := d.msgBus.PublishInbound(ctx, msg)
+	if err == nil {
+		slog.Info("ws: ask_user resume dispatch completed",
+			"card_id", set.CardID,
+			"answer_count", len(set.Answers),
+			"outcome", "delivered",
+			"delivery_stage", "message_bus")
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		slog.Warn("ws: ask_user resume dispatch completed",
+			"card_id", set.CardID,
+			"answer_count", len(set.Answers),
+			"outcome", "timed_out")
+		return err
+	}
+	if errors.Is(err, bus.ErrBusClosed) {
+		slog.Warn("ws: ask_user resume dispatch completed",
+			"card_id", set.CardID,
+			"answer_count", len(set.Answers),
+			"outcome", "stranded",
+			"reason", "bus_closed")
+		return err
+	}
+	slog.Warn("ws: ask_user resume dispatch completed",
+		"card_id", set.CardID,
+		"answer_count", len(set.Answers),
+		"outcome", "stranded",
+		"reason", "publish_failed",
+		"error_type", fmt.Sprintf("%T", err))
+	return err
+}
+
+func askUserAnswerRejectionReason(err error) string {
+	switch {
+	case errors.Is(err, askuser.ErrNoPending):
+		return "no_pending"
+	case errors.Is(err, askuser.ErrSessionMismatch):
+		return "session_mismatch"
+	case errors.Is(err, askuser.ErrNotOwner):
+		return "not_owner"
+	case errors.Is(err, askuser.ErrAlreadyResolved):
+		return "already_resolved"
+	default:
+		return "invalid_answer"
+	}
+}
+
+func askUserResumeFailureOutcome(err error) (outcome, reason string) {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timed_out", "message_bus_timeout"
+	case errors.Is(err, bus.ErrBusClosed):
+		return "stranded", "bus_closed"
+	default:
+		return "stranded", "resume_dispatch_failed"
+	}
 }
 
 // askUserAuditSink records one audit entry per default-safe auto-resolution
@@ -228,9 +305,10 @@ func (s *askUserAuditSink) RecordAutoDefault(cardID, sessionID, header, label st
 
 // handleAskUserAnswer bridges an inbound ask_user_answer frame to the
 // registry: cancel:true → CancelByUser; otherwise Submit (server-validated,
-// first-valid-wins). Every rejection is surfaced back to the submitting
-// client as an error frame — never a silent drop (the card stays pending
-// and the user must see why their Answer did nothing).
+// first-valid-wins). A validation rejection is surfaced back to the submitting
+// client as an error frame and leaves the card pending. A failure to resume
+// after acceptance is also surfaced, but the already-consumed card remains
+// terminal; its log record distinguishes that outcome from a rejection.
 func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFrame) {
 	reg := h.askUserReg
 	if reg == nil {
@@ -264,8 +342,23 @@ func (h *WSHandler) handleAskUserAnswer(wc *wsConn, f generated.AskUserAnswerFra
 		err = reg.Submit(f.CardId, f.SessionId, wc.userID, answers)
 	}
 	if err != nil {
-		slog.Warn("ws: ask_user_answer rejected",
-			"card_id", f.CardId, "session_id", f.SessionId, "error", err)
+		if errors.Is(err, askuser.ErrResumeDispatch) {
+			outcome, reason := askUserResumeFailureOutcome(err)
+			slog.Warn("ws: ask_user_answer accepted; resume failed",
+				"card_id", f.CardId,
+				"session_id", f.SessionId,
+				"outcome", outcome,
+				"reason", reason)
+			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "ask_user_answer: " + err.Error(),
+			})
+			return
+		}
+		slog.Info("ws: ask_user_answer rejected",
+			"card_id", f.CardId,
+			"session_id", f.SessionId,
+			"reason", askUserAnswerRejectionReason(err))
 		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "ask_user_answer: " + err.Error(),

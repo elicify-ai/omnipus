@@ -35,6 +35,43 @@ import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 
 
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
+type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
+
+function appendUnmatchedToolError(
+  bucket: SessionChatState,
+  frame: ToolCallResultFrame,
+  result: unknown,
+): Partial<SessionChatState> {
+  if (frame.status !== 'error') {
+    console.debug('[chat] resolveToolCall for unknown call_id', frame.call_id)
+    return {}
+  }
+  console.warn('[chat] unmatched tool error rendered as standalone notice', { callId: frame.call_id, tool: frame.tool })
+  logDiagnostic('chatUnmatchedToolError', { callId: frame.call_id, tool: frame.tool })
+  return produce(bucket, (draft) => {
+    const notice: ChatMessage = {
+      id: generateId(),
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+      status: 'done',
+      isStreaming: false,
+      agentId: frame.agent_id,
+      tool_calls: [{
+        id: frame.call_id,
+        tool: frame.tool,
+        params: {},
+        result,
+        status: 'error',
+        duration_ms: frame.duration_ms,
+        error: frame.error,
+      }],
+    }
+    draft.messagesById[notice.id] = notice
+    draft.messageOrder.push(notice.id)
+  }) as Partial<SessionChatState>
+}
+
 interface FrameContext {
   set: StoreApi<ChatStore>['setState']
   get: StoreApi<ChatStore>['getState']
@@ -1560,8 +1597,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
           } else {
             withBucket(targetSid, (b) => {
               if (!b.toolCalls[frame.call_id]) {
-                console.debug('[chat] resolveToolCall for unknown call_id', frame.call_id)
-                return {}
+                return appendUnmatchedToolError(b, frame, clampedResult)
               }
               return produce(b, (draft) => {
                 const tc = draft.toolCalls[frame.call_id]

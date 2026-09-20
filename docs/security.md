@@ -70,7 +70,7 @@ The viewer refreshes every 30 seconds. The log includes security events, policy 
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.
-- **God-mode** under **Settings**, **Gateway** removes every permission prompt and disables the kernel sandbox, outbound-network restrictions, and shell guard for every agent. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
+- **God-mode** under **Settings**, **Gateway** disables the kernel sandbox, outbound-network restrictions, and shell guard for every agent. For tools, it sets the **global** policy to Allow for every tool and removes the permission prompts that come from that global policy. It does **not** override an agent's own tool policy: a tool an agent denies itself stays denied, and a tool that agent asks about still asks. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
 
 ## Related pages
 

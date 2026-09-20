@@ -1795,11 +1795,13 @@ type agentLoopInspectSessionStore struct {
 // very first pass) and again from SetPlanStore for every already-registered
 // agent once the gateway installs the real store.
 //
-// Every dependency gap is logged LOUDLY (Error, never silently) at wiring
-// time so an unwired seam is visible in the boot log — on top of, not
-// instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
+// Every unexpected dependency gap is logged LOUDLY (Error, never silently)
+// at wiring time so an unwired seam is visible in the boot log — on top of,
+// not instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
 // store / nil checker / nil dispatcher => explicit error result, never an
-// implicit allow or a silently-dead no-op tool).
+// implicit allow or a silently-dead no-op tool). The nil plan store on the
+// documented first boot pass is expected and stays at DEBUG; the tools still
+// fail closed until SetPlanStore performs the second pass.
 // The six tools below (the ADR-052 four, plus ADR-055's plan_correct and
 // stop_plan) are registered via RegisterReplacing, not Register:
 // this function is called once per agent at registerSharedTools time AND
@@ -1814,7 +1816,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	}
 
 	if planStore == nil {
-		logger.WarnCF("agent", "wirePlanToolsForAgent: plan store not yet installed — "+
+		logger.DebugCF("agent", "wirePlanToolsForAgent: plan store not yet installed — "+
 			"create_plan/execute_plan register but will fail closed until SetPlanStore runs",
 			map[string]any{"agent_id": agent.ID})
 	}
@@ -1993,6 +1995,60 @@ func (n agentLoopJobAgentNamer) AgentDisplayName(agentID string) (string, bool) 
 	return reg.GetAgentName(agentID)
 }
 
+func (r agentLoopJobSessionActivityReader) LastActivityBySessionID(
+	refs []tools.JobSessionActivityRef,
+) map[string]time.Time {
+	activity := make(map[string]time.Time, len(refs))
+	if len(refs) == 0 {
+		return activity
+	}
+
+	stores := make([]*session.UnifiedStore, 0, len(r.al.GetRegistry().ListAgentIDs())+1)
+	seen := make(map[*session.UnifiedStore]struct{})
+	addStore := func(store *session.UnifiedStore) {
+		if store == nil {
+			return
+		}
+		if _, ok := seen[store]; ok {
+			return
+		}
+		seen[store] = struct{}{}
+		stores = append(stores, store)
+	}
+	addStore(r.al.GetSessionStore())
+	for _, agentID := range r.al.GetRegistry().ListAgentIDs() {
+		addStore(r.al.GetAgentStore(agentID))
+	}
+
+	// Mirror ResolveSessionStore's ownership rule without its successful-read
+	// double probe: not-found continues to the next legacy store, while any
+	// other read failure stops so corruption cannot be masked by a duplicate ID.
+	for _, ref := range refs {
+		for _, store := range stores {
+			meta, err := store.GetMeta(ref.SessionID)
+			switch {
+			case err == nil && sessionActivityIdentityMatches(meta, ref):
+				activity[ref.SessionID] = meta.UpdatedAt
+			case err == nil:
+			case errors.Is(err, os.ErrNotExist):
+				continue
+			}
+			break
+		}
+	}
+	return activity
+}
+
+func sessionActivityIdentityMatches(meta *session.UnifiedMeta, ref tools.JobSessionActivityRef) bool {
+	if meta == nil || meta.UpdatedAt.IsZero() || meta.AgentID != ref.AgentID {
+		return false
+	}
+	// Older delegated sessions may have no persisted workspace even though
+	// their lifecycle record is scoped. When both sides carry one, require an
+	// exact match so a duplicate legacy session ID cannot cross workspaces.
+	return meta.WorkspaceID == "" || ref.WorkspaceID == "" || meta.WorkspaceID == ref.WorkspaceID
+}
+
 // --- list_jobs wiring (the unified background-job roster) -----------------
 //
 // Every store below is reached through a LATE-RESOLVING adapter rather than a
@@ -2026,6 +2082,8 @@ type agentLoopJobTaskLister struct{ al *AgentLoop }
 
 type agentLoopJobLifecycleLister struct{ al *AgentLoop }
 
+type agentLoopJobSessionActivityReader struct{ al *AgentLoop }
+
 // agentLoopJobAgentNamer resolves a delegated agent's display name for a
 // subagent row's label. AgentRegistry.GetAgentName already has exactly this
 // contract (name+true when the agent exists, the raw id when its name is
@@ -2041,7 +2099,7 @@ type agentLoopJobAgentNamer struct{ al *AgentLoop }
 // SetPlanStore's re-wire loop the way the plan surface is: the adapters above
 // read every store live, so there is nothing for a later pass to re-bind.
 //
-// Two of this tool's seven setters are left UNWIRED because the
+// Two setters are left UNWIRED because the
 // implementations they need do not exist yet. Each omission degrades honestly
 // and is listed here so the gap is visible at the wiring site rather than
 // inferred from behaviour:
@@ -2126,6 +2184,9 @@ func (al *AgentLoop) wireJobRosterForAgent(agent *AgentInstance) {
 			return nil
 		}
 		return delegateTool
+	})
+	listJobs.SetSessionActivityReader(func() tools.JobSessionActivityReader {
+		return agentLoopJobSessionActivityReader{al: al}
 	})
 	// RegisterReplacing, not Register: registerSharedTools re-runs on every hot
 	// reload, so a same-name re-registration is EXPECTED and must not log a

@@ -337,6 +337,13 @@ log-only, confirmed); §1's "seven of the nine `delegate` actions" (exactly seve
   inheritance anywhere in the function; the only unconditional `allow` is the explicit
   `cfg.GodMode` branch above it.
 
+  > **Superseded history — correction 2026-09-20 (issue #761).** The last clause described the
+  > code as it stood at review time and is kept as the record. It is no longer accurate: the
+  > `cfg.GodMode` branch no longer returns `allow` for the whole function. It sets the **global**
+  > side to `allow` and the merge below then runs unchanged, so a per-agent `deny` still denies.
+  > The rest of this finding stands. See
+  > [ADR-084 §12](./ADR-084-judge-as-an-active-reviewer.md).
+
   ADR-055 D8's **body** already corrects exactly this — *"**v3 correction — v2's claim here
   was false, and it was my error twice over** … It **fails closed to deny**"* — and closes
   with *"A citation inherited from a review is not verification."* ADR-056 v2 inherited the

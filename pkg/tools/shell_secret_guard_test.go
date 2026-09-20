@@ -33,11 +33,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// secretGuardProbeCommand returns the dangerous spelling issue #767 says the
+// text backstop must retain for each protected entry. The two names that are
+// also ordinary prose are expressed as paths; the intentionally uncommon
+// secret names remain context-free.
+func secretGuardProbeCommand(name string) string {
+	switch name {
+	case "config.json":
+		return "cat ~/.omnipus/config.json"
+	case "system":
+		return "cat ~/.omnipus/system/audit.jsonl"
+	default:
+		return "cat " + name
+	}
+}
+
 // TestSecretGuardPatterns_CoverEverySecretEntryAlways is the coupling test.
-// For every name in fspolicy.SecretEntriesAlways, a command that merely
-// MENTIONS the name (no path, no special syntax — the guard is a literal-text
-// backstop, not a path resolver) must be blocked by defaultDenyPatterns, and
-// an ordinary command that mentions none of them must not be.
+// Every name in fspolicy.SecretEntriesAlways must retain a dangerous spelling
+// that defaultDenyPatterns blocks. For config.json and system that spelling is
+// an explicit path component; merely mentioning either in prose is allowed by
+// TestBashSafetyGuard_PreciseDenyPatterns.
 func TestSecretGuardPatterns_CoverEverySecretEntryAlways(t *testing.T) {
 	if len(fspolicy.SecretEntriesAlways) == 0 {
 		t.Fatal("fspolicy.SecretEntriesAlways is empty — this test would pass vacuously and prove nothing")
@@ -45,7 +60,7 @@ func TestSecretGuardPatterns_CoverEverySecretEntryAlways(t *testing.T) {
 
 	for _, name := range fspolicy.SecretEntriesAlways {
 		t.Run(name, func(t *testing.T) {
-			command := "cat " + name
+			command := secretGuardProbeCommand(name)
 			if reason := applyDenyPatterns(command, defaultDenyPatterns, nil); reason == "" {
 				t.Errorf("shell guard does not cover secret-set entry %q: command %q was NOT blocked.\n"+
 					"fspolicy.SecretEntriesAlways gained an entry secretGuardPatterns cannot reach — "+
@@ -78,8 +93,7 @@ func TestSecretGuardPatterns_OrdinaryCommandsUnaffected(t *testing.T) {
 // like the lowercase form the secret set is spelled in.
 func TestSecretGuardPatterns_CaseInsensitive(t *testing.T) {
 	for _, name := range fspolicy.SecretEntriesAlways {
-		upper := strings.ToUpper(name)
-		command := "cat " + upper
+		command := strings.ToUpper(secretGuardProbeCommand(name))
 		if reason := applyDenyPatterns(command, defaultDenyPatterns, nil); reason == "" {
 			t.Errorf("shell guard does not cover uppercase spelling of %q: command %q was NOT blocked", name, command)
 		}
@@ -122,7 +136,15 @@ func TestSecretGuardPatterns_GeneratedFromLiveSecretSet(t *testing.T) {
 			len(secretGuardPatterns), len(fspolicy.SecretEntriesAlways))
 	}
 	for i, name := range fspolicy.SecretEntriesAlways {
-		want := `\b` + regexp.QuoteMeta(strings.ToLower(name)) + `\b`
+		var want string
+		switch name {
+		case "config.json":
+			want = `[/\\]config\.json\b`
+		case "system":
+			want = `\bsystem[/\\]`
+		default:
+			want = `\b` + regexp.QuoteMeta(strings.ToLower(name)) + `\b`
+		}
 		got := secretGuardPatterns[i].String()
 		if got != want {
 			t.Errorf("secretGuardPatterns[%d] = %q, want %q (generated from %q)", i, got, want, name)
