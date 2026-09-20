@@ -88,6 +88,16 @@ export const CANONICAL_GENERATED_TOKEN_PATHS = Object.freeze([
 ])
 const CANONICAL_GENERATED_TOKEN_PATH_SET = new Set(CANONICAL_GENERATED_TOKEN_PATHS)
 
+// Status-contract governed-record capability (FIX-CONTRACT lane, 2026-09-20)
+// — see the isStatusContractColorRead doc comment below for the full design.
+// `src/design-system/status.ts`'s own `statusContract` export and its
+// `status(...)` builder function name, mirrored here exactly (never derived
+// or guessed) so a differently-named look-alike export/builder can never
+// satisfy this capability.
+const STATUS_CONTRACT_MODULE_PATH = 'src/design-system/status.ts'
+const STATUS_CONTRACT_EXPORT_NAME = 'statusContract'
+const STATUS_CONTRACT_BUILDER_NAME = 'status'
+
 const COLOR_FUNCS = new Set(['rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch', 'color'])
 
 const GROUP_FUNCS = new Set([
@@ -1571,6 +1581,14 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
     // lexical `x && …` / `x ? … : …` / `if (x) { … }` guard) — see
     // isProvenNonNullReceiver. Only the null candidate is excluded; every
     // OTHER candidate still has to resolve on its own merits.
+    // Status-contract governed-record capability (FIX-CONTRACT lane): checked
+    // FIRST, exactly like the generated-token-accessor capability's own call-
+    // site check below — a matching `statusContract.<key>.resolvedColor`
+    // read reports CLEAN and returns here; every other shape (wrong module,
+    // a look-alike local `statusContract`, an unresolvable key, a non-colour
+    // final property) takes no special action and falls straight through,
+    // unchanged, to the resolveMemberTargets handling immediately below.
+    if (ts.isPropertyAccessExpression(node) && isStatusContractColorRead(node, ctx)) return
     const nullAllowed = isProvenNonNullReceiver(node)
     const resolution = { incomplete: false }
     const targets = resolveMemberTargets(node, ctx, stack, resolution, nullAllowed)
@@ -3393,6 +3411,18 @@ function resolveRuntimeTemplateSpanValue(expression, ctx, stack, boundary) {
     return resolveRuntimeTemplateSpanValue(init, ctx, nextStack, boundary)
   }
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    // Status-contract governed-record capability (FIX-CONTRACT lane): checked
+    // FIRST, mirroring inspectCssValueExpr's own call-site check exactly —
+    // every real consumer of `statusContract.<key>.resolvedColor` reaches
+    // THIS resolver (not inspectCssValueExpr directly) whenever the read
+    // sits inside a template span (`` `${color}1a` ``, the alpha-tint idiom
+    // every applied consumer uses), because inspectTemplate's `tryString`
+    // cannot fold a PropertyAccessExpression into a literal and falls to
+    // this parallel dispatch instead. A matching read is fully accounted
+    // for (returns true, no finding) with no further action needed here;
+    // every other shape falls through unchanged to the existing
+    // resolveMemberTargets/emitRuntimePaintBoundary handling below.
+    if (ts.isPropertyAccessExpression(node) && isStatusContractColorRead(node, ctx)) return true
     const nullAllowed = isProvenNonNullReceiver(node)
     const resolution = { incomplete: false }
     const targets = resolveMemberTargets(node, ctx, stack, resolution, nullAllowed)
@@ -3744,6 +3774,180 @@ function resolveGeneratedTokenModulePath(ident, ctx, seen = new Set()) {
     if (ts.isIdentifier(target)) return resolveGeneratedTokenModulePath(target, ctx, seen)
   }
   return null
+}
+
+// ── Status-contract governed-record capability (FIX-CONTRACT lane, 2026-09-20) ──
+//
+// Closes the ts-colors/unsupported regression a first C1 repair script hit
+// the moment it replaced hand-written status hexes with reads of the
+// design system's own governed record: `import { statusContract } from
+// '@/design-system/status'; STATUS_COLORS = { inbox: statusContract.inbox
+// .resolvedColor, ... }`. `statusContract` (src/design-system/status.ts) is
+// `Object.freeze({ inbox: status('inbox', ...), next: status('next', ...),
+// ... })`, where `status()`'s own `resolvedColor` field is bound to
+// `generatedColor(...)` — a call this file ALREADY proves governed via the
+// generated-token-accessor capability above (isGeneratedTokenAccessorCall /
+// generatedTokenAccessorReturnIsGoverned / resolveGeneratedTokenModulePath).
+// This capability re-verifies that exact chain structurally, reusing those
+// three functions rather than writing a second colour-provenance proof, and
+// adds nothing beyond walking TWO extra, fixed hops (statusContract's own
+// object literal, then status()'s own return object literal) to reach the
+// same already-trusted call:
+//   1. The read must be a plain, non-computed `<base>.<statusKey>.<finalProp>`
+//      PropertyAccessExpression chain — never `statusContract['inbox']` or
+//      any ElementAccessExpression at either hop.
+//   2. `<base>` must resolve — via resolveGeneratedTokenModulePath's own
+//      import/const-alias walk, unchanged — to a NAMED import of
+//      `statusContract` (checked by IMPORT NAME, not module path alone, so
+//      a renamed import of some OTHER export from that module never
+//      qualifies) from STATUS_CONTRACT_MODULE_PATH. A same-named LOCAL
+//      object literal (`const statusContract = {...}`) is never trusted:
+//      it has no import to resolve, so this fails closed exactly like the
+//      generated-token-accessor capability's own module-path check does for
+//      a look-alike local finite object (see that capability's doc comment,
+//      "Probed directly").
+//   3. `<statusKey>` must be an actual property of statusContract's own
+//      object-literal initializer (after unwrapping the ONE Object.freeze
+//      wrapper — never any other call), whose value is a call to the
+//      module-local `status(...)` builder — never a hard-coded assumption
+//      that every property of a record named `statusContract` is safe.
+//   4. `<finalProp>` must resolve, inside THAT status() call's own single
+//      return object literal (again unwrapping exactly one Object.freeze),
+//      to a value that is EITHER a bare identifier bound (by a local `const`
+//      in status()'s own body) to a further call this file independently
+//      proves governed via isGeneratedTokenAccessorCall — reusing that
+//      capability exactly as it already exists, not a copy of it — OR a
+//      bare identifier bound directly to a governed `<tokens>[id]` element
+//      access (isGovernedTokenIdentifier's own shape, reused the same way).
+//      `resolvedColor` (bound to `generatedColor(...)`) satisfies this;
+//      `label`/`nonColorCue` (bound to a function PARAMETER, no local const
+//      at all) and `tokens`/`contrast` (bound to `compositeOver(...)` calls
+//      that do real colour MATH, not a governed accessor) do not — so this
+//      is a genuine structural proof of "this member is provably a governed
+//      colour", never a hard-coded trust of the name "resolvedColor" alone.
+// Any failure at any step falls through UNCHANGED to the pre-existing
+// resolveMemberTargets/emitUnsupported handling at this call site — a wrong
+// key, an unresolvable base, a differently-named final property, or a
+// non-colour member (bullet 4) keeps today's conservative behaviour.
+//
+// Deliberately does NOT reach through calleeDeclaration/resolveIdentInit
+// (which key off the LIVE scope stack, `ctx.scopes` — correct for the file
+// currently being walked, but wrong for status.ts's own top-level
+// declarations when reached this way from an arbitrary consumer file, where
+// a same-named local binding in the CONSUMER could otherwise be
+// misattributed). Every lookup here is purely structural — module-record
+// declarations/imports, keyed by source file — exactly like
+// resolveGeneratedTokenModulePath and isGovernedTokenIdentifier already are.
+function isStatusContractColorRead(node, ctx) {
+  const finalKey = node.name.text
+  const mid = unwrap(node.expression)
+  if (!ts.isPropertyAccessExpression(mid)) return false
+  const statusKey = mid.name.text
+  const base = unwrap(mid.expression)
+  if (!ts.isIdentifier(base)) return false
+  if (!resolvesToStatusContractImport(base, ctx)) return false
+  return statusContractMemberIsGovernedColor(statusKey, finalKey, ctx)
+}
+
+// Mirrors resolveGeneratedTokenModulePath's own import/const-alias walk
+// exactly, with one addition: the FIRST hop must be a named import whose
+// EXPORTED name (not just local alias) is literally `statusContract` —
+// resolveGeneratedTokenModulePath alone only proves the MODULE, which would
+// wrongly accept a renamed import of some other export from that same file.
+function resolvesToStatusContractImport(ident, ctx, seen = new Set()) {
+  const sourceFile = ident.getSourceFile()
+  const marker = `${sourceFile.fileName}#${ident.text}`
+  if (seen.has(marker)) return false
+  seen.add(marker)
+  const record = ctx.sourceRecords.get(sourceFile) ?? indexModuleRecord(sourceFile.fileName, sourceFile)
+  const name = ident.text
+  const imported = record.imports.get(name)
+  if (imported) {
+    return imported.imported === STATUS_CONTRACT_EXPORT_NAME
+      && governedModulePath(record.path, imported.specifier, ctx.modules) === STATUS_CONTRACT_MODULE_PATH
+  }
+  const declaration = record.declarations.get(name)
+  if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+    && declaration.parent && ts.isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & ts.NodeFlags.Const)) {
+    const target = unwrap(declaration.initializer)
+    if (ts.isIdentifier(target)) return resolvesToStatusContractImport(target, ctx, seen)
+  }
+  return false
+}
+
+// Strips exactly one `Object.freeze(...)` wrapper (status.ts wraps both
+// `statusContract` itself and each status() return value this way) — this
+// file's ordinary `unwrap` deliberately does not do this generally (it would
+// let ANY frozen record resolve as a plain object literal everywhere,
+// widening every OTHER capability in this file that consults `unwrap`); this
+// capability alone needs it, so it strips it locally instead.
+function unwrapObjectFreezeCall(node) {
+  const core = unwrap(node)
+  if (ts.isCallExpression(core) && ts.isPropertyAccessExpression(core.expression)
+    && ts.isIdentifier(core.expression.expression) && core.expression.expression.text === 'Object'
+    && core.expression.name.text === 'freeze' && core.arguments.length === 1) {
+    return unwrap(core.arguments[0])
+  }
+  return core
+}
+
+// Bullets 3-4 of isStatusContractColorRead's doc comment: resolves
+// STATUS_CONTRACT_MODULE_PATH's own `statusContract` and `status(...)`
+// declarations directly from its module record (never via ctx.scopes) and
+// proves `<statusKey>.<finalKey>` governed via the existing generated-token-
+// accessor machinery.
+function statusContractMemberIsGovernedColor(statusKey, finalKey, ctx) {
+  const record = moduleRecord(ctx, STATUS_CONTRACT_MODULE_PATH)
+  if (!record) return false
+  const contractDeclaration = record.declarations.get(STATUS_CONTRACT_EXPORT_NAME)
+  if (!contractDeclaration || !ts.isVariableDeclaration(contractDeclaration) || !contractDeclaration.initializer) return false
+  const contractObject = unwrapObjectFreezeCall(contractDeclaration.initializer)
+  if (!contractObject || !ts.isObjectLiteralExpression(contractObject) || contractObject.properties.some(opaqueObjectMember)) return false
+  const entryValue = propertyInit(contractObject, statusKey)
+  if (!entryValue) return false
+  const call = unwrap(entryValue)
+  if (!ts.isCallExpression(call)) return false
+  const callee = unwrap(call.expression)
+  if (!ts.isIdentifier(callee) || callee.text !== STATUS_CONTRACT_BUILDER_NAME) return false
+  const builderDeclaration = record.declarations.get(STATUS_CONTRACT_BUILDER_NAME)
+  if (!builderDeclaration || !ts.isFunctionDeclaration(builderDeclaration) || !builderDeclaration.body) return false
+  const returns = collectReturns(builderDeclaration)
+  if (!returns.length) return false
+  return returns.every((expr) => statusBuilderReturnIsGovernedColor(expr, finalKey, builderDeclaration, ctx))
+}
+
+function statusBuilderReturnIsGovernedColor(returnExpr, finalKey, builderDeclaration, ctx) {
+  const returnObject = unwrapObjectFreezeCall(returnExpr)
+  if (!returnObject || !ts.isObjectLiteralExpression(returnObject) || returnObject.properties.some(opaqueObjectMember)) return false
+  const value = propertyInit(returnObject, finalKey)
+  if (!value) return false
+  return statusBuilderValueIsGovernedColor(value, builderDeclaration, ctx)
+}
+
+// `value` is a member of status()'s own return object literal (e.g. the bare
+// identifier `color` for `resolvedColor: color`). Governed only when it
+// resolves — through a local `const` declared directly in the SAME status()
+// body (never a function PARAMETER like `label`/`nonColorCue`, which
+// findLocalConstDeclaration structurally cannot find) — to a call this file
+// already proves governed via isGeneratedTokenAccessorCall, or directly to a
+// governed `<tokens>[id]` element access via isGovernedTokenIdentifier's own
+// shape. Reuses both capabilities exactly as written; adds no new colour-
+// provenance proof of its own.
+function statusBuilderValueIsGovernedColor(value, builderDeclaration, ctx) {
+  const target = unwrap(value)
+  if (!ts.isIdentifier(target)) return false
+  if (isGovernedTokenIdentifier(target, builderDeclaration, ctx)) return true
+  const local = findLocalConstDeclaration(builderDeclaration.body, target.text)
+  if (!local || !local.initializer) return false
+  const initializer = unwrap(local.initializer)
+  if (!ts.isCallExpression(initializer)) return false
+  const callee = unwrap(initializer.expression)
+  if (!ts.isIdentifier(callee)) return false
+  const calleeDeclaration = ctx.sourceRecords.get(builderDeclaration.getSourceFile())?.declarations.get(callee.text)
+  if (!calleeDeclaration || !ts.isFunctionDeclaration(calleeDeclaration) || !calleeDeclaration.body) return false
+  const returns = collectReturns(calleeDeclaration)
+  if (!returns.length) return false
+  return returns.every((expr) => generatedTokenAccessorReturnIsGoverned(expr, calleeDeclaration, ctx))
 }
 
 // True for the literal `null` keyword or the `undefined` identifier — the

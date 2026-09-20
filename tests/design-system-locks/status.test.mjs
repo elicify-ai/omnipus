@@ -628,3 +628,107 @@ describe('non-paint status and state bindings stay clean', () => {
     assert.match(findings[0].message, /var\(--color-warning\)/)
   })
 })
+
+// ── FIX-CONTRACT lane — status-contract governed-record capability ──────────
+//
+// Closes the design-system/status-unsupported regression the first C1
+// status-colour repair script hit the moment it replaced hand-written hexes
+// with `statusContract.<key>.resolvedColor` reads (e.g. `TASK_CANCELLED_COLOR
+// = statusContract.cancelled.resolvedColor`). Spec: dist/design-system-
+// baseline/cli-lanes/c1-prep/FIX-CONTRACT (lane brief). Oracle: the design's
+// own stated invariant — `statusContract`, imported from the design system's
+// own status module, resolves each status through the SAME generated-token
+// accessor this file already trusts nothing but the token pipeline itself to
+// produce — not the implementation.
+describe('FIX-CONTRACT: status-contract governed-record capability', () => {
+  const statusModule = `
+    import { resolvedTokens } from './tokens'
+    const generatedValues = resolvedTokens
+    function generatedColor(id) {
+      const value = generatedValues[id]
+      if (typeof value !== 'string') throw new Error('missing token: ' + id)
+      return value.toUpperCase()
+    }
+    function status(tokenName, label, nonColorCue) {
+      const color = generatedColor('color.status.' + tokenName)
+      return Object.freeze({ label, resolvedColor: color, nonColorCue })
+    }
+    export const statusContract = Object.freeze({
+      inbox: status('inbox', 'Inbox', 'quiet-circle'),
+      next: status('next', 'Next', 'ready-info'),
+      cancelled: status('cancelled', 'Cancelled', 'stopped-by-user'),
+    })
+  `
+  // The tokens module's CONTENT is never read by this capability (it only
+  // needs generatedColor()'s own `generatedValues[id]` shape and the fact
+  // that `generatedValues` traces to an import FROM this path) — but the
+  // path must still be a present key so modulePath's own resolution can
+  // match it at all.
+  const statusModules = { 'src/design-system/status.ts': statusModule, 'src/design-system/tokens.ts': '' }
+
+  it('permitted: a direct statusContract.<key>.resolvedColor read reports clean', () => {
+    const source = `import { statusContract } from '@/design-system/status'; export const TASK_CANCELLED_COLOR = statusContract.cancelled.resolvedColor`
+    const modules = { ...statusModules, 'src/fixture.ts': source }
+    assert.deepEqual(run(source, { path: 'src/fixture.ts', modules }), [])
+  })
+
+  it('permitted: the applied statusColors.ts shape (a full STATUS_COLORS record built entirely from these reads) reports clean', () => {
+    const source = `
+      import { statusContract } from '@/design-system/status'
+      export const STATUS_COLORS = {
+        inbox: statusContract.inbox.resolvedColor,
+        next: statusContract.next.resolvedColor,
+      }
+      export const TASK_CANCELLED_COLOR = statusContract.cancelled.resolvedColor
+    `
+    const modules = { ...statusModules, 'src/fixture.ts': source }
+    assert.deepEqual(run(source, { path: 'src/fixture.ts', modules }), [])
+  })
+
+  it('permitted: a consumer indexing that record dynamically (statusColor(status)-style) reports clean', () => {
+    const paletteSource = `
+      import { statusContract } from '@/design-system/status'
+      export const STATUS_COLORS = { inbox: statusContract.inbox.resolvedColor, next: statusContract.next.resolvedColor }
+    `
+    const consumerSource = `
+      import { STATUS_COLORS } from '@/lib/statusColors'
+      export function statusColor(status) { return STATUS_COLORS[status] ?? STATUS_COLORS.inbox }
+    `
+    const modules = { ...statusModules, 'src/lib/statusColors.ts': paletteSource, 'src/fixture.ts': consumerSource }
+    assert.deepEqual(run(consumerSource, { path: 'src/fixture.ts', modules }), [])
+  })
+
+  it('forbidden: a local look-alike object named statusContract (never imported) is not trusted', () => {
+    // Deliberately built via an opaque call rather than an inline object
+    // literal — status.mjs's own isColorPropertyName requires a hyphen
+    // before "color" (or an exact "background"/"bg"), so a bare
+    // "resolvedColor" key is not independently caught by anything else in
+    // this file; an opaque call keeps this test isolated to THIS
+    // capability's own import gate regardless.
+    const source = `
+      function makeFakeContract() { return { cancelled: { resolvedColor: '#EAB308' } } }
+      const statusContract = makeFakeContract()
+      export const TASK_CANCELLED_COLOR = statusContract.cancelled.resolvedColor
+    `
+    const modules = { ...statusModules, 'src/fixture.ts': source }
+    const findings = run(source, { path: 'src/fixture.ts', modules })
+    assert.ok(findings.length > 0, 'a same-named local object must never resolve as governed')
+  })
+
+  it('forbidden: a status entry wired to the WRONG statusContract key is a mismatch, not silently governed', () => {
+    const source = `
+      import { statusContract } from '@/design-system/status'
+      export const STATUS_COLORS = { inbox: statusContract.next.resolvedColor }
+    `
+    const modules = { ...statusModules, 'src/fixture.ts': source }
+    const findings = run(source, { path: 'src/fixture.ts', modules })
+    assert.ok(findings.some((finding) => finding.ruleId === RULE.mismatch), 'a cross-wired status key must report a mismatch')
+  })
+
+  it('forbidden: a non-colour member (nonColorCue) never becomes a colour proof', () => {
+    const source = `import { statusContract } from '@/design-system/status'; export const TASK_CANCELLED_COLOR_HACK = statusContract.cancelled.nonColorCue`
+    const modules = { ...statusModules, 'src/fixture.ts': source }
+    const findings = run(source, { path: 'src/fixture.ts', modules })
+    assert.ok(findings.length > 0, 'a non-colour member must never resolve as governed')
+  })
+})

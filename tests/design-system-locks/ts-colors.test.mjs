@@ -1308,3 +1308,146 @@ function Swatch() { return <div style={{ color: A }} /> }
   const findings = scan({ path: accessorPath, source, modules: { [GENERATED_TOKENS_MODULE_PATH]: GENERATED_TOKENS_MODULE_SOURCE, [accessorPath]: source } })
   assert.deepEqual(findings, [])
 })
+
+// ── FIX-CONTRACT lane — status-contract governed-record capability ──────────
+//
+// Closes the ts-colors/unsupported (later ts-colors/extension-boundary)
+// regression the first C1 status-colour repair script hit the moment it
+// replaced hand-written hexes with `statusContract.<key>.resolvedColor`
+// reads. Spec: dist/design-system-baseline/cli-lanes/c1-prep/FIX-CONTRACT
+// (lane brief). Oracle: the design's own stated invariant — a read of
+// `statusContract.<key>.resolvedColor`, imported from the design system's
+// own status module, is provably no different in trust class than the
+// already-governed generated-token-accessor read it is built from — never
+// the implementation.
+
+const STATUS_MODULE_PATH = 'src/design-system/status.ts'
+const STATUS_MODULE_SOURCE = `import { resolvedTokens } from './tokens'
+const generatedValues = resolvedTokens as Readonly<Record<string, string | number>>
+function generatedColor(id: string): string {
+  const value = generatedValues[id]
+  if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value)) {
+    throw new Error('generated colour token is missing or invalid: ' + id)
+  }
+  return value.toUpperCase()
+}
+function status(tokenName: string, label: string, nonColorCue: string) {
+  const color = generatedColor('color.status.' + tokenName)
+  return Object.freeze({ label, resolvedColor: color, nonColorCue })
+}
+export const statusContract = Object.freeze({
+  inbox: status('inbox', 'Inbox', 'quiet-circle'),
+  next: status('next', 'Next', 'ready-info'),
+  inProgress: status('in-progress', 'In progress', 'live-work'),
+  cancelled: status('cancelled', 'Cancelled', 'stopped-by-user'),
+})
+`
+const STATUS_CONTRACT_MODULES = { [GENERATED_TOKENS_MODULE_PATH]: GENERATED_TOKENS_MODULE_SOURCE, [STATUS_MODULE_PATH]: STATUS_MODULE_SOURCE }
+
+function scanWithStatusContract(path, source, extraModules = {}) {
+  return scan({ path, source, modules: { ...STATUS_CONTRACT_MODULES, ...extraModules, [path]: source } })
+}
+
+test('FIX-CONTRACT permitted: a direct statusContract.<key>.resolvedColor read reports clean', () => {
+  const path = 'src/lib/statusContractDirect.tsx'
+  const source = `import { statusContract } from '@/design-system/status'
+function Dot() { return <div style={{ color: statusContract.inbox.resolvedColor }} /> }
+`
+  assert.deepEqual(scanWithStatusContract(path, source), [])
+})
+
+test('FIX-CONTRACT permitted: the same read through a local const alias reports clean', () => {
+  const path = 'src/lib/statusContractLocalConst.tsx'
+  const source = `import { statusContract } from '@/design-system/status'
+const nextColor = statusContract.next.resolvedColor
+function Dot() { return <div style={{ color: nextColor }} /> }
+`
+  assert.deepEqual(scanWithStatusContract(path, source), [])
+})
+
+test('FIX-CONTRACT permitted: a record built entirely from these reads, indexed dynamically, reports clean', () => {
+  const recordPath = 'src/lib/statusColorsRecord.ts'
+  const source = `import { statusContract } from '@/design-system/status'
+export const STATUS_COLORS: Record<string, string> = {
+  inbox: statusContract.inbox.resolvedColor,
+  next: statusContract.next.resolvedColor,
+}
+export function statusColor(status: string) { return STATUS_COLORS[status] }
+`
+  const consumerPath = 'src/components/Dot.tsx'
+  const consumerSource = `import { STATUS_COLORS } from '@/lib/statusColorsRecord'
+function Dot({ status }: { status: string }) { return <div style={{ backgroundColor: STATUS_COLORS[status] }} /> }
+`
+  const findings = scan({
+    path: consumerPath,
+    source: consumerSource,
+    modules: { ...STATUS_CONTRACT_MODULES, [recordPath]: source, [consumerPath]: consumerSource },
+  })
+  assert.deepEqual(findings, [])
+})
+
+test('FIX-CONTRACT permitted: the real applied statusColors.ts shape (STATUS_COLORS record + TASK_CANCELLED_COLOR) reports clean, including read through a template alpha-tint suffix', () => {
+  // Mirrors the exact applied shape (dist/design-system-baseline/cli-lanes/
+  // c1-apply/statusColors.applied.ts) and the exact alpha-tint idiom every
+  // real consumer (TaskNode.tsx, PlansFilterBand.tsx, RollupBadge.tsx,
+  // TaskCard.tsx, WorkspaceGraphTab.tsx) uses — this shape reaches
+  // resolveRuntimeTemplateSpanValue's OWN PropertyAccessExpression branch,
+  // a SEPARATE dispatch from inspectCssValueExpr's, which needs the same
+  // capability wired in independently (the regression this test pins).
+  const statusColorsPath = 'src/lib/statusColors.ts'
+  const statusColorsSource = `import { statusContract } from '@/design-system/status'
+export const STATUS_COLORS: Record<string, string> = {
+  inbox: statusContract.inbox.resolvedColor,
+  next: statusContract.next.resolvedColor,
+}
+export const TASK_CANCELLED_COLOR = statusContract.cancelled.resolvedColor
+`
+  const consumerPath = 'src/components/workspaces/graph/TaskNode.tsx'
+  const consumerSource = `import { STATUS_COLORS } from '@/lib/statusColors'
+function TaskNodeComponent({ status }: { status: string }) {
+  return <div style={{ backgroundColor: \`\${STATUS_COLORS[status]}1a\` }} />
+}
+`
+  const findings = scan({
+    path: consumerPath,
+    source: consumerSource,
+    modules: { ...STATUS_CONTRACT_MODULES, [statusColorsPath]: statusColorsSource, [consumerPath]: consumerSource },
+  })
+  assert.deepEqual(findings, [])
+})
+
+test('FIX-CONTRACT forbidden: a local look-alike object named statusContract (never imported) is not trusted', () => {
+  // Deliberately built via an opaque call rather than an inline object
+  // literal with a `resolvedColor` key — an inline literal would ALSO be
+  // caught by this scanner's unrelated blanket colour-shaped-object-literal
+  // walk (any "...Color"-suffixed key is inspected regardless of this
+  // capability), which would mask whether THIS capability's own import gate
+  // is what is actually doing the rejecting.
+  const path = 'src/lib/statusContractLookalike.tsx'
+  const source = `declare function makeFakeContract(): { inbox: { resolvedColor: string } }
+const statusContract = makeFakeContract()
+function Dot() { return <div style={{ color: statusContract.inbox.resolvedColor }} /> }
+`
+  const findings = scanWithStatusContract(path, source)
+  assert.ok(findings.length > 0, 'a same-named local object must never resolve as governed')
+  assert.ok(!findings.every((f) => f.ruleId === 'ts-colors/raw-color'), 'must not be silently accepted as clean')
+})
+
+test('FIX-CONTRACT forbidden: an unresolvable computed status key stays conservative', () => {
+  const path = 'src/lib/statusContractDynamicKey.tsx'
+  const source = `import { statusContract } from '@/design-system/status'
+declare const someKey: keyof typeof statusContract
+function Dot() { return <div style={{ color: statusContract[someKey].resolvedColor }} /> }
+`
+  const findings = scanWithStatusContract(path, source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'), 'a computed statusContract key must never resolve as governed')
+})
+
+test('FIX-CONTRACT forbidden: a non-colour member (nonColorCue) never becomes a colour proof', () => {
+  const path = 'src/lib/statusContractNonColor.tsx'
+  const source = `import { statusContract } from '@/design-system/status'
+function Dot() { return <div style={{ color: statusContract.inbox.nonColorCue }} /> }
+`
+  const findings = scanWithStatusContract(path, source)
+  assert.ok(findings.length > 0, 'a non-colour member must never resolve as governed')
+})

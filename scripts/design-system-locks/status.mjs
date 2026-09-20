@@ -55,6 +55,22 @@ const SINGLE_STATUS_RE = /cancelled|canceled|in[_-]?progress/i
 const PAINT_BINDING_RE = /colou?r|palette|hex|fill|stroke|background|chipstyle/i
 const PRINTER = ts.createPrinter({ removeComments: true, newLine: ts.NewLineKind.LineFeed })
 
+// Status-contract governed-record capability (FIX-CONTRACT lane, 2026-09-20)
+// — see statusContractResolvedColorOutcome's doc comment for the full
+// design. `src/design-system/status.ts`'s own export/builder names, and the
+// canonical generated-token module paths its `generatedColor()` accessor
+// ultimately reads from — mirrored here exactly, never derived or guessed,
+// so a differently-named look-alike can never satisfy this capability.
+const STATUS_CONTRACT_MODULE_PATH = 'src/design-system/status.ts'
+const STATUS_CONTRACT_EXPORT_NAME = 'statusContract'
+const STATUS_CONTRACT_BUILDER_NAME = 'status'
+const GENERATED_TOKEN_MODULE_PATHS = new Set([
+  'src/styles/tokens.generated.css',
+  'src/styles/tokens.theme.generated.css',
+  'src/design-system/tokens.ts',
+])
+const CASE_OR_TRIM_METHODS = new Set(['toUpperCase', 'toLowerCase', 'trim', 'trimStart', 'trimEnd'])
+
 export function scan({ path = '', source = '', policy, modules } = {}) {
   const filePath = String(path).replaceAll('\\', '/')
   const text = typeof source === 'string' ? source : String(source ?? '')
@@ -447,9 +463,309 @@ function localDeclaration(identifier, record) {
   return record?.exports.get(identifier.text) ?? null
 }
 
+// ── Status-contract governed-record capability (FIX-CONTRACT lane, 2026-09-20) ──
+//
+// Closes the design-system/status-unsupported regression a first C1 repair
+// script hit the moment it replaced hand-written status hexes with reads of
+// the design system's own governed record: `import { statusContract } from
+// '@/design-system/status'; TASK_CANCELLED_COLOR = statusContract.cancelled
+// .resolvedColor`. `statusContract` (src/design-system/status.ts) is
+// `Object.freeze({ inbox: status('inbox', ...), ... })`, where `status()`'s
+// own `resolvedColor` field is bound to `generatedColor(...)`, which reads
+// this project's own generated token output. Unlike this file's EXISTING
+// governed-module-paint recognizer (the `ts.isIdentifier(core.expression)`
+// branch a few lines below, and its own PropertyAccessExpression case),
+// which resolves a SINGLE cross-module hop into a plain object literal, a
+// `statusContract.<key>.resolvedColor` read is TWO hops deep, through an
+// `Object.freeze(...)`-wrapped record whose values are themselves function
+// CALLS — a shape neither that branch nor a plain `extractColors(printTs(...))`
+// text scan (which only ever matches a literal-looking colour string) can
+// see through. This capability recognizes exactly that two-hop shape and
+// proves it governed structurally, rather than trusting the property name
+// "resolvedColor" by itself:
+//   1. The read must be a plain, non-computed `<base>.<statusKey>.<finalProp>`
+//      PropertyAccessExpression chain — never `statusContract['inbox']`.
+//   2. `<base>` must resolve to a NAMED import of `statusContract`
+//      (checked by IMPORT NAME, not module path alone) from
+//      STATUS_CONTRACT_MODULE_PATH — never a same-named LOCAL object
+//      literal, which has no import statement to resolve at all.
+//   3. `<statusKey>` (any of statusContract's own camelCase property names —
+//      `inProgress`, not `in-progress`) must be an actual property of
+//      statusContract's own object-literal initializer (after unwrapping
+//      the ONE Object.freeze wrapper this file's `unwrap` already strips),
+//      whose value is a call to the module-local `status(...)` builder.
+//   4. `<finalProp>` must resolve, inside status()'s own single return
+//      object literal (again exactly one Object.freeze unwrap), to a value
+//      that is a bare identifier bound — by a local `const` in status()'s
+//      OWN body, never a function PARAMETER like `label`/`nonColorCue` — to
+//      a call whose callee is itself a LOCAL function (in the SAME module)
+//      whose own returns resolve, through the same const/case-method
+//      pattern, to a `<tokens>[id]` element access on an identifier that
+//      traces — via import or `const`-alias, any number of hops — to
+//      GENERATED_TOKEN_MODULE_PATHS. `resolvedColor` (→ `generatedColor(...)`
+//      → `generatedValues[id]` → `resolvedTokens` imported from `./tokens`)
+//      satisfies this; `tokens`/`contrast` (bound to `compositeOver(...)`
+//      calls that do real colour MATH, not a governed accessor) do not.
+// A canonical-status BINDING key (`statusKey`, e.g. the 'inbox' key of the
+// STATUS_COLORS entry this read is the VALUE of) that disagrees with the
+// resolved statusKey is a genuine MISMATCH (a status wired to the wrong
+// colour), reported exactly like any other cross-wired status colour — this
+// capability never silently drops that check. Any other failure at any step
+// returns null (not recognized), falling through UNCHANGED to this file's
+// pre-existing governed-module-paint / extractColors handling.
+function statusContractResolvedColorOutcome(core, statusKey, env, record) {
+  if (!ts.isPropertyAccessExpression(core)) return null
+  const finalKey = core.name.text
+  const mid = unwrap(core.expression)
+  if (!mid || !ts.isPropertyAccessExpression(mid)) return null
+  const midKeyRaw = mid.name.text
+  const midKey = canonicalStatus(midKeyRaw)
+  if (!midKey) return null
+  const base = unwrap(mid.expression)
+  if (!base || !ts.isIdentifier(base)) return null
+  const sourceFile = record ? record.sf : env.sf
+  if (!resolvesToStatusContractExport(base, sourceFile, env)) return null
+  if (!statusContractMemberIsGovernedColor(midKeyRaw, finalKey, env)) return null
+  if (statusKey && midKey !== statusKey) return ['mismatch']
+  return [null]
+}
+
+// Structural (never scope-based) import resolution: walks `sf`'s own import
+// declarations directly, exactly like this file's existing
+// importedDeclaration, but additionally requires the EXPORTED name (not
+// just the local alias) to be literally `statusContract` — importedDeclaration
+// alone resolves by local alias only, which would wrongly accept a renamed
+// import of some OTHER export from that same module.
+function resolvesToStatusContractExport(identifier, sf, env) {
+  for (const statement of sf.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+    const clause = statement.importClause
+    const binding = clause?.namedBindings
+    if (!binding || !ts.isNamedImports(binding)) continue
+    for (const element of binding.elements) {
+      if (element.name.text !== identifier.text) continue
+      const exportedName = element.propertyName?.text ?? element.name.text
+      if (exportedName !== STATUS_CONTRACT_EXPORT_NAME) return false
+      return modulePath(env.ctx.path, statement.moduleSpecifier.text, env.ctx.modules) === STATUS_CONTRACT_MODULE_PATH
+    }
+  }
+  return false
+}
+
+// Purely structural cache of STATUS_CONTRACT_MODULE_PATH's OWN top-level
+// declarations/imports (exported or not — this file's ordinary moduleRecord
+// only tracks EXPORTED symbols, but `status()`/`generatedColor()` are
+// module-private). Cached once per scan (env.ctx) — never touches
+// env.ctx.moduleCache/exports, so this is a pure addition with no risk to
+// the existing export-only cache's behaviour.
+function statusContractModuleInfo(env) {
+  if (env.ctx.__statusContractModuleInfo !== undefined) return env.ctx.__statusContractModuleInfo
+  const source = env.ctx.modules?.[STATUS_CONTRACT_MODULE_PATH]
+  if (typeof source !== 'string') {
+    env.ctx.__statusContractModuleInfo = null
+    return null
+  }
+  const sf = ts.createSourceFile(STATUS_CONTRACT_MODULE_PATH, source, ts.ScriptTarget.Latest, true, scriptKindFor(extensionOf(STATUS_CONTRACT_MODULE_PATH)))
+  const declarations = new Map()
+  const imports = new Map()
+  for (const statement of sf.statements) {
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        if (ts.isIdentifier(declaration.name)) declarations.set(declaration.name.text, declaration)
+      }
+    } else if (ts.isFunctionDeclaration(statement) && statement.name) {
+      declarations.set(statement.name.text, statement)
+    } else if (ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier)) {
+      const bindings = statement.importClause?.namedBindings
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          imports.set(element.name.text, { specifier: statement.moduleSpecifier.text, imported: element.propertyName?.text ?? element.name.text })
+        }
+      }
+    }
+  }
+  const info = { sf, declarations, imports }
+  env.ctx.__statusContractModuleInfo = info
+  return info
+}
+
+function propertyAssignmentValue(objectNode, key) {
+  let result = null
+  for (const prop of objectNode.properties) {
+    if (ts.isShorthandPropertyAssignment(prop)) {
+      if (prop.name.text === key) result = prop.name
+      continue
+    }
+    if (!ts.isPropertyAssignment(prop)) continue
+    if (resolveKey(prop.name, objectNode.getSourceFile()) === key) result = prop.initializer
+  }
+  return result
+}
+
+// A member is opaque (voids the whole-object completeness proof) exactly
+// like this file's own hasColorishProp standard: a non-PropertyAssignment
+// member other than a shorthand (spread, method, getter/setter) is always
+// opaque; a computed key that cannot be pinned to a static literal name is
+// opaque too. A shorthand property names itself unambiguously and is never
+// opaque.
+function isOpaqueStatusMember(member) {
+  if (ts.isShorthandPropertyAssignment(member)) return false
+  if (!ts.isPropertyAssignment(member)) return true
+  return resolveKey(member.name, member.getSourceFile()) === null
+}
+
+// Finds the `const <name> = …` VariableDeclaration textually inside `body`
+// (a function Block), never descending into a nested function's own scope.
+function findLocalConst(body, name) {
+  if (!body || !ts.isBlock(body)) return null
+  let found = null
+  const visit = (node) => {
+    if (found || ts.isFunctionLike(node)) return
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name
+      && node.parent && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)) {
+      found = node
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(body, visit)
+  return found
+}
+
+// Resolves `ident` to a canonical generated-token-module path when it is
+// either (a) a named import, or (b) a `const` alias — through an `as`/type-
+// assertion cast or plain reassignment-free binding, any number of hops,
+// each hop still required to be `const` — of one. Mirrors
+// ts-colors.mjs::resolveGeneratedTokenModulePath's exact reasoning; this
+// file cannot import that one directly (independent scanner, no shared
+// runtime), so the same narrow proof is reproduced here instead of trusted
+// by name alone.
+function resolvesToGeneratedTokenModule(ident, info, env, seen = new Set()) {
+  const marker = `${info.sf.fileName}#${ident.text}`
+  if (seen.has(marker)) return false
+  seen.add(marker)
+  const imported = info.imports.get(ident.text)
+  if (imported) {
+    const path = modulePath(STATUS_CONTRACT_MODULE_PATH, imported.specifier, env.ctx.modules)
+    return path !== null && GENERATED_TOKEN_MODULE_PATHS.has(path)
+  }
+  const declaration = info.declarations.get(ident.text)
+  if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+    && declaration.parent && ts.isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & ts.NodeFlags.Const)) {
+    const target = unwrap(declaration.initializer)
+    if (ts.isIdentifier(target)) return resolvesToGeneratedTokenModule(target, info, env, seen)
+  }
+  return false
+}
+
+// A governed accessor return is either the bare identifier bound to a
+// governed element-access read, or that same identifier wrapped in exactly
+// one content-preserving case/trim String method call — mirrors
+// ts-colors.mjs's generatedTokenAccessorReturnIsGoverned exactly (same
+// independent-scanner reproduction rationale as resolvesToGeneratedTokenModule).
+function accessorReturnIsGovernedColor(returnExpr, accessorDeclaration, info, env) {
+  let target = unwrap(returnExpr)
+  if (ts.isCallExpression(target) && target.arguments.length === 0) {
+    const callee = unwrap(target.expression)
+    if (callee && ts.isPropertyAccessExpression(callee) && CASE_OR_TRIM_METHODS.has(callee.name.text)) {
+      target = unwrap(callee.expression)
+    }
+  }
+  if (!ts.isIdentifier(target)) return false
+  const local = findLocalConst(accessorDeclaration.body, target.text)
+  if (!local || !local.initializer) return false
+  const initializer = unwrap(local.initializer)
+  if (!ts.isElementAccessExpression(initializer)) return false
+  const base = unwrap(initializer.expression)
+  if (!base || !ts.isIdentifier(base)) return false
+  return resolvesToGeneratedTokenModule(base, info, env)
+}
+
+function collectReturnExpressions(fnDecl) {
+  const returns = []
+  const visit = (node) => {
+    if (ts.isFunctionLike(node) && node !== fnDecl) return
+    if (ts.isReturnStatement(node) && node.expression) returns.push(node.expression)
+    else ts.forEachChild(node, visit)
+  }
+  if (fnDecl.body && ts.isBlock(fnDecl.body)) visit(fnDecl.body)
+  else if (fnDecl.body) returns.push(fnDecl.body)
+  return returns
+}
+
+// `value` is a member of status()'s own return object literal (e.g. the bare
+// identifier `color` for `resolvedColor: color`). Governed only when it
+// resolves — through a local `const` declared directly in status()'s OWN
+// body (never a function PARAMETER like `label`/`nonColorCue`, which
+// findLocalConst structurally cannot find) — to a call whose callee is a
+// LOCAL function in the SAME module whose own returns are all governed.
+function builderValueIsGovernedColor(value, builderDeclaration, info, env) {
+  const target = unwrap(value)
+  if (!ts.isIdentifier(target)) return false
+  const local = findLocalConst(builderDeclaration.body, target.text)
+  if (!local || !local.initializer) return false
+  const initializer = unwrap(local.initializer)
+  if (!ts.isCallExpression(initializer)) return false
+  const callee = unwrap(initializer.expression)
+  if (!callee || !ts.isIdentifier(callee)) return false
+  const accessorDeclaration = info.declarations.get(callee.text)
+  if (!accessorDeclaration || !ts.isFunctionDeclaration(accessorDeclaration) || !accessorDeclaration.body) return false
+  const returns = collectReturnExpressions(accessorDeclaration)
+  if (!returns.length) return false
+  return returns.every((expr) => accessorReturnIsGovernedColor(expr, accessorDeclaration, info, env))
+}
+
+function statusBuilderReturnIsGovernedColor(returnExpr, finalKey, builderDeclaration, info, env) {
+  const returnObject = unwrap(returnExpr)
+  if (!returnObject || !ts.isObjectLiteralExpression(returnObject) || returnObject.properties.some(isOpaqueStatusMember)) return false
+  const value = propertyAssignmentValue(returnObject, finalKey)
+  if (!value) return false
+  return builderValueIsGovernedColor(value, builderDeclaration, info, env)
+}
+
+// Bullets 3-4 of statusContractResolvedColorOutcome's doc comment: resolves
+// STATUS_CONTRACT_MODULE_PATH's own `statusContract` and `status(...)`
+// declarations directly from statusContractModuleInfo (never via a live
+// scope stack — this file has none to begin with) and proves
+// `<midKey>.<finalKey>` governed.
+function statusContractMemberIsGovernedColor(midKeyRaw, finalKey, env) {
+  const info = statusContractModuleInfo(env)
+  if (!info) return false
+  const contractDeclaration = info.declarations.get(STATUS_CONTRACT_EXPORT_NAME)
+  if (!contractDeclaration || !ts.isVariableDeclaration(contractDeclaration) || !contractDeclaration.initializer) return false
+  const contractObject = unwrap(contractDeclaration.initializer)
+  if (!contractObject || !ts.isObjectLiteralExpression(contractObject) || contractObject.properties.some(isOpaqueStatusMember)) return false
+  const entryValue = propertyAssignmentValue(contractObject, midKeyRaw)
+  if (!entryValue) return false
+  const call = unwrap(entryValue)
+  if (!ts.isCallExpression(call)) return false
+  const callee = unwrap(call.expression)
+  if (!callee || !ts.isIdentifier(callee) || callee.text !== STATUS_CONTRACT_BUILDER_NAME) return false
+  const builderDeclaration = info.declarations.get(STATUS_CONTRACT_BUILDER_NAME)
+  if (!builderDeclaration || !ts.isFunctionDeclaration(builderDeclaration) || !builderDeclaration.body) return false
+  const returns = collectReturnExpressions(builderDeclaration)
+  if (!returns.length) return false
+  return returns.every((expr) => statusBuilderReturnIsGovernedColor(expr, finalKey, builderDeclaration, info, env))
+}
+
+// Folds a paintOutcomes-style outcomes array to a single classification —
+// shared by classifyGovernedModulePaint and the property-enumeration loop
+// below (paintOutcomes' own PropertyAccessExpression/ElementAccessExpression
+// branch), so a nested governed-record read (see
+// statusContractResolvedColorOutcome) is classified by the SAME precedence
+// rule as the top-level call site.
+function foldOutcomes(outcomes) {
+  if (outcomes.includes('mismatch')) return 'mismatch'
+  if (outcomes.includes('literal')) return 'literal'
+  if (outcomes.includes('unsupported')) return 'unsupported'
+  return null
+}
+
 function paintOutcomes(node, statusKey, env, record = null, seen = new Set()) {
   const core = unwrap(node)
   if (!core) return null
+  const contractOutcome = statusContractResolvedColorOutcome(core, statusKey, env, record)
+  if (contractOutcome) return contractOutcome
   if (ts.isBinaryExpression(core) && core.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) {
     const primary = paintOutcomes(core.left, statusKey, env, record, seen)
     return primary ?? paintOutcomes(core.right, statusKey, env, record, seen)
@@ -468,7 +784,22 @@ function paintOutcomes(node, statusKey, env, record = null, seen = new Set()) {
       const key = canonicalStatus(resolveKey(prop.name, resolved.record.sf) ?? '')
       if (!key || (selectedKey ? key !== selectedKey : statusKey && key !== statusKey)) continue
       const colors = extractColors(printTs(resolved.record.sf, prop.initializer))
-      const outcome = colors.length ? classifyOutcome(key, colors, env.ctx.maps) : 'unsupported'
+      let outcome
+      if (colors.length) {
+        outcome = classifyOutcome(key, colors, env.ctx.maps)
+      } else {
+        // A record entry's value is not always a literal-looking colour
+        // string extractColors can find textually — it may itself be a
+        // governed cross-module read (statusContractResolvedColorOutcome),
+        // e.g. `inbox: statusContract.inbox.resolvedColor`. Recurse through
+        // the SAME paintOutcomes this branch is already part of before
+        // giving up as unsupported — this is a pure ADDITION: an entry that
+        // was already 'unsupported' before (a genuinely unprovable value)
+        // still is, since paintOutcomes returns null for anything it does
+        // not recognize and the fallback below is unchanged.
+        const nested = paintOutcomes(prop.initializer, key, env, resolved.record, seen)
+        outcome = nested ? foldOutcomes(nested) : 'unsupported'
+      }
       outcomes.push(outcome === 'literal' ? null : outcome)
     }
     return outcomes.length ? outcomes : ['unsupported']
@@ -512,7 +843,7 @@ function paintOutcomes(node, statusKey, env, record = null, seen = new Set()) {
 function classifyGovernedModulePaint(node, statusKey, env, syntaxNode) {
   const outcomes = paintOutcomes(node, statusKey, env)
   if (!outcomes) return false
-  const outcome = outcomes.includes('mismatch') ? 'mismatch' : outcomes.includes('literal') ? 'literal' : outcomes.includes('unsupported') ? 'unsupported' : null
+  const outcome = foldOutcomes(outcomes)
   reportOutcome(env, syntaxNode, statusKey, outcome, 'governed imported status paint')
   return true
 }
