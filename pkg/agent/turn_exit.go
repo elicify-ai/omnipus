@@ -23,8 +23,9 @@ func (ts *turnState) ClaimCancel() bool {
 	return true
 }
 
-// MarkAbandoned sets the abandoned flag. Called by the stuck-watchdog timer
-// when the turn goroutine has not exited 5s after the hard-abort signal (FR-21).
+// MarkAbandoned sets the abandoned flag when a controller stops waiting for a
+// turn goroutine that ignored hard abort. Callers include the gateway cancel
+// watchdog and the delegated-turn timeout detach path.
 func (ts *turnState) MarkAbandoned() {
 	ts.abandoned.Store(true)
 }
@@ -215,6 +216,9 @@ func (ts *turnState) interruptHintMessage() providers.Message {
 // from within the goroutine that finishes the turn, so it must not block or
 // call back into the agent loop with any locks held.
 func (ts *turnState) Finish(isHardAbort bool) {
+	if isHardAbort {
+		ts.finishedByHardAbort.Store(true)
+	}
 	ts.isFinished.Store(true)
 
 	// Ensure finishedChan exists before entering closeOnce.Do.

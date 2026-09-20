@@ -1332,8 +1332,9 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 	return true
 }
 
-// callProvider calls the configured provider or fallback chain and records streaming progress.
-func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+// callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
+// Delegated-turn rate-limit retries wrap this method in loop_provider_retry.go.
+func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 	// Clear tool-argument progress when the round ends, on EVERY exit
 	// path (success, error, retry, recovery). Placed here rather than
 	// at the four call sites so no future path can forget it.
@@ -1474,6 +1475,12 @@ func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, to
 				delta := visible[len(lastChunk):]
 				lastChunk = visible
 				if delta != "" {
+					// This attempt-local counter is independent of the concrete
+					// streamer. Some channels expose no buffer-length method, and
+					// WebSocket creates a fresh streamer per round. Count before
+					// Update so an attempted partial emit fails closed even if the
+					// client disconnects during the write.
+					rt.providerCallStreamedBytes.Add(int64(len(delta)))
 					if err := streamer.Update(providerCtx, delta); err != nil {
 						logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 					}
