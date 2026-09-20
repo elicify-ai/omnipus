@@ -14,6 +14,22 @@
 // color-position registration (cycles, namespace edges, layer edges) belong to
 // the Stage A tokens checker and are composed by the orchestrator.
 //
+// At-rule CONDITION text (AtRule.params) is scanned too, not just declaration
+// values: @supports and @container conditions are grammatically built from
+// `<ident-or-custom-prop>: <value>` feature tests (optionally wrapped in
+// `not(...)`/`style(...)`/combined with and/or), and that value position is
+// analyzed with the exact same walkValueTokens used for declarations — never a
+// second, weaker matcher. `selector(...)` arguments are skipped outright (a
+// selector, never a color position). Every other at-rule's params — keyframe
+// selectors, page selectors, `@theme`/`@utility`/`@property` identifiers,
+// `@import`/`@charset` strings, layer names, and so on — is not colour-bearing
+// by grammar and is not walked, so it never manufactures unsupported-noise on
+// ordinary CSS. Within a walked condition, plain boolean/range feature tests
+// (e.g. `(min-width: 640px)`, `(color)`) have no colon-paired value and are
+// left alone — no current CSS media/container feature takes a color value —
+// while a genuinely malformed condition (unbalanced parentheses, an
+// unrecognizable declaration shape) fails closed as css-colors/unsupported.
+//
 // Fail-closed: PostCSS parse failures become explicit css-colors/parse-error
 // findings, unrecognized #-prefixed tokens and undecodable data URIs become
 // css-colors/unsupported findings. The scanner never returns empty success for
@@ -50,6 +66,17 @@ const COLOR_CONTEXT_FUNCTIONS = new Set([
   'repeating-linear-gradient', 'repeating-radial-gradient', 'repeating-conic-gradient',
   'color-mix', 'light-dark',
 ])
+
+/**
+ * At-rules whose condition text is grammatically built from feature tests —
+ * `<ident-or-custom-prop>: <value>`, optionally wrapped in not()/style() or
+ * combined with and/or — so a color can legitimately appear there. Every other
+ * at-rule's params (keyframe selectors, page selectors, `@theme`/`@utility`/
+ * `@property` identifiers, `@import`/`@charset` strings, layer names, …) is a
+ * name or selector list, never a color position, and is deliberately left
+ * unwalked so it can never manufacture unsupported-noise on ordinary CSS.
+ */
+const CONDITION_AT_RULES = new Set(['supports', 'container', 'media'])
 
 /** Normalized properties whose var() references are color positions. */
 const COLOR_CONTEXT_PROPERTIES = new Set([
@@ -277,6 +304,126 @@ function checkWordToken(token, identContext, report) {
   if (NAMED_COLORS.has(lower) && !identContext) report(RULE_RAW_COLOR, lower, token)
 }
 
+/**
+ * Walks an at-rule's condition text (AtRule.params) for @supports, @container
+ * and @media, whose grammar is built from feature tests that pair a bare
+ * identifier or custom-property name with a value via ':' — the exact shape
+ * a declaration has. `emitAt(ruleId, syntax, offset, message)` reports at an
+ * offset into `params`; callers translate that to a file line/column.
+ */
+function walkAtRuleCondition(params, ctx, emitAt) {
+  const tokens = tokenizeValue(params)
+  walkConditionTokens(tokens, 0, tokens.length, params, ctx, emitAt)
+}
+
+/** Scans a flat run of condition tokens for parenthesized feature groups. */
+function walkConditionTokens(tokens, from, to, fullText, ctx, emitAt) {
+  const unbalanced = (syntax, offset) => emitAt(
+    RULE_UNSUPPORTED,
+    syntax,
+    offset,
+    `Unbalanced parentheses in at-rule condition (${syntax}); the condition cannot be analyzed for embedded colors. Fail-closed report, not a pass.`,
+  )
+  for (let i = from; i < to; i += 1) {
+    const token = tokens[i]
+    if (token.kind === 'rparen') {
+      unbalanced(`unbalanced parentheses in condition: ${truncate(fullText, 60)}`, token.start)
+      return
+    }
+    if (token.kind === 'lparen') {
+      const close = matchingParenIndex(tokens, i)
+      if (close === -1 || close >= to) {
+        unbalanced(`unbalanced parentheses in condition: ${truncate(fullText, 60)}`, token.start)
+        return
+      }
+      walkConditionGroup(tokens, i + 1, close, fullText, ctx, emitAt)
+      i = close
+      continue
+    }
+    if (token.kind === 'word' && tokens[i + 1]?.kind === 'lparen') {
+      const lower = token.text.toLowerCase()
+      const close = matchingParenIndex(tokens, i + 1)
+      if (close === -1 || close >= to) {
+        unbalanced(`unbalanced parentheses in condition: ${truncate(fullText, 60)}`, token.start)
+        return
+      }
+      // `selector(...)` takes a CSS selector, never a color position — every other
+      // word-then-'(' adjacency here (style(), not(), and/or combinators, or a
+      // container-name/media-type immediately preceding its condition — whitespace
+      // is invisible to the tokenizer, so these are indistinguishable from a
+      // "function call" by token shape alone) is safe to recurse into: the group
+      // walk below only ever reports a genuine single-identifier ':' declaration,
+      // so recursing never manufactures a finding from ordinary combinator text.
+      if (lower !== 'selector') walkConditionGroup(tokens, i + 2, close, fullText, ctx, emitAt)
+      i = close
+      continue
+    }
+  }
+}
+
+/** Scans the content of one parenthesized condition group for a `prop: value` feature test. */
+function walkConditionGroup(tokens, from, to, fullText, ctx, emitAt) {
+  if (from >= to) return
+  let colonIdx = -1
+  for (let k = from; k < to; k += 1) {
+    if (tokens[k].kind === 'operator' && tokens[k].text === ':') {
+      colonIdx = k
+      break
+    }
+    if (tokens[k].kind === 'lparen') break
+  }
+  if (colonIdx === -1) {
+    // No colon at this level: either a nested condition (recurse) or a boolean/range
+    // feature test (`(color)`, `(width >= 400px)`) — no current CSS media or
+    // container feature takes a color value, so that case is left clean, not noise.
+    const hasNested = tokens.slice(from, to)
+      .some((t) => t.kind === 'lparen' || (t.kind === 'word' && ['and', 'or', 'not'].includes(t.text.toLowerCase())))
+    if (hasNested) walkConditionTokens(tokens, from, to, fullText, ctx, emitAt)
+    return
+  }
+  const propTokens = tokens.slice(from, colonIdx).filter((t) => t.kind === 'word')
+  if (propTokens.length !== 1) {
+    const syntax = `unrecognized condition shape: ${truncate(fullText.slice(tokens[from].start, tokens[to - 1].end), 60)}`
+    emitAt(
+      RULE_UNSUPPORTED,
+      syntax,
+      tokens[from].start,
+      `Unrecognized at-rule condition shape (${syntax}); cannot verify whether it carries a color. Fail-closed report, not a pass.`,
+    )
+    return
+  }
+  const prop = propTokens[0].text
+  const valueStart = tokens[colonIdx + 1]?.start
+  const valueEnd = tokens[to - 1]?.end
+  if (valueStart === undefined || valueEnd === undefined || valueStart >= valueEnd) return
+  const value = fullText.slice(valueStart, valueEnd)
+  walkValueTokens({
+    prop,
+    value,
+    identContext: isIdentContextProperty(prop),
+    colorDepth: isColorContextProperty(prop) ? 1 : 0,
+    ctx,
+    messages: atRuleConditionMessages(prop, value),
+    report: (ruleId, syntax, token, message) => emitAt(ruleId, syntax, valueStart + (token?.start ?? 0), message),
+  })
+}
+
+function atRuleConditionMessages(prop, value) {
+  const trunc = truncate(value, 60)
+  return (ruleId, syntax) => {
+    if (ruleId === RULE_RAW_COLOR) {
+      return `Raw color ${syntax} in at-rule condition "${prop}" (value: ${trunc}); reference a registered CSS token via var(--…) or register an exception.`
+    }
+    if (ruleId === RULE_UNREGISTERED) {
+      return `Unregistered CSS token reference ${syntax} in at-rule color condition "${prop}" (value: ${trunc}); reference a registered token from the token graph or register it centrally.`
+    }
+    if (ruleId === RULE_UNSUPPORTED) {
+      return `Unrecognized #-prefixed token ${syntax} in at-rule condition "${prop}"; not a valid hex length (3, 4, 6, or 8 digits). Fail-closed report, not a pass.`
+    }
+    return `Data URI in at-rule condition "${prop}" could not be decoded (${syntax}); embedded paint cannot be verified — fail-closed report, not a pass.`
+  }
+}
+
 /** Strips one matching pair of surrounding quotes, if present. */
 function stripMatchingQuotes(text) {
   const trimmed = text.trim()
@@ -476,19 +623,29 @@ function svgPaintMessages(attr) {
   }
 }
 
+/** Converts a fixed prefix leading up to an offset into a 1-based display line/column. */
+function positionFromPrefix(start, prefix) {
+  if (!start) return { line: 1, column: 1 }
+  const lastNewline = prefix.lastIndexOf('\n')
+  if (lastNewline === -1) return { line: start.line, column: start.column + prefix.length }
+  let newlines = 0
+  for (let i = 0; i < prefix.length; i += 1) if (prefix[i] === '\n') newlines += 1
+  return { line: start.line + newlines, column: prefix.length - lastNewline }
+}
+
 /** Maps a 0-based offset in decl.value to 1-based display line/column in the file. */
 function makePositionMapper(decl) {
   const start = decl.source?.start
   const between = decl.raws.between ?? ': '
-  return (offset) => {
-    if (!start) return { line: 1, column: 1 }
-    const prefix = decl.prop + between + decl.value.slice(0, offset)
-    const lastNewline = prefix.lastIndexOf('\n')
-    if (lastNewline === -1) return { line: start.line, column: start.column + prefix.length }
-    let newlines = 0
-    for (let i = 0; i < prefix.length; i += 1) if (prefix[i] === '\n') newlines += 1
-    return { line: start.line + newlines, column: prefix.length - lastNewline }
-  }
+  return (offset) => positionFromPrefix(start, decl.prop + between + decl.value.slice(0, offset))
+}
+
+/** Maps a 0-based offset in atRule.params to 1-based display line/column in the file. */
+function makeAtRulePositionMapper(atRule) {
+  const start = atRule.source?.start
+  const afterName = atRule.raws.afterName ?? (atRule.params ? ' ' : '')
+  const prefix = `@${atRule.name}${afterName}`
+  return (offset) => positionFromPrefix(start, prefix + atRule.params.slice(0, offset))
 }
 
 function truncate(text, limit) {
@@ -528,20 +685,36 @@ export function scan({ path, source, policy }) {
   }
   const ctx = { tokenSet: new Set(policy.tokenCssNames) }
   const findings = []
-  root.walkDecls((decl) => {
-    const position = makePositionMapper(decl)
-    walkValueTokens({
-      prop: decl.prop,
-      value: decl.value,
-      identContext: isIdentContextProperty(decl.prop),
-      colorDepth: isColorContextProperty(decl.prop) ? 1 : 0,
-      ctx,
-      messages: declarationMessages(decl.prop, decl.value),
-      report: (ruleId, syntax, token, message) => {
-        const at = position(token?.start ?? 0)
+  root.walk((node) => {
+    if (node.type === 'decl') {
+      const decl = node
+      const position = makePositionMapper(decl)
+      walkValueTokens({
+        prop: decl.prop,
+        value: decl.value,
+        identContext: isIdentContextProperty(decl.prop),
+        colorDepth: isColorContextProperty(decl.prop) ? 1 : 0,
+        ctx,
+        messages: declarationMessages(decl.prop, decl.value),
+        report: (ruleId, syntax, token, message) => {
+          const at = position(token?.start ?? 0)
+          findings.push({ ruleId, path, syntax, message, line: at.line, column: at.column })
+        },
+      })
+      return
+    }
+    if (node.type === 'atrule') {
+      const atRule = node
+      const name = normalizeProperty(atRule.name)
+      if (!CONDITION_AT_RULES.has(name)) return
+      const params = atRule.params ?? ''
+      if (params.trim() === '') return
+      const position = makeAtRulePositionMapper(atRule)
+      walkAtRuleCondition(params, ctx, (ruleId, syntax, offset, message) => {
+        const at = position(offset)
         findings.push({ ruleId, path, syntax, message, line: at.line, column: at.column })
-      },
-    })
+      })
+    }
   })
   return findings
 }

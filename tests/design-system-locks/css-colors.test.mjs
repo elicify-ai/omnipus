@@ -469,6 +469,83 @@ describe('nested contexts are scanned', () => {
   })
 })
 
+describe('at-rule condition text is scanned for colors', () => {
+  it('reports a raw color in an @supports condition alongside a control declaration color', () => {
+    const findings = run('@supports (color: #ff0000) { .a { color: #00ff00 } }')
+    assert.deepEqual(ruleIds(findings), ['css-colors/raw-color', 'css-colors/raw-color'])
+    assert.deepEqual(syntaxes(findings), ['#ff0000', '#00ff00'])
+    assertRawColor(findings[0], '#ff0000')
+    assertRawColor(findings[1], '#00ff00')
+    assert.match(findings[0].message, /at-rule condition/)
+  })
+
+  it('reports a raw color in an @container style() condition alongside a control declaration color', () => {
+    const findings = run('@container style(--brand: #ff0000) { .a { color: #00ff00 } }')
+    assert.deepEqual(ruleIds(findings), ['css-colors/raw-color', 'css-colors/raw-color'])
+    assert.deepEqual(syntaxes(findings), ['#ff0000', '#00ff00'])
+  })
+
+  it('reports a raw color inside an @supports not() wrapper', () => {
+    const findings = run('@supports not (color: #ff0000) { .a { color: var(--color-primary) } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertRawColor(findings[0], '#ff0000')
+  })
+
+  it('reports an unregistered token reference in an @container style() condition', () => {
+    const findings = run('@container style(color: var(--unregistered-local)) { .a { color: var(--color-primary) } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertUnregisteredToken(findings[0], 'var(--unregistered-local)')
+  })
+
+  it('keeps a custom-property style() condition with a raw literal reported the same as a custom-property declaration', () => {
+    const findings = run('@container style(--brand: #ff0000) { .a { color: var(--color-primary) } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertRawColor(findings[0], '#ff0000')
+  })
+
+  it('keeps a token-based @supports condition clean', () => {
+    assert.deepEqual(
+      run('@supports (color: var(--color-primary)) { .a { color: var(--color-primary) } }'),
+      [],
+    )
+  })
+
+  it('does not turn an ordinary media query into noise', () => {
+    assert.deepEqual(run('@media (min-width: 640px) { .a { color: var(--color-primary) } }'), [])
+    assert.deepEqual(run('@media screen and (min-width: 640px) { .a { color: var(--color-primary) } }'), [])
+    assert.deepEqual(run('@media (prefers-color-scheme: dark) { .a { color: var(--color-primary) } }'), [])
+  })
+
+  it('does not turn an ordinary @container size query into noise', () => {
+    assert.deepEqual(run('@container sidebar (min-width: 400px) { .a { color: var(--color-primary) } }'), [])
+  })
+
+  it('does not walk into a @supports selector() argument', () => {
+    assert.deepEqual(run('@supports selector(a > b) { .a { color: var(--color-primary) } }'), [])
+  })
+
+  it('does not walk non-color-bearing at-rule preludes (@keyframes, @theme, @property names)', () => {
+    assert.deepEqual(run("@keyframes red-fade { from { color: var(--color-primary) } }"), [])
+    assert.deepEqual(run('@theme { --color-brand: var(--color-primary); }'), [])
+  })
+
+  it('fails closed on a malformed @supports condition (unbalanced parentheses)', () => {
+    const findings = run('@supports ((color: #ff0000) { .a { color: #00ff00 } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assert.equal(findings[0].ruleId, 'css-colors/unsupported')
+    assert.match(findings[0].syntax, /unbalanced parentheses/)
+    assert.ok(findings[0].message.length > 0)
+    assert.ok(Number.isInteger(findings[0].line) && findings[0].line > 0)
+    assert.ok(Number.isInteger(findings[0].column) && findings[0].column > 0)
+  })
+
+  it('fails closed on a malformed @container condition with an ambiguous declaration shape', () => {
+    const findings = run('@container style(too many words: #ff0000) { .a { color: var(--color-primary) } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assert.equal(findings[0].ruleId, 'css-colors/unsupported')
+  })
+})
+
 describe('unsupported syntax fails closed', () => {
   it('reports a five-digit hex as unsupported, not silently clean', () => {
     const findings = run('a { color: #fffff }')
