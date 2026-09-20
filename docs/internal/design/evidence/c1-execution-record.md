@@ -62,6 +62,15 @@ These are the remaining C1 items that a script refused rather than guessed. Each
 | D-E | Root-font-dependent spacing (`spacing/root-dependent`, 36 findings) | Nothing today; changes behaviour when a user enlarges their browser font | `rem` follows a user-adjusted root font; a px token does not. Converting is an accessibility trade-off, not a cleanup. |
 | D-F | Remaining raw colours (`ts-colors/raw-color`, 403 findings) | Varies | Mostly governed data rather than chrome — avatar colours, file-type icons, diagram themes. Tailwind v4 regenerated its palette in OKLCH, so its named colours no longer equal our brand hexes; every swap is a visible change. Needs splitting into clusters and deciding per cluster. |
 
+| D-G | The 3px indents (`spacing/off-scale`, 14 sites) | `ml-[3px]` becomes either 2px or 4px | 3px is exactly equidistant between the 2px and 12px rungs added on 2026-09-20, so the mapping tool refused the tie. D10's own wording ("next grid multiple", which gave 1.75->2 and 10.5->12) reads as 4px, but the tool tie-broke downward to 2px. A 1px call either way, in chat metadata indents. |
+| D-H | `fontSize: 9` in `ChartPart.tsx` | A chart axis label grows from 9px to 12px | The 12px floor is ratified and has been applied to 324 other sites, but a chart label is data visualisation rather than UI chrome, and +3px may reflow the chart. One site. |
+
+## Ready to implement — analysis done, no ruling needed
+
+| Item | Finding | Resolved mapping |
+|---|---|---|
+| Tree indent custom properties | `spacing/invalid-var`, 4 sites (`Sidebar`, `FileTreeView`, `KnowledgeOutline`, `SearchModal`) | Each sets a pixel number in JS and multiplies by `1px`: `calc(var(--x-indent-depth-px) * 1px)`. The step is 14px and the base 12px -- the legacy 14px-root values D10 already maps to 16px and 12px. The fix is to set a unitless depth COUNT and multiply by tokens: `calc(var(--space-2-5) + var(--depth) * var(--space-4))`. That is the same normalisation already applied to `px-4`/`p-4` in 87 places, so it needs no new decision -- but it is a structural change to nested tree indentation in four files, and there is no visual baseline to catch a regression (issue #753), so it wants care rather than a bulk edit. |
+
 ## Deferred, tracked elsewhere
 
 - **Appearance gate.** No visual-regression coverage exists: `toHaveScreenshot` appears zero times, there are no snapshot baselines, and the design-system Playwright config sets `screenshot: 'off'`. The only look check is a human. Issue [#753](https://github.com/elicify-ai/omnipus/issues/753), explicitly out of scope for this delivery.
