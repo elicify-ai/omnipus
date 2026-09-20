@@ -3,12 +3,14 @@
  *
  * The four onboarding rows the spec names, each with its own oracle:
  *
- *   1. "Auth-method control keeps three steps" (FR-028) — the step tracker has
- *      exactly 3 steps, and step 3 still carries the auth-method control INSIDE
- *      its second-level panel. A fourth numbered step would fail row 1.
- *   2. "Onboarding model field is empty" (FR-029, FR-040) — step 3's model
- *      control starts with NO value; its accessible name is the caller's label
- *      verbatim, which is only true while nothing is selected.
+ *   1. "Auth-method control keeps four steps" (FR-028) — the step tracker has
+ *      exactly 4 steps (WP5 / ADR-0010 added the Personal-preferences step at
+ *      position 3), and the provider step (now step 4) still carries the
+ *      auth-method control INSIDE its second-level panel. A fifth numbered
+ *      step would fail row 1.
+ *   2. "Onboarding model field is empty" (FR-029, FR-040) — the provider step's
+ *      model control starts with NO value; its accessible name is the caller's
+ *      label verbatim, which is only true while nothing is selected.
  *   3. "Finish is disabled until a model is chosen" (SC-008) — disabled with no
  *      model, still disabled while the probe is in flight / for a stale probe,
  *      enabled only once the probe passed FOR THAT model.
@@ -17,6 +19,13 @@
  *
  * Plus the free-string probe id row (FR-023/FR-036): a Custom endpoint id that
  * is NOT in the catalog reaches the probe verbatim.
+ *
+ * The wizard is now four steps in local mode (WP5 / ADR-0010):
+ *   Step 1 — admin username; Step 2 — admin password; Step 3 — personal
+ *   preferences (name/tone/detail); Step 4 — provider + model. The provider
+ *   step is what the auth-method control lives inside; the personal step is
+ *   optional input and is advanced with the pref-name field alone (tone and
+ *   detail have shipped defaults).
  *
  * Harness: `fixtures/onboarding-stubs.ts` — read its header for why the wizard
  * is driven against stubbed edges rather than a second real onboarding of the
@@ -33,26 +42,30 @@ import { catalogRow, stubOnboarding } from './fixtures/onboarding-stubs'
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 /** FR-029, verbatim — mirrors ONBOARDING_MODEL_LABEL in src/routes/onboarding.tsx. */
-const MODEL_LABEL = 'Model for your first agent'
+const MODEL_LABEL = 'Default model'
 
 /** An api-key company that exists in the fixture with exactly one variant. */
 const OPENAI = catalogRow('openai')
 const OPENAI_MODEL = OPENAI.models?.[0]?.id as string
 
-/** Walk steps 1 and 2 so the test body starts on step 3. */
-async function reachStepThree(page: import('@playwright/test').Page): Promise<void> {
+/** Walk steps 1, 2, and 3 so the test body starts on step 4 (the picker). */
+async function reachStepFour(page: import('@playwright/test').Page): Promise<void> {
   await page.goto(`${BASE_URL}/#/onboarding`)
-  await expect(page.getByText('Step 1 of 3').first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('Step 1 of 4').first()).toBeVisible({ timeout: 15_000 })
 
   await page.locator('#admin-username').fill('e2e-admin')
   await page.getByRole('button', { name: /^continue$/i }).click()
 
-  await expect(page.getByText('Step 2 of 3').first()).toBeVisible()
+  await expect(page.getByText('Step 2 of 4').first()).toBeVisible()
   await page.locator('#admin-password').fill('e2e-passw0rd!')
   await page.locator('#admin-password-confirm').fill('e2e-passw0rd!')
   await page.getByRole('button', { name: /^continue$/i }).click()
 
-  await expect(page.getByText('Step 3 of 3').first()).toBeVisible()
+  await expect(page.getByText('Step 3 of 4').first()).toBeVisible()
+  await page.locator('#pref-name').fill('e2e-admin')
+  await page.getByRole('button', { name: /^continue$/i }).click()
+
+  await expect(page.getByText('Step 4 of 4').first()).toBeVisible()
 }
 
 /** Pick the OpenAI Popular tile, type a key, confirm the second-level panel. */
@@ -67,35 +80,35 @@ async function confirmOpenAIWithKey(page: import('@playwright/test').Page): Prom
 
 // ── Row 1: three steps, auth method inside step 3 (FR-028 / SC-008) ───────────
 
-test('onboarding step tracker has exactly 3 steps and the auth-method control lives inside step 3', async ({
+test('onboarding step tracker has exactly 4 steps and the auth-method control lives inside step 4', async ({
   page,
 }) => {
   await stubOnboarding(page)
-  await reachStepThree(page)
+  await reachStepFour(page)
 
   // The progress semantics carry the count, not the dots' styling.
   const progress = page.getByRole('progressbar', { name: /onboarding progress/i })
-  await expect(progress).toHaveAttribute('aria-valuemax', '3')
+  await expect(progress).toHaveAttribute('aria-valuemax', '4')
   await expect(progress).toHaveAttribute('aria-valuemin', '1')
-  await expect(progress).toHaveAttribute('aria-valuenow', '3')
+  await expect(progress).toHaveAttribute('aria-valuenow', '4')
 
-  // Differentiation: a 4-step tracker would render "Step 3 of 4".
-  await expect(page.getByText('Step 3 of 4')).toHaveCount(0)
+  // Differentiation: a 5-step tracker would render "Step 4 of 5".
+  await expect(page.getByText('Step 4 of 5')).toHaveCount(0)
 
-  // FR-028: the auth-method control is INSIDE step 3's second-level panel — it
-  // is what a fourth numbered step would otherwise have carried.
+  // FR-028: the auth-method control is INSIDE step 4's second-level panel — it
+  // is what a fifth numbered step would otherwise have carried.
   await page.getByTestId(`picker-popular-${OPENAI.id}`).click()
   await expect(page.getByTestId('provider-detail-panel-auth')).toBeVisible()
-  await expect(progress).toHaveAttribute('aria-valuenow', '3')
+  await expect(progress).toHaveAttribute('aria-valuenow', '4')
 })
 
 // ── Row 2: the model field starts empty (FR-029) ──────────────────────────────
 
-test('onboarding step 3 pre-selects no model — the field is empty and labelled verbatim', async ({
+test('onboarding step 4 pre-selects no model — the field is empty and labelled verbatim', async ({
   page,
 }) => {
   await stubOnboarding(page)
-  await reachStepThree(page)
+  await reachStepFour(page)
   await confirmOpenAIWithKey(page)
 
   const modelTrigger = page.getByTestId('onboarding-model-select')
@@ -115,7 +128,7 @@ test('onboarding step 3 pre-selects no model — the field is empty and labelled
 
 test('Finish stays disabled until a model is chosen and its probe passes', async ({ page }) => {
   const wire = await stubOnboarding(page)
-  await reachStepThree(page)
+  await reachStepFour(page)
 
   const finish = page.getByRole('button', { name: /finish/i })
 
@@ -145,7 +158,7 @@ test('Finish stays disabled until a model is chosen and its probe passes', async
 
 test('onboarding completion sends auth_method with the provider', async ({ page }) => {
   const wire = await stubOnboarding(page)
-  await reachStepThree(page)
+  await reachStepFour(page)
   await confirmOpenAIWithKey(page)
 
   await page.getByTestId('onboarding-model-select').click()
@@ -177,7 +190,7 @@ test('a Custom endpoint id that is not in the catalog reaches the probe verbatim
   page,
 }) => {
   const wire = await stubOnboarding(page)
-  await reachStepThree(page)
+  await reachStepFour(page)
 
   // The Custom endpoint row is the picker's last row and settles on its own.
   await page.getByTestId('picker-custom-endpoint').click()

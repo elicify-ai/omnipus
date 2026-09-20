@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -119,7 +120,7 @@ func TestHandleCompleteOnboarding_OutOfEnumTone_Rejected400(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "preferences.tone")
 
 	_, err := os.Stat(config.UserProfilePath())
-	assert.True(t, os.IsNotExist(err),
+	assert.True(t, errors.Is(err, os.ErrNotExist),
 		"a refused request must write no USER.md at all, got err=%v", err)
 }
 
@@ -132,7 +133,7 @@ func TestHandleCompleteOnboarding_OutOfEnumDetail_Rejected400(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "preferences.detail")
 
 	_, err := os.Stat(config.UserProfilePath())
-	assert.True(t, os.IsNotExist(err),
+	assert.True(t, errors.Is(err, os.ErrNotExist),
 		"a refused request must write no USER.md at all, got err=%v", err)
 }
 
@@ -153,7 +154,7 @@ func TestHandleCompleteOnboarding_ToneCarryingAHeading_CannotReachUserMD(t *test
 
 	data, err := os.ReadFile(config.UserProfilePath())
 	if err != nil {
-		require.True(t, os.IsNotExist(err), "unexpected error reading USER.md: %v", err)
+		require.True(t, errors.Is(err, os.ErrNotExist), "unexpected error reading USER.md: %v", err)
 		return
 	}
 	content := string(data)
@@ -185,7 +186,7 @@ func TestWriteOnboardingUserProfile_UnknownTone_WritesNothing(t *testing.T) {
 
 	assert.NotEmpty(t, warning, "an unknown tone must surface as the non-blocking warning")
 	_, err := os.Stat(config.UserProfilePath())
-	assert.True(t, os.IsNotExist(err),
+	assert.True(t, errors.Is(err, os.ErrNotExist),
 		"nothing may be written for an unknown tone, got err=%v", err)
 }
 

@@ -86,11 +86,26 @@ test('(c) dev_mode_bypass = true shows red persistent banner on every route', as
 
   // Now mock GET /api/v1/state to force dev_mode_bypass=true. We use a full
   // synthetic response so we don't depend on the replay's auth context.
+  // ADR-0010 (WP1): `identity` is a REQUIRED field of the generated AppState
+  // (contracts/components/schemas/AppState.yaml), validated by the SPA's zod
+  // edge on every fetch — omitting it would throw inside fetchAppState, TanStack
+  // Query would mark the app-state query as errored, `appState` would stay
+  // undefined, and `devModeBypass = appState?.dev_mode_bypass === true` (AppShell.tsx)
+  // would resolve to false even though the mock body says true — the banner
+  // would never render and this row would time out on the locator.
   await page.route('**/api/v1/state', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ onboarding_complete: true, dev_mode_bypass: true }),
+      body: JSON.stringify({
+        onboarding_complete: true,
+        identity: {
+          mode: 'local',
+          edition: 'core',
+          signed_in: true,
+        },
+        dev_mode_bypass: true,
+      }),
     });
   });
 

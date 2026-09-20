@@ -105,12 +105,13 @@ test.afterAll(async () => {
 // BDD: Given a fresh install (no users, no OMNIPUS_BEARER_TOKEN, no
 //        dev_mode_bypass, onboarding incomplete)
 //      When an anonymous browser opens the onboarding wizard and reaches
-//        step 3
+//        the provider step (step 4 in local mode — WP5 / ADR-0010 added the
+//        personal-preferences step at position 3)
 //      Then the provider picker renders at least one real "Popular" tile,
 //        sourced from a 200 GET /api/v1/providers/catalog
 
 test(
-  'fresh install, no bypass: anonymous onboarding step 3 renders the real provider catalog',
+  'fresh install, no bypass: anonymous onboarding step 4 renders the real provider catalog',
   async ({ page }) => {
     const catalogStatuses: number[] = []
     page.on('response', (res) => {
@@ -120,12 +121,21 @@ test(
     })
 
     await page.goto(`${handle.baseURL}/#/onboarding`)
-    await expect(page.getByText('Step 1 of 3').first()).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('Step 1 of 4').first()).toBeVisible({ timeout: 15_000 })
 
     await page.locator('#admin-username').fill('fresh-install-admin')
     await page.getByRole('button', { name: /^continue$/i }).click()
     await page.locator('#admin-password').fill('fresh-install-passw0rd!')
     await page.locator('#admin-password-confirm').fill('fresh-install-passw0rd!')
+    await page.getByRole('button', { name: /^continue$/i }).click()
+
+    // Personal-preferences step (WP5): #pref-name is the only required field;
+    // tone and detail have shipped defaults, so we advance without selecting
+    // them. This step exists in front of the picker as a separate screen — the
+    // FR-050 pre-auth window has to stay open THROUGH it for the picker to
+    // read the catalog at all.
+    await expect(page.getByText('Step 3 of 4').first()).toBeVisible()
+    await page.locator('#pref-name').fill('fresh-install-admin')
     await page.getByRole('button', { name: /^continue$/i }).click()
 
     // ── Core assertion: a real Popular tile rendered. ProviderPicker.tsx

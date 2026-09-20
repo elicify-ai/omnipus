@@ -18,7 +18,7 @@ on:
     paths:
       - 'pkg/tools/browser/**'
       - 'pkg/sandbox/**'
-      - 'cmd/omnipus/internal/doctor/**'
+      - 'pkg/app/internal/doctor/**'
       - 'scripts/cft-bundle.sh'
       - 'scripts/install.sh'
       - 'deploy/macos/**'
@@ -101,7 +101,7 @@ jobs:
         # unit tests (synthetic fixtures) execute natively here, proving the
         # parser + dylib resolution work on real darwin, not just compile-check.
         shell: bash
-        run: go test -tags goolm,stdjson -run 'TestParseMachO|TestMissingChromeLibs' ./cmd/omnipus/internal/doctor/
+        run: go test -tags goolm,stdjson -run 'TestParseMachO|TestMissingChromeLibs' ./pkg/app/internal/doctor/
 
       - name: Smoke boot — gateway boots on macOS — AC-10 smoke
         shell: bash
