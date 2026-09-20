@@ -667,7 +667,7 @@
       "description": "Zero spacing."
     },
     {
-      "id": "space.scale.0-5",
+      "id": "space.scale.2px",
       "css": "--space-0-5",
       "layer": "primitive",
       "kind": "dimension",
@@ -691,7 +691,7 @@
       "description": "Base spacing step."
     },
     {
-      "id": "space.scale.2-5",
+      "id": "space.scale.12px",
       "css": "--space-2-5",
       "layer": "primitive",
       "kind": "dimension",
