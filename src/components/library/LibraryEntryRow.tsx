@@ -31,6 +31,7 @@ import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
 import { MountFolderIcon } from './icons'
+import { IconButton } from '@/components/ui/icon-button'
 
 /** Format a byte count as a compact human-readable size. */
 export function formatLibrarySize(bytes: number): string {
@@ -270,17 +271,15 @@ export function LibraryEntryRow({
           still open the menu and still activate an item. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             aria-label={`Actions for ${entry.name}`}
             data-testid={`library-row-menu-${entry.path}`}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
-            className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]"
           >
             <DotsThree size={18} weight="bold" />
-          </button>
+          </IconButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"

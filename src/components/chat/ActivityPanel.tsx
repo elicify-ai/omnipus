@@ -27,9 +27,10 @@
 // wire mechanism first.
 
 import { useState } from 'react'
-import { CaretDown, CaretUp, Check, X } from '@phosphor-icons/react'
+import { Check, X } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { ActivityAvatar } from './ActivityAvatar'
 import { ToolCallBadge } from './ToolCallBadge'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
@@ -89,15 +90,12 @@ function ActivityRow({
           drops out of the tab order and Enter/Space can't no-op on it,
           rather than leaving a focusable dead button whose aria-expanded is
           already (correctly) omitted below. */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => canExpand && setExpanded((e) => !e)}
-        disabled={!canExpand}
-        aria-expanded={canExpand ? expanded : undefined}
-        className={cn(
-          'flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
-          canExpand ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : 'cursor-default',
-        )}
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        expandable={canExpand}
+        caretSize={11}
+        data-testid="activity-row-toggle"
       >
         <ActivityAvatar item={item} size="sm" />
         <span className="flex-1 min-w-0 truncate text-[var(--color-secondary)] font-medium font-mono">
@@ -118,12 +116,7 @@ function ActivityRow({
           )}
         </span>
         {duration && <span className="text-[var(--color-muted)] shrink-0 tabular-nums">{duration}</span>}
-        {canExpand && (
-          <span className="text-[var(--color-muted)] shrink-0">
-            {expanded ? <CaretUp size={11} aria-hidden="true" /> : <CaretDown size={11} aria-hidden="true" />}
-          </span>
-        )}
-      </button>
+      </DisclosureRow>
 
       {canExpand && expanded && item.kind === 'judge' && (
         <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]" data-testid="judge-verdict-detail">

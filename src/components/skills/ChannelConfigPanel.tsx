@@ -8,6 +8,7 @@ import {
 } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -151,14 +152,16 @@ function PasswordField({
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid || undefined}
       />
-      <button tabIndex={0}
+      <IconButton
         type="button"
+        size="sm"
+        variant="ghost"
         onClick={() => setVisible((v) => !v)}
-        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors"
         aria-label={visible ? 'Hide password' : 'Show password'}
       >
         {visible ? <EyeSlash size={13} /> : <Eye size={13} />}
-      </button>
+      </IconButton>
     </div>
   )
 }
@@ -865,13 +868,14 @@ export function ChannelConfigPanel({
               className="flex flex-col items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2-5)] rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[length:var(--type-utility-xs-size)] font-medium"
             >
               <span>Couldn&apos;t load {channelName} configuration. Check your connection and try again.</span>
-              <button tabIndex={0}
+              <Button
                 type="button"
-                className="underline hover:no-underline text-amber-400"
+                variant="link"
+                className="underline text-amber-400 hover:text-amber-400 hover:no-underline"
                 onClick={() => refetchConfig()}
               >
                 Retry
-              </button>
+              </Button>
             </div>
           </div>
         ) : (
@@ -1042,15 +1046,16 @@ export function ChannelConfigPanel({
                           className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
                         >
                           Couldn&apos;t load workspace members — try again.{' '}
-                          <button tabIndex={0}
+                          <Button
                             type="button"
-                            className="underline hover:no-underline"
+                            variant="link"
+                            className="underline text-[var(--color-error)] hover:text-[var(--color-error)] hover:no-underline"
                             onClick={() =>
                               queryClient.invalidateQueries({ queryKey: ['workspaces', selectedWorkspaceId] })
                             }
                           >
                             Retry
-                          </button>
+                          </Button>
                         </p>
                       ) : isBoundFlow && coreTeam !== null && coreTeam.length === 0 ? (
                         // FR-009: empty core_team — can't select anything

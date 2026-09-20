@@ -687,16 +687,15 @@ export function BasePreview({
         {views.map((v) => {
           const active = v.name === selected?.name
           return (
-            <button
+            <Button
               key={v.name}
-              type="button"
-              tabIndex={0}
+              variant="ghost"
               role="tab"
               aria-selected={active}
               onClick={() => setSelectedSlug(v.name)}
               data-testid={`base-view-tab-${v.name}`}
               title={v.unservable === true ? v.unservable_reason : undefined}
-              className={`-mb-[var(--border-width-hairline)] whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-caption-size)] transition-colors ${
+              className={`h-auto -mb-[var(--border-width-hairline)] whitespace-nowrap rounded-none border-b-2 px-[var(--space-2)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] hover:bg-transparent ${
                 active
                   ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
                   : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
@@ -713,7 +712,7 @@ export function BasePreview({
               {active && result !== undefined && result.refusal === undefined && (
                 <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{result.rows.length}</span>
               )}
-            </button>
+            </Button>
           )
         })}
         {/* UAT D-119 (2026-09-13): a HEALTHY base is text too. The raw
@@ -724,21 +723,20 @@ export function BasePreview({
             .base), never on the file having failed to parse. Library-only:
             an embed shows a view, not a file. */}
         {embed === undefined && entry.is_text_editable && (
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
+            variant="ghost"
             aria-pressed={showRaw}
             onClick={() => setShowRaw((v) => !v)}
             data-testid="base-preview-source-toggle"
             title={showRaw ? 'Back to the views' : 'Open the base file as text'}
-            className={`-mb-[var(--border-width-hairline)] ml-auto flex shrink-0 items-center gap-[var(--space-1)] whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-caption-size)] transition-colors ${
+            className={`h-auto -mb-[var(--border-width-hairline)] ml-auto shrink-0 gap-[var(--space-1)] whitespace-nowrap rounded-none border-b-2 px-[var(--space-2)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] hover:bg-transparent ${
               showRaw
                 ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
                 : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
             }`}
           >
             <Code size={13} /> {showRaw ? 'Views' : 'Source'}
-          </button>
+          </Button>
         )}
         </div>
       )}
@@ -804,17 +802,16 @@ export function BasePreview({
               </span>
             )}
           </span>
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
+            variant="outline"
             onClick={() => {
               if (linkGraph.query.isError) void linkGraph.query.refetch()
             }}
             data-testid="base-preview-link-graph-retry"
-            className="shrink-0 rounded border border-current px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
+            className="h-auto shrink-0 rounded border-current px-[var(--space-2)] py-[var(--space-0-5)] text-[color:inherit] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] uppercase tracking-wide hover:bg-transparent hover:opacity-80"
           >
             Retry
-          </button>
+          </Button>
         </div>
       )}
 
@@ -887,15 +884,14 @@ export function BasePreview({
                     ? 'A refresh of this view was rate-limited by the knowledge workspace limit. Showing the last loaded data.'
                     : 'A refresh of this view failed. Showing the last loaded data.'}
                 </span>
-                <button
-                  type="button"
-                  tabIndex={0}
+                <Button
+                  variant="outline"
                   onClick={() => void resultQuery.refetch()}
                   data-testid="base-preview-result-refresh-retry"
-                  className="shrink-0 rounded border border-current px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
+                  className="h-auto shrink-0 rounded border-current px-[var(--space-2)] py-[var(--space-0-5)] text-[color:inherit] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] uppercase tracking-wide hover:bg-transparent hover:opacity-80"
                 >
                   Retry
-                </button>
+                </Button>
               </div>
             )}
             <ViewPartsRenderer

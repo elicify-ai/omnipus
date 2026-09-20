@@ -18,6 +18,7 @@ import { useUiStore } from '@/store/ui'
 import { Copy } from '@phosphor-icons/react'
 import type { Task } from '@/lib/api'
 import { hasVisibleResult, type TaskRunOccurrenceContext } from '@/lib/taskRuns'
+import { Button } from '@/components/ui/button'
 
 export interface TaskResultFieldProps {
   task: Task
@@ -56,14 +57,14 @@ export function TaskResultField({ task, occurrence }: TaskResultFieldProps) {
         >
           {result}
         </pre>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onClick={handleCopyResult}
-          className="absolute top-2 right-2 flex items-center gap-[var(--space-1)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
+          className="absolute top-2 right-2 h-auto gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)]"
           aria-label="Copy result"
         >
           <Copy size={11} /> Copy
-        </button>
+        </Button>
       </div>
     </div>
   )

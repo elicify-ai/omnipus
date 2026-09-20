@@ -12,6 +12,7 @@
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import { cellValue, rowExcludedFromTotals } from './viewResultData'
 import { ExcludedRowMark, TotalsFooter } from './PartChrome'
+import { Button } from '@/components/ui/button'
 
 export function TilesPart({
   part,
@@ -54,17 +55,16 @@ export function TilesPart({
             </>
           )
           return onOpenPath ? (
-            <button
+            <Button
               key={row.path}
-              type="button"
-              tabIndex={0}
+              variant="ghost"
               onClick={() => onOpenPath(row.path)}
               aria-label={`Open ${row.title}`}
               data-testid="viewpart-tile"
-              className="flex flex-col gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
+              className="h-auto w-full flex-col items-stretch justify-start gap-[var(--space-1)] whitespace-normal rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
             >
               {content}
-            </button>
+            </Button>
           ) : (
             <div
               key={row.path}

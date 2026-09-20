@@ -2,8 +2,10 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Brain, ArrowUp, ArrowDown, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { Switch } from '@/components/ui/switch'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
@@ -44,26 +46,12 @@ function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-relaxed">{description}</p>
         )}
       </div>
-      <button tabIndex={0}
+      <Switch
         id={id}
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={[
-          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none',
-          checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]',
-        ].join(' ')}
+        checked={checked}
+        onCheckedChange={onChange}
         aria-label={label}
-      >
-        <span
-          className={[
-            'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform',
-            checked ? 'translate-x-4' : 'translate-x-0',
-          ].join(' ')}
-          aria-hidden="true"
-        />
-      </button>
+      />
     </div>
   )
 }
@@ -488,38 +476,41 @@ export function MemorySection(): React.ReactElement {
                           <Warning size={12} weight="fill" />
                         </span>
                       )}
-                      <button tabIndex={0}
+                      <IconButton
+                        variant="ghost"
                         ref={(el) => setFallbackControlRef(entry.model, 'up', el)}
                         type="button"
                         data-testid={`recap-fallback-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
                         onClick={() => handleMoveFallback(entry.model, -1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <ArrowUp size={12} />
-                      </button>
-                      <button tabIndex={0}
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
                         ref={(el) => setFallbackControlRef(entry.model, 'down', el)}
                         type="button"
                         data-testid={`recap-fallback-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === form.recap_fallback_models.length - 1}
                         onClick={() => handleMoveFallback(entry.model, 1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <ArrowDown size={12} />
-                      </button>
-                      <button tabIndex={0}
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
                         ref={(el) => setFallbackControlRef(entry.model, 'remove', el)}
                         type="button"
                         data-testid={`recap-fallback-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
                         onClick={() => handleRemoveFallback(entry.model)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                       >
                         <X size={12} />
-                      </button>
+                      </IconButton>
                     </div>
                   )
                 })}

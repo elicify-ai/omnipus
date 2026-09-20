@@ -5,6 +5,8 @@ import { ChartBar, ChatCircle, CaretUp, CaretDown, Scales } from '@phosphor-icon
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
@@ -171,28 +173,30 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
               className="text-left py-[var(--space-2)] pr-[var(--space-3)] font-medium"
               aria-sort={sortKey === 'title' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
             >
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="ghost"
                 onClick={() => handleSort('title')}
-                className={`inline-flex items-center gap-[var(--space-1)] hover:text-[var(--color-secondary)] transition-colors${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
+                className={`h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] font-medium hover:bg-transparent hover:text-[var(--color-secondary)]${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
               >
                 Session
                 {titleSortIcon}
-              </button>
+              </Button>
             </th>
             <th
               scope="col"
               className="text-right py-[var(--space-2)] pl-[var(--space-3)] font-medium"
               aria-sort={sortKey === 'tokens' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
             >
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="ghost"
                 onClick={() => handleSort('tokens')}
-                className={`inline-flex items-center gap-[var(--space-1)] hover:text-[var(--color-secondary)] transition-colors${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
+                className={`h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] font-medium hover:bg-transparent hover:text-[var(--color-secondary)]${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
               >
                 {tokensSortIcon}
                 Tokens
-              </button>
+              </Button>
             </th>
           </tr>
         </thead>
@@ -363,28 +367,22 @@ export function UsageScreen() {
           </div>
 
           {/* Period segmented control */}
-          <div
-            className="flex items-center gap-[var(--space-0-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-0-5)]"
-            role="group"
+          <SegmentedControl
             aria-label="Select time period"
+            value={period}
+            onValueChange={(v) => setPeriod(v as TokenStatsPeriod)}
+            className="bg-[var(--color-surface-1)]"
           >
             {PERIODS.map(({ value, label }) => (
-              <button tabIndex={0}
+              <SegmentedControlItem
                 key={value}
-                type="button"
-                onClick={() => setPeriod(value)}
+                value={value}
                 data-testid={`period-${value}`}
-                aria-pressed={period === value}
-                className={`px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-utility-xs-size)] font-medium transition-colors${
-                  period === value
-                    ? ' bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                    : ' text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
-                }`}
               >
                 {label}
-              </button>
+              </SegmentedControlItem>
             ))}
-          </div>
+          </SegmentedControl>
         </div>
 
         {/* Loading state */}
@@ -500,13 +498,14 @@ export function UsageScreen() {
                     role="alert"
                   >
                     <span>Could not load per-session data.</span>
-                    <button tabIndex={0}
+                    <Button
                       type="button"
+                      variant="link"
                       onClick={() => void refetchSessions()}
-                      className="shrink-0 font-medium underline hover:no-underline"
+                      className="shrink-0 text-[var(--color-error)] hover:text-[var(--color-error)] underline hover:no-underline"
                     >
                       Retry
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   <SessionsTable rows={sessionRows} />

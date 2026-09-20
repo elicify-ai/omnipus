@@ -36,6 +36,8 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from '@/components/ui/alert-dialog'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { cn } from '@/lib/utils'
 
 export interface RiskyOption<T extends string> {
   value: T
@@ -93,6 +95,13 @@ export interface RiskySettingControlProps<T extends string> {
   onSelectSafe: (value: T) => void
   /** Whether the control is disabled (e.g. while a mutation is in flight). */
   disabled?: boolean
+  /**
+   * Accessible name for the option group (SegmentedControl requires one).
+   * Defaults to `copy.dialogTitle` with a trailing "?" stripped, which reads
+   * naturally as a description of the choice being made (e.g. "Listen on all
+   * network interfaces?" → "Listen on all network interfaces").
+   */
+  groupLabel?: string
 }
 
 /**
@@ -114,7 +123,9 @@ export function RiskySettingControl<T extends string>({
   onConfirm,
   onSelectSafe,
   disabled = false,
+  groupLabel,
 }: RiskySettingControlProps<T>) {
+  const resolvedGroupLabel = groupLabel ?? copy.dialogTitle.replace(/\?+\s*$/, '')
   // `pendingRiskyValue` is only set when the user clicks a non-safe option.
   // It is cleared after dialog resolve (either direction). It is NEVER derived
   // from `currentValue` to avoid a retroactive dialog on mount.
@@ -157,23 +168,27 @@ export function RiskySettingControl<T extends string>({
     <>
       <div className="space-y-[var(--space-2)]">
         {/* Option buttons */}
-        <div className="flex flex-wrap gap-[var(--space-2)]" role="group">
+        <SegmentedControl
+          aria-label={resolvedGroupLabel}
+          value={activeHighlightValue}
+          onValueChange={(value) => handleOptionClick(value as T)}
+          disabled={disabled}
+          className="flex-wrap gap-[var(--space-2)] border-transparent bg-transparent p-0"
+        >
           {options.map((opt) => {
             const isSafe = opt.value === safeValue
             const isActive = activeHighlightValue === opt.value
             return (
-              <button tabIndex={0}
+              <SegmentedControlItem
                 key={opt.value}
-                type="button"
-                disabled={disabled}
-                onClick={() => handleOptionClick(opt.value)}
+                value={opt.value}
                 data-testid={`risky-option-${opt.value}`}
-                aria-pressed={isActive}
-                className={`inline-flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                className={cn(
+                  'h-auto min-w-0 items-center gap-[var(--space-1)] rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium shadow-none',
                   isActive
-                    ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
-                    : 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-                }`}
+                    ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/20 hover:text-[var(--color-accent)]'
+                    : 'border-[var(--color-border)] bg-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+                )}
               >
                 {opt.label}
                 {isSafe && (
@@ -184,10 +199,10 @@ export function RiskySettingControl<T extends string>({
                     Recommended
                   </span>
                 )}
-              </button>
+              </SegmentedControlItem>
             )
           })}
-        </div>
+        </SegmentedControl>
 
         {/* Standing amber badge — shown while PERSISTED value is risky */}
         {isCurrentRisky && (

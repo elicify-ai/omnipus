@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Warning, Clock, X } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { IconButton } from '@/components/ui/icon-button'
 
 export interface RateLimitIndicatorProps {
   scope: 'agent' | 'channel' | 'global'
@@ -85,14 +86,15 @@ export function RateLimitIndicator({
         )}
       </div>
 
-      <button tabIndex={0}
-        type="button"
+      <IconButton
+        size="sm"
+        variant="ghost"
         onClick={onDismiss}
-        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-[var(--space-0-5)]"
+        className="shrink-0 mt-[var(--space-0-5)]"
         aria-label="Dismiss rate limit notice"
       >
         <X size={12} />
-      </button>
+      </IconButton>
     </div>
   )
 }

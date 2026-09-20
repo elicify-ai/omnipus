@@ -78,6 +78,8 @@ import {
   isApiError,
 } from '@/lib/api'
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode, MountSkillsDisclosure } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
@@ -915,56 +917,53 @@ export function LibraryExplorer({
       {/* Toolbar / breadcrumb row */}
       <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
         <nav aria-label="Library breadcrumb" className="flex items-center gap-[var(--space-1)] min-w-0 flex-1 text-[length:var(--type-body-compact-size)] overflow-hidden">
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
+            variant="ghost"
             onClick={handleGoRoot}
             data-testid="library-crumb-root"
             className={cn(
-              'flex items-center gap-[var(--space-1)] shrink-0 rounded px-[var(--space-1)] py-[var(--space-1)] transition-colors',
+              'h-auto shrink-0 gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]',
               workspaceId === null
-                ? 'text-[var(--color-accent)] font-medium'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+                ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
+                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
             )}
           >
             <Files size={14} />
             Library
-          </button>
+          </Button>
           {workspaceId !== null && (
             <>
               <CaretRight size={12} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
-              <button
-                type="button"
-                tabIndex={0}
+              <Button
+                variant="ghost"
                 onClick={handleGoWorkspaceRoot}
                 data-testid="library-crumb-workspace"
                 className={cn(
-                  'truncate rounded px-[var(--space-1)] py-[var(--space-1)] transition-colors min-w-0',
+                  'h-auto min-w-0 truncate rounded px-[var(--space-1)] py-[var(--space-1)] font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]',
                   pathSegments.length === 0
-                    ? 'text-[var(--color-accent)] font-medium'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+                    ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
                 )}
               >
                 {currentWorkspaceName}
-              </button>
+              </Button>
             </>
           )}
           {pathSegments.map((seg, i) => (
             <span key={`${seg}-${i}`} className="flex items-center gap-[var(--space-1)] min-w-0">
               <CaretRight size={12} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
-              <button
-                type="button"
-                tabIndex={0}
+              <Button
+                variant="ghost"
                 onClick={() => handleBreadcrumbSegment(i, pathSegments)}
                 className={cn(
-                  'truncate rounded px-[var(--space-1)] py-[var(--space-1)] transition-colors min-w-0',
+                  'h-auto min-w-0 truncate rounded px-[var(--space-1)] py-[var(--space-1)] font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]',
                   i === pathSegments.length - 1
-                    ? 'text-[var(--color-accent)] font-medium'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+                    ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
                 )}
               >
                 {seg}
-              </button>
+              </Button>
             </span>
           ))}
         </nav>
@@ -1035,34 +1034,30 @@ export function LibraryExplorer({
             }}
           />
           {onPopOut && (
-            <button
-              type="button"
-              tabIndex={0}
+            <IconButton
               onClick={() => {
                 if (confirmDiscardLibraryEdits()) onPopOut()
               }}
               aria-label="Open Library in a new tab"
               title="Open in new tab"
               data-testid="library-popout-button"
-              className="rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+              className="h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
             >
               <ArrowSquareOut size={16} />
-            </button>
+            </IconButton>
           )}
           {onClose && (
-            <button
-              type="button"
-              tabIndex={0}
+            <IconButton
               onClick={() => {
                 if (confirmDiscardLibraryEdits()) onClose()
               }}
               aria-label="Close Library"
               title="Close"
               data-testid="library-close-button"
-              className="rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+              className="h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
             >
               <X size={16} />
-            </button>
+            </IconButton>
           )}
         </div>
       </div>
@@ -1182,13 +1177,12 @@ export function LibraryExplorer({
             {!workspacesQuery.isLoading &&
               !workspacesQuery.isError &&
               sortedWorkspaces.map((node) => (
-                <button
+                <Button
                   key={node.id}
-                  type="button"
-                  tabIndex={0}
+                  variant="ghost"
                   onClick={() => handleOpenWorkspaceNode(node)}
                   data-testid={`library-workspace-node-${node.id}`}
-                  className="flex w-full items-center gap-[var(--space-2-5)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] hover:bg-[var(--color-surface-2)] text-left transition-colors"
+                  className="h-auto w-full justify-start gap-[var(--space-2-5)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
                 >
                   {/* Icon-consistency pass (2026-09-07): every surface that
                       names a workspace uses the same Phosphor Buildings glyph
@@ -1201,7 +1195,7 @@ export function LibraryExplorer({
                   <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] shrink-0">
                     {node.entry_count} item{node.entry_count === 1 ? '' : 's'}
                   </span>
-                </button>
+                </Button>
               ))}
           </LibrarySearchBar>
         ) : (

@@ -9,6 +9,7 @@ import {
   SheetFooter,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -709,12 +710,12 @@ export function CreateTaskSlideOver({
                 {depCandidates.map((t) => {
                   const checked = form.blockedBy.includes(t.id)
                   return (
-                    <button tabIndex={0}
+                    <Button
                       key={t.id}
-                      type="button"
+                      variant="ghost"
                       onClick={() => toggleDep(t.id)}
                       aria-pressed={checked}
-                      className="w-full flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] text-left hover:bg-[var(--color-surface-2)] transition-colors"
+                      className="h-auto w-full justify-start gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] text-left hover:bg-[var(--color-surface-2)]"
                     >
                       {/* The row button carries the checked state via
                           aria-pressed — this Checkbox is a decorative visual
@@ -728,7 +729,7 @@ export function CreateTaskSlideOver({
                         className="pointer-events-none"
                       />
                       <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
-                    </button>
+                    </Button>
                   )
                 })}
               </PopoverContent>
@@ -743,14 +744,15 @@ export function CreateTaskSlideOver({
                       className="inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                     >
                       <span className="max-w-[120px] truncate">{t?.title ?? id}</span>
-                      <button tabIndex={0}
-                        type="button"
+                      <IconButton
                         onClick={() => toggleDep(id)}
                         aria-label={`Remove dependency ${t?.title ?? id}`}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                        variant="ghost"
+                        size="sm"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <X size={9} />
-                      </button>
+                      </IconButton>
                     </span>
                   )
                 })}
@@ -809,14 +811,15 @@ export function CreateTaskSlideOver({
                     className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
                   >
                     <span className="flex-1 text-[var(--color-secondary)] truncate">{text}</span>
-                    <button tabIndex={0}
-                      type="button"
+                    <IconButton
                       onClick={() => removeTodo(idx)}
                       aria-label={`Remove checklist item ${text}`}
-                      className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                     >
                       <Trash size={12} />
-                    </button>
+                    </IconButton>
                   </li>
                 ))}
               </ul>

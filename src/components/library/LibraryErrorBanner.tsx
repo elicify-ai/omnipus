@@ -11,6 +11,7 @@
 
 import { WarningCircle, X } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { IconButton } from '@/components/ui/icon-button'
 
 export interface LibraryErrorBannerProps {
   message: string
@@ -36,15 +37,13 @@ export function LibraryErrorBanner({ message, onDismiss, testId, className }: Li
       <WarningCircle size={14} className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-error)]" weight="fill" />
       <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-error)]">{message}</p>
       {onDismiss && (
-        <button
-          type="button"
-          tabIndex={0}
+        <IconButton
           onClick={onDismiss}
           aria-label="Dismiss error"
-          className="shrink-0 text-[var(--color-error)]/70 transition-colors hover:text-[var(--color-error)]"
+          className="h-auto w-auto shrink-0 p-0 text-[var(--color-error)]/70 hover:bg-transparent hover:text-[var(--color-error)]"
         >
           <X size={12} />
-        </button>
+        </IconButton>
       )}
     </div>
   )

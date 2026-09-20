@@ -35,6 +35,8 @@ import { resolvePreviewHref } from '@/lib/preview-url'
 import { isSafeHref } from '@/lib/url-safe'
 import type { ServeWorkspaceResult, RunInWorkspaceResult } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -117,15 +119,17 @@ function ErrorBlock({
         </a>
       )}
       {onRetry && (
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={onRetry}
           aria-label="Retry warmup"
-          className="mt-[var(--space-1)] flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+          className="mt-[var(--space-1)] h-auto gap-[var(--space-1)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
         >
           <ArrowsClockwise size={11} />
           Retry
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -364,25 +368,25 @@ export function IframePreview(props: IframePreviewProps) {
           {toolName}
         </span>
 
-        <button tabIndex={0}
-          type="button"
+        <IconButton
+          variant="ghost"
           onClick={handleOpen}
           aria-label="Open preview in new tab"
           title="Open in new tab"
-          className="p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
+          className="h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)]"
         >
           <ArrowSquareOut size={13} />
-        </button>
+        </IconButton>
 
-        <button tabIndex={0}
-          type="button"
+        <IconButton
+          variant="ghost"
           onClick={handleCopy}
           aria-label="Copy preview link"
           title="Copy link"
-          className="p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
+          className="h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)]"
         >
           <Copy size={13} />
-        </button>
+        </IconButton>
       </div>
 
       <div className="px-[var(--space-2-5)] py-[var(--space-2)]">

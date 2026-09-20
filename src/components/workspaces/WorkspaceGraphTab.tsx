@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 import { GraphView } from './graph/GraphView'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
 import {
@@ -187,13 +188,13 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           Failed to load the task graph. Check your connection and try again.
         </p>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           onClick={() => void refetchTasks()}
-          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-utility-xs-size)]"
         >
           Retry
-        </button>
+        </Button>
       </div>
     )
   }

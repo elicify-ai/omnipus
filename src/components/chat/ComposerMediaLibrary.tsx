@@ -55,6 +55,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 /** Small byte formatter shared with the tab (kept local to avoid a new module). */
@@ -119,27 +120,29 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
   const buttonDisabled = disabled || !workspaceId
 
   const resolvedClassName = cn(
-                      'w-full flex items-center gap-[var(--space-2-5)] rounded-md px-[var(--space-2)] py-[var(--space-2)] text-left',
-                      'hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-60',
+                      'w-full h-auto justify-start gap-[var(--space-2-5)] px-[var(--space-2)] py-[var(--space-2)] text-left',
+                      'hover:bg-[var(--color-surface-2)]',
                     )
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="icon"
         disabled={buttonDisabled}
         tabIndex={tabIndex ?? 0}
         onClick={() => setOpen(true)}
         aria-label="Attach a file from the workspace library"
         title={workspaceId ? 'Attach from library' : 'No active workspace'}
         className={cn(
-          'shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center',
+          'shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full',
           'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)]',
-          'transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
+          'disabled:cursor-not-allowed',
         )}
         data-testid="composer-library-attach"
       >
         <FolderOpen size={16} />
-      </button>
+      </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
@@ -170,16 +173,16 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
             <ul className="flex flex-col gap-[var(--space-1)]" role="list">
               {entries.map((entry) => (
                 <li key={entry.id}>
-                  <button
+                  <Button
                     type="button"
-                    tabIndex={0}
+                    variant="ghost"
                     onClick={() => handleSelect(entry)}
                     disabled={attachingId !== null}
                     className={resolvedClassName}
                     data-testid={`library-pick-${entry.id}`}
                   >
                     <PickerRow entry={entry} busy={attachingId === entry.id} />
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
@@ -239,15 +242,16 @@ export function LibraryAttachmentChips() {
               <Icon size={16} weight="fill" />
             </div>
             <span className="truncate text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{a.filename}</span>
-            <button
+            <Button
               type="button"
-              tabIndex={0}
+              variant="ghost"
+              size="icon"
               onClick={() => removeLibraryAttachment(a.id)}
               aria-label={`Remove ${a.filename}`}
-              className="flex items-center justify-center w-4 h-4 rounded-full text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:bg-[var(--color-error)] transition-colors"
+              className="w-4 h-4 rounded-full text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:bg-[var(--color-error)]"
             >
               <X size={10} weight="bold" />
-            </button>
+            </Button>
           </div>
         )
       })}

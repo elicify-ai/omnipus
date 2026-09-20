@@ -44,10 +44,13 @@
  */
 
 import { useMemo, useState } from 'react'
-import { CaretDown, CaretUp, Database, LockSimple, ShieldWarning, Warning } from '@phosphor-icons/react'
+import { Database, LockSimple, ShieldWarning, Warning } from '@phosphor-icons/react'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { PolicyBadge } from '@/components/shared/PolicyBadge'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { cn } from '@/lib/utils'
 import { CATEGORY_LABELS, groupByCategory, resolvePolicy } from '@/lib/toolCategories'
 import {
   POLICY_PRESETS,
@@ -403,11 +406,12 @@ function CategorySection({
       className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
     >
       {/* Trigger — always visible; pill is IN the trigger row */}
-      <button tabIndex={0}
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center justify-between w-full px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+      <DisclosureRow
+        expanded={open}
+        onExpandedChange={setOpen}
+        expandable
+        caretSize={13}
+        className="w-full rounded-none px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
       >
         <span className="flex items-center gap-[var(--space-2)]">
           <span>{label}</span>
@@ -419,8 +423,7 @@ function CategorySection({
             {PILL_LABEL[summary]}
           </span>
         </span>
-        {open ? <CaretUp size={13} /> : <CaretDown size={13} />}
-      </button>
+      </DisclosureRow>
 
       {/* Expanded content */}
       {open && (
@@ -504,47 +507,48 @@ function McpServerSection({
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
       {/* Header row: toggle + server name + bulk controls */}
       <div className="flex items-center justify-between px-[var(--space-2-5)] py-[var(--space-2)]">
-        <button tabIndex={0}
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
-          className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors min-w-0 flex-1 text-left"
+        <DisclosureRow
+          expanded={open}
+          onExpandedChange={setOpen}
+          expandable
+          caretSize={13}
           data-testid="advanced-disclosure-trigger"
+          className="min-w-0 flex-1 gap-[var(--space-2)] rounded-none text-left text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
         >
           <span className="truncate">{server}</span>
           <span className="text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)] shrink-0">
             {serverTools.length} tool{serverTools.length !== 1 ? 's' : ''}
           </span>
-          {open ? <CaretUp size={13} className="shrink-0" /> : <CaretDown size={13} className="shrink-0" />}
-        </button>
+        </DisclosureRow>
 
         {/* Per-server bulk allow/ask/deny — only shown when a wildcard key is derivable */}
         {wildcardKey != null && (
-          <div
-            className="flex gap-[var(--space-1)] shrink-0 ml-[var(--space-2-5)]"
+          <SegmentedControl
+            aria-label={`Bulk policy for ${server}`}
+            value={currentWildcard ?? ''}
+            onValueChange={(p) => onWildcardPolicy(wildcardKey, p as ToolPolicy)}
+            disabled={disabled}
+            className="shrink-0 ml-[var(--space-2-5)] gap-[var(--space-1)] border-transparent bg-transparent p-0"
             data-testid={`mcp-server-bulk-${server}`}
           >
             {ALL_POLICIES.map((p) => {
               const isActive = currentWildcard === p
               return (
-                <button tabIndex={0}
+                <SegmentedControlItem
                   key={p}
-                  type="button"
-                  disabled={disabled}
-                  aria-pressed={isActive}
+                  value={p}
                   data-testid={`mcp-server-bulk-${server}-${p}`}
                   title={`Set all ${server} tools to ${p}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onWildcardPolicy(wildcardKey, p)
-                  }}
-                  className={`px-[var(--space-2)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-medium border transition-colors capitalize disabled:opacity-40 disabled:cursor-not-allowed ${BULK_BUTTON_CLASS(isActive, p)}`}
+                  className={cn(
+                    'h-auto min-w-0 rounded px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium capitalize shadow-none',
+                    BULK_BUTTON_CLASS(isActive, p),
+                  )}
                 >
                   {p.charAt(0).toUpperCase() + p.slice(1)}
-                </button>
+                </SegmentedControlItem>
               )
             })}
-          </div>
+          </SegmentedControl>
         )}
       </div>
 
@@ -707,26 +711,31 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
     <div className="space-y-[var(--space-3)]" data-testid="tool-policy-editor">
       {/* 1. Role preset selector */}
       <div className="space-y-[var(--space-2)]">
-        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">Role preset</p>
-        <div className="flex gap-[var(--space-2)] flex-wrap">
+        <p id="tool-policy-role-preset-label" className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">Role preset</p>
+        <SegmentedControl
+          aria-labelledby="tool-policy-role-preset-label"
+          value={activePreset ?? ''}
+          onValueChange={(role) => handlePresetClick(role as RolePreset)}
+          disabled={disabled}
+          className="flex-wrap gap-[var(--space-2)] border-transparent bg-transparent p-0"
+        >
           {(Object.entries(POLICY_PRESETS) as [RolePreset, typeof POLICY_PRESETS[RolePreset]][]).map(([role, preset]) => (
-            <button tabIndex={0}
+            <SegmentedControlItem
               key={role}
-              type="button"
-              disabled={disabled}
-              onClick={() => handlePresetClick(role)}
+              value={role}
               data-testid={`preset-${role}`}
               title={preset.description}
-              className={`px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={cn(
+                'h-auto min-w-0 rounded-md px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium shadow-none',
                 activePreset === role
-                  ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
-                  : 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-              }`}
+                  ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/20 hover:text-[var(--color-accent)]'
+                  : 'border-[var(--color-border)] bg-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+              )}
             >
               {preset.label}
-            </button>
+            </SegmentedControlItem>
           ))}
-        </div>
+        </SegmentedControl>
         {/* Preset description */}
         {activePreset && (
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{POLICY_PRESETS[activePreset].description}</p>

@@ -45,11 +45,12 @@
 // readers without stealing focus.
 
 import { useEffect, useRef, useState } from 'react'
-import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ShieldWarning, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
+import { Target, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ShieldWarning, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
 import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 
 // ── Display cap for the goal condition (grapheme-safe, mirrors GoalIndicator) ─
 const CONDITION_DISPLAY_CAP = 80
@@ -184,16 +185,16 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
 
   return (
     <div className="flex flex-col items-end" data-testid="goal-pill-wrapper">
-      <button
-        type="button"
-        tabIndex={0}
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        expandable
+        caretSize={11}
         data-testid={config.testId}
         data-goal-id={goalId}
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
         aria-label={`Goal: ${truncateCondition(frame.condition)}, state ${config.label}. Click to ${expanded ? 'collapse' : 'expand'}.`}
         className={cn(
-          'flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shadow-md transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer',
+          'rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] shadow-md hover:bg-[var(--color-surface-2)]',
           config.accentClass,
         )}
       >
@@ -209,8 +210,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         <span className="shrink-0 tabular-nums opacity-80">
           {frame.round}/{frame.max_rounds}
         </span>
-        {expanded ? <CaretUp size={11} aria-hidden="true" /> : <CaretDown size={11} aria-hidden="true" />}
-      </button>
+      </DisclosureRow>
 
       {showSubtitle && (
         <p

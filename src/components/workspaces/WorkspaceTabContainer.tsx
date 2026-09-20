@@ -11,6 +11,8 @@ import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
 
 // React context carrying the resolved workspace to every tab.
@@ -167,16 +169,16 @@ function WorkspaceTabContainerView({
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
         >
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             id="sidebar-hamburger"
             onClick={toggle}
             aria-label="Toggle navigation sidebar"
             data-testid="workspace-hamburger"
-            className="flex items-center justify-center h-chrome-header min-h-chrome-header w-11 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+            variant="ghost"
+            className="h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
           >
             <List size={20} />
-          </button>
+          </IconButton>
 
           {/* The workspace name renders INSIDE WorkspaceTabBar as the first
               tablist item (→ settings) — one menu component, no stray button. */}
@@ -224,14 +226,13 @@ function WorkspaceNotFoundState() {
       <p className="text-[var(--color-muted)] text-[length:var(--type-utility-xs-size)] max-w-xs">
         This workspace may have been deleted or the link may be outdated.
       </p>
-      <button tabIndex={0}
-        type="button"
+      <Button
         onClick={handleBackToWorkspace}
         data-testid="workspace-not-found-back-btn"
-        className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-[length:var(--type-body-compact-size)] hover:opacity-90 transition-opacity"
+        className="hover:opacity-90"
       >
         Back to my workspace
-      </button>
+      </Button>
     </div>
   )
 }

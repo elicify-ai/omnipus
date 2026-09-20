@@ -4,13 +4,13 @@ import {
   XCircle,
   Prohibit,
   Lock,
-  CaretDown,
-  CaretUp,
   Warning,
   DownloadSimple,
   Broadcast,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import type { MessagePartStatus } from '@assistant-ui/react'
@@ -165,11 +165,12 @@ function ToolResultRefDisplay({
 
       {/* Fetch button — hidden once data is loaded */}
       {!data && !isError && (
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="link"
           onClick={() => setFetchEnabled(true)}
           disabled={isFetching}
-          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] font-body text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:cursor-wait"
+          className="rounded-none flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] font-body disabled:cursor-wait"
         >
           {isFetching ? (
             <ArrowsClockwise size={11} className="animate-spin" />
@@ -177,7 +178,7 @@ function ToolResultRefDisplay({
             <DownloadSimple size={11} />
           )}
           {isFetching ? 'Loading...' : 'Show full output'}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -470,20 +471,11 @@ export function GenericToolCall({
           live", so the caret now sits immediately before that launcher
           instead of after it — an acceptable, intentional shift. */}
       <div className="flex w-full items-center gap-[var(--space-2)]">
-        <button tabIndex={0}
-          type="button"
-          onClick={() => hasDetail && setExpanded((e) => !e)}
-          className={cn(
-            // flex-1: the toggle spans the whole row (minus the Watch-live
-            // launcher, which stays an independent target) — matching
-            // ToolCallBadge's full-row click target. Without it the toggle
-            // shrinks to its text and the row's middle is dead space.
-            'flex flex-1 min-w-0 items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
-            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            !hasDetail ? 'cursor-default' : undefined
-          )}
-          aria-expanded={hasDetail ? expanded : undefined}
-          disabled={!hasDetail}
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={hasDetail}
+          data-testid="tool-call-toggle"
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-secondary)] font-medium">
@@ -492,23 +484,19 @@ export function GenericToolCall({
           <span className={cn('text-[var(--color-muted)]')}>
             {statusConfig.label}
           </span>
-          {hasDetail && (
-            <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-            </span>
-          )}
-        </button>
+        </DisclosureRow>
         {isBrowserTool && (
-          <button tabIndex={0}
+          <Button
             type="button"
+            variant="link"
             onClick={handleWatchLive}
             aria-label="Watch live"
             title="Watch this agent's browser live"
-            className="shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
+            className="rounded-none shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)]"
           >
             <Broadcast size={13} />
             <span>Watch live</span>
-          </button>
+          </Button>
         )}
       </div>
 

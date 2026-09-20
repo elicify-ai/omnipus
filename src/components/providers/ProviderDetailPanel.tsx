@@ -52,6 +52,8 @@ import {
 import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
 import type { PickerCompanyRow } from './provider-picker-model'
 import { inferRegionFromLocale, regionLabel } from './region-inference'
+import { Button } from '@/components/ui/button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /**
  * FR-006's exact pair, in priority order, for a company's sign-in variants —
@@ -294,31 +296,24 @@ export function ProviderDetailPanel({
           >
             Plan
           </span>
-          <div
-            role="group"
+          <SegmentedControl
             aria-labelledby={planGroupLabelId}
+            value={plan}
+            onValueChange={(value) => setPlan(value)}
             data-testid={`${testId}-plans`}
-            className="flex flex-wrap items-center gap-[var(--space-1)]"
+            className="flex w-full flex-wrap items-center gap-[var(--space-1)] border-transparent bg-transparent p-0"
           >
             {planOptions.map((value) => (
-              <button
+              <SegmentedControlItem
                 key={value || 'standard'}
-                type="button"
-                tabIndex={0}
+                value={value}
                 data-testid={`${testId}-plan-${value || 'standard'}`}
-                aria-pressed={plan === value}
-                onClick={() => setPlan(value)}
-                className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-secondary)',
-                  background: plan === value ? 'var(--color-surface-2)' : 'transparent',
-                }}
+                className="h-auto min-h-[32px] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
               >
                 {planLabel(value)}
-              </button>
+              </SegmentedControlItem>
             ))}
-          </div>
+          </SegmentedControl>
         </div>
       )}
 
@@ -333,31 +328,24 @@ export function ProviderDetailPanel({
           >
             {inference.copy}
           </span>
-          <div
-            role="group"
+          <SegmentedControl
             aria-labelledby={regionGroupLabelId}
+            value={region}
+            onValueChange={(value) => setRegion(value)}
             data-testid={`${testId}-regions`}
-            className="flex flex-wrap items-center gap-[var(--space-1)]"
+            className="flex w-full flex-wrap items-center gap-[var(--space-1)] border-transparent bg-transparent p-0"
           >
             {company.regions.map((value) => (
-              <button
+              <SegmentedControlItem
                 key={value}
-                type="button"
-                tabIndex={0}
+                value={value}
                 data-testid={`${testId}-region-${value}`}
-                aria-pressed={region === value}
-                onClick={() => setRegion(value)}
-                className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-secondary)',
-                  background: region === value ? 'var(--color-surface-2)' : 'transparent',
-                }}
+                className="h-auto min-h-[32px] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
               >
                 {regionLabel(value)}
-              </button>
+              </SegmentedControlItem>
             ))}
-          </div>
+          </SegmentedControl>
         </div>
       )}
 
@@ -403,26 +391,25 @@ export function ProviderDetailPanel({
       />
 
       <div className="flex items-center gap-[var(--space-2)]">
-        <button
+        <Button
           type="button"
-          tabIndex={0}
+          variant="default"
           data-testid={`${testId}-continue`}
           onClick={() => onConfirm?.(selection)}
-          className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
-          style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+          className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
         >
           Continue
-        </button>
+        </Button>
         {onCancel && (
-          <button
+          <Button
             type="button"
-            tabIndex={0}
+            variant="ghost"
             data-testid={`${testId}-cancel`}
             onClick={onCancel}
-            className="min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+            className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
-          </button>
+          </Button>
         )}
       </div>
     </div>

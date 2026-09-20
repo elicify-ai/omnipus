@@ -33,6 +33,9 @@ import { Check, X } from '@phosphor-icons/react'
 import type { AskUserQuestionCard as AskUserCard } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'
 import { HistoricalMessageMarkdown } from './historical-markdown'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /** Grace window before the client auto-submits a fully-answered card. */
 export const ASK_GRACE_MS = 5 * 60 * 1000
@@ -245,39 +248,47 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
         <span className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
           <b className="text-[var(--color-accent)] font-medium">{card.agent_id}</b> needs your input
         </span>
-        <div className="flex gap-[var(--space-1)] ml-auto" role="tablist">
+        {/* Question switcher — SegmentedControlItem, not role="tab"/"tablist":
+            every item keeps its own normal Tab stop with no roving tabindex
+            and no aria-controls wiring to a tabpanel, which is exactly the
+            shape that primitive's own doc comment (segmented-control.tsx)
+            calls out as the case role="tablist"/"tab" would misrepresent —
+            see CalendarToolbar.tsx's precedent cited there. */}
+        <SegmentedControl
+          aria-label="Questions"
+          value={String(active)}
+          onValueChange={(v) => {
+            touch()
+            setActive(Number(v))
+          }}
+          className="ml-auto gap-[var(--space-1)] rounded-none border-0 bg-transparent p-0"
+        >
           {questions.map((tq, i) => {
             const done = isAnswered(tq)
             return (
-              <button tabIndex={0}
+              <SegmentedControlItem
                 key={tq.header}
-                type="button"
-                role="tab"
-                aria-selected={i === active}
+                value={String(i)}
                 data-testid={`ask-user-tab-${i}`}
-                onClick={() => {
-                  touch()
-                  setActive(i)
-                }}
-                className={
-                  'font-mono text-[length:var(--type-utility-xs-size)] bg-transparent border-0 border-b-2 px-[var(--space-2)] pb-[var(--space-1)] cursor-pointer ' +
-                  (i === active
-                    ? 'text-[var(--color-secondary)] border-[var(--color-accent)]'
+                className={cn(
+                  'h-auto shrink-0 rounded-none border-0 border-b-2 px-[var(--space-2)] pb-[var(--space-1)] font-mono text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] shadow-none',
+                  i === active
+                    ? 'bg-transparent text-[var(--color-secondary)] border-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-secondary)]'
                     : done
-                      ? 'text-[color:var(--color-success)] border-transparent'
-                      : 'text-[var(--color-muted)] border-transparent hover:text-[var(--color-secondary)]')
-                }
+                      ? 'bg-transparent text-[color:var(--color-success)] border-transparent hover:bg-transparent hover:text-[color:var(--color-success)]'
+                      : 'bg-transparent text-[var(--color-muted)] border-transparent hover:bg-transparent hover:text-[var(--color-secondary)]',
+                )}
               >
                 {i + 1} {tq.header}
                 {done && <Check size={9} className="inline ml-[var(--space-0-5)]" aria-hidden="true" />}
-              </button>
+              </SegmentedControlItem>
             )
           })}
-        </div>
+        </SegmentedControl>
       </div>
 
       {/* Active question panel */}
-      <div role="tabpanel" data-testid="ask-user-panel">
+      <div data-testid="ask-user-panel">
         <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] mb-[var(--space-2-5)]">{q.question}</p>
 
         {q.context && (
@@ -294,16 +305,19 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
             const d = draftFor(q.header)
             const selected = d.selected.includes(o.label)
             return (
-              <button tabIndex={0}
+              <Button
                 key={o.label}
                 type="button"
+                variant="ghost"
                 aria-pressed={selected}
                 onClick={() => selectOption(q, o.label)}
                 data-testid="ask-user-option"
-                className={
-                  'flex gap-[var(--space-2-5)] items-start text-left w-full bg-transparent border-0 rounded-md px-[var(--space-2)] py-[var(--space-2)] cursor-pointer ' +
-                  (selected ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-accent)]/10')
-                }
+                className={cn(
+                  'h-auto w-full items-start justify-start gap-[var(--space-2-5)] px-[var(--space-2)] py-[var(--space-2)] text-left font-[var(--font-weight-regular)]',
+                  selected
+                    ? 'bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/10'
+                    : 'hover:bg-[var(--color-accent)]/10',
+                )}
               >
                 <span
                   aria-hidden="true"
@@ -339,7 +353,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                     <span className="block text-[var(--color-muted)] mt-[var(--space-0-5)]">{o.description}</span>
                   )}
                 </span>
-              </button>
+              </Button>
             )
           })}
           <div className="px-[var(--space-2)] pt-[var(--space-1)]">
@@ -368,23 +382,27 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
 
       {/* Footer: Answer + Cancel + counter */}
       <div className="flex items-center gap-[var(--space-2-5)] mt-[var(--space-2-5)]">
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="default"
+          size="sm"
           disabled={!allAnswered}
           onClick={submit}
           data-testid="ask-user-submit"
-          className="text-[length:var(--type-caption-size)] font-medium rounded-lg px-[var(--space-3)] py-[var(--space-1)] bg-[var(--color-accent)] text-[#1a1503] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer border-0"
+          className="h-auto rounded-lg px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)]"
         >
           Answer
-        </button>
-        <button tabIndex={0}
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={cancel}
           data-testid="ask-user-cancel"
-          className="text-[length:var(--type-caption-size)] bg-transparent border-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] cursor-pointer px-[var(--space-1)]"
+          className="h-auto rounded-none px-[var(--space-1)] text-[length:var(--type-caption-size)] hover:bg-transparent"
         >
           Cancel
-        </button>
+        </Button>
         <span
           className="ml-auto font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="ask-user-progress"

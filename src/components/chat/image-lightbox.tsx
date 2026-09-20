@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from '@phosphor-icons/react'
 import DOMPurify from 'dompurify'
+import { IconButton } from '@/components/ui/icon-button'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -182,14 +183,14 @@ export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageL
         </div>
 
         {/* Close button */}
-        <button tabIndex={0}
-          type="button"
-          className="ml-[var(--space-2-5)] w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-3,var(--color-surface-2))] transition-colors z-10"
+        <IconButton
+          variant="secondary"
+          className="ml-[var(--space-2-5)] shrink-0 rounded-full border border-[var(--color-border)] z-10"
           onClick={onClose}
           aria-label="Close image preview"
         >
           <X size={16} weight="bold" />
-        </button>
+        </IconButton>
       </div>
 
       {/* ── Media area ─────────────────────────────────────────────────── */}

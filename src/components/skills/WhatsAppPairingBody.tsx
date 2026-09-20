@@ -7,6 +7,7 @@ import {
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
+import { Button } from '@/components/ui/button'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 
 // RetryableState: shared layout for the timeout and error cases — both show an
@@ -29,15 +30,17 @@ function RetryableState({
         <p className="text-[length:var(--type-utility-xs-size)]">{message}</p>
       </div>
       {onRetry && (
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={onRetry}
           data-testid="whatsapp-retry"
-          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
+          className="gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
         >
           <ArrowsClockwise size={13} />
           Retry
-        </button>
+        </Button>
       )}
     </div>
   )

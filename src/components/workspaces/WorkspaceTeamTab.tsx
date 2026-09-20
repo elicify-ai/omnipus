@@ -19,6 +19,7 @@ import {
 } from '@/lib/api'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { Button } from '@/components/ui/button'
 import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 import { useActiveWorkspace } from './WorkspaceTabContainer'
@@ -460,13 +461,13 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
           Failed to load this workspace's delegation graph.
         </p>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           onClick={() => void refetchDelegation()}
-          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-utility-xs-size)]"
         >
           Retry
-        </button>
+        </Button>
       </div>
     )
   }

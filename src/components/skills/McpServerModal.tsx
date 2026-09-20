@@ -49,6 +49,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { addMcpServer, updateMcpServer, isApiError, type McpServer, type McpServerUpdate } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -454,40 +456,31 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             </div>
 
             {/* Connect mode */}
-            <div className="space-y-[var(--space-2)]" role="group" aria-labelledby="mcp-connect-mode-label">
+            <div className="space-y-[var(--space-2)]">
               <span id="mcp-connect-mode-label" className="block text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Connect via</span>
-              <div className="flex gap-[var(--space-2)]">
-                <button tabIndex={0}
-                  type="button"
+              <SegmentedControl
+                aria-labelledby="mcp-connect-mode-label"
+                value={mode}
+                onValueChange={(v) => handleModeSelect(v as ConnectMode)}
+                className="flex w-full"
+              >
+                <SegmentedControlItem
+                  value="network"
                   data-testid="mode-network"
-                  aria-pressed={mode === 'network'}
-                  onClick={() => handleModeSelect('network')}
-                  className={[
-                    'flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-md border text-[length:var(--type-utility-xs-size)] font-medium flex-1 justify-center transition-colors',
-                    mode === 'network'
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-                  ].join(' ')}
+                  className="flex-1 justify-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
                 >
                   <Globe size={13} />
                   A network address
-                </button>
-                <button tabIndex={0}
-                  type="button"
+                </SegmentedControlItem>
+                <SegmentedControlItem
+                  value="local"
                   data-testid="mode-local"
-                  aria-pressed={mode === 'local'}
-                  onClick={() => handleModeSelect('local')}
-                  className={[
-                    'flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-md border text-[length:var(--type-utility-xs-size)] font-medium flex-1 justify-center transition-colors',
-                    mode === 'local'
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-                  ].join(' ')}
+                  className="flex-1 justify-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
                 >
                   <Terminal size={13} />
                   A local program
-                </button>
-              </div>
+                </SegmentedControlItem>
+              </SegmentedControl>
 
               {/* Standing badge: shown while local-program mode is active */}
               {mode === 'local' && confirmedLocal && (
@@ -574,25 +567,28 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                               data-testid={`header-value-${idx}`}
                             />
                             {headerRows.length > 1 && (
-                              <button tabIndex={0}
+                              <IconButton
                                 type="button"
+                                size="sm"
+                                variant="ghost"
                                 onClick={() => handleRemoveHeaderRow(idx)}
-                                className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-[var(--space-1)] rounded shrink-0"
+                                className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] shrink-0"
                                 aria-label={`Remove header ${row.key.trim() || `row ${idx + 1}`}`}
                               >
                                 <Trash size={13} />
-                              </button>
+                              </IconButton>
                             )}
                           </div>
                         ))}
-                        <button tabIndex={0}
+                        <Button
                           type="button"
+                          variant="link"
                           onClick={handleAddHeaderRow}
-                          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                          className="gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
                           data-testid="add-header-row"
                         >
                           <Plus size={11} /> Add header
-                        </button>
+                        </Button>
                       </div>
                     </div>
 

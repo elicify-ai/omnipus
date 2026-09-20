@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { CaretDown, CaretUp } from '@phosphor-icons/react'
-import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
@@ -75,26 +74,16 @@ function FileReadBlock({
     // slot is the status dot/spinner only.
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => !isRunning && setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
-          !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
-          isRunning && 'cursor-default'
-        )}
-        aria-expanded={!isRunning ? expanded : undefined}
-        disabled={isRunning}
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        expandable={!isRunning}
+        data-testid="file-read-toggle"
       >
         {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{name}</span>
-        <span className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] shrink-0">
-          <span className={cn()}>{countOrStatusLabel}</span>
-          {!isRunning && (
-            <span className="ml-[var(--space-1)]">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
-          )}
-        </span>
-      </button>
+        <span className="text-[var(--color-muted)] shrink-0">{countOrStatusLabel}</span>
+      </DisclosureRow>
 
       {/* File content panel — left-accent block, no bordered card. The
           content pane keeps its dark code-block styling (bg-[#0d1117]). */}

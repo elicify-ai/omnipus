@@ -31,6 +31,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { buildProviderModelGroups } from '@/lib/providerModelGroups'
 import { isEligibleNewDefault, providerStatusLabel } from '@/lib/providerStatus'
 import type {
@@ -218,37 +219,39 @@ export function RemoveProviderDialog({
               {displayName} backs the default model. Choose the model that takes over before
               removing it.
             </p>
-            <div className="flex flex-wrap gap-[var(--space-1)]">
+            <SegmentedControl
+              aria-label="New default model provider"
+              value={activeCandidateId}
+              onValueChange={(candidateIdValue) => {
+                setCandidateId(candidateIdValue)
+                // A model belongs to the provider it was picked under —
+                // carrying it across would submit a pair that does not exist.
+                setModel('')
+              }}
+              className="h-auto flex-wrap gap-[var(--space-1)] border-0 bg-transparent p-0"
+            >
               {candidates.map((candidate) => {
                 const pressed = candidate.id === activeCandidateId
                 return (
-                  <button
+                  <SegmentedControlItem
                     key={candidate.id}
-                    type="button"
-                    tabIndex={0}
-                    aria-pressed={pressed}
+                    value={candidate.id}
                     data-testid={`new-default-provider-${candidate.id}`}
-                    onClick={() => {
-                      setCandidateId(candidate.id)
-                      // A model belongs to the provider it was picked under —
-                      // carrying it across would submit a pair that does not exist.
-                      setModel('')
-                    }}
-                    className="flex items-center gap-[var(--space-1)] rounded border px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
-                    style={{
-                      borderColor: pressed ? 'var(--color-accent)' : 'var(--color-border)',
-                      color: 'var(--color-secondary)',
-                      background: pressed ? 'var(--color-surface-2)' : 'transparent',
-                    }}
+                    className={[
+                      'h-auto gap-[var(--space-1)] rounded border px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shadow-none text-[var(--color-secondary)]',
+                      pressed
+                        ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
+                        : 'border-[var(--color-border)] bg-transparent hover:bg-transparent hover:text-[var(--color-secondary)]',
+                    ].join(' ')}
                   >
                     <span>{candidate.display_name ?? candidate.name ?? candidate.id}</span>
                     <span className="text-[var(--color-muted)]">
                       {providerStatusLabel(candidate.status)}
                     </span>
-                  </button>
+                  </SegmentedControlItem>
                 )
               })}
-            </div>
+            </SegmentedControl>
             <ModelSelector
               models={[]}
               value={model}

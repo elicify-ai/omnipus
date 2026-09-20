@@ -27,6 +27,8 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Progress } from '@/components/ui/progress'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { PlanActionButton } from './PlanActionButton'
 import type { Agent, Plan, Task } from '@/lib/api'
 import {
@@ -160,18 +162,18 @@ export function PlansFilterBand({
       })}
 
       {showNewPlanTile && (
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="outline"
           onClick={onNewPlan}
           aria-label="New plan"
           className={cn(
             TILE_SIZE,
-            'flex flex-col items-center justify-center gap-[var(--space-1)] rounded-lg border border-dashed border-[var(--color-border)] p-[var(--space-2-5)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
+            'h-auto flex-col gap-[var(--space-1)] rounded-lg border-dashed border-[var(--color-border)] bg-transparent p-[var(--space-2-5)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
           )}
         >
           <Plus size={16} />
           <span className="text-[length:var(--type-utility-xs-size)] font-medium">New plan</span>
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -199,12 +201,12 @@ function AllTasksTile({
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
       )}
     >
-      <button tabIndex={0}
-        type="button"
+      <Button
+        variant="ghost"
         aria-pressed={selected}
         aria-label="All tasks"
         onClick={onSelect}
-        className="flex h-full w-full flex-col items-start gap-[var(--space-2)] text-left"
+        className="h-full w-full flex-col items-start justify-start gap-[var(--space-2)] rounded-none p-0 text-left hover:bg-transparent"
       >
         <span
           className={cn(
@@ -218,7 +220,7 @@ function AllTasksTile({
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {totalTasks} task{totalTasks === 1 ? '' : 's'}
         </span>
-      </button>
+      </Button>
     </div>
   )
 }
@@ -290,14 +292,15 @@ function PlanFilterTile({
         className="absolute right-1.5 top-1.5 z-10 flex items-center gap-[var(--space-0-5)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
         onClick={(e) => e.stopPropagation()}
       >
-        <button tabIndex={0}
-          type="button"
+        <IconButton
           aria-label={`Edit plan ${plan.title}`}
           onClick={onEdit}
-          className="inline-flex items-center justify-center rounded p-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          variant="ghost"
+          size="sm"
+          className="rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
         >
           <PencilSimple size={13} />
-        </button>
+        </IconButton>
 
         {/* ADR-052 §6.8 button matrix — draft → Execute, running/cap-queued
             approved → Stop, cancelled → Play. Renders nothing for done/a
@@ -307,13 +310,14 @@ function PlanFilterTile({
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               aria-label={`Plan actions for ${plan.title}`}
-              className="inline-flex items-center justify-center rounded p-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+              variant="ghost"
+              size="sm"
+              className="rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
             >
               <DotsThreeVertical size={14} weight="bold" />
-            </button>
+            </IconButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
             <DropdownMenuItem
@@ -330,12 +334,12 @@ function PlanFilterTile({
 
       {/* Select control — the tile's TITLE/body is the filter toggle (Von
           Restorff: `aria-pressed` + gold ring communicate the active tile). */}
-      <button tabIndex={0}
-        type="button"
+      <Button
+        variant="ghost"
         aria-pressed={selected}
         aria-label={plan.title}
         onClick={onSelect}
-        className="flex h-full w-full flex-col items-start gap-[var(--space-2)] pr-[var(--space-6)] text-left"
+        className="h-full w-full flex-col items-start justify-start gap-[var(--space-2)] rounded-none p-0 pr-[var(--space-6)] text-left hover:bg-transparent"
       >
         <span className="flex flex-wrap items-center gap-[var(--space-1)]">
           <span
@@ -427,7 +431,7 @@ function PlanFilterTile({
             </span>
           )}
         </span>
-      </button>
+      </Button>
 
       <AlertDialog open={confirmClear} onOpenChange={setConfirmClear}>
         <AlertDialogContent>

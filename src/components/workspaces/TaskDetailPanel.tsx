@@ -41,6 +41,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -690,14 +691,15 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         ) : (
           <div className="relative group">
             <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] pr-[var(--space-4)]">{task.title}</p>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               onClick={() => { setTitleDraft(task.title); setEditingTitle(true) }}
-              className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              variant="ghost"
+              size="sm"
+              className="absolute top-0 right-0 h-auto w-auto p-[var(--space-1)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-[var(--color-muted)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)]"
               aria-label="Edit title"
             >
               <PencilSimple size={12} />
-            </button>
+            </IconButton>
           </div>
         )}
       </Field>
@@ -733,14 +735,15 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <pre className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-[var(--space-2-5)] whitespace-pre-wrap break-words leading-relaxed">
               {task.prompt || <span className="text-[var(--color-muted)]">No prompt set.</span>}
             </pre>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               onClick={() => setEditingPrompt(true)}
-              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              variant="ghost"
+              size="sm"
+              className="absolute top-2 right-2 h-auto w-auto p-[var(--space-1)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-[var(--color-muted)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)]"
               aria-label="Edit prompt"
             >
               <PencilSimple size={12} />
-            </button>
+            </IconButton>
           </div>
         )}
       </Field>
@@ -1069,12 +1072,12 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             {depCandidates.map((t) => {
               const checked = blockedBy.includes(t.id)
               return (
-                <button tabIndex={0}
+                <Button
                   key={t.id}
-                  type="button"
+                  variant="ghost"
                   onClick={() => handleToggleDep(t.id)}
                   aria-pressed={checked}
-                  className="w-full flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] text-left hover:bg-[var(--color-surface-1)] transition-colors"
+                  className="h-auto w-full justify-start gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] text-left hover:bg-[var(--color-surface-1)]"
                 >
                   {/* The row button carries the checked state via aria-pressed
                       — this Checkbox is a decorative visual echo, not a
@@ -1087,7 +1090,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                     className="pointer-events-none"
                   />
                   <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
-                </button>
+                </Button>
               )
             })}
           </PopoverContent>
@@ -1102,14 +1105,15 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                   className="inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                 >
                   <span className="max-w-[120px] truncate">{dep?.title ?? id}</span>
-                  <button tabIndex={0}
-                    type="button"
+                  <IconButton
                     onClick={() => handleToggleDep(id)}
                     aria-label={`Remove dependency ${dep?.title ?? id}`}
-                    className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                   >
                     <X size={9} />
-                  </button>
+                  </IconButton>
                 </span>
               )
             })}
@@ -1193,14 +1197,15 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             {task.artifacts!.map((path) => (
               <div key={path} className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]">
                 <span className="flex-1 font-mono text-[var(--color-secondary)] truncate">{path}</span>
-                <button tabIndex={0}
-                  type="button"
+                <IconButton
                   onClick={() => handleCopyPath(path)}
-                  className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                   aria-label={`Copy path: ${path}`}
                 >
                   <Copy size={11} />
-                </button>
+                </IconButton>
               </div>
             ))}
           </div>
@@ -1212,11 +1217,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <Field label={`Sub-tasks (${subtasks.length})`}>
           <div className="space-y-[var(--space-1)]">
             {subtasks.map((sub) => (
-              <button tabIndex={0}
+              <Button
                 key={sub.id}
-                type="button"
+                variant="ghost"
                 onClick={() => onTaskSelect?.(sub)}
-                className="w-full flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-1)] transition-colors text-left"
+                className="h-auto w-full justify-start gap-[var(--space-2)] rounded-md bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] text-left hover:bg-[var(--color-surface-1)]"
               >
                 <Badge
                   variant="outline"
@@ -1230,7 +1235,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                     <Robot size={10} /> {sub.agent_name}
                   </span>
                 )}
-              </button>
+              </Button>
             ))}
           </div>
         </Field>

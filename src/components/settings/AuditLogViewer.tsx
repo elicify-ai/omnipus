@@ -130,18 +130,19 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
         <TableCell className="whitespace-nowrap text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)]">
           <div className="flex items-center gap-[var(--space-1)]">
             {hasDetail ? (
-              <button tabIndex={0}
+              <Button
+                variant="ghost"
                 type="button"
                 onClick={() => setExpanded((v) => !v)}
                 aria-expanded={expanded}
                 aria-controls={detailId}
                 aria-label={`${expanded ? 'Hide' : 'Show'} details for this ${entry.event} entry`}
-                className="shrink-0 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
+                className="h-auto w-auto shrink-0 rounded p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               >
                 {expanded
                   ? <CaretDown size={10} />
                   : <CaretRight size={10} />}
-              </button>
+              </Button>
             ) : (
               <span className="w-[10px] shrink-0" aria-hidden="true" />
             )}

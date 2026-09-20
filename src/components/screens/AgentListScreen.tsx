@@ -197,16 +197,17 @@ function AgentsLibraryView({
         <div className="flex items-center gap-[var(--space-2)]">
           <Popover open={filterMenuOpen} onOpenChange={setFilterMenuOpen}>
             <PopoverTrigger asChild>
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 data-testid="workspace-filter-trigger"
-                className="inline-flex items-center gap-[var(--space-1)] rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium transition-colors"
+                className="h-auto gap-[var(--space-1)] rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-surface-1)] hover:bg-[var(--color-surface-1)]"
                 style={{
                   borderColor:
                     workspaceFilter !== 'all'
                       ? 'var(--color-accent)'
                       : 'var(--color-border)',
-                  backgroundColor: 'var(--color-surface-1)',
                   color:
                     workspaceFilter !== 'all'
                       ? 'var(--color-accent)'
@@ -220,19 +221,20 @@ function AgentsLibraryView({
                   ? 'Filter by workspace'
                   : (activeWorkspace?.name ?? workspaceFilter)}
                 <CaretDown size={10} />
-              </button>
+              </Button>
             </PopoverTrigger>
             <PopoverContent align="start" sideOffset={4} className="w-56 p-[var(--space-1)]">
               <div role="group" aria-label="Filter by workspace">
-                <button tabIndex={0}
+                <Button
                   type="button"
+                  variant="ghost"
                   data-testid="workspace-filter-all"
                   onClick={() => {
                     setWorkspaceFilter('all')
                     setFilterMenuOpen(false)
                   }}
                   aria-current={workspaceFilter === 'all' ? 'true' : undefined}
-                  className="flex w-full items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
+                  className="h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
                   style={
                     workspaceFilter === 'all'
                       ? { color: 'var(--color-accent)', fontWeight: 'var(--font-weight-semibold)' }
@@ -240,18 +242,19 @@ function AgentsLibraryView({
                   }
                 >
                   All agents
-                </button>
+                </Button>
                 {workspaces.map((ws) => (
-                  <button tabIndex={0}
+                  <Button
                     key={ws.id}
                     type="button"
+                    variant="ghost"
                     data-testid={`workspace-filter-${ws.id}`}
                     onClick={() => {
                       setWorkspaceFilter(ws.id)
                       setFilterMenuOpen(false)
                     }}
                     aria-current={workspaceFilter === ws.id ? 'true' : undefined}
-                    className="flex w-full items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
+                    className="h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
                     style={
                       workspaceFilter === ws.id
                         ? { color: 'var(--color-accent)', fontWeight: 'var(--font-weight-semibold)' }
@@ -260,21 +263,22 @@ function AgentsLibraryView({
                   >
                     <Users size={12} />
                     {ws.name}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </PopoverContent>
           </Popover>
           {workspaceFilter !== 'all' && (
-            <button tabIndex={0}
+            <Button
               type="button"
+              variant="ghost"
               data-testid="workspace-filter-clear"
               onClick={() => setWorkspaceFilter('all')}
-              className="inline-flex items-center gap-[var(--space-1)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium transition-colors"
+              className="h-auto gap-[var(--space-1)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium hover:bg-transparent"
               style={{ color: 'var(--color-muted)' }}
             >
               Clear filter
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -430,9 +434,10 @@ function AgentsLibraryView({
                       {CLI_ORDER.map((cli) => {
                         const available = cliAvailable[cli]
                         return (
-                          <button tabIndex={0}
+                          <Button
                             key={cli}
                             type="button"
+                            variant="ghost"
                             disabled={!available}
                             title={available ? undefined : cliTooltip[cli]}
                             onClick={() => {
@@ -440,7 +445,7 @@ function AgentsLibraryView({
                               setExternalMenuOpen(false)
                             }}
                             data-testid={`add-external-${cli}`}
-                            className="flex w-full items-center justify-between gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                            className="h-auto w-full items-center justify-between gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] focus:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                           >
                             <span className="font-mono">{CLI_LABELS[cli]}</span>
                             {!available && (
@@ -448,7 +453,7 @@ function AgentsLibraryView({
                                 not installed
                               </span>
                             )}
-                          </button>
+                          </Button>
                         )
                       })}
                     </div>

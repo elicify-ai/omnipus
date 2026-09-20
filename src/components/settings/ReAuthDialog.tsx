@@ -9,6 +9,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { reAuth, getErrorMessage } from '@/lib/api'
@@ -111,14 +112,15 @@ export function ReAuthDialog({
               className="pr-[var(--space-6)]"
               data-testid="reauth-password-input"
             />
-            <button tabIndex={0}
+            <IconButton
+              variant="ghost"
               type="button"
               onClick={() => setShowPassword((v) => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+              className="absolute right-2 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeSlash size={15} /> : <Eye size={15} />}
-            </button>
+            </IconButton>
           </div>
           {error && (
             <div

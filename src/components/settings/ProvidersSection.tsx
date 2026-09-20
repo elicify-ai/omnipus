@@ -31,12 +31,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
   EyeSlash,
-  ArrowCounterClockwise,
   Plus,
   X,
   Globe,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -440,16 +440,17 @@ function ProviderConfigSheet({
                 autoComplete="off"
                 data-testid={`api-key-input-${providerId}`}
               />
-              <button tabIndex={0}
+              <IconButton
+                variant="ghost"
                 type="button"
                 onClick={() =>
                   setShowKey((prev) => ({ ...prev, [draftKey]: !prev[draftKey] }))
                 }
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                className="absolute right-2.5 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                 aria-label={showKey[draftKey] ? 'Hide API key' : 'Show API key'}
               >
                 {showKey[draftKey] ? <EyeSlash size={14} /> : <Eye size={14} />}
-              </button>
+              </IconButton>
             </div>
           </div>
 
@@ -485,15 +486,16 @@ function ProviderConfigSheet({
                       <li key={slug}>
                         <Badge variant="muted" className="gap-[var(--space-1)] font-mono">
                           {slug}
-                          <button tabIndex={0}
+                          <IconButton
+                            variant="ghost"
                             type="button"
                             onClick={() => removeSlug(slug)}
                             aria-label={`Remove ${slug}`}
                             data-testid={`remove-model-${providerId}-${slug}`}
-                            className="text-[var(--color-muted)] hover:text-[var(--color-error)]"
+                            className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                           >
                             <X size={10} weight="bold" />
-                          </button>
+                          </IconButton>
                         </Badge>
                       </li>
                     ))}
@@ -588,28 +590,28 @@ function ProviderConfigSheet({
           <div className="flex justify-between gap-[var(--space-2)] pt-[var(--space-2)]">
             <div className="flex gap-[var(--space-2)]">
               {provider && provider.status === 'connected' && (
-                <button tabIndex={0}
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={() => handleTest(providerId)}
-                  disabled={testing[providerId]}
+                  actionState={testing[providerId] ? 'pending' : 'idle'}
                   title="Re-test the connection"
-                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
+                  className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                 >
-                  {testing[providerId] ? (
-                    <ArrowCounterClockwise size={12} className="animate-spin inline" />
-                  ) : 'Test'}
-                </button>
+                  Test
+                </Button>
               )}
               {/* ADR-068 US-3 — destructive, so text tier and far from Save. */}
               {provider && onRemove && (
-                <button tabIndex={0}
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={() => onRemove(provider)}
-                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                   data-testid={`remove-provider-btn-${providerId}`}
                 >
                   Remove provider
-                </button>
+                </Button>
               )}
             </div>
             <div className="flex gap-[var(--space-2)]">

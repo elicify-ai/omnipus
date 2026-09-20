@@ -1,4 +1,6 @@
 import { ShieldCheck, ShieldWarning, Prohibit } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 export type ToolPolicy = 'allow' | 'ask' | 'deny'
 
@@ -21,18 +23,20 @@ export function PolicyBadge({ policy, onClick, active, disabled, title }: Policy
   const cfg = POLICY_CONFIGS[policy]
   const Icon = cfg.icon
   return (
-    <button tabIndex={0}
+    <Button
       type="button"
+      variant="ghost"
       onClick={onClick}
       disabled={disabled}
       title={title}
       aria-pressed={active}
-      className={`inline-flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-        active ? cfg.activeColor : `border-transparent ${cfg.color} hover:bg-[var(--color-surface-2)]`
-      }`}
+      className={cn(
+        'h-auto items-center gap-[var(--space-1)] rounded px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium border hover:bg-[var(--color-surface-2)]',
+        active ? cfg.activeColor : `border-transparent ${cfg.color}`,
+      )}
     >
       <Icon size={11} weight="bold" />
       {cfg.label}
-    </button>
+    </Button>
   )
 }

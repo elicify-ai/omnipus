@@ -1525,6 +1525,180 @@ describe('finite if-chain style dispatcher (MessageItem.tsx avatarStyle style)',
   })
 })
 
+// C2 gap 2 (checkpoint-B: ToolPolicyEditor.tsx's `BULK_BUTTON_CLASS(active,
+// policy)`). Class-builder counterpart of the if-chain style dispatcher
+// directly above (collectGuardedLocalReturns, reached generically through
+// pureFunctionReturns, the same entry point every other opaque class-builder-
+// argument call goes through) -- but for a shape neither the switch-based
+// dispatcher nor Item 5's if-chain proof can resolve: BULK_BUTTON_CLASS is
+// declared INSIDE the component body (not top-level, isTopLevelFiniteDispatcherFunction's
+// restriction), and its branches return NAMED locals (`const base = '...'`)
+// rather than literals sitting directly in the return statement.
+describe('guarded local-const if-chain class builder (C2 gap 2: ToolPolicyEditor.tsx BULK_BUTTON_CLASS)', () => {
+  const jsxPath = 'src/components/shared/ToolPolicyEditor.tsx'
+
+  it('PERMITTED: a nested, named-branch class builder with leading const literals resolves through cn(), all-clean branches give no findings', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active, policy }) {',
+      '  const BULK_BUTTON_CLASS = (active, policy) => {',
+      "    const base = 'text-white'",
+      "    const allow = 'p-[8px]'",
+      "    const deny = 'text-red-500'",
+      '    if (!active) return base',
+      "    if (policy === 'allow') return allow",
+      '    return deny',
+      '  }',
+      '  return (',
+      '    <button',
+      "      className={cn('px-[var(--space-2)]', BULK_BUTTON_CLASS(active, policy))}",
+      '    />',
+      '  )',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('PERMITTED: an off-scale literal hidden inside one named branch is still caught, not silently swallowed by resolving the call', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active, policy }) {',
+      '  const BULK_BUTTON_CLASS = (active, policy) => {',
+      "    const base = 'text-white'",
+      "    const allow = 'p-[7px]'",
+      '    if (!active) return base',
+      '    return allow',
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', BULK_BUTTON_CLASS(active, policy))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+  })
+
+  it('PERMITTED: the unbraced `if (c) return x` single-statement form resolves exactly like the braced form', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active }) {',
+      '  const helper = (active) => {',
+      "    const base = 'p-[8px]'",
+      '    if (!active) return base',
+      '    return base',
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', helper(active))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('FORBIDDEN: a `let` leading declaration is not trusted like `const` -- reassignment cannot be ruled out', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active }) {',
+      '  const helper = (active) => {',
+      "    let base = 'p-[8px]'",
+      '    if (!active) return base',
+      "    return 'p-[8px]'",
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', helper(active))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: helper(active)'))
+  })
+
+  it('FORBIDDEN: an `else` branch is not the recognized shape and the call stays unsupported', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active }) {',
+      '  const helper = (active) => {',
+      "    const base = 'p-[8px]'",
+      "    const other = 'p-[8px]'",
+      '    if (!active) { return base } else { return other }',
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', helper(active))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: helper(active)'))
+  })
+
+  it('FORBIDDEN: a returned local not declared by the SAME function (an outer, reassigned `let` read through a branch) stays unsupported, never silently resolved', () => {
+    // Regression coverage for a real defect found while building this
+    // capability: resolving a bare identifier return via the generic
+    // isPureStaticExpression check (which only rules out calls/assignments,
+    // not "is this identifier's own value fixed") let a reference to an
+    // OUTER, reassigned `let` through with zero finding -- reading back its
+    // stale first value instead of catching the later off-scale reassignment.
+    // collectGuardedLocalReturns must refuse any identifier that is not one
+    // of ITS OWN leading consts, not chase it into an enclosing scope.
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active }) {',
+      "  let outerClass = 'p-[8px]'",
+      "  outerClass = 'p-[7px]'",
+      '  const helper = (active) => {',
+      "    const base = 'p-[8px]'",
+      '    if (!active) return base',
+      '    return outerClass',
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', helper(active))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: helper(active)'))
+  })
+
+  it('FORBIDDEN: a branch returning a call expression is not a literal and stays unsupported', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active }) {',
+      '  const helper = (active) => {',
+      "    const base = 'p-[8px]'",
+      '    if (!active) return base',
+      '    return computeClass()',
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', helper(active))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: helper(active)'))
+  })
+
+  it('FORBIDDEN: no unconditional trailing return (every statement is a guarded `if`) is not provably exhaustive and stays unsupported', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active }) {',
+      '  const helper = (active) => {',
+      "    const base = 'p-[8px]'",
+      '    if (!active) return base',
+      '    if (active) return base',
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', helper(active))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: helper(active)'))
+  })
+
+  it('mutation proof: reverting the leading-const requirement to zero-or-more (instead of at least one) would make a NESTED bare if-chain (no leading consts at all) resolve here too, widening past the dedicated top-level-only Item 5 proof -- the pinned "FORBIDDEN: a NESTED if-chain function stays unsupported" style test above is the sentinel that this must never happen for className/cn() either', () => {
+    const source = [
+      "import { cn } from '../../lib/utils'",
+      'export function BulkControl({ active }) {',
+      '  const helper = (u) => {',
+      "    if (u) { return 'p-[8px]' }",
+      "    return 'p-[4px]'",
+      '  }',
+      "  return <button className={cn('px-[var(--space-2)]', helper(active))} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: helper(active)'))
+  })
+})
+
 // Item 6 (lane R2, remaining-47.tsv #12 -- KbMarkdownImage.tsx's `style={
 // Object.keys(style).length > 0 ? style : undefined}`). A locally-declared,
 // never-escaping style accumulator built via imperative property assignment

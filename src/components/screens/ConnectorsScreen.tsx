@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gear, Envelope, Plus, Trash, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import {
@@ -226,33 +227,37 @@ function ChannelInstanceRow({
         )}
       </div>
       <div className="flex items-center gap-[var(--space-2)] shrink-0">
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={onConfigure}
-          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
+          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors font-medium"
           aria-label={`Configure ${instanceId}`}
         >
           <Gear size={13} />
           Configure
-        </button>
-        <button tabIndex={0}
+        </Button>
+        <Button
           type="button"
+          variant="link"
           onClick={onToggle}
-          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors font-medium"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors font-medium no-underline hover:no-underline"
           aria-label={`${channel.enabled ? 'Disable' : 'Enable'} ${instanceId}`}
           data-testid={`channel-toggle-${instanceId}`}
         >
           {channel.enabled ? 'Disable' : 'Enable'}
-        </button>
-        <button tabIndex={0}
+        </Button>
+        <IconButton
           type="button"
+          size="sm"
+          variant="ghost"
           onClick={onDelete}
-          className="flex items-center gap-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-red-400 transition-colors"
+          className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-red-400 transition-colors"
           aria-label={`Delete ${instanceId} instance`}
           data-testid={`channel-delete-btn-${instanceId}`}
         >
           <Trash size={13} />
-        </button>
+        </IconButton>
       </div>
     </div>
   )
@@ -290,15 +295,16 @@ function ChannelTypeGroup({
           <BrandIcon slug={channelSlug(baseType)} size={18} decorative />
           <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">{displayName}</h3>
         </div>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => onAddAnother(baseType)}
           data-testid={`channel-type-add-another-${baseType}`}
-          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors font-medium"
+          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]/80 transition-colors font-medium"
         >
           <Plus size={12} />
           Add another…
-        </button>
+        </Button>
       </div>
       <div className="space-y-[var(--space-2)]">
         {instances.map((channel) => {
@@ -343,19 +349,20 @@ function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
         {types.map((channel) => {
           const baseType = deriveBaseType(channel)
           return (
-            <button tabIndex={0}
+            <Button
               key={baseType}
               type="button"
+              variant="ghost"
               onClick={() => onConfigureType(channel)}
               data-testid={`channel-roster-connect-${baseType}`}
-              className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left"
+              className="h-auto items-center justify-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors"
             >
               <BrandIcon slug={channelSlug(baseType)} size={22} decorative />
               <span className="flex-1 min-w-0 font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {channel.name}
               </span>
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] font-medium shrink-0">Configure</span>
-            </button>
+            </Button>
           )
         })}
       </div>
@@ -844,16 +851,17 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
         </p>
       </div>
       <div className="flex items-center gap-[var(--space-2)] shrink-0">
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={onConfigure}
-          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
+          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors font-medium"
           aria-label={`Configure ${agentName} mailbox${workspaceName ? ` (${workspaceName})` : ''}`}
           data-testid={`mailbox-configure-btn-${pairKey}`}
         >
           <Gear size={13} />
           Configure
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -1105,15 +1113,16 @@ export function ConnectorsScreen() {
                 <h2 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                   Email
                 </h2>
-                <button tabIndex={0}
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => setMailboxPanel({ open: true, target: null })}
                   data-testid="email-mailbox-add-btn"
-                  className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors font-medium"
+                  className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]/80 transition-colors font-medium"
                 >
                   <Plus size={12} />
                   Add mailbox
-                </button>
+                </Button>
               </div>
               <div data-testid="email-mailbox-card" className="space-y-[var(--space-2)]">
                 {mailboxesLoading ? (

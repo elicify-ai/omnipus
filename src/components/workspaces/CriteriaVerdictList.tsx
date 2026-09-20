@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Check, X, CircleDashed, CaretDown, CaretRight } from '@phosphor-icons/react'
 import type { AcceptanceCriterion, JudgeVerdict, EvidenceRecord } from '@/lib/api'
 import { EvidenceViewer } from './EvidenceViewer'
+import { IconButton } from '@/components/ui/icon-button'
 
 // Fallback denominator of the "attempt N of M" counter, used ONLY when the
 // caller has no server-resolved maximum (`Task.effective_max_attempts`). MUST
@@ -179,15 +180,16 @@ function CriterionRow({ criterion: c, verdict, evidenceRecord: ev, isExpanded, o
           )}
         </div>
         {ev && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             onClick={onToggleExpand}
             aria-expanded={isExpanded}
             aria-label={`${isExpanded ? 'Collapse' : 'Expand'} evidence for ${c.text}`}
-            className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+            variant="ghost"
+            size="sm"
+            className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-          </button>
+          </IconButton>
         )}
       </div>
       {isExpanded && ev && (

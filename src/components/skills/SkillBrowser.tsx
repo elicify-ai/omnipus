@@ -113,16 +113,17 @@ function FeaturedSkillSuggestions({ onSelect }: { onSelect: (query: string) => v
       </div>
       <div className="grid grid-cols-2 gap-[var(--space-2)]">
         {FEATURED_SUGGESTIONS.map((s) => (
-          <button tabIndex={0}
+          <Button
             key={s.query}
             type="button"
+            variant="ghost"
             data-testid={`featured-suggestion-${s.query.replace(/\s+/g, '-')}`}
             onClick={() => onSelect(s.query)}
-            className="flex flex-col items-start gap-[var(--space-0-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-left hover:bg-[var(--color-surface-2)] hover:border-[var(--color-accent)]/40 transition-colors"
+            className="h-auto flex-col items-start justify-start whitespace-normal gap-[var(--space-0-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)] hover:border-[var(--color-accent)]/40 transition-colors"
           >
             <span className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{s.label}</span>
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">{s.description}</span>
-          </button>
+          </Button>
         ))}
       </div>
     </div>

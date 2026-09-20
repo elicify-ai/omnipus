@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify'
 import { ArrowClockwise, Code, Image, ArrowsOutSimple, DownloadSimple, Copy } from '@phosphor-icons/react'
 import { MediaActionToolbar, type MediaAction } from './MediaActionToolbar'
 import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
 import { copyText, copyImageBlob, svgToPngBlob, downloadBlob, canCopyImage } from './media-actions'
 
 // normalizeMermaidSource deterministically fixes the single most common MECHANICAL
@@ -95,16 +96,17 @@ function MermaidErrorCard({ error, code }: { error: string; code: string }) {
           <Code size={13} />
           <span>Diagram couldn&apos;t be drawn — showing source</span>
         </span>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={handleFix}
           disabled={sent}
           aria-label={sent ? 'Fix requested' : 'Ask the assistant to fix the diagram'}
-          className="flex shrink-0 items-center gap-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-auto rounded-none p-0 shrink-0 gap-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:cursor-not-allowed"
         >
           <ArrowClockwise size={11} />
           {sent ? 'Fix requested' : 'Fix'}
-        </button>
+        </Button>
       </div>
       {/* The source as an ordinary code block — the content is still readable. */}
       <pre className="overflow-x-auto whitespace-pre-wrap break-words border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Plus, Trash } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   Select,
   SelectContent,
@@ -250,14 +251,15 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
                     by {c.author.kind}:{c.author.id}
                   </p>
                 </div>
-                <button tabIndex={0}
-                  type="button"
+                <IconButton
                   onClick={() => removeCriterion(idx)}
                   aria-label={`Remove criterion ${c.text}`}
-                  className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                 >
                   <Trash size={12} />
-                </button>
+                </IconButton>
               </li>
             )
           })}
@@ -275,22 +277,22 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         />
 
         <div className="flex items-center gap-[var(--space-2-5)]">
-          <button tabIndex={0}
-            type="button"
+          <Button
+            variant="ghost"
             aria-expanded={expander === 'check'}
             onClick={() => toggleExpander('check')}
-            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto p-0 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             + Add technical check
-          </button>
-          <button tabIndex={0}
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
             aria-expanded={expander === 'behavior'}
             onClick={() => toggleExpander('behavior')}
-            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto p-0 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             + Add action-count check
-          </button>
+          </Button>
         </div>
 
         {/* ADR-080 D-TYPES — judgment selector. Every criterion carries a

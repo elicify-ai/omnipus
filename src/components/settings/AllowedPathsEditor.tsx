@@ -1,15 +1,22 @@
 import { useState } from 'react'
 import { Trash, Plus } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 
-// Read-only badge with tooltip for allowed_paths rows
+// Read-only badge with tooltip for allowed_paths rows.
+// Deliberately a <span>, not a <button>: it performs no action (no onClick,
+// cursor-default) — it is a static label that discloses more text on
+// hover/focus, the same shape as a native `title` attribute. tabIndex={0}
+// keeps it reachable for keyboard users so the tooltip is not mouse-only;
+// it never claims the button/dialog/radio/switch/tab semantics the
+// design-system `controls/raw-button` lock exists to catch, so it isn't a
+// hand-built control under that rule.
 function ReadOnlyBadge() {
   const [tip, setTip] = useState(false)
   return (
     <span className="relative inline-block">
-      <button
-        type="button"
+      <span
         className="inline-flex items-center rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-mono border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] cursor-default"
         onMouseEnter={() => setTip(true)}
         onMouseLeave={() => setTip(false)}
@@ -19,7 +26,7 @@ function ReadOnlyBadge() {
         aria-describedby={tip ? 'ro-tip' : undefined}
       >
         read-only
-      </button>
+      </span>
       {tip && (
         <span
           id="ro-tip"
@@ -77,14 +84,15 @@ export function AllowedPathsEditor({
                   restart required
                 </span>
               )}
-              <button tabIndex={0}
+              <IconButton
+                variant="ghost"
                 type="button"
                 aria-label={`Delete path ${p}`}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
+                className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                 onClick={() => onDelete(i)}
               >
                 <Trash size={12} />
-              </button>
+              </IconButton>
             </div>
             {rowErrors[i] && (
               <p className="text-[length:var(--type-caption-size)] text-[var(--color-error)] pl-[var(--space-2)]">{rowErrors[i]}</p>

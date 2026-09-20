@@ -58,6 +58,7 @@ import {
   AlertDialogAction,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SmartSelect } from '@/components/ui/smart-select'
@@ -158,14 +159,16 @@ function PasswordField({
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid || undefined}
       />
-      <button tabIndex={0}
+      <IconButton
         type="button"
+        size="sm"
+        variant="ghost"
         onClick={() => setVisible((v) => !v)}
-        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors"
         aria-label={visible ? 'Hide password' : 'Show password'}
       >
         {visible ? <EyeSlash size={13} /> : <Eye size={13} />}
-      </button>
+      </IconButton>
     </div>
   )
 }

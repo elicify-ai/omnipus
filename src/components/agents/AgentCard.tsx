@@ -1,5 +1,6 @@
 import { Circle, Star } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -39,12 +40,13 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
 
   return (
     <div className="relative group/card">
-      <button tabIndex={0}
+      <Button
         type="button"
+        variant="ghost"
         data-testid={`agent-card-${agent.id}`}
         onClick={handleOpen}
         className={cn(
-          'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]',
+          'block h-auto w-full whitespace-normal rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
           'focus-visible:border-[var(--color-accent)]'
         )}
@@ -132,21 +134,22 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
             )}
           </div>
         </div>
-      </button>
+      </Button>
 
       {/* "Set as default" sits outside the card button to avoid nested-button HTML violation.
           Persistent (no group-hover gating — touch users would never see it) and sized for a
           44×44 tap target per WCAG 2.5.8 (token: --spacing-tap-target-min). */}
       {!agent.default && onSetDefault && (
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={onSetDefault}
-          className="absolute bottom-3 right-4 flex items-center justify-center gap-[var(--space-1)] min-h-tap-target-min min-w-tap-target-min px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          className="absolute bottom-3 right-4 h-auto min-h-tap-target-min min-w-tap-target-min gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)]"
           aria-label={`Set ${agent.name} as default agent`}
         >
           <Star size={12} weight="fill" />
           Set as default
-        </button>
+        </Button>
       )}
     </div>
   )

@@ -3668,8 +3668,124 @@ function pureFunctionReturns(call, ctx) {
   const declaration = functionDeclarationFor(call.expression, ctx)
   if (!declaration?.body) return null
   if (!ts.isBlock(declaration.body)) return isPureStaticExpression(declaration.body) ? [declaration.body] : null
-  if (declaration.body.statements.length !== 1 || !ts.isReturnStatement(declaration.body.statements[0]) || !declaration.body.statements[0].expression) return null
-  return isPureStaticExpression(declaration.body.statements[0].expression) ? [declaration.body.statements[0].expression] : null
+  if (declaration.body.statements.length === 1 && ts.isReturnStatement(declaration.body.statements[0]) && declaration.body.statements[0].expression) {
+    return isPureStaticExpression(declaration.body.statements[0].expression) ? [declaration.body.statements[0].expression] : null
+  }
+  return collectGuardedLocalReturns(declaration.body)
+}
+
+// C2 gap 2: a locally-scoped "named-branch" class builder --
+// ToolPolicyEditor.tsx's `BULK_BUTTON_CLASS(active, policy)` shape:
+//   const base = '...'; const variantA = '...'; const variantB = '...'
+//   if (!active) return base
+//   if (policy === 'allow') return variantA
+//   return variantB
+// reached generically through the SAME pureFunctionReturns call every other
+// opaque class-builder-argument call expression goes through -- not gated on
+// a CLASS_BUILDERS name (BULK_BUTTON_CLASS carries none) and, unlike
+// collectFiniteIfChainReturns (Item 5) above, NOT restricted to a top-level
+// declaration: BULK_BUTTON_CLASS is declared inside the component body, and
+// isTopLevelFiniteDispatcherFunction's restriction exists to rule out a
+// dispatcher closing over CALLER-local mutable state it cannot see.
+//
+// That restriction is replaced here, not dropped, by a stricter LEXICAL one:
+// every string this proof can ever produce is either a bare string/no-
+// substitution-template literal sitting directly in a return statement, or a
+// `const` this SAME function declared at the top of its own body with such a
+// literal as its initializer. Deliberately narrower than isPureStaticExpression
+// (used by the sibling single-statement case above): that check only rules out
+// calls/new/await/yield/assignment inside an expression -- it does NOT rule out
+// a bare identifier reference at all. Verified by manual reproduction during
+// this fix: a leading-const guard around a branch whose OTHER return was a
+// bare reference to an outer, reassigned `let` resolved cleanly with ZERO
+// finding (not even for the reassigned off-scale value) once that identifier
+// reached the file's general identifier machinery -- a pre-existing
+// resolveExpr blind spot this capability must not gain a brand-new,
+// previously-unreachable route into (this exact shape returned
+// `spacing/unsupported`, correctly, before this fix, because the old
+// single-statement-only pureFunctionReturns simply refused to look at a
+// multi-statement body at all).
+// Restricting both the local consts' initializers and every return expression
+// to string/template literal syntax makes that entirely moot: neither can
+// EVER contain an identifier reference, so there is nothing to leak outward,
+// resolved or not -- `const` also makes runtime reassignment between
+// declaration and return impossible (enforced by the language, not this
+// analysis).
+//
+// Fails closed (returns null -> the caller's existing unsupported finding)
+// on: any statement that is not {a leading const, an if/return, the final
+// return}; a leading declaration that is not `const`, has more than one
+// declarator, destructures its name, or whose initializer is anything other
+// than a string/no-substitution-template literal; an `if` with an `else`, a
+// multi-statement block body, or a body with no return expression (both the
+// braced `if (c) { return x }` and unbraced `if (c) return x` single-statement
+// forms are accepted); a branch or final return expression that is neither a
+// string/template literal nor a reference to one of this function's own
+// leading consts; a body with no unconditional trailing return (so every path
+// is provably exhaustive by construction, without needing to reason about the
+// conditions themselves); a body that is only leading consts with no return
+// at all.
+function collectGuardedLocalReturns(body) {
+  const statements = body.statements
+  const locals = new Map()
+  let index = 0
+  while (index < statements.length) {
+    const statement = statements[index]
+    if (!ts.isVariableStatement(statement)) break
+    const { declarations } = statement.declarationList
+    if (declarations.length !== 1) return null
+    const [decl] = declarations
+    if (!ts.isIdentifier(decl.name) || !decl.initializer) return null
+    if (!isConstVariableDeclaration(decl) || !isLiteralClassString(decl.initializer)) return null
+    locals.set(decl.name.text, decl.initializer)
+    index += 1
+  }
+  if (index === statements.length) return null // no branch/trailing return to enumerate
+  // Requiring at least one leading const keeps this shape disjoint from the
+  // plain "bare if-chain returning literals directly" shape (no leading
+  // locals at all) that collectFiniteIfChainReturns (Item 5) already owns
+  // through its OWN, deliberately top-level-only proof -- MessageItem.tsx's
+  // avatarStyle, including its pinned "a NESTED if-chain function stays
+  // unsupported" regression sentinel (spacing-adversarial.test.mjs). Without
+  // this, resolving the shape here first (pureFunctionReturns runs before
+  // collectFiniteIfChainReturns in visitStyleLike) would silently widen that
+  // deliberately-narrower proof to nested declarations too -- exactly the
+  // "quietly widen a rule" failure mode this capability must not cause. Zero
+  // leading consts steps out of the way entirely and lets that sentinel keep
+  // its own unrelated, narrower guarantee.
+  if (locals.size === 0) return null
+  const resolveReturn = (expr) => {
+    if (ts.isIdentifier(expr)) return locals.get(expr.text) ?? null
+    return isLiteralClassString(expr) ? expr : null
+  }
+  const results = []
+  for (; index < statements.length - 1; index += 1) {
+    const statement = statements[index]
+    if (!ts.isIfStatement(statement) || statement.elseStatement) return null
+    const thenBody = statement.thenStatement
+    const inner = ts.isBlock(thenBody) ? (thenBody.statements.length === 1 ? thenBody.statements[0] : null) : thenBody
+    if (!inner || !ts.isReturnStatement(inner) || !inner.expression) return null
+    const resolved = resolveReturn(inner.expression)
+    if (!resolved) return null
+    results.push(resolved)
+  }
+  const last = statements[statements.length - 1]
+  if (!ts.isReturnStatement(last) || !last.expression) return null
+  const resolvedLast = resolveReturn(last.expression)
+  if (!resolvedLast) return null
+  results.push(resolvedLast)
+  return results
+}
+
+// A string or no-substitution-template literal carries no expressions and
+// therefore no identifier references at all -- unlike isPureStaticExpression
+// (which only rules out calls/new/await/yield/assignment, and would happily
+// accept a template WITH a `${...}` substitution or a bare identifier), this
+// is the strict "cannot possibly name anything outside itself" check
+// collectGuardedLocalReturns needs so it can trust a local const's value, or
+// a bare returned literal, without re-verifying anything downstream.
+function isLiteralClassString(node) {
+  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
 }
 
 function isPureStaticExpression(node) {

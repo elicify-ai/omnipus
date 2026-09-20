@@ -11,6 +11,8 @@ import { CaretLeft, CaretRight } from '@phosphor-icons/react'
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import { cellValue, rowsByPath } from './viewResultData'
 import { TotalsFooter } from './PartChrome'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 
 const DAY_HEADERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'] as const
 
@@ -145,27 +147,25 @@ export function CalendarPart({
         </p>
       )}
       <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)]">
-        <button
-          type="button"
-          tabIndex={0}
+        <IconButton
+          size="sm"
           onClick={() => step(-1)}
           aria-label="Previous month"
-          className="flex h-6 w-6 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          className="h-6 w-6 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
         >
           <CaretLeft size={13} />
-        </button>
+        </IconButton>
         <span className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]" data-testid="viewpart-calendar-month">
           {monthLabel}
         </span>
-        <button
-          type="button"
-          tabIndex={0}
+        <IconButton
+          size="sm"
           onClick={() => step(1)}
           aria-label="Next month"
-          className="flex h-6 w-6 items-center justify-center rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          className="h-6 w-6 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
         >
           <CaretRight size={13} />
-        </button>
+        </IconButton>
       </div>
       <div className="grid grid-cols-7 gap-[var(--border-width-hairline)] border-t border-[var(--color-border)] bg-[var(--color-border)]">
         {DAY_HEADERS.map((h, i) => (
@@ -187,18 +187,17 @@ export function CalendarPart({
             <span className="text-[var(--color-muted)]">{cell.day}</span>
             {(rowsByDay.get(cell.iso) ?? []).map((row) =>
               onOpenPath ? (
-                <button
+                <Button
                   key={row.path}
-                  type="button"
-                  tabIndex={0}
+                  variant="ghost"
                   onClick={() => onOpenPath(row.path)}
                   title={row.title}
                   aria-label={`Open ${row.title}`}
                   data-testid="viewpart-calendar-event"
-                  className="mt-[var(--space-0-5)] block w-full truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="mt-[var(--space-0-5)] h-auto w-full justify-start truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-left font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
                 >
                   {row.title}
-                </button>
+                </Button>
               ) : (
                 <div
                   key={row.path}
@@ -226,18 +225,17 @@ export function CalendarPart({
           <div className="flex flex-wrap gap-[var(--space-1)]">
             {unscheduled.map((row) =>
               onOpenPath ? (
-                <button
+                <Button
                   key={row.path}
-                  type="button"
-                  tabIndex={0}
+                  variant="ghost"
                   onClick={() => onOpenPath(row.path)}
                   title={row.title}
                   aria-label={`Open ${row.title}`}
                   data-testid="viewpart-calendar-unscheduled-row"
-                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="h-auto max-w-[16rem] justify-start truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-left font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
                 >
                   {row.title}
-                </button>
+                </Button>
               ) : (
                 <span
                   key={row.path}

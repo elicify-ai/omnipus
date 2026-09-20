@@ -28,6 +28,7 @@ import { ShikiCodeBlock } from '@/components/chat/markdown-shared'
 import { LibraryTextPreview } from './LibraryTextPreview'
 import { shikiLanguageFor } from './libraryLanguages'
 import type { LibraryEntry } from '@/lib/api'
+import { Button } from '@/components/ui/button'
 
 /** A line longer than this is never handed to the highlighter (D-38). */
 export const LONG_LINE_CHARS = 10_000
@@ -154,15 +155,14 @@ function CodeValidityNotice({
         This file is not valid {name} — {problem}. It was saved exactly as written; nothing that
         reads it as {name} will accept it until this is fixed.
       </span>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="outline"
         onClick={onFix}
         data-testid="library-code-invalid-fix"
-        className="rounded border border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
+        className="h-auto rounded border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
       >
         Fix
-      </button>
+      </Button>
     </div>
   )
 }

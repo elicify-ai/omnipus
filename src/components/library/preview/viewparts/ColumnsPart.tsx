@@ -9,6 +9,7 @@
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import { cellValue, rowExcludedFromTotals, rowsByPath } from './viewResultData'
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter } from './PartChrome'
+import { Button } from '@/components/ui/button'
 
 interface Column {
   key: string
@@ -80,16 +81,15 @@ function Card({
   )
   if (onOpenPath) {
     return (
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={() => onOpenPath(row.path)}
         aria-label={`Open ${row.title}`}
         data-testid="viewpart-board-card"
-        className="block w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-3)]"
+        className="h-auto w-full justify-start rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)]"
       >
         {content}
-      </button>
+      </Button>
     )
   }
   return (

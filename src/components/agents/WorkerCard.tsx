@@ -1,7 +1,8 @@
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Lightning, Spinner, CheckCircle, WarningCircle, XCircle } from '@phosphor-icons/react'
+import { Lightning, CheckCircle, WarningCircle, XCircle } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { testAgentRunner, isApiError } from '@/lib/api'
 import type { Agent, ExecutorConfig, RunnerTestResponse } from '@/lib/api'
@@ -49,12 +50,13 @@ export function WorkerCard({ agent }: WorkerCardProps) {
 
   return (
     <div className="relative group/card">
-      <button tabIndex={0}
+      <Button
         type="button"
+        variant="ghost"
         data-testid={`worker-card-${agent.id}`}
         onClick={() => navigate({ to: '/agents/$agentId', params: { agentId: agent.id } })}
         className={cn(
-          'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]',
+          'block h-auto w-full whitespace-normal rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
           'focus-visible:border-[var(--color-accent)]'
         )}
@@ -112,7 +114,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
             </div>
           </div>
         </div>
-      </button>
+      </Button>
 
       {/* Test run — sits outside the card button to avoid nested-button HTML. */}
       <WorkerTestRun agentId={agent.id} agentName={agent.name} isExternalCli={isExternalCli} />
@@ -132,36 +134,38 @@ function WorkerTestRun({ agentId, agentName, isExternalCli }: { agentId: string;
 
   if (!isExternalCli) {
     return (
-      <button tabIndex={0}
+      <Button
         type="button"
+        variant="ghost"
         disabled
         data-testid={`worker-test-run-${agentId}`}
         title="Native runners have no external connection to test."
-        className="absolute bottom-3 right-4 flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/50 cursor-not-allowed"
+        className="absolute bottom-3 right-4 h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/50 hover:bg-transparent disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-100"
         aria-label={`Test run for ${agentName} (unavailable for native runtime)`}
       >
         <Lightning size={12} />
         Test run
-      </button>
+      </Button>
     )
   }
 
   return (
     <div className="absolute bottom-3 right-4 flex flex-col items-end gap-[var(--space-1)]">
-      <button tabIndex={0}
+      <Button
         type="button"
-        disabled={isPending}
+        variant="ghost"
+        actionState={isPending ? 'pending' : 'idle'}
         data-testid={`worker-test-run-${agentId}`}
         onClick={() => {
           reset()
           mutate()
         }}
-        className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-60"
+        className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)] disabled:opacity-60"
         aria-label={`Test run for ${agentName}`}
       >
-        {isPending ? <Spinner size={12} className="animate-spin" /> : <Lightning size={12} />}
+        {!isPending && <Lightning size={12} />}
         {isPending ? 'Testing…' : 'Test run'}
-      </button>
+      </Button>
       {error && (
         <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
           Test failed

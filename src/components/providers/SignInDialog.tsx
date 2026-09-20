@@ -487,15 +487,16 @@ export function SignInDialog({
               </div>
               {providerId === 'openai-chatgpt' && codexLoginPresent && (
                 <div className="pt-[var(--space-1)] border-t border-[var(--color-border)]">
-                  <button tabIndex={0}
+                  <Button
                     type="button"
+                    variant="link"
                     onClick={handleImportCodexLogin}
                     disabled={importing}
-                    className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 mt-[var(--space-2)]"
+                    className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium"
                     data-testid="import-codex-login-btn"
                   >
                     {importing ? 'Checking…' : 'Use my existing Codex login'}
-                  </button>
+                  </Button>
                   {importError && (
                     <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]" role="alert" aria-live="assertive">
                       {importError}

@@ -105,6 +105,7 @@ import { KbAudioEmbedMount } from './KbAudioEmbedMount'
 import { KbVideoEmbedMount } from './KbVideoEmbedMount'
 import { KbPdfPageEmbedMount } from './KbPdfPageEmbedMount'
 import { KbQueryFenceEmbed } from './KbQueryFenceEmbed'
+import { Button } from '@/components/ui/button'
 
 type RemarkPlugins = ComponentProps<typeof ReactMarkdown>['remarkPlugins']
 
@@ -1300,15 +1301,14 @@ function CollectionLink({
   }
 
   return (
-    <button
-      type="button"
-      tabIndex={0}
+    <Button
+      variant="link"
       {...shared}
-      className={`inline text-left align-baseline ${className}`}
+      className={`inline h-auto rounded-none p-0 align-baseline text-[length:inherit] font-[var(--font-weight-regular)] text-left ${verified ? '' : 'hover:no-underline'} ${className}`}
       onClick={() => ctx.onNavigate?.(path, heading)}
     >
       {body}
-    </button>
+    </Button>
   )
 }
 

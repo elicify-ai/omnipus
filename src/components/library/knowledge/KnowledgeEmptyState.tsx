@@ -47,6 +47,7 @@ import {
 import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 /**
  * One resolved answer about a folder, ready to render.
@@ -283,16 +284,14 @@ export function KnowledgeEmptyState({
             this workspace. Omnipus never creates an{' '}
             <span className="font-mono">.obsidian</span> folder, and never changes one it finds.
           </p>
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
             data-testid="knowledge-create-collection"
             onClick={onCreateCollection}
-            className="inline-flex h-8 items-center gap-[var(--space-2)] rounded-md bg-[var(--color-accent)] px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
+            className="h-8 gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
           >
             <Books size={14} weight="fill" aria-hidden="true" />
             Create a collection here
-          </button>
+          </Button>
         </Shell>
       )
 
@@ -429,16 +428,14 @@ export function KnowledgeEmptyState({
             nothing to read or search until a note exists.
           </p>
           {onCreateNote ? (
-            <button
-              type="button"
-              tabIndex={0}
+            <Button
               data-testid="knowledge-create-note"
               onClick={onCreateNote}
-              className="inline-flex h-8 items-center gap-[var(--space-2)] rounded-md bg-[var(--color-accent)] px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
+              className="h-8 gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
             >
               <FileText size={14} weight="fill" aria-hidden="true" />
               Write the first note
-            </button>
+            </Button>
           ) : (
             <p data-testid="knowledge-create-note-unavailable">
               Add or upload a markdown file to this folder and Omnipus will index it automatically.

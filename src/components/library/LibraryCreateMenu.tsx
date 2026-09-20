@@ -43,6 +43,7 @@ import {
 import { LibraryNewVaultDialog } from './LibraryNewVaultDialog'
 import { MountFolderIcon } from './icons'
 import type { LibraryEntry } from '@/lib/api'
+import { IconButton } from '@/components/ui/icon-button'
 
 interface LibraryCreateMenuProps {
   workspaceId: string | null
@@ -83,16 +84,14 @@ export function LibraryCreateMenu({
     <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             aria-label="Create"
             title="Create"
             data-testid="library-create-menu-trigger"
-            className="rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
           >
             <Plus size={16} />
-          </button>
+          </IconButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" data-testid="library-create-menu">
           {inWorkspace && (

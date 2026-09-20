@@ -4,6 +4,7 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react'
 import { Check } from '@phosphor-icons/react'
 import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
 import { clsx } from 'clsx'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -97,13 +98,14 @@ function ActionButton({ action, variant }: ActionButtonProps) {
     : 'text-[var(--color-secondary)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-1)] px-2'
 
   return (
-    <button tabIndex={0}
+    <Button
       type="button"
+      variant="ghost"
       aria-label={done && action.transientLabel ? action.transientLabel : action.label}
       title={done && action.transientLabel ? action.transientLabel : action.label}
       onClick={handleClick}
       disabled={pending}
-      className={`${baseClasses} ${variantClasses}`}
+      className={`h-auto p-0 ${baseClasses} ${variantClasses}`}
     >
       {done ? (
         <Check
@@ -117,7 +119,7 @@ function ActionButton({ action, variant }: ActionButtonProps) {
           {action.icon}
         </span>
       )}
-    </button>
+    </Button>
   )
 }
 

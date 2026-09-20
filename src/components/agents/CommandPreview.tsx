@@ -51,6 +51,7 @@ import { CheckCircle, Copy, PaperPlaneTilt, Spinner, WarningCircle, XCircle } fr
 import { useCommandPreview } from '@/hooks/useCommandPreview'
 import { useExecutorSmokeTest } from '@/hooks/useExecutorSmokeTest'
 import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
 import type { ExecutorCommandPreviewRequest, ExecutorCommandPreviewResponse, ExecutorSmokeTestResponse } from '@/lib/api'
 
 export interface CommandPreviewProps {
@@ -148,14 +149,15 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
           ) : (
             <>Couldn't compute a live command preview — the settings below still apply when this agent runs.</>
           )}{' '}
-          <button tabIndex={0}
+          <Button
             type="button"
+            variant="link"
             onClick={retry}
             data-testid={testId ? `${testId}-retry` : undefined}
-            className="font-medium text-[var(--color-accent)] underline underline-offset-2 hover:no-underline"
+            className="text-[length:var(--type-caption-size)] font-medium underline underline-offset-2 hover:no-underline"
           >
             Retry
-          </button>
+          </Button>
         </p>
       </div>
     )
@@ -171,15 +173,16 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
       >
         <div className="flex items-center justify-between gap-[var(--space-2)]">
           <p className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]">Command Omnipus will run</p>
-          <button tabIndex={0}
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => copyCommand(result.command_line)}
             data-testid={testId ? `${testId}-copy` : undefined}
-            className="flex shrink-0 items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+            className="h-auto shrink-0 gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)]"
           >
             <Copy size={11} />
             Copy
-          </button>
+          </Button>
         </div>
 
         <code
@@ -315,16 +318,17 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
             Runs a real request through this CLI (spends a small amount of usage).
           </p>
         </div>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="outline"
+          actionState={isPending ? 'pending' : 'idle'}
           onClick={handleClick}
-          disabled={isPending}
           data-testid={smokeTestId ? `${smokeTestId}-button` : undefined}
-          className="flex shrink-0 items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-60"
+          className="h-auto shrink-0 gap-[var(--space-1)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]"
         >
-          {isPending ? <Spinner size={12} className="animate-spin" /> : <PaperPlaneTilt size={12} />}
+          {!isPending && <PaperPlaneTilt size={12} />}
           {isPending ? 'Running…' : 'Send a test message'}
-        </button>
+        </Button>
       </div>
 
       {isPending && (

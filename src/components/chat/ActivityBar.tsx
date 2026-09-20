@@ -33,6 +33,7 @@ import { useState } from 'react'
 import { ArrowsClockwise, CaretRight } from '@phosphor-icons/react'
 import { ActivityAvatar } from './ActivityAvatar'
 import { ActivityPanel } from './ActivityPanel'
+import { Button } from '@/components/ui/button'
 import { useRunningActivity } from '@/hooks/useRunningActivity'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
 import { statusDot } from '@/lib/toolStatusConfig'
@@ -71,14 +72,15 @@ export function ActivityBar() {
 
   return (
     <>
-      <button tabIndex={0}
+      <Button
         type="button"
+        variant="ghost"
         data-testid="activity-bar"
         onClick={() => setPanelOpen(true)}
         aria-haspopup="dialog"
         aria-expanded={panelOpen}
         aria-label={`Activity — ${label}`}
-        className="inline-flex max-w-full items-center gap-[var(--space-2)] self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-3)]"
+        className="h-auto max-w-full justify-start self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]"
       >
         <div className="flex -space-x-[var(--space-2)] shrink-0">
           {stackItems.map((item) => (
@@ -111,7 +113,7 @@ export function ActivityBar() {
         </span>
 
         <CaretRight size={12} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
-      </button>
+      </Button>
 
       <ActivityPanel
         open={panelOpen}

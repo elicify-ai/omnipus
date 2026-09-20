@@ -196,6 +196,25 @@ describe('permitted typography — no findings', () => {
     expectClean('export const x = <p className="text-[length:var(--type-caption-size)]">hi</p>')
   })
 
+  it('allows the length-typed CSS-wide keyword form (C2 gap 1: inherit is value plumbing, not a size)', () => {
+    // text-[length:inherit] defers entirely to the (already-governed) parent
+    // computed size; it names no size of its own, so it cannot pin an
+    // off-scale magic number the way text-[length:13px] does (see the
+    // adversarial 'rejects an explicitly length-typed arbitrary size' case
+    // below, which must keep firing). Mirrors evaluateFontSizeValue's
+    // existing 'ok' verdict for the identical keyword on the raw
+    // `font-size:` declaration path (line 232 above) and
+    // css-colors.mjs's COLOR_KEYWORD_EXEMPTS treatment of currentColor.
+    expectClean('export const x = <p className="text-[length:inherit]">hi</p>')
+  })
+
+  it('allows the other CSS-wide value keywords in the same length-typed position', () => {
+    expectClean('export const x = <p className="text-[length:initial]">hi</p>')
+    expectClean('export const x = <p className="text-[length:unset]">hi</p>')
+    expectClean('export const x = <p className="text-[length:revert]">hi</p>')
+    expectClean('export const x = <p className="text-[length:revert-layer]">hi</p>')
+  })
+
   it('allows the v4 paren shorthand for a registered size token', () => {
     expectClean('export const x = <p className="text-(length:--type-caption-size)">hi</p>')
   })
@@ -292,6 +311,21 @@ describe('forbidden Tailwind size utilities', () => {
 
   it('rejects an explicitly length-typed arbitrary size', () => {
     expectOne('export const x = <p className="text-[length:13px]">hi</p>', 'typography/arbitrary-text-size', 'text-[length:13px]')
+  })
+
+  it('C2 gap 1 adversarial: the CSS-wide-keyword carve-out is exact, not a prefix or fuzzy match', () => {
+    // A near-miss word that merely resembles a CSS-wide keyword must still
+    // fail closed as unsupported, proving CSS_WIDE_KEYWORDS.has() is doing
+    // exact membership, not a prefix/substring/case-insensitive check.
+    expectOne('export const x = <p className="text-[length:inherited]">hi</p>', 'typography/unsupported-text-utility', 'text-[length:inherited]')
+    // Off-scale literals beside the keyword form must still block — the
+    // carve-out is for value plumbing, not for arbitrary magic numbers.
+    expectOne('export const x = <p className="text-[length:13px]">hi</p>', 'typography/arbitrary-text-size', 'text-[length:13px]')
+    expectOne('export const x = <p className="text-[13px]">hi</p>', 'typography/arbitrary-text-size', 'text-[13px]')
+    // The untyped form never reaches evaluateArbitrarySizeValue at all (it
+    // fails isColourLike/BARE_CUSTOM_PROPERTY_PATTERN/isLengthLike first), so
+    // it keeps reporting through its own unrelated classification path.
+    expectOne('export const x = <p className="text-[inherit]">hi</p>', 'typography/unsupported-text-utility', 'text-[inherit]')
   })
 
   it('rejects an arbitrary rem size', () => {

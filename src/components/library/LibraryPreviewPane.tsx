@@ -66,6 +66,8 @@ import { LibraryCodePreview } from './preview/LibraryCodePreview'
 import { LibraryTextPreview } from './preview/LibraryTextPreview'
 import { LibraryDownloadCard } from './preview/LibraryDownloadCard'
 import { PreviewHeaderSlotProvider } from './preview/previewHeaderSlot'
+import { IconButton } from '@/components/ui/icon-button'
+import { Button } from '@/components/ui/button'
 
 // Every control in the single header row is a bare icon, matching the browser
 // panel's toolbar treatment: no border, no fill, hover as the only chrome.
@@ -295,9 +297,7 @@ export function LibraryPreviewPane({
           {liveEntry.name}
         </p>
         <div ref={setHeaderSlot} className="flex shrink-0 items-center gap-[var(--space-0-5)]" />
-        <button
-          type="button"
-          tabIndex={0}
+        <IconButton
           onClick={onClose}
           aria-label="Close preview"
           title="Close preview"
@@ -305,7 +305,7 @@ export function LibraryPreviewPane({
           className={LIBRARY_ICON_BTN}
         >
           <X size={15} />
-        </button>
+        </IconButton>
       </div>
 
       {/* FR-007 — the untrusted-content boundary. It lives HERE, in the pane's
@@ -562,16 +562,15 @@ function LibraryHtmlFrame({
           <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
             This preview link has expired. Anything the page loads from now on will fail.
           </p>
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
+            variant="ghost"
             onClick={() => void tokenQuery.refetch()}
             data-testid="library-html-preview-reload"
-            className="shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning)]/20"
+            className="h-auto shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-warning)] hover:bg-[var(--color-warning)]/20 hover:text-[var(--color-warning)]"
           >
             <ArrowClockwise size={12} className="mr-[var(--space-1)] inline" />
             Reload
-          </button>
+          </Button>
         </div>
       )}
       {/* The height is explicit because this frame is often rendered inside
@@ -611,15 +610,14 @@ function PreviewUnavailable({
       <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Preview unavailable</p>
       <p className="max-w-sm text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]">{detail}</p>
       {onRetry && (
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="outline"
           onClick={onRetry}
           data-testid="library-html-preview-retry"
-          className="rounded border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          className="h-auto rounded px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)]"
         >
           Try again
-        </button>
+        </Button>
       )}
     </div>
   )

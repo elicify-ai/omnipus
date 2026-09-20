@@ -3,6 +3,7 @@ import { Outlet } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
+import { Button } from '@/components/ui/button'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
@@ -196,13 +197,15 @@ export function AppShell() {
               className="flex items-center justify-between gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] shrink-0"
             >
               <span>{connectionError}</span>
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={reconnect}
-                className="px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-error)]/20 transition-colors"
+                className="h-auto px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/20 hover:text-[var(--color-error)] transition-colors"
               >
                 Retry
-              </button>
+              </Button>
             </div>
           )}
 

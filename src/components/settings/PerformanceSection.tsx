@@ -18,6 +18,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Cpu, Info, Warning, Target } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import {
@@ -390,16 +391,16 @@ export function PerformanceSection(): React.ReactElement {
             Failed to load performance settings: {getErrorMessage(error, 'Unknown error')}
           </span>
         </div>
-        <button
+        <Button
+          variant="link"
           type="button"
-          tabIndex={0}
           data-testid="performance-retry-btn"
           onClick={() => void refetch()}
           disabled={isFetching}
-          className="text-[length:var(--type-utility-xs-size)] font-medium underline text-[var(--color-secondary)] disabled:opacity-50"
+          className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] underline hover:text-[var(--color-secondary)]"
         >
           {isFetching ? 'Retrying…' : 'Retry'}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -627,24 +628,24 @@ export function PerformanceSection(): React.ReactElement {
 
       {/* Escape hatch: manual trigger exposed for keyboard users / edge cases */}
       {dirty && !reauthOpen && (
-        <button tabIndex={0}
+        <Button
           type="button"
           data-testid="performance-save-btn"
           onClick={triggerSave}
-          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-[var(--space-2)] focus:bg-[var(--color-surface-1)] focus:rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50"
         >
           Save changes
-        </button>
+        </Button>
       )}
       {goalDirty && !reauthOpen && (
-        <button tabIndex={0}
+        <Button
           type="button"
           data-testid="performance-goal-save-btn"
           onClick={triggerGoalSave}
-          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-[var(--space-2)] focus:bg-[var(--color-surface-1)] focus:rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50"
         >
           Save changes
-        </button>
+        </Button>
       )}
     </div>
   )

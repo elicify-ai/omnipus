@@ -10,6 +10,7 @@ import { cellValue, findCell, rowExcludedFromTotals, rowsByPath, FILE_NAME_PROPE
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
 import { EditableCell, canEditCell, type RecordEditContext } from './RecordFieldEditor'
+import { Button } from '@/components/ui/button'
 
 function detailProperty(part: ViewResultPart): string | undefined {
   return (part.columns ?? []).find((c) => c !== FILE_NAME_PROPERTY)
@@ -44,19 +45,18 @@ function ListRow({
       {...(onOpenPath ? { onClick: () => onOpenPath(row.path) } : {})}
     >
       {onOpenPath ? (
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="ghost"
           onClick={(event) => {
             event.stopPropagation()
             onOpenPath(row.path)
           }}
           aria-label={`Open ${row.title}`}
           data-testid="viewpart-row-open"
-          className="min-w-0 truncate text-left text-[var(--color-secondary)]"
+          className="h-auto min-w-0 truncate rounded p-0 text-left font-[var(--font-weight-regular)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {row.title}
-        </button>
+        </Button>
       ) : (
         <span className="min-w-0 truncate text-[var(--color-secondary)]">{row.title}</span>
       )}

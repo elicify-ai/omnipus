@@ -3,7 +3,6 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   X,
   CaretDown,
-  CaretUp,
   Sparkle,
   Star,
   Lightning,
@@ -20,6 +19,8 @@ import { useFocusRestore } from '@/hooks/useFocusRestore'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
@@ -342,7 +343,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [fallbackModels, setFallbackModels] = useState<FallbackEntry[]>([])
   const [temperature, setTemperature] = useState(1.0)
   const [maxTokens, setMaxTokens] = useState(4096)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [useGlobalRateLimits, setUseGlobalRateLimits] = useState(true)
   const [maxLlmCallsPerHour, setMaxLlmCallsPerHour] = useState<number | ''>('')
   const [maxToolCallsPerMinute, setMaxToolCallsPerMinute] = useState<number | ''>('')
@@ -390,7 +390,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])
   const [shellDenyPatterns, setShellDenyPatterns] = useState<string[]>([])
-  const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
@@ -1564,41 +1563,30 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 "save" sampling params that silently reverted on refetch
                 (live bug, 2026-07-03). */}
             {!isExternalAgent && (
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-              <button tabIndex={0}
-                type="button"
-                onClick={() => setAdvancedOpen((o) => !o)}
-                className="flex items-center justify-between w-full px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                aria-expanded={advancedOpen}
-              >
-                <span>Sampling parameters</span>
-                {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-              </button>
-              {advancedOpen && (
-                <div className="px-[var(--space-2-5)] pb-[var(--space-2-5)] space-y-[var(--space-3)] border-t border-[var(--color-border)]">
-                  <RangeField
-                    label="Temperature"
-                    caption="Higher = more creative / less predictable (0–2, default 1)"
-                    value={temperature}
-                    min={0}
-                    max={2}
-                    step={0.05}
-                    onChange={(v) => { markDirty(); setTemperature(v) }}
-                    format={(v) => v.toFixed(2)}
-                  />
-                  <RangeField
-                    label="Max tokens"
-                    caption="Maximum length of each reply"
-                    value={maxTokens}
-                    min={256}
-                    max={32768}
-                    step={256}
-                    onChange={(v) => { markDirty(); setMaxTokens(v) }}
-                    format={(v) => v.toLocaleString()}
-                  />
-                </div>
-              )}
-            </div>
+            <AdvancedDisclosure title="Sampling parameters">
+              <div className="space-y-[var(--space-3)]">
+                <RangeField
+                  label="Temperature"
+                  caption="Higher = more creative / less predictable (0–2, default 1)"
+                  value={temperature}
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  onChange={(v) => { markDirty(); setTemperature(v) }}
+                  format={(v) => v.toFixed(2)}
+                />
+                <RangeField
+                  label="Max tokens"
+                  caption="Maximum length of each reply"
+                  value={maxTokens}
+                  min={256}
+                  max={32768}
+                  step={256}
+                  onChange={(v) => { markDirty(); setMaxTokens(v) }}
+                  format={(v) => v.toLocaleString()}
+                />
+              </div>
+            </AdvancedDisclosure>
             )}
           </section>
 
@@ -1704,35 +1692,38 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         />
                       </span>
                       <span>{entry.model}</span>
-                      <button tabIndex={0}
-                        type="button"
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
                         data-testid={`fallback-chip-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
                         onClick={() => { markDirty(); moveFallback(entry.model, -1) }}
-                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowUp size={10} />
-                      </button>
-                      <button tabIndex={0}
-                        type="button"
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
                         data-testid={`fallback-chip-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === fallbackModels.length - 1}
                         onClick={() => { markDirty(); moveFallback(entry.model, 1) }}
-                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowDown size={10} />
-                      </button>
-                      <button tabIndex={0}
-                        type="button"
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
                         data-testid={`fallback-chip-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
                         onClick={() => { markDirty(); removeFallback(entry.model) }}
-                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <X size={10} />
-                      </button>
+                      </IconButton>
                       {providerMissing && (
                         <span
                           data-testid={`fallback-chip-warning-${entry.model}`}
@@ -2320,25 +2311,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               isolation. */}
           {!isExternalAgent && (
             <section className="space-y-[var(--space-2-5)]">
-              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => setShellAdvancedOpen((o) => !o)}
-                  className="flex items-center justify-between w-full px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                  aria-expanded={shellAdvancedOpen}
-                >
-                  <span className="font-headline font-semibold text-[length:var(--type-body-size)]">Shell deny patterns</span>
-                  {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                </button>
-                {shellAdvancedOpen && (
-                  <div className="px-[var(--space-2-5)] pb-[var(--space-2-5)] border-t border-[var(--color-border)]">
-                    <ShellDenyPatternsEditor
-                      value={shellDenyPatterns}
-                      onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
-                    />
-                  </div>
-                )}
-              </div>
+              <AdvancedDisclosure
+                title="Shell deny patterns"
+                titleClassName="font-headline font-semibold text-[length:var(--type-body-size)]"
+              >
+                <ShellDenyPatternsEditor
+                  value={shellDenyPatterns}
+                  onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
+                />
+              </AdvancedDisclosure>
             </section>
           )}
 
@@ -3174,15 +3155,16 @@ function EnvironmentOverridesEditor({
                   aria-label="Environment variable value"
                   disabled={disabled}
                 />
-                <button tabIndex={0}
-                  type="button"
+                <IconButton
+                  variant="ghost"
+                  size="sm"
                   onClick={() => removeRow(row.id)}
-                  className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors disabled:opacity-50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                  className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] disabled:opacity-50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                   aria-label={`Remove env override ${row.key || 'entry'}`}
                   disabled={disabled}
                 >
                   <X size={12} />
-                </button>
+                </IconButton>
               </div>
               {isDuplicate && (
                 <p
@@ -3197,14 +3179,14 @@ function EnvironmentOverridesEditor({
         })
       )}
       {!disabled && (
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           data-testid="profile-env-add"
           onClick={addRow}
-          className="text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline"
+          className="text-[length:var(--type-caption-size)]"
         >
           + Add override
-        </button>
+        </Button>
       )}
     </div>
   )

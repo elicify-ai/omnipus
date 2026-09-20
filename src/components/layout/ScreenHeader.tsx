@@ -1,4 +1,5 @@
 import { List } from '@phosphor-icons/react'
+import { IconButton } from '@/components/ui/icon-button'
 import { useSidebarStore } from '@/store/sidebar'
 
 interface ScreenHeaderProps {
@@ -30,16 +31,17 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
       className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
     >
       {/* Hamburger — sidebar toggle (full chrome-row height for Fitts / AA) */}
-      <button tabIndex={0}
+      <IconButton
         id="sidebar-hamburger"
         type="button"
+        variant="ghost"
         onClick={toggle}
         aria-label="Toggle navigation sidebar"
         aria-expanded={isOpen}
-        className="flex items-center justify-center h-chrome-header min-h-chrome-header w-10 -ml-[var(--space-2)] rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+        className="h-chrome-header min-h-chrome-header w-10 -ml-[var(--space-2)] rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
       >
         <List size={20} />
-      </button>
+      </IconButton>
 
       {/* Screen title */}
       <h2 className="flex-1 min-w-0 font-headline font-semibold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">

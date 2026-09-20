@@ -44,6 +44,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import { collectionPathToWorkspacePath, libraryNoteHref } from './KnowledgeBacklinks'
@@ -117,15 +118,14 @@ export function KnowledgeViewsList({
           }
           testId="knowledge-views-error-banner"
         />
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="outline"
           onClick={() => void viewsQuery.refetch()}
           data-testid="knowledge-views-retry"
-          className="self-start rounded border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          className="h-auto self-start rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)]"
         >
           Try again
-        </button>
+        </Button>
       </div>
     )
   }
@@ -151,18 +151,17 @@ export function KnowledgeViewsList({
           const unservable = v.unservable === true
           return (
             <li key={v.name}>
-              <button
-                type="button"
-                tabIndex={0}
+              <Button
+                variant="ghost"
                 disabled={unservable}
                 aria-disabled={unservable || undefined}
                 data-testid="knowledge-views-item"
                 data-view={v.name}
                 onClick={() => setOpenView({ name: v.name, label: v.label })}
                 className={cn(
-                  'flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
+                  'h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] disabled:opacity-60',
                   unservable
-                    ? 'cursor-default opacity-60'
+                    ? 'cursor-default hover:bg-transparent'
                     : 'hover:bg-[var(--color-surface-2)]',
                 )}
               >
@@ -189,7 +188,7 @@ export function KnowledgeViewsList({
                     {v.unservable_reason ?? "This view can't be served."}
                   </span>
                 )}
-              </button>
+              </Button>
             </li>
           )
         })}

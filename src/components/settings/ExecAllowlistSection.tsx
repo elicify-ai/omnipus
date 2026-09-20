@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Terminal, Plus, Trash } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { fetchExecAllowlist, updateExecAllowlist } from '@/lib/api'
@@ -153,14 +154,16 @@ export function ExecAllowlistSection(): React.ReactElement {
                 >
                   {pattern}
                 </Badge>
-                <button tabIndex={0}
+                <IconButton
+                  variant="ghost"
+                  size="sm"
                   type="button"
                   aria-label={`Remove pattern ${pattern}`}
                   onClick={() => handleRemove(pattern)}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                 >
                   <Trash size={12} />
-                </button>
+                </IconButton>
               </div>
             ))}
           </div>

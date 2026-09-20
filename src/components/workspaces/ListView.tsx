@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { PRIORITY_BADGE } from './TaskCard'
 import { TaskActionButton } from './TaskActionButton'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
@@ -356,14 +357,11 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          // tabIndex={0}: repo WebKit-tabbability convention (Safari only Tabs
-          // to elements with an explicit tabindex). See tabindex-convention.test.ts.
-          tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           aria-label={`${label} column — ${affordance}`}
           className={cn(
-            'flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider transition-colors',
+            'h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider hover:bg-transparent',
             isSorted || isFiltered
               ? 'text-[var(--color-secondary)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -376,7 +374,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
               legible (an opacity-50 caret on the muted header colour was almost
               invisible). */}
           <CaretDown size={10} weight="bold" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align === 'right' ? 'end' : 'start'} className="w-48">
         {sort != null && (
@@ -453,11 +451,8 @@ function TaskRow({
         <span className={cn('rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold', badge.className)}>{badge.label}</span>
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
-        <button
-          // tabIndex={0}: repo WebKit-tabbability convention (Safari only Tabs
-          // to elements with an explicit tabindex). See tabindex-convention.test.ts.
-          tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onClick={(e) => {
             // The <tr> also has onClick — stop the button's click bubbling so it
             // doesn't fire onClick twice. A native <button> already activates on
@@ -477,10 +472,10 @@ function TaskRow({
           // instead of one that grows to fit the very content it's meant to
           // truncate.
           title={task.title}
-          className="block w-full truncate text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
+          className="h-auto w-full min-w-0 justify-start truncate p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {task.title}
-        </button>
+        </Button>
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"

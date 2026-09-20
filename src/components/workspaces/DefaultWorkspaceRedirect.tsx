@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { Button } from '@/components/ui/button'
 import type { WorkspaceTab } from './WorkspaceTabBar'
 
 interface DefaultWorkspaceRedirectProps {
@@ -62,18 +63,18 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           Could not load workspaces. Check your connection, then retry.
         </p>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           data-testid="workspace-redirect-retry"
           onClick={() => void refetch()}
           disabled={isFetching}
           aria-label="Retry loading workspaces"
-          className="inline-flex items-center gap-[var(--space-1)] rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium transition-colors disabled:opacity-50"
-          style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
+          className="gap-[var(--space-1)] border-[var(--color-accent)] text-[var(--color-accent)] hover:bg-transparent"
         >
           <ArrowClockwise size={14} className={isFetching ? 'animate-spin' : undefined} />
           {isFetching ? 'Retrying…' : 'Retry'}
-        </button>
+        </Button>
       </div>
     )
   }

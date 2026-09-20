@@ -7,6 +7,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/shared/ListStates'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore, type NotifItem } from '@/store/notifications'
@@ -94,13 +95,14 @@ export function NotificationPanel() {
             Notifications
           </SheetTitle>
           {unreadCount > 0 && (
-            <button tabIndex={0}
+            <Button
               type="button"
+              variant="link"
               onClick={handleMarkAllRead}
-              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
+              className="text-[length:var(--type-utility-xs-size)]"
             >
               Mark all read
-            </button>
+            </Button>
           )}
         </SheetHeader>
 
@@ -110,10 +112,11 @@ export function NotificationPanel() {
           <ul className="divide-y divide-[var(--color-border)]">
             {items.map((item) => (
               <li key={item.id}>
-                <button tabIndex={0}
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => handleClick(item)}
-                  className={`flex w-full items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2-5)] text-left transition-colors hover:bg-[var(--color-surface-2)] ${
+                  className={`h-auto w-full items-start justify-start gap-[var(--space-2)] whitespace-normal rounded-none px-[var(--space-3)] py-[var(--space-2-5)] text-left font-[var(--font-weight-regular)] transition-colors hover:bg-[var(--color-surface-2)] ${
                     item.read ? '' : 'bg-[var(--color-surface-2)]'
                   }`}
                 >
@@ -151,7 +154,7 @@ export function NotificationPanel() {
                       </p>
                     )}
                   </div>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

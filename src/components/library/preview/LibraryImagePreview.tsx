@@ -20,6 +20,7 @@ import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
 import { libraryDownloadUrl } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
+import { Button } from '@/components/ui/button'
 
 interface LibraryImagePreviewProps {
   workspaceId: string
@@ -67,18 +68,17 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
             “{entry.name}” could not be loaded. It may have been deleted or moved since this list
             was read, or your session may have expired.
           </span>
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
+            variant="outline"
             onClick={() => {
               setFailed(false)
               setAttempt((n) => n + 1)
             }}
             data-testid="library-image-retry"
-            className="inline-flex items-center gap-[var(--space-1)] rounded border border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
+            className="h-auto gap-[var(--space-1)] rounded border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
           >
             <ArrowClockwise size={12} /> Try again
-          </button>
+          </Button>
         </div>
       </div>
     )

@@ -30,6 +30,7 @@ import {
   UnresolvedLink,
 } from '../knowledgeMarkdown'
 import type { KbLinkResolution } from '../knowledgeMarkdown'
+import { Button } from '@/components/ui/button'
 
 /**
  * What a view can offer a cell's wikilink tokens. Mirrors
@@ -120,17 +121,16 @@ function CellWikilink({
   }
 
   return (
-    <button
-      type="button"
-      tabIndex={0}
+    <Button
+      variant="link"
       data-testid="viewpart-cell-link"
       data-kb-state={verified ? 'resolved' : 'unknown'}
-      className={`inline text-left align-baseline ${className}`}
+      className={`inline h-auto rounded-none p-0 align-baseline text-[length:inherit] font-[var(--font-weight-regular)] text-left ${verified ? '' : 'hover:no-underline'} ${className}`}
       onClick={handleClick}
     >
       {text}
       {srUnverified}
-    </button>
+    </Button>
   )
 }
 

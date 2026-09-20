@@ -28,6 +28,8 @@ import {
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter, UnitValue } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
 import { EditableCell, canEditCell, type RecordEditContext } from './RecordFieldEditor'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 /** The row-level click target every openable part shares: mouse convenience
  *  on the row/card itself, plus one real, keyboard-reachable button that is
@@ -48,19 +50,18 @@ function RowOpenButton({
   className: string
 }) {
   return (
-    <button
-      type="button"
-      tabIndex={0}
+    <Button
+      variant="ghost"
       onClick={(event) => {
         event.stopPropagation()
         onOpen()
       }}
       aria-label={`Open ${rowTitle}`}
       data-testid="viewpart-row-open"
-      className={className}
+      className={cn('h-auto min-w-0 rounded-none p-0 font-[var(--font-weight-regular)] text-[length:inherit] hover:bg-transparent', className)}
     >
       {children}
-    </button>
+    </Button>
   )
 }
 

@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import type { ToolCall } from '@/lib/api'
 import type { MarshalErrorResult } from '@/lib/ws'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
@@ -137,32 +137,18 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
             aria-expanded entirely (rather than leaving it stuck at `false`,
             which would falsely announce "collapsible, currently collapsed"
             for a row that can never actually expand yet). */}
-        <button tabIndex={0}
-          type="button"
-          onClick={() => !isRunning && setExpanded((e) => !e)}
-          disabled={isRunning}
-          className={cn(
-            'flex flex-1 min-w-0 items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
-            !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
-            isRunning ? 'cursor-default' : undefined
-          )}
-          aria-expanded={!isRunning ? expanded : undefined}
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={!isRunning}
+          data-testid="tool-call-toggle"
         >
           {config.indicator}
           <span className="text-[var(--color-secondary)] font-medium">
             {humanizeToolName(toolCall.tool)}
           </span>
           <span className={cn('text-[var(--color-muted)]')}>{config.label}</span>
-          {/* Caret lives inside the toggle button (not a split-out sibling
-              control) — there is no other independently-clickable action on
-              this row to justify splitting the row, so the whole row stays
-              one click target (mirrors BashOutput.tsx). */}
-          {!isRunning && (
-            <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-            </span>
-          )}
-        </button>
+        </DisclosureRow>
       </div>
 
       {/* Expanded detail — indented quote-block: a thin left accent line

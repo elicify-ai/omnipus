@@ -16,6 +16,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -368,15 +370,16 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
                 ))}
               </SelectContent>
             </Select>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
+              variant="ghost"
+              size="sm"
               onClick={() => removeFallback(idx)}
-              className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] p-[var(--space-1)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+              className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
               aria-label={`Remove fallback ${idx + 1}`}
               data-testid={`wizard-fallback-remove-${idx}`}
             >
               <X size={12} />
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>
@@ -554,39 +557,43 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
       {/* CLI chooser — only when the roster did NOT pre-lock one. */}
       {!lockedCli && (
         <div className="space-y-[var(--space-2)]">
-          <label className="text-[length:var(--type-body-compact-size)] font-medium">CLI runtime</label>
-          <div className="flex gap-[var(--space-2)] flex-wrap" data-testid="wizard-cli-chooser">
+          <label id="wizard-cli-chooser-label" className="text-[length:var(--type-body-compact-size)] font-medium">CLI runtime</label>
+          <SegmentedControl
+            aria-labelledby="wizard-cli-chooser-label"
+            value={payload.cli ?? ''}
+            onValueChange={(cli) => {
+              // Switching CLI invalidates any verdict validated
+              // against the previous CLI at this path. Clear both the
+              // local hook (for THIS mount's hint) and the payload
+              // field directly (the result-only sync effect above
+              // deliberately does not clear on idle — see its
+              // comment — so this explicit clear is what actually
+              // lifts a stale block, FR-019).
+              cliValidation.reset()
+              setField('executor_cli_validation_reason', undefined)
+              setField('cli', cli as WizardCli)
+            }}
+            className="flex-wrap gap-[var(--space-2)] border-transparent bg-transparent p-0"
+            data-testid="wizard-cli-chooser"
+          >
             {(SUPPORTED_CLIS as readonly WizardCli[]).map((cli) => {
               const selected = payload.cli === cli
               return (
-                <button tabIndex={0}
+                <SegmentedControlItem
                   key={cli}
-                  type="button"
-                  onClick={() => {
-                    // Switching CLI invalidates any verdict validated
-                    // against the previous CLI at this path. Clear both the
-                    // local hook (for THIS mount's hint) and the payload
-                    // field directly (the result-only sync effect above
-                    // deliberately does not clear on idle — see its
-                    // comment — so this explicit clear is what actually
-                    // lifts a stale block, FR-019).
-                    cliValidation.reset()
-                    setField('executor_cli_validation_reason', undefined)
-                    setField('cli', cli)
-                  }}
+                  value={cli}
                   className={
                     selected
-                      ? 'px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-utility-xs-size)] font-medium border bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
-                      : 'px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-utility-xs-size)] font-medium border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors'
+                      ? 'h-auto min-w-0 rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium shadow-none bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/20 hover:text-[var(--color-accent)]'
+                      : 'h-auto min-w-0 rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium shadow-none border-[var(--color-border)] bg-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
                   }
                   data-testid={`wizard-cli-${cli}`}
-                  aria-pressed={selected}
                 >
                   {CLI_LABEL[cli]}
-                </button>
+                </SegmentedControlItem>
               )
             })}
-          </div>
+          </SegmentedControl>
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             Selects the external runner that will execute this agent.
           </p>
@@ -631,14 +638,15 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
       <div className="space-y-[var(--space-2)]" data-testid="wizard-env-overrides">
         <div className="flex items-center justify-between">
           <label className="text-[length:var(--type-body-compact-size)] font-medium">Environment overrides</label>
-          <button tabIndex={0}
+          <Button
             type="button"
+            variant="link"
             onClick={addEnvRow}
-            className="text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline"
+            className="text-[length:var(--type-caption-size)]"
             data-testid="wizard-env-overrides-add"
           >
             + Add env var
-          </button>
+          </Button>
         </div>
         {envRows.length === 0 && (
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
@@ -669,14 +677,15 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
                     aria-label="Environment variable value"
                     data-testid={`wizard-env-value-${row.id}`}
                   />
-                  <button tabIndex={0}
-                    type="button"
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
                     onClick={() => removeEnvRow(row.id)}
-                    className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] text-[length:var(--type-utility-xs-size)] px-[var(--space-2)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                    className="h-auto w-auto px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                     aria-label={`Remove ${row.key || 'env var'}`}
                   >
                     ×
-                  </button>
+                  </IconButton>
                 </div>
                 {isDuplicate && (
                   <p

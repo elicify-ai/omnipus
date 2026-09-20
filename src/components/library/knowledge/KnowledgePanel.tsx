@@ -61,6 +61,7 @@ import { cn } from '@/lib/utils'
 
 import { KnowledgeEmptyState, type KnowledgeFirstRunState } from './KnowledgeEmptyState'
 import { KnowledgeViewsList, type LoadCollectionViewsFn } from './KnowledgeViewsList'
+import { Button } from '@/components/ui/button'
 
 /** Last path segment of a workspace-relative folder path; '' for the root. */
 function folderNameOf(rootPath: string): string {
@@ -284,15 +285,14 @@ export function KnowledgePanel({
             accessible name on one screen are ambiguous to anyone navigating by
             name — a screen-reader user, or a test. This one names the thing it
             re-does. */}
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="outline"
           data-testid="knowledge-panel-retry"
           onClick={() => void query.refetch()}
-          className="shrink-0 rounded-md border border-[var(--color-error)]/50 px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-error)] transition-colors hover:bg-[var(--color-error)]/15"
+          className="h-auto shrink-0 rounded-md border-[var(--color-error)]/50 px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-error)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
         >
           Check again
-        </button>
+        </Button>
       </div>
     )
   }

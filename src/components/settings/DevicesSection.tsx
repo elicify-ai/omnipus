@@ -27,14 +27,15 @@ function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
           <DeviceMobile size={15} className="text-[var(--color-accent)] shrink-0" />
           <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Pairing a device</p>
         </div>
-        <button tabIndex={0}
+        <Button
+          variant="ghost"
           type="button"
           onClick={onClose}
-          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+          className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           aria-label="Close pairing instructions"
         >
           Close
-        </button>
+        </Button>
       </div>
       <ol className="space-y-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] list-decimal list-inside">
         <li>Open the Omnipus app on the device you want to pair.</li>

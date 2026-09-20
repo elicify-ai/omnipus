@@ -21,6 +21,7 @@ import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListSt
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
@@ -270,14 +271,16 @@ export function SkillsScreen() {
                     </div>
                   </div>
                   {skill.source !== 'builtin' && (
-                    <button tabIndex={0}
+                    <IconButton
                       type="button"
+                      size="sm"
+                      variant="ghost"
                       onClick={() => setConfirmDeleteSkill(skill.name)}
-                      className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-[var(--space-1)] rounded shrink-0"
+                      className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] transition-colors shrink-0"
                       aria-label={`Remove ${skill.name}`}
                     >
                       <Trash size={14} />
-                    </button>
+                    </IconButton>
                   )}
                 </div>
               ))}
@@ -333,11 +336,13 @@ export function SkillsScreen() {
                           data-testid={`toggle-enabled-${server.id}`}
                         />
                         {/* Test button (G7) */}
-                        <button tabIndex={0}
+                        <IconButton
                           type="button"
+                          size="sm"
+                          variant="ghost"
                           onClick={() => handleTestMcp(server.id)}
                           disabled={testingMcp === server.id}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors p-[var(--space-1)] rounded disabled:opacity-50"
+                          className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)] transition-colors disabled:opacity-50"
                           aria-label={`Test ${server.name}`}
                           data-testid={`test-mcp-${server.id}`}
                         >
@@ -345,35 +350,40 @@ export function SkillsScreen() {
                             ? <CircleNotch size={14} className="animate-spin" />
                             : <PlugsConnected size={14} />
                           }
-                        </button>
+                        </IconButton>
                         {/* Edit button (G8) */}
-                        <button tabIndex={0}
+                        <IconButton
                           type="button"
+                          size="sm"
+                          variant="ghost"
                           onClick={() => { setMcpEditTarget(server); setMcpModalOpen(true) }}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-[var(--space-1)] rounded"
+                          className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors"
                           aria-label={`Edit ${server.name}`}
                           data-testid={`edit-mcp-${server.id}`}
                         >
                           <PencilSimple size={14} />
-                        </button>
-                        <button tabIndex={0}
+                        </IconButton>
+                        <Button
                           type="button"
+                          variant="ghost"
                           onClick={() => setExpandedMcp(isExpanded ? null : server.id)}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-[var(--space-1)] rounded"
+                          className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors"
                           aria-expanded={isExpanded}
                           aria-controls={isExpanded ? `mcp-tools-${server.id}` : undefined}
                           aria-label={`${isExpanded ? 'Hide' : 'Show'} tools for ${server.name}`}
                         >
                           {isExpanded ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                        </button>
-                        <button tabIndex={0}
+                        </Button>
+                        <IconButton
                           type="button"
+                          size="sm"
+                          variant="ghost"
                           onClick={() => setConfirmDeleteMcp(server.id)}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-[var(--space-1)] rounded"
+                          className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] transition-colors"
                           aria-label={`Remove ${server.name}`}
                         >
                           <Trash size={14} />
-                        </button>
+                        </IconButton>
                       </div>
                     </div>
                     {isExpanded && (
@@ -584,10 +594,11 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                 data-testid={`tool-category-${cat}`}
               >
                 {/* Category header row — clickable to expand/collapse */}
-                <button tabIndex={0}
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => toggleCategory(cat)}
-                  className="flex items-center gap-[var(--space-2-5)] w-full px-[var(--space-3)] py-[var(--space-2-5)] text-left hover:bg-[var(--color-surface-2)] transition-colors"
+                  className="h-auto flex items-center justify-start gap-[var(--space-2-5)] w-full rounded-none px-[var(--space-3)] py-[var(--space-2-5)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)] transition-colors"
                   aria-expanded={isExpanded}
                   aria-controls={isExpanded ? `tool-category-tools-${cat}` : undefined}
                   data-testid={`tool-category-toggle-${cat}`}
@@ -609,7 +620,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                       : <CaretRight size={13} className="text-[var(--color-muted)]" />
                     }
                   </div>
-                </button>
+                </Button>
                 {/* Expanded tool list */}
                 {isExpanded && (
                   <div

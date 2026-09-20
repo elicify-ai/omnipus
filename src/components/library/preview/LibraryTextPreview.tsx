@@ -17,6 +17,8 @@ import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { cn } from '@/lib/utils'
 import { PreviewHeaderPortal } from './previewHeaderSlot'
 import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { IconButton } from '@/components/ui/icon-button'
 import { useLibraryFileEditor } from './useLibraryFileEditor'
 import { LibraryCodeEditor } from './LibraryCodeEditor'
 import type { LibraryEntry } from '@/lib/api'
@@ -66,38 +68,35 @@ export function LibraryTextPreview({
           with aria-pressed rather than a single toggle, so a screen reader
           hears which of view/edit is current instead of inferring it. */}
       <PreviewHeaderPortal>
-        <div className="flex items-center gap-[var(--space-0-5)]" role="group" aria-label="View mode">
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => setMode('view')}
-            aria-pressed={mode === 'view'}
+        <SegmentedControl
+          aria-label="View mode"
+          value={mode}
+          onValueChange={(v) => setMode(v as 'view' | 'edit')}
+          className="gap-0 p-[var(--space-0-5)]"
+        >
+          <SegmentedControlItem
+            value="view"
             aria-label="View"
             title="View"
             data-testid="library-preview-mode-view"
-            className={cn(LIBRARY_ICON_BTN, mode === 'view' ? 'text-[var(--color-accent)]' : undefined)}
+            className="h-7 w-7 p-0"
           >
             <Eye size={15} weight={mode === 'view' ? 'fill' : 'regular'} />
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => setMode('edit')}
-            aria-pressed={mode === 'edit'}
+          </SegmentedControlItem>
+          <SegmentedControlItem
+            value="edit"
             aria-label="Edit"
             title="Edit"
             data-testid="library-preview-mode-edit"
-            className={cn(LIBRARY_ICON_BTN, mode === 'edit' ? 'text-[var(--color-accent)]' : undefined)}
+            className="h-7 w-7 p-0"
           >
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
-          </button>
-        </div>
+          </SegmentedControlItem>
+        </SegmentedControl>
         {/* Kept: it is the only feedback that a save happened at all, and it
             renders nothing while idle, so it costs no width in the common case. */}
         <AutoSaveIndicator status={status} error={error} lastSavedAt={lastSavedAt} />
-        <button
-          type="button"
-          tabIndex={0}
+        <IconButton
           onClick={save}
           disabled={!isDirty || status === 'saving'}
           aria-label={status === 'saving' ? 'Saving' : 'Save'}
@@ -106,7 +105,7 @@ export function LibraryTextPreview({
           className={cn(LIBRARY_ICON_BTN, isDirty && status !== 'saving' ? 'text-[var(--color-accent)]' : undefined)}
         >
           <FloppyDisk size={15} weight={isDirty ? 'fill' : 'regular'} />
-        </button>
+        </IconButton>
       </PreviewHeaderPortal>
 
       <div className="flex-1 min-h-0 overflow-auto">

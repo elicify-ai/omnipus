@@ -18,6 +18,7 @@
 // this kind-agnostic chrome.
 
 import { SpinnerGap, Warning } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
 
 export function EmbedMountPlaceholder() {
   return (
@@ -61,14 +62,13 @@ export function EmbedMountError({ message, onRetry }: { message: string; onRetry
       <Warning size={16} />
       <span>{message}</span>
       {onRetry && (
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="link"
           onClick={onRetry}
-          className="text-[length:var(--type-caption-size)] underline underline-offset-2"
+          className="text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] underline underline-offset-2 hover:text-[var(--color-warning)]"
         >
           Retry
-        </button>
+        </Button>
       )}
     </div>
   )

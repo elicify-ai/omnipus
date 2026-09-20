@@ -15,7 +15,7 @@
 // than kept as dead code.
 
 import React from 'react'
-import { CaretDown, CaretUp } from '@phosphor-icons/react'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { ToolCallBadge } from './ToolCallBadge'
 import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
@@ -111,13 +111,12 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
     // the row is transparent on the thread, matching ToolCallBadge/GenericToolCall.
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Collapsed header — FR-H-008 */}
-      <button tabIndex={0}
-        type="button"
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={toggle}
+        expandable
         data-testid="subagent-collapsed"
-        onClick={toggle}
-        aria-expanded={expanded}
         aria-label={`Subagent: ${label}, ${stepCountText(stepCount)}, status ${span.status}`}
-        className="flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
       >
         {/* Status indicator — dot for terminal states, spinner while running */}
         {config.indicator}
@@ -154,12 +153,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
             {formatDuration(terminal.durationMs)}
           </span>
         )}
-
-        {/* Caret */}
-        <span className="ml-auto text-[var(--color-muted)] shrink-0">
-          {expanded ? <CaretUp size={12} aria-hidden="true" /> : <CaretDown size={12} aria-hidden="true" />}
-        </span>
-      </button>
+      </DisclosureRow>
 
       {/* W3: 3p (external-CLI) delegates are batch — no intermediate output
           while running, only a report on completion. Shown only while

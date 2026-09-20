@@ -6,6 +6,7 @@ import { executePlan, stopPlan, restartPlan, isApiError, parsePlanApproveTaskErr
 import type { Plan } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { cn } from '@/lib/utils'
+import { IconButton } from '@/components/ui/icon-button'
 
 export type PlanAction = 'execute' | 'stop' | 'play'
 
@@ -177,13 +178,14 @@ export function PlanActionButton({ plan, className }: PlanActionButtonProps) {
       onKeyDown={(e) => e.stopPropagation()}
       className="inline-flex"
     >
-      <button tabIndex={0}
-        type="button"
+      <IconButton
         aria-label={`${copy.label} plan ${plan.title}`}
         onClick={() => setConfirmOpen(true)}
         disabled={pending}
+        variant="ghost"
+        size="sm"
         className={cn(
-          'inline-flex items-center justify-center rounded p-[var(--space-1)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px] disabled:opacity-50',
+          'rounded pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]',
           action === 'stop'
             ? 'text-[var(--color-muted)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]'
             : 'text-[var(--color-muted)] hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)]',
@@ -191,7 +193,7 @@ export function PlanActionButton({ plan, className }: PlanActionButtonProps) {
         )}
       >
         <Icon size={13} weight="fill" />
-      </button>
+      </IconButton>
 
       <ConfirmActionModal
         open={confirmOpen}

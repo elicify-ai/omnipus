@@ -122,6 +122,9 @@ import { cn } from '@/lib/utils'
 import { useUiStore } from '@/store/ui'
 import { PreviewHeaderPortal } from './previewHeaderSlot'
 import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { IconButton } from '@/components/ui/icon-button'
+import { Button } from '@/components/ui/button'
 import { setLibraryEditorDirty } from './unsavedGuard'
 import { getLibraryErrorMessage } from '../libraryErrorMessage'
 import { LibrarySignaturePad, SIGNATURE_PAD_WIDTH, SIGNATURE_PAD_HEIGHT } from './LibrarySignaturePad'
@@ -1736,37 +1739,34 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 `}</style>
 
       <PreviewHeaderPortal>
-        <div className="flex items-center gap-[var(--space-0-5)]" role="group" aria-label="View mode">
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => handleToggleMode('view')}
-            aria-pressed={mode === 'view'}
+        <SegmentedControl
+          aria-label="View mode"
+          value={mode}
+          onValueChange={(v) => handleToggleMode(v as 'view' | 'edit')}
+          className="gap-0 p-[var(--space-0-5)]"
+        >
+          <SegmentedControlItem
+            value="view"
             aria-label="View"
             title="View"
             data-testid="library-pdf-mode-view"
-            className={cn(LIBRARY_ICON_BTN, mode === 'view' ? 'text-[var(--color-accent)]' : undefined)}
+            className="h-7 w-7 p-0"
           >
             <Eye size={15} weight={mode === 'view' ? 'fill' : 'regular'} />
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => handleToggleMode('edit')}
+          </SegmentedControlItem>
+          <SegmentedControlItem
+            value="edit"
             disabled={!canEdit}
-            aria-pressed={mode === 'edit'}
             aria-label="Edit"
             title={canEdit ? 'Fill fields or add a signature' : 'Edit'}
             data-testid="library-pdf-mode-edit"
-            className={cn(LIBRARY_ICON_BTN, mode === 'edit' ? 'text-[var(--color-accent)]' : undefined)}
+            className="h-7 w-7 p-0"
           >
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
-          </button>
-        </div>
+          </SegmentedControlItem>
+        </SegmentedControl>
         <div className="flex items-center gap-[var(--space-0-5)]" role="group" aria-label="Zoom">
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             onClick={() => setZoom((z) => nextPdfZoom(z, 'out'))}
             disabled={zoom <= PDF_ZOOM_STEPS[0]}
             aria-label="Zoom out"
@@ -1775,21 +1775,18 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             className={LIBRARY_ICON_BTN}
           >
             <MagnifyingGlassMinus size={15} />
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
+          </IconButton>
+          <Button
+            variant="ghost"
             onClick={() => setZoom(PDF_ZOOM_DEFAULT)}
             aria-label={`Zoom ${Math.round(zoom * 100)} percent — reset to 100 percent`}
             title="Reset zoom"
             data-testid="library-pdf-zoom-reset"
-            className="rounded px-[var(--space-1)] text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+            className="h-auto rounded px-[var(--space-1)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             {Math.round(zoom * 100)}%
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
+          </Button>
+          <IconButton
             onClick={() => setZoom((z) => nextPdfZoom(z, 'in'))}
             disabled={zoom >= PDF_ZOOM_STEPS[PDF_ZOOM_STEPS.length - 1]}
             aria-label="Zoom in"
@@ -1798,12 +1795,10 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             className={LIBRARY_ICON_BTN}
           >
             <MagnifyingGlassPlus size={15} />
-          </button>
+          </IconButton>
         </div>
         {mode === 'edit' && (
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             onClick={() => {
               // D-63: read the page on screen NOW, not the document's last page.
               const c = containerRef.current
@@ -1817,13 +1812,11 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             className={LIBRARY_ICON_BTN}
           >
             <Signature size={15} />
-          </button>
+          </IconButton>
         )}
         <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={lastSavedAt} />
         {mode === 'edit' && (
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             onClick={() => void handleSave()}
             disabled={!dirty || saveStatus === 'saving'}
             aria-label={saveStatus === 'saving' ? 'Saving' : 'Save'}
@@ -1832,7 +1825,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             className={cn(LIBRARY_ICON_BTN, dirty && saveStatus !== 'saving' ? 'text-[var(--color-accent)]' : undefined)}
           >
             <FloppyDisk size={15} weight={dirty ? 'fill' : 'regular'} />
-          </button>
+          </IconButton>
         )}
       </PreviewHeaderPortal>
 
@@ -1877,17 +1870,16 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         >
           <span>Signatures placed (not yet saved):</span>
           {placedSignatures.map((sig) => (
-            <button
+            <Button
               key={sig.key}
-              type="button"
-              tabIndex={0}
+              variant="outline"
               onClick={() => handleRemoveSignature(sig.key)}
-              className="inline-flex items-center gap-[var(--space-1)] rounded border border-[var(--color-border)] px-[var(--space-1)] py-[var(--space-0-5)] hover:bg-[var(--color-surface-2)]"
+              className="h-auto gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-0-5)] font-[var(--font-weight-regular)] text-[length:inherit]"
               title={`Remove the signature on page ${sig.pageNumber}`}
               data-testid={`library-pdf-signature-chip-${sig.key}`}
             >
               Page {sig.pageNumber} <X size={10} />
-            </button>
+            </Button>
           ))}
         </div>
       )}
@@ -1932,15 +1924,14 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
           >
             <p className="font-medium">This PDF could not be displayed.</p>
             <p className="mt-[var(--space-2)] text-[var(--color-error)]">{error}</p>
-            <button
-              type="button"
-              tabIndex={0}
+            <Button
+              variant="outline"
               onClick={handleRetry}
               data-testid="library-pdf-retry"
-              className="mt-[var(--space-2-5)] rounded border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+              className="mt-[var(--space-2-5)] h-auto rounded px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)]"
             >
               Try again
-            </button>
+            </Button>
           </div>
         </div>
       )}

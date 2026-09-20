@@ -16,6 +16,7 @@ import { fetchSubtasks, tasksQueryKeys } from '@/lib/api'
 import type { Task } from '@/lib/api'
 import { STATUS_COLORS as STATUS_DOT, STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 interface TaskChildrenProps {
   parentTaskId: string
@@ -51,17 +52,17 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
   if (isError) {
     return (
       <div className="mt-[var(--space-2)] pl-[var(--space-2)] border-l-2 border-[var(--color-error)]/40">
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onClick={(e) => {
             e.stopPropagation()
             refetch()
           }}
-          className="flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] transition-colors"
+          className="h-auto gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-error)]"
         >
           <ArrowsClockwise size={11} />
           Couldn&apos;t load subtasks — Retry
-        </button>
+        </Button>
       </div>
     )
   }
@@ -69,9 +70,9 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
   if (children.length === 0) return null
 
   const resolvedClassName = cn(
-              'w-full flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-left',
+              'h-auto w-full items-center justify-start gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-left',
               'text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-              'hover:bg-[var(--color-surface-2)] transition-colors',
+              'hover:bg-[var(--color-surface-2)]',
             )
   return (
     // A native <ul>/<li> pair gives the list/listitem semantics for free —
@@ -84,8 +85,8 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
     <ul className="mt-[var(--space-2)] list-none space-y-[var(--space-1)] pl-[var(--space-2)] border-l-2 border-[var(--color-border)]" aria-label="Subtasks">
       {children.map((child) => (
         <li key={child.id}>
-          <button tabIndex={0}
-            type="button"
+          <Button
+            variant="ghost"
             onClick={(e) => {
               e.stopPropagation()
               onChildClick(child)
@@ -109,7 +110,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
             >
               {STATUS_LABEL[child.status]}
             </span>
-          </button>
+          </Button>
         </li>
       ))}
     </ul>

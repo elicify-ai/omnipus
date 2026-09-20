@@ -8,8 +8,10 @@
 
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { CaretDown, CaretUp, Camera, Broadcast } from '@phosphor-icons/react'
+import { Camera, Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -174,16 +176,11 @@ export function BrowserToolBlock({
           the expand/collapse toggle is its own button so "Watch live" can be a
           separate, independently clickable sibling rather than nested inside it. */}
       <div className="flex w-full items-center gap-[var(--space-2)]">
-        <button tabIndex={0}
-          type="button"
-          onClick={() => hasDetail && setExpanded((e) => !e)}
-          className={cn(
-            'flex flex-1 min-w-0 items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
-            hasDetail ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
-            !hasDetail ? 'cursor-default' : undefined
-          )}
-          aria-expanded={hasDetail ? expanded : undefined}
-          disabled={!hasDetail}
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={hasDetail}
+          data-testid="browser-tool-toggle"
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{toolName}</span>
@@ -193,28 +190,23 @@ export function BrowserToolBlock({
           <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
-        </button>
+        </DisclosureRow>
 
         {/* "Watch live" is shown on every browser tool-call row, not only while
             the call is running: browser tools complete in well under a second,
             but the agent's browser session persists afterwards, so the viewer
             can open the live panel to watch/continue at any point. */}
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="link"
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
+          className="rounded-none shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)]"
         >
           <Broadcast size={13} />
           <span>Watch live</span>
-        </button>
-
-        {hasDetail && (
-          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-          </span>
-        )}
+        </Button>
       </div>
 
       {/* Detail panel — indented left-accent block instead of the old

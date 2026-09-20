@@ -12,6 +12,7 @@
 
 import * as React from 'react'
 import { Plug } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
 
 /** The wire protocols a custom endpoint may declare (generated enum subset). */
 export const CUSTOM_ENDPOINT_PROTOCOLS = ['openai-compatible', 'anthropic'] as const
@@ -137,26 +138,25 @@ export function CustomEndpointPanel({
       )}
 
       <div className="flex items-center gap-[var(--space-2)]">
-        <button
+        <Button
           type="submit"
-          tabIndex={0}
+          variant="default"
           data-testid="custom-endpoint-submit"
           disabled={!complete || submitting}
-          className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] disabled:opacity-50"
-          style={{ borderColor: 'var(--color-border)' }}
+          className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
         >
           Add endpoint
-        </button>
+        </Button>
         {onCancel && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             data-testid="custom-endpoint-cancel"
-            tabIndex={0}
             onClick={onCancel}
-            className="min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
+            className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
-          </button>
+          </Button>
         )}
       </div>
     </form>

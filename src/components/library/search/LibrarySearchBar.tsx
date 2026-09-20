@@ -60,6 +60,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   Dialog,
   DialogContent,
@@ -280,12 +282,11 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
   const coverage = vaultCoverage(query, hit)
   return (
     <li>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-note-hit"
-        className="flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
         <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <FileText size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
@@ -311,7 +312,7 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
             No excerpt available for this note.
           </span>
         ) : null}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -319,12 +320,11 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
 function AttachmentRow({ hit, onOpen }: { hit: VaultSearchAttachmentHit; onOpen: () => void }) {
   return (
     <li>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-attachment-hit"
-        className="flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
         <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <Paperclip size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
@@ -334,7 +334,7 @@ function AttachmentRow({ hit, onOpen }: { hit: VaultSearchAttachmentHit; onOpen:
         {/* FR-039a: an attachment's contents are never read, by design — the
             match is on its filename alone, so there is never an excerpt to
             show and never a "could not be read" implication either. */}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -379,12 +379,11 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
   const withheldCount = hit.cells.length - shownCells.length
   return (
     <li className="flex flex-col">
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-record-hit"
-        className="flex w-full flex-col items-start gap-[var(--space-1)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full flex-col items-start gap-[var(--space-1)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
         <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <IdentificationCard size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
@@ -409,18 +408,17 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
             ))}
           </span>
         )}
-      </button>
+      </Button>
       {(withheldCount > 0 || expanded) && (
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="ghost"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
           data-testid="vault-search-record-cells-more"
-          className="self-start rounded px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] leading-4 text-[var(--color-muted)] underline-offset-2 hover:underline"
+          className="h-auto self-start rounded px-[var(--space-2)] pb-[var(--space-1)] pt-0 text-[length:var(--type-caption-size)] leading-4 font-[var(--font-weight-regular)] text-[var(--color-muted)] underline-offset-2 hover:bg-transparent hover:underline"
         >
           {expanded ? 'Show fewer properties' : `+${withheldCount} more ${withheldCount === 1 ? 'property' : 'properties'}`}
-        </button>
+        </Button>
       )}
     </li>
   )
@@ -429,12 +427,11 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
 function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void }) {
   return (
     <li>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-view-hit"
-        className="flex w-full items-center gap-[var(--space-1)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full items-center gap-[var(--space-1)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
         <SquaresFour size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
         <span className="flex-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{hit.label}</span>
@@ -448,7 +445,7 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
             {hit.kind}
           </Badge>
         )}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -517,16 +514,16 @@ function FileHitRow({
   const matchCount = hit.match_count
   return (
     <li>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         tabIndex={interactive ? 0 : -1}
         onClick={interactive ? onOpen : undefined}
         disabled={!interactive}
         aria-disabled={!interactive || undefined}
         data-testid={isContent ? 'file-search-content-hit' : 'file-search-name-hit'}
         className={cn(
-          'flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
-          interactive ? 'hover:bg-[var(--color-surface-2)]' : 'cursor-default opacity-70',
+          'h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] disabled:opacity-70',
+          interactive ? 'hover:bg-[var(--color-surface-2)]' : 'cursor-default hover:bg-transparent',
         )}
       >
         <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
@@ -568,7 +565,7 @@ function FileHitRow({
             ))}
           </div>
         )}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -862,16 +859,14 @@ export function LibrarySearchBar({
           className="pl-[var(--space-5)] pr-[var(--space-5)]"
         />
         {text !== '' && (
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             onClick={() => setText('')}
             aria-label="Clear search"
             data-testid="library-search-clear"
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-[var(--space-0-5)] text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
+            className="absolute right-2 top-1/2 h-auto w-auto -translate-y-1/2 rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             <X size={14} aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
       </div>
 
@@ -1244,9 +1239,8 @@ export function LibrarySearchBar({
               {viewResultQuery.data?.source !== undefined ? (
                 <span data-testid="library-search-view-source">
                   Saved view from{' '}
-                  <button
-                    type="button"
-                    tabIndex={0}
+                  <Button
+                    variant="link"
                     data-testid="library-search-view-source-open"
                     onClick={() => {
                       const src = viewResultQuery.data?.source
@@ -1255,10 +1249,10 @@ export function LibrarySearchBar({
                         setOpenView(null)
                       }
                     }}
-                    className="underline underline-offset-2 hover:text-[var(--color-secondary)]"
+                    className="text-[color:inherit] text-[length:inherit] font-[var(--font-weight-regular)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
                   >
                     {viewResultQuery.data.source}
-                  </button>
+                  </Button>
                 </span>
               ) : (
                 'Saved view'

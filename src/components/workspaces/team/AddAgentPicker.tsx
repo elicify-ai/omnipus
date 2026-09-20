@@ -70,7 +70,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
   }, [agents, memberIds, query])
 
   const resolvedClassName = cn(
-                  'flex w-full items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-2)] text-left transition-colors',
+                  'flex h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-none px-[var(--space-2)] py-[var(--space-2)] text-left transition-colors',
                   'hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)]',
                 )
   return (
@@ -131,9 +131,9 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
             </p>
           ) : (
             candidates.map((a) => (
-              <button tabIndex={0}
+              <Button
                 key={a.id}
-                type="button"
+                variant="ghost"
                 data-testid={`team-add-agent-option-${a.id}`}
                 onClick={() => {
                   onAdd(a.id)
@@ -168,7 +168,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                   </span>
                 </div>
                 <Plus size={13} className="shrink-0 text-[var(--color-muted)]" />
-              </button>
+              </Button>
             ))
           )}
         </div>

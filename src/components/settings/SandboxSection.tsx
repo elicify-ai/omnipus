@@ -277,13 +277,14 @@ function Abi4Banner({
         Your Linux kernel uses Landlock v{abiVersion}, which is not yet supported (issue {issueRef}).
         Enforce mode will exit with code 78 at boot. Use &lsquo;permissive&rsquo; or &lsquo;off&rsquo; until Landlock support is upgraded.
       </p>
-      <button tabIndex={0}
+      <Button
+        variant="link"
         type="button"
         onClick={onDismiss}
-        className="shrink-0 text-[length:var(--type-caption-size)] text-yellow-400 underline hover:text-yellow-300 focus:outline-none focus:ring-yellow-400 rounded"
+        className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-caption-size)] text-yellow-400 underline hover:text-yellow-300"
       >
         Dismiss for session
-      </button>
+      </Button>
     </div>
   )
 }
@@ -945,15 +946,16 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
 
         {hasCapabilities && (
           <>
-            <button tabIndex={0}
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => setStatusExpanded((e) => !e)}
-              className="mt-[var(--space-2-5)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              className="mt-[var(--space-2-5)] h-auto w-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               aria-expanded={statusExpanded}
             >
               {statusExpanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
               {statusExpanded ? 'Hide capabilities' : 'Show capabilities'}
-            </button>
+            </Button>
             {statusExpanded && <CapabilitiesPanel data={statusData} />}
           </>
         )}

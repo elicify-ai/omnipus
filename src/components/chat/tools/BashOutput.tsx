@@ -18,8 +18,9 @@
 
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { ArrowsClockwise, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { ArrowsClockwise } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
@@ -138,11 +139,11 @@ function BashOutputBlock({
           the caret lives INSIDE the button and the whole row is one click
           target. */}
       <div className="flex w-full items-center gap-[var(--space-2)]">
-        <button tabIndex={0}
-          type="button"
-          onClick={() => setExpanded((e) => !e)}
-          className="flex flex-1 min-w-0 items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
-          aria-expanded={expanded}
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable
+          data-testid="bash-output-toggle"
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{label}</span>
@@ -150,10 +151,7 @@ function BashOutputBlock({
           <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
-          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-          </span>
-        </button>
+        </DisclosureRow>
       </div>
 
       {/* Output panel — indented left-accent block; the dark terminal panel

@@ -74,6 +74,7 @@ import { useState } from 'react'
 import { Target, CaretRight, CaretDown } from '@phosphor-icons/react'
 import type { GoalStatusFrame } from '@/lib/api/generated/asyncapi-types'
 import { CriteriaBreakdown, type CriteriaBreakdownItem } from '@/components/shared/CriteriaBreakdown'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 
 export interface GoalEchoCardProps {
   /** The goal_status frame describing the active goal's record (condition + accounting + criteria breakdown). */
@@ -115,13 +116,18 @@ function GoalAccordionSection({
   const [open, setOpen] = useState(false)
   return (
     <div className="mt-[var(--space-2)]" data-testid={testId}>
-      <button
-        type="button"
-        tabIndex={0}
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
+      {/* Leading caret + trailing hint is a shape DisclosureRow's own
+          built-in caret (always trailing, no hint slot) cannot express, so
+          the caret is rendered manually as the row's first child
+          (`hideCaret` suppresses DisclosureRow's own trailing one) — still
+          built on DisclosureRow/Button, never a raw <button>. */}
+      <DisclosureRow
+        expanded={open}
+        onExpandedChange={setOpen}
+        expandable
+        hideCaret
         data-testid={`${testId}-trigger`}
-        className="flex w-full items-center gap-[var(--space-1)] text-left text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
+        className="w-full gap-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
       >
         {open ? (
           <CaretDown size={10} className="shrink-0" aria-hidden="true" />
@@ -137,7 +143,7 @@ function GoalAccordionSection({
             — {hint}
           </span>
         )}
-      </button>
+      </DisclosureRow>
       {open && (
         <div className="mt-[var(--space-1)]" data-testid={`${testId}-content`}>
           {children}

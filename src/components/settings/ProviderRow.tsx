@@ -10,7 +10,6 @@ import {
   Globe,
   Question,
   SpinnerGap,
-  ArrowsClockwise,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -416,13 +415,13 @@ export function ProviderRow({
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-[var(--space-2)] flex-wrap">
-            <button
-              tabIndex={0}
+            <Button
+              variant="ghost"
               type="button"
               onClick={() => setExpanded((v) => !v)}
               aria-expanded={expanded}
               aria-controls={`model-limits-${provider.id}`}
-              className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+              className="h-auto w-auto gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)]"
               data-testid={`provider-row-expand-toggle-${provider.id}`}
             >
               <CaretDown
@@ -431,7 +430,7 @@ export function ProviderRow({
                 aria-hidden="true"
               />
               <span data-testid={`provider-row-title-${provider.id}`}>{title}</span>
-            </button>
+            </Button>
             <Badge data-testid={badge.testId} variant={badge.variant} className="gap-[var(--space-1)]">
               {badge.icon}
               {badge.text}
@@ -468,29 +467,27 @@ export function ProviderRow({
 
         <div className="flex items-center gap-[var(--space-2)] shrink-0">
           {onCheckEntitlement && (
-            <button
-              tabIndex={0}
+            <Button
+              variant="ghost"
               type="button"
               onClick={onCheckEntitlement}
-              disabled={checkingEntitlement}
-              className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
+              actionState={checkingEntitlement ? 'pending' : 'idle'}
+              className="h-auto w-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               data-testid={`check-entitlement-btn-${provider.id}`}
             >
-              {checkingEntitlement ? (
-                <ArrowsClockwise size={12} className="animate-spin" />
-              ) : null}
               Check with my account
-            </button>
+            </Button>
           )}
           {onSetAsDefault && (
-            <button tabIndex={0}
+            <Button
+              variant="ghost"
               type="button"
               onClick={onSetAsDefault}
-              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               data-testid={`set-default-btn-${provider.id}`}
             >
               Set as default model…
-            </button>
+            </Button>
           )}
           {signInCapable ? (
             <Button

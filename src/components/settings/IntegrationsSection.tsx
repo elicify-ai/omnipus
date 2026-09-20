@@ -10,6 +10,7 @@ import {
   Star,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -165,14 +166,15 @@ export function IntegrationsSection() {
                   autoComplete="off"
                   data-testid={`key-input-${p.id}`}
                 />
-                <button tabIndex={0}
+                <IconButton
+                  variant="ghost"
                   type="button"
                   onClick={() => setShowKey((prev) => ({ ...prev, [p.id]: !prev[p.id] }))}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                  className="absolute right-2.5 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                   aria-label={showKey[p.id] ? 'Hide API key' : 'Show API key'}
                 >
                   {showKey[p.id] ? <EyeSlash size={14} /> : <Eye size={14} />}
-                </button>
+                </IconButton>
               </div>
               <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
                 Stored encrypted (AES-256-GCM) — saving requires re-typing your password.

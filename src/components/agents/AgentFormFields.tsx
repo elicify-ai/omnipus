@@ -2,6 +2,8 @@ import { Scroll, Microphone, UploadSimple } from '@phosphor-icons/react'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { VoiceProviderSub } from './voice-provider-sub'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
@@ -91,8 +93,9 @@ export function UploadMdButton({
 }) {
   const addToast = useUiStore((s) => s.addToast)
   return (
-    <button tabIndex={0}
+    <Button
       type="button"
+      variant="outline"
       data-testid={testId}
       onClick={() => {
         const input = document.createElement('input')
@@ -122,11 +125,11 @@ export function UploadMdButton({
         }
         input.click()
       }}
-      className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-[var(--space-1)]"
+      className="h-7 gap-[var(--space-1)] rounded px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
     >
       <UploadSimple size={12} />
       Upload .md
-    </button>
+    </Button>
   )
 }
 
@@ -273,12 +276,13 @@ export function AvatarColorPicker({
         const name = AVATAR_COLORS_BY_NAME[color] ?? color
         const isSelected = value === color
         return (
-          <button tabIndex={0}
+          <IconButton
             key={color}
-            type="button"
+            variant="ghost"
+            size="sm"
             data-testid={`${testIdPrefix}-${name}`}
             onClick={() => onChange(color)}
-            className="w-7 h-7 rounded-full transition-transform hover:scale-110"
+            className="h-7 w-7 rounded-full p-0 transition-transform hover:scale-110 hover:bg-transparent"
             style={{
               backgroundColor: color,
               boxShadow: isSelected ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,

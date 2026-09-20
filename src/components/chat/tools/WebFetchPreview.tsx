@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { CaretDown, CaretUp, ArrowSquareOut } from '@phosphor-icons/react'
+import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
@@ -91,16 +92,11 @@ function WebFetchBlock({
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       <div className="flex w-full items-center gap-[var(--space-2)]">
         {/* Header */}
-        <button tabIndex={0}
-          type="button"
-          onClick={() => hasDetail && setExpanded((e) => !e)}
-          className={cn(
-            'flex min-w-0 flex-1 items-center gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
-            hasDetail ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
-            !hasDetail ? 'cursor-default' : undefined
-          )}
-          aria-expanded={hasDetail ? expanded : undefined}
-          disabled={!hasDetail}
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={hasDetail}
+          data-testid="web-fetch-toggle"
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">web_fetch</span>
@@ -110,7 +106,7 @@ function WebFetchBlock({
           <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
-        </button>
+        </DisclosureRow>
         {linkable && (
           <a tabIndex={0}
             href={url}
@@ -122,11 +118,6 @@ function WebFetchBlock({
           >
             <ArrowSquareOut size={12} />
           </a>
-        )}
-        {hasDetail && (
-          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-          </span>
         )}
       </div>
 

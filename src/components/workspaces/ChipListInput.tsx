@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Plus, X } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 
 /**
  * The one add-a-value / removable-chip editor in the workspace forms.
@@ -127,7 +128,7 @@ export function ChipListInput({
   }
 
   const resolvedChipClassName = classes(CHIP_BASE_CLASS, chipClassName)
-  const resolvedChipRemoveClassName = classes('shrink-0', chipRemoveClassName)
+  const resolvedChipRemoveClassName = classes('h-auto w-auto shrink-0 p-0 hover:bg-transparent', chipRemoveClassName)
   return (
     <div className="flex flex-col gap-[var(--space-1)]" data-testid={testId}>
       <div className="flex items-center gap-[var(--space-2)]">
@@ -178,14 +179,15 @@ export function ChipListInput({
                   hover via `title`. A value long enough to truncate is rare at
                   these widths, and the tooltip covers it. */}
               <span className="truncate">{value}</span>
-              <button tabIndex={0}
-                type="button"
+              <IconButton
                 onClick={() => remove(index)}
                 aria-label={`Remove ${noun} ${value}`}
+                variant="ghost"
+                size="sm"
                 className={resolvedChipRemoveClassName}
               >
                 <X size={9} />
-              </button>
+              </IconButton>
             </span>
           ))}
         </div>

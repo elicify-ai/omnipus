@@ -8,6 +8,7 @@ import {
   SheetFooter,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -165,14 +166,15 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
                       className="flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
                     >
                       {agent?.name ?? agentId}
-                      <button tabIndex={0}
-                        type="button"
+                      <IconButton
                         onClick={() => setForm((s) => ({ ...s, core_team: s.core_team.filter((id) => id !== agentId) }))}
                         aria-label={`Remove ${agent?.name ?? agentId} from core team`}
-                        className="rounded-full text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                        variant="ghost"
+                        size="sm"
+                        className="h-auto w-auto rounded-full p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <X size={10} />
-                      </button>
+                      </IconButton>
                     </span>
                   )
                 })}

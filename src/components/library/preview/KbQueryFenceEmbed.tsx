@@ -48,6 +48,7 @@ import {
 import type { components } from '@/lib/api/generated/openapi-types'
 import { LazyEmbedMount } from './LazyEmbedMount'
 import { stripWikilinkNotation } from './wikilinkNotation'
+import { Button } from '@/components/ui/button'
 
 type VaultSearchResponse = components['schemas']['VaultSearchResponse']
 
@@ -179,14 +180,13 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
           <Warning size={14} />
           {rateLimited ? 'This query is rate-limited by the knowledge workspace limit.' : 'Could not run this query.'}
         </span>
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="link"
           onClick={() => void searchQuery.refetch()}
-          className="text-[length:var(--type-caption-size)] underline underline-offset-2"
+          className="text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] underline underline-offset-2 hover:text-[var(--color-warning)]"
         >
           Retry
-        </button>
+        </Button>
       </div>
     )
   }

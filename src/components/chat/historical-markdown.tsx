@@ -17,6 +17,7 @@ import 'katex/dist/katex.min.css'
 import { rehypePhosphorEmoji } from '@/lib/rehype-phosphor-emoji'
 import { useUiStore } from '@/store/ui'
 import { copyText } from './media-actions'
+import { Button } from '@/components/ui/button'
 import {
   PhosphorEmojiSpan,
   MarkdownImage,
@@ -68,10 +69,11 @@ function HistoricalCodeBlock({ code, language }: HistoricalCodeBlockProps) {
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono uppercase tracking-wide">
           {language || 'code'}
         </span>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={handleCopy}
-          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+          className="h-auto rounded-none p-0 gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           aria-label="Copy code to clipboard"
         >
           {copied ? (
@@ -85,7 +87,7 @@ function HistoricalCodeBlock({ code, language }: HistoricalCodeBlockProps) {
               <span>Copy</span>
             </>
           )}
-        </button>
+        </Button>
       </div>
       <ShikiCodeBlock language={language} code={code} />
     </div>

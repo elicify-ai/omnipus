@@ -344,17 +344,16 @@ export function LibraryAddMountDialog({
                   <p className="p-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No folders here.</p>
                 )}
                 {listing?.entries.map((entry) => (
-                  <button
+                  <Button
                     key={entry.path}
-                    type="button"
-                    tabIndex={0}
+                    variant="ghost"
                     onClick={() => {
                       setPath(entry.path)
                       setSelectedVerdict(entry)
                       if (entry.mountable) void load(entry.path)
                     }}
                     data-testid={`library-add-mount-row-${entry.name}`}
-                    className={`flex w-full items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-body-compact-size)] border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-2)] ${
+                    className={`h-auto w-full justify-start rounded-none gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-2)] ${
                       path === entry.path ? 'bg-[var(--color-surface-3)]' : ''
                     }`}
                   >
@@ -378,7 +377,7 @@ export function LibraryAddMountDialog({
                     {entry.mountable !== false && entry.broad && (
                       <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-warning)]">broad</span>
                     )}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>

@@ -209,7 +209,19 @@ const ROLE_UTILITY_TOKENS = new Map([
   ['tracking', { variables: new Map([['normal', '--tracking-normal']]), ruleId: 'typography/letter-spacing-arbitrary' }],
 ])
 
-const CSS_FAMILY_KEYWORDS = new Set(['inherit', 'initial', 'unset', 'revert', 'revert-layer'])
+// CSS-wide value keywords: value plumbing, not a size/family choice of their
+// own — each one defers entirely to a value computed elsewhere (the parent's
+// cascaded value, the property's own initial value, …), so it can never pin
+// an off-scale magic number the way a literal (`13px`, `'Arial'`) can. This
+// is the typography-lock analogue of css-colors.mjs's COLOR_KEYWORD_EXEMPTS,
+// which treats the identical keyword set (plus currentcolor/transparent) the
+// same way for color. Used both for raw CSS/style values (evaluateFontSizeValue,
+// evaluateFontFamilyValue, role-utility CSS values) and, via
+// evaluateArbitrarySizeValue, for the Tailwind `text-[length:inherit]` arbitrary
+// form — see the comment at that call site for why the scanner cannot (and,
+// following the color-lock precedent, does not try to) verify that a governed
+// parent exists at every call site.
+const CSS_WIDE_KEYWORDS = new Set(['inherit', 'initial', 'unset', 'revert', 'revert-layer'])
 const CSS_GENERIC_FAMILY_KEYWORDS = new Set([
   'serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui',
   'ui-serif', 'ui-sans-serif', 'ui-monospace', 'ui-rounded',
@@ -647,7 +659,7 @@ function evaluateFontFamilyValue(text, registeredTokens) {
     const status = registeredTokens.has(varMatch[1]) ? 'ok' : 'unregistered'
     return { status, printed: `var(${varMatch[1]})` }
   }
-  if (CSS_FAMILY_KEYWORDS.has(trimmed)) return { status: 'ok', printed: trimmed }
+  if (CSS_WIDE_KEYWORDS.has(trimmed)) return { status: 'ok', printed: trimmed }
   const parts = trimmed.split(',').map((part) => collapseWhitespace(part))
   const unregistered = []
   let sawRegisteredVar = false
@@ -851,6 +863,35 @@ function classifyArbitrarySize({ inner, wrapper }, sink) {
 }
 
 function evaluateArbitrarySizeValue(value, syntax, sink) {
+  // `text-[length:inherit]` (and initial/unset/revert/revert-layer): a
+  // CSS-wide keyword is value plumbing, never a magic number — it names no
+  // size of its own, only "take whatever is already computed elsewhere",
+  // which cannot drift off the D9/D10 scale because it carries no scale
+  // position to drift from. Tokenizing/parsing it as a length expression
+  // would throw (parseAtom requires a bare word to be a function call), so
+  // this must short-circuit before that attempt, exactly like
+  // evaluateFontSizeValue already does for the identical keyword set on the
+  // raw-CSS `font-size:` declaration path (§D1/§D2) — this closes the one
+  // place that path and the Tailwind arbitrary-utility path disagreed.
+  // Only the `length:`-hinted call site (classifyArbitrarySize's
+  // `text-[length:…]` branch) can ever reach this function with a bare
+  // keyword: the other two call sites gate on BARE_CUSTOM_PROPERTY_PATTERN
+  // (`--…`) and isLengthLike (`\d`/calc|clamp|min|max), neither of which
+  // "inherit" et al. satisfy, so an untyped `text-[inherit]` never reaches
+  // this branch and still falls through to its own unsupported-text-utility
+  // finding unchanged.
+  //
+  // Whether a "governed parent" actually exists at the DOM node this class
+  // ends up on is NOT something this static, per-declaration scanner can see
+  // — it has no render-tree/DOM model, only the literal text of one class
+  // value. The identical question already exists for `color: currentColor`
+  // in css-colors.mjs's COLOR_KEYWORD_EXEMPTS and is answered the same way
+  // there: accepted unconditionally, not gated on a provably-governed
+  // ancestor, because CSS-wide keywords carry no value of their own to
+  // register in the first place — there is nothing here for a central
+  // reviewer to approve. An off-scale literal like `text-[13px]` remains
+  // fully reportable; only the zero-information keyword form is exempt.
+  if (CSS_WIDE_KEYWORDS.has(value.trim())) return
   const varMatch = VAR_REFERENCE_PATTERN.exec(value)
   const bareMatch = BARE_CUSTOM_PROPERTY_PATTERN.exec(value)
   if (varMatch || bareMatch) {

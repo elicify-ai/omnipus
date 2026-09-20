@@ -4,6 +4,7 @@ import { Shield } from '@phosphor-icons/react'
 import { fetchPromptGuardLevel, updatePromptGuardLevel, getErrorMessage } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 
 // ── Level metadata ────────────────────────────────────────────────────────────
@@ -114,23 +115,24 @@ export function PromptGuardSection(): React.ReactElement {
           Controls how untrusted tool output is sanitised before passing to the agent.
         </p>
 
-        <div className="space-y-[var(--space-2)]" role="radiogroup" aria-label="Prompt injection defense level">
+        <RadioGroup
+          className="space-y-[var(--space-2)]"
+          orientation="vertical"
+          aria-label="Prompt injection defense level"
+          value={selected}
+          onValueChange={(value) => handleChange(value as PromptInjectionLevel)}
+        >
           {LEVELS.map((lvl) => {
             const isActive = selected === lvl.value
             return (
-              <button tabIndex={0}
+              <RadioGroupItem
                 key={lvl.value}
-                type="button"
-                role="radio"
-                aria-checked={isActive}
-                onClick={() => {
-                  if (selected !== lvl.value) handleChange(lvl.value)
-                }}
+                value={lvl.value}
                 className={[
-                  'w-full text-left rounded-md border p-[var(--space-2-5)] transition-colors disabled:opacity-60 disabled:cursor-not-allowed',
+                  'flex-col items-start gap-0 rounded-md border p-[var(--space-2-5)] transition-colors',
                   isActive
-                    ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/8'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border)]/80',
+                    ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/8 hover:bg-[var(--color-accent)]/8'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border)]/80 hover:bg-[var(--color-surface-2)]',
                 ].join(' ')}
               >
                 <div className="flex items-center gap-[var(--space-2)]">
@@ -155,10 +157,10 @@ export function PromptGuardSection(): React.ReactElement {
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)] ml-[var(--space-3)] leading-relaxed">
                   {lvl.subtitle}
                 </p>
-              </button>
+              </RadioGroupItem>
             )
           })}
-        </div>
+        </RadioGroup>
       </div>
     </section>
   )

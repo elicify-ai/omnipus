@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { PencilSimple, Check, X } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { updateWorkspace, workspacesQueryKeys, getErrorMessage } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -87,17 +88,18 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
             <h1 className="font-headline text-xl font-bold text-[var(--color-secondary)] flex-1 truncate">
               {workspace.name}
             </h1>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               onClick={() => {
                 setNameDraft(workspace.name)
                 setEditingName(true)
               }}
               aria-label="Edit workspace name"
-              className="p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+              variant="ghost"
+              size="sm"
+              className="h-auto w-auto flex-shrink-0 p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
             >
               <PencilSimple size={14} />
-            </button>
+            </IconButton>
           </>
         )}
       </div>

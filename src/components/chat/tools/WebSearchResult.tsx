@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { CaretDown, CaretUp, ArrowSquareOut } from '@phosphor-icons/react'
+import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
@@ -109,31 +110,19 @@ function WebSearchBlock({
     // leading slot is the status dot/spinner only, same as the other rows.
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => hasDetail && setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
-          hasDetail ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
-          !hasDetail ? 'cursor-default' : undefined
-        )}
-        aria-expanded={hasDetail ? expanded : undefined}
-        disabled={!hasDetail}
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        expandable={hasDetail}
+        data-testid="web-search-toggle"
       >
         {statusConfig.indicator}
         <span className="text-[var(--color-muted)] shrink-0">web_search</span>
         <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0 italic">{query}</span>
-        <span className="flex items-center gap-[var(--space-1)] shrink-0">
-          <span className={cn('text-[var(--color-muted)]')}>
-            {countOrStatusLabel}
-          </span>
-          {hasDetail && (
-            <span className="ml-[var(--space-1)] text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-            </span>
-          )}
+        <span className={cn('text-[var(--color-muted)] shrink-0')}>
+          {countOrStatusLabel}
         </span>
-      </button>
+      </DisclosureRow>
 
       {/* Results panel — left-accent block, no bordered card. Inner content
           keeps its identity (numbered result list / raw preview) but the

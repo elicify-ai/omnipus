@@ -71,6 +71,8 @@ import {
 } from '@/lib/api'
 import { ApiError, rateLimitedWriteRefusalMessage } from '@/lib/api-error'
 import { isEditableCell, recordPropertyText, type EditableCellType } from './viewResultData'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 
 /** One successful inline field write, reported upward. The ONLY intended
  *  wiring point is the screen that owns this view's TanStack Query cache
@@ -519,9 +521,8 @@ function EditableValueCell({
           <WarningCircle size={12} weight="fill" />
           {conflictMessage}
         </span>
-        <button
-          tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           onMouseDown={stop}
           onClick={(event) => {
             stop(event)
@@ -530,10 +531,10 @@ function EditableValueCell({
             setEditing(true)
           }}
           data-testid="viewpart-cell-conflict-retry"
-          className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-caption-size)] font-medium underline underline-offset-2"
         >
           Retry
-        </button>
+        </Button>
       </span>
     )
   }
@@ -625,9 +626,8 @@ function EditableValueCell({
     // prevent, one level down.
     return (
       <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--space-1)]">
-        <button
-          tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onMouseDown={stop}
           onClick={(event) => {
             stop(event)
@@ -637,14 +637,14 @@ function EditableValueCell({
           }}
           data-testid="viewpart-cell-editor-trigger"
           aria-label={`Edit ${cell.property}`}
-          className="group inline-flex max-w-full min-w-0 items-center gap-[var(--space-1)] text-left"
+          className="group h-auto min-w-0 max-w-full items-center gap-[var(--space-1)] rounded p-0 text-left font-[var(--font-weight-regular)] hover:bg-transparent"
         >
           <span className="min-w-0 truncate">{renderValue(value)}</span>
           <PencilSimple
             size={11}
             className="shrink-0 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
           />
-        </button>
+        </Button>
         {error !== undefined && (
           <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             {error}
@@ -854,9 +854,8 @@ function RelationCellEditor({
   if (!open) {
     return (
       <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--space-1)]">
-        <button
-          tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onMouseDown={stop}
           onClick={(event) => {
             stop(event)
@@ -864,14 +863,14 @@ function RelationCellEditor({
           }}
           data-testid="viewpart-relation-trigger"
           aria-label={`Edit ${cell.property}`}
-          className="group inline-flex max-w-full min-w-0 items-center gap-[var(--space-1)] text-left"
+          className="group h-auto min-w-0 max-w-full items-center gap-[var(--space-1)] rounded p-0 text-left font-[var(--font-weight-regular)] hover:bg-transparent"
         >
           <span className="min-w-0 truncate">{renderValue(cell.value)}</span>
           <PencilSimple
             size={11}
             className="shrink-0 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100"
           />
-        </button>
+        </Button>
         {error !== undefined && (
           <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             {error}
@@ -901,17 +900,16 @@ function RelationCellEditor({
               className="inline-flex items-center gap-[var(--space-1)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)]"
             >
               {label}
-              <button
-                tabIndex={0}
-                type="button"
+              <IconButton
+                size="sm"
                 disabled={saving}
                 aria-label={`Remove ${label}`}
                 data-testid={`viewpart-relation-remove-${label}`}
                 onClick={() => void commit('remove', [stored])}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)] disabled:opacity-50"
+                className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] disabled:opacity-50"
               >
                 <X size={10} weight="bold" />
-              </button>
+              </IconButton>
             </span>
           )
         })}
@@ -949,31 +947,29 @@ function RelationCellEditor({
           {results.slice(0, 8).map((hit) => {
             const label = hit.title ?? hit.path
             return (
-              <button
+              <Button
                 key={hit.path}
-                tabIndex={0}
-                type="button"
+                variant="ghost"
                 disabled={saving}
                 data-testid={`viewpart-relation-option-${label}`}
                 onClick={() => void commit(scalarFilled ? 'replace' : 'add', [label])}
-                className="text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] disabled:opacity-50"
+                className="h-auto w-full justify-start rounded p-0 text-left font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)] disabled:opacity-50"
               >
                 {label}
-              </button>
+              </Button>
             )
           })}
         </span>
       )}
 
-      <button
-        tabIndex={0}
-        type="button"
+      <Button
+        variant="link"
         onClick={() => setOpen(false)}
         data-testid="viewpart-relation-close"
-        className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] underline underline-offset-2"
+        className="text-[length:var(--type-caption-size)] font-medium underline underline-offset-2"
       >
         Done
-      </button>
+      </Button>
 
       {conflictMessage !== undefined && (
         <span
@@ -982,18 +978,17 @@ function RelationCellEditor({
         >
           <WarningCircle size={12} weight="fill" />
           {conflictMessage}
-          <button
-            tabIndex={0}
-            type="button"
+          <Button
+            variant="link"
             onClick={() => {
               setConflictMessage(undefined)
               void loadRecord()
             }}
             data-testid="viewpart-relation-conflict-retry"
-            className="font-medium text-[var(--color-accent)] underline underline-offset-2"
+            className="font-medium underline underline-offset-2"
           >
             Retry
-          </button>
+          </Button>
         </span>
       )}
       {error !== undefined && (

@@ -522,8 +522,9 @@ export function GatewaySection() {
 
       {/* Remote Access */}
       <section>
-        <button tabIndex={0}
-          className="flex items-center gap-[var(--space-2)] w-full text-left py-[var(--space-1)]"
+        <Button
+          variant="ghost"
+          className="h-auto w-full justify-start gap-[var(--space-2)] rounded-none p-0 py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-transparent"
           onClick={() => setRemoteAccessOpen((v) => !v)}
           type="button"
           aria-expanded={remoteAccessOpen}
@@ -535,7 +536,7 @@ export function GatewaySection() {
             <CaretRight size={12} className="text-[var(--color-muted)]" />
           )}
           <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Remote Access</h3>
-        </button>
+        </Button>
 
         {remoteAccessOpen && (
           <div id="remote-access-panel" className="mt-[var(--space-2-5)] space-y-[var(--space-3)]">

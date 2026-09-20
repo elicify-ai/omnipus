@@ -79,6 +79,7 @@ import {
 } from './KnowledgeBacklinks'
 import { WIKILINK_RE, type EmbedResolution, type KbLinkResolution } from '../preview/knowledgeMarkdown'
 import { libraryEntryExt } from '../preview/libraryPreviewKind'
+import { Button } from '@/components/ui/button'
 
 /**
  * The note's ancestor folders, DEEPEST FIRST, ending with the work-tree root
@@ -704,14 +705,13 @@ export function KnowledgeNoteView({
           className="mb-[var(--space-2-5)] flex items-center justify-between gap-[var(--space-2-5)] rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
         >
           <span>{graphAnswerIssue.message}</span>
-          <button
-            tabIndex={0}
-            type="button"
+          <Button
+            variant="outline"
             onClick={() => void linksQuery.refetch()}
-            className="shrink-0 rounded border border-current px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
+            className="h-auto shrink-0 rounded border-current px-[var(--space-2)] py-[var(--space-1)] text-[color:inherit] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] uppercase tracking-wide hover:bg-transparent hover:opacity-80"
           >
             Retry
-          </button>
+          </Button>
         </div>
       ) : null}
       {/* EMB-071. ADR-083's N3 dropped print support, and this notice is the

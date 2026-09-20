@@ -33,6 +33,8 @@
 
 import * as React from 'react'
 import { Key, SignIn } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /** The closed auth-method set (contract `Provider.auth_method`, X-25). */
 export type AuthMethod = 'api_key' | 'sign_in'
@@ -163,44 +165,30 @@ export function AuthMethodControl({
           no control, and a single-button "segmented control" is a lie about
           what the operator can do. */}
       {signInOffered && apiKeyOffered && (
-        <div
-          role="group"
+        <SegmentedControl
           aria-label="Authentication method"
+          value={method}
+          onValueChange={(next) => chooseMethod(next as AuthMethod)}
           data-testid={`${testId}-segment`}
-          className="flex items-center gap-[var(--space-1)] rounded-md border p-[var(--space-1)]"
-          style={{ borderColor: 'var(--color-border)' }}
+          className="flex w-full gap-[var(--space-1)] p-[var(--space-1)]"
         >
-          <button
-            type="button"
-            tabIndex={0}
+          <SegmentedControlItem
+            value="sign_in"
             data-testid={`${testId}-segment-sign_in`}
-            aria-pressed={method === 'sign_in'}
-            onClick={() => chooseMethod('sign_in')}
-            className="flex min-h-[32px] flex-1 items-center justify-center gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
-            style={{
-              color: 'var(--color-secondary)',
-              background: method === 'sign_in' ? 'var(--color-surface-2)' : 'transparent',
-            }}
+            className="h-auto min-h-[32px] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <SignIn size={14} aria-hidden="true" />
             {signInLabel}
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
+          </SegmentedControlItem>
+          <SegmentedControlItem
+            value="api_key"
             data-testid={`${testId}-segment-api_key`}
-            aria-pressed={method === 'api_key'}
-            onClick={() => chooseMethod('api_key')}
-            className="flex min-h-[32px] flex-1 items-center justify-center gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
-            style={{
-              color: 'var(--color-secondary)',
-              background: method === 'api_key' ? 'var(--color-surface-2)' : 'transparent',
-            }}
+            className="h-auto min-h-[32px] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <Key size={14} aria-hidden="true" />
             API key
-          </button>
-        </div>
+          </SegmentedControlItem>
+        </SegmentedControl>
       )}
 
       {signInOffered && method === 'sign_in' && (
@@ -269,17 +257,16 @@ export function AuthMethodControl({
             </span>
           )}
 
-          <button
+          <Button
             type="button"
-            tabIndex={0}
+            variant="outline"
             data-testid={`${testId}-signin-start`}
             onClick={() => onSignIn?.(providerId)}
-            className="flex min-h-[32px] items-center justify-center gap-[var(--space-1)] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+            className="h-auto min-h-[32px] gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <SignIn size={14} aria-hidden="true" />
             Sign in
-          </button>
+          </Button>
         </div>
       )}
 
