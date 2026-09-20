@@ -52,7 +52,7 @@ var (
 	// ErrGatewayDown is returned when the TCP dial to the local gateway fails
 	// (connection refused). The caller prints the "start it with: omnipus start"
 	// hint (FR-014).
-	ErrGatewayDown = errors.New("Omnipus isn't running — start it with: omnipus start")
+	ErrGatewayDown = errors.New("omnipus isn't running — start it with: omnipus start")
 
 	// ErrKeyInvalid is returned when the WebSocket connection is established but
 	// the server sends an auth-phase error frame (unauthorized: invalid token)
@@ -60,7 +60,7 @@ var (
 	// auth is established (FR-019 — the live gateway always sends the error frame
 	// first) or via the close code as a fallback.
 	// The caller prints the "run: omnipus start" rotation hint.
-	ErrKeyInvalid = errors.New("Your CLI key is invalid or out of date. Run: omnipus start")
+	ErrKeyInvalid = errors.New("your CLI key is invalid or out of date. Run: omnipus start")
 
 	// ErrTimeout is returned when no done frame is received within Options.Timeout.
 	ErrTimeout = errors.New("timed out waiting for the agent to finish")

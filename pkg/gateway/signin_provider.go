@@ -109,6 +109,8 @@ type SignInProvider interface {
 // nothing else. Every method here is implemented by restAPIHost, below,
 // against restAPI's already-private fields and already-private helpers —
 // the provider never sees restAPI itself.
+//
+//nolint:interfacebloat // single-registration-point seam for SignInProvider (ADR-0010); splitting it would force every provider to receive N interfaces and defeat the registration contract. Add a method, don't split.
 type Host interface {
 	// Config returns the live config snapshot (config can hot-reload; never
 	// cache the returned pointer across requests).

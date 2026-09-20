@@ -90,7 +90,7 @@ type AttachSessionFrame struct {
 
 // AuthFrame — Client → server authentication frame.
 type AuthFrame struct {
-	// Bearer token from /api/v1/onboarding/complete. Id-tagged "omnipus_<8hex>_<64hex>" (81) or legacy "omnipus_<64hex>" (72).
+	// Bearer token from /api/v1/auth/login. Id-tagged "omnipus_<8hex>_<64hex>" (81) or legacy "omnipus_<64hex>" (72).
 	Token string `json:"token"`
 	Type  string `json:"type"`
 }

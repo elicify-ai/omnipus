@@ -5,6 +5,7 @@
 package gateway
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -196,7 +197,7 @@ func writeOnboardingUserProfile(prefs gen.OnboardingPreferences) string {
 			return onboardingProfileWriteWarning
 		}
 		return ""
-	case os.IsNotExist(err):
+	case errors.Is(err, os.ErrNotExist):
 		if writeErr := writeOnboardingProfileFile(path, section); writeErr != nil {
 			slog.Error("onboarding: USER.md profile write failed", "path", path, "error", writeErr)
 			return onboardingProfileWriteWarning

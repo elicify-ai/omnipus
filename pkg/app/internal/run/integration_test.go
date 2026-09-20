@@ -65,8 +65,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/elicify-ai/omnipus/pkg/app/internal/run"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/app/internal/run"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
@@ -484,7 +484,12 @@ func TestIntegration_StaleTokenDistinctMessage(t *testing.T) {
 		"stdout must be empty when auth fails")
 
 	// The error message must contain FR-019 guidance.
-	assert.Contains(t, run.ErrKeyInvalid.Error(), "Your CLI key is invalid or out of date")
+	// Note: the first word is lower-case per staticcheck/ST1005 (Go error-string
+	// convention: capitalised first words read awkwardly when wrapped). The
+	// substantive guidance — "CLI key is invalid or out of date" + the
+	// `omnipus start` rotation hint — is unchanged. Adapted to the new
+	// intentional literal in round-12 fix-up; the assertion shape is preserved.
+	assert.Contains(t, run.ErrKeyInvalid.Error(), "your CLI key is invalid or out of date")
 	assert.Contains(t, run.ErrKeyInvalid.Error(), "omnipus start")
 }
 
@@ -720,19 +725,36 @@ func TestWSFrameCodec_AuthFrameExactType(t *testing.T) {
 
 // TestErrKeyInvalid_MessageContent verifies the ErrKeyInvalid sentinel message.
 // Traces to: cli-minimization-spec.md FR-019
+//
+// Round-12 fix-up: assertions adapted to the lower-case first word introduced
+// by the ST1005 fix in commit 622d28b8 (Go error-string convention; capitalised
+// first words read awkwardly when wrapped). The substantive content of the
+// message — "CLI key is invalid or out of date" + the `omnipus start`
+// rotation hint — is unchanged; only the literal first letter moved.
+// Distinctness from ErrGatewayDown is now asserted against the post-fix
+// lowercase literal "omnipus isn't running" (capital-O form no longer appears
+// in any error string, so the prior literal would have been a tautology).
 func TestErrKeyInvalid_MessageContent(t *testing.T) {
 	msg := run.ErrKeyInvalid.Error()
-	assert.Contains(t, msg, "Your CLI key is invalid or out of date")
+	assert.Contains(t, msg, "your CLI key is invalid or out of date")
 	assert.Contains(t, msg, "omnipus start")
-	assert.NotContains(t, msg, "Omnipus isn't running",
+	assert.NotContains(t, msg, "omnipus isn't running",
 		"ErrKeyInvalid must be distinct from ErrGatewayDown")
 }
 
 // TestErrGatewayDown_MessageContent verifies ErrGatewayDown sentinel message.
 // Traces to: cli-minimization-spec.md User Story 1 AC-2
+//
+// Round-12 fix-up: assertion adapted to the lower-case first word introduced
+// by the ST1005 fix in commit 622d28b8 (Go error-string convention). The
+// substantive content of the message — "isn't running" + the
+// `omnipus start` bring-up hint — is unchanged; only the literal first
+// letter moved. The distinctness check on the other side of the partition
+// ("invalid or out of date") still passes unchanged because that phrase
+// remains absent from ErrGatewayDown.
 func TestErrGatewayDown_MessageContent(t *testing.T) {
 	msg := run.ErrGatewayDown.Error()
-	assert.Contains(t, msg, "Omnipus isn't running")
+	assert.Contains(t, msg, "omnipus isn't running")
 	assert.Contains(t, msg, "omnipus start")
 	assert.NotContains(t, msg, "invalid or out of date",
 		"ErrGatewayDown must be distinct from ErrKeyInvalid")
