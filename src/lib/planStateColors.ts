@@ -14,6 +14,7 @@
 // module only maps the 5 closed `PlanState` values (+ an unknown fallback).
 
 import type { Plan } from '@/lib/api'
+import { statusContract } from '@/design-system/status'
 
 export type PlanState = Plan['state']
 
@@ -28,11 +29,11 @@ export const PLAN_STATE_ORDER: readonly PlanState[] = [
 
 /** Per-state accent hex. The single source of truth for Plan badge colour. */
 export const PLAN_STATE_COLORS: Record<PlanState, string> = {
-  draft: '#9ca3af', // neutral grey — being authored
-  approved: '#3B82F6', // info blue — locked in, transitional
-  running: '#D4AF37', // Forge Gold — the marquee "live" accent
-  done: '#10b981', // success green — terminal, quiet
-  failed: '#ef4444', // error red — terminal, loud
+  draft: statusContract.inbox.resolvedColor, // neutral grey — being authored
+  approved: statusContract.next.resolvedColor, // info blue — locked in, transitional
+  running: statusContract.inProgress.resolvedColor, // Forge Gold — the marquee "live" accent
+  done: statusContract.done.resolvedColor, // success green — terminal, quiet
+  failed: statusContract.failed.resolvedColor, // error red — terminal, loud
 }
 
 /** Per-state human-readable label. */
@@ -84,7 +85,7 @@ export function planStateLabel(state: PlanState | string | undefined): string {
  * Kept in sync by hand with `statusColors.ts`'s `TASK_CANCELLED_COLOR` — see
  * that module's header comment for why the two aren't a shared symbol.
  */
-export const PLAN_CANCELLED_COLOR = '#EAB308'
+export const PLAN_CANCELLED_COLOR = statusContract.cancelled.resolvedColor
 
 /** True when this plan is `failed` specifically because the user Stopped it (not a genuine failure). */
 export function isPlanCancelled(plan: Pick<Plan, 'state' | 'failed_reason'>): boolean {

@@ -26,9 +26,12 @@ describe('planStateColors — badge matrix', () => {
     ['done', 'Done', '#10b981'],
     ['failed', 'Failed', '#ef4444'],
   ] as const)('state=%s -> label=%s hex=%s', (state, label, hex) => {
-    expect(planStateColor(state)).toBe(hex)
+    // Hex is compared case-insensitively: these values now come from the
+    // governed status contract, which returns them upper-case, and CSS hex
+    // is case-insensitive — the same colour either way.
+    expect(planStateColor(state).toLowerCase()).toBe(hex.toLowerCase())
     expect(planStateLabel(state)).toBe(label)
-    expect(PLAN_STATE_COLORS[state]).toBe(hex)
+    expect(PLAN_STATE_COLORS[state].toLowerCase()).toBe(hex.toLowerCase())
     expect(PLAN_STATE_LABELS[state]).toBe(label)
   })
 

@@ -10,7 +10,11 @@ Scripts are applied ONE AT A TIME by the lead, because 255 of the 302 affected f
 
 | # | Script or change | Items targeted | Applied | Typecheck | Tests | Audit diff | Commit |
 |---|---|---|---|---|---|---|---|
-| _(rows are appended as each is applied)_ | | | | | | | |
+| 1 | codemod-status-source --literal | 13 ledger items (status hexes -> the governed source) | 2 files, 15 edits, 0 refusals; re-run plans 0 | exit 0 | 707/707 related | PASS, 0 errors; debt 3451 -> 3380 (71 removed, 0 added), 0 unsupported | see below |
+
+**Row 1 note — applied twice.** The first attempt was reverted by this gate: it produced 17 `unsupported` findings, because neither scanner could read `statusContract.<status>.resolvedColor`, the governed source the repair moves code onto. Fixed in commit fc33bb643 (both scanners now resolve that read structurally, and a second dispatcher handling the `${color}1a` tint idiom was wired in too), then re-applied byte-identically. Three tests compared hex strings exactly and failed on letter case alone (`#9CA3AF` vs `#9ca3af`, the same colour); they now compare case-insensitively.
+
+**Ledger refresh policy during C1.** Each applied repair removes debt, so the installed baseline lists fingerprints that no longer exist. The audit still passes (a resolved fingerprint is not an error), but a stale baseline could silently re-accept a regression of the same value. The ledger and baseline are therefore rebuilt through the tracked install sequence at C1 close, and that rebuild is itself a row in this record.
 
 ## Gate for every row
 
