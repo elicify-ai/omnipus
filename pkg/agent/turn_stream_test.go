@@ -224,9 +224,8 @@ func TestStampStreamerParentSpawnCallID_RootTurnStampsEmpty(t *testing.T) {
 }
 
 // TestStampStreamerParentSpawnCallID_NoOpWhenStreamerDoesNotImplementInterface
-// mirrors the sibling stamp functions' fallback tests: non-webchat streamers
-// (telegram, wecom, sse — none of which implement SetParentSpawnCallID) are
-// left untouched.
+// mirrors the sibling stamp functions' fallback tests: streamers without the
+// optional SetParentSpawnCallID method are left untouched.
 func TestStampStreamerParentSpawnCallID_NoOpWhenStreamerDoesNotImplementInterface(t *testing.T) {
 	ts := &turnState{parentSpawnCallID: "call_abc123"}
 	streamer := &mockStreamer{} // does NOT implement SetParentSpawnCallID

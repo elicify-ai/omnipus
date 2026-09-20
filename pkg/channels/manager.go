@@ -454,7 +454,9 @@ func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionI
 		return nil, false
 	}
 
-	// Mark streamActive on Finalize so preSend knows to clean up the placeholder
+	// Mark completed root streams so preSend knows to clean up the placeholder.
+	// Streams stamped with a non-empty parentSpawnCallID are suppressed by the
+	// wrapper and never marked active.
 	key := channelName + ":" + chatID
 	return &finalizeHookStreamer{
 		Streamer:   streamer,
@@ -462,18 +464,43 @@ func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionI
 	}, true
 }
 
-// finalizeHookStreamer wraps a Streamer to run a hook on Finalize.
+// finalizeHookStreamer suppresses stamped delegated streams and tracks completed root streams.
 type finalizeHookStreamer struct {
 	Streamer
-	onFinalize func()
+	onFinalize        func()
+	parentSpawnCallID string
+}
+
+// SetParentSpawnCallID receives the turn's existing delegation-nesting
+// correlation before any tokens flow. This is temporary containment until
+// turn publication policy owns the decision for every output class.
+func (s *finalizeHookStreamer) SetParentSpawnCallID(parentSpawnCallID string) {
+	s.parentSpawnCallID = parentSpawnCallID
+}
+
+func (s *finalizeHookStreamer) Update(ctx context.Context, content string) error {
+	if s.parentSpawnCallID != "" {
+		return nil
+	}
+	return s.Streamer.Update(ctx, content)
 }
 
 func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) error {
+	if s.parentSpawnCallID != "" {
+		return nil
+	}
 	if err := s.Streamer.Finalize(ctx, content); err != nil {
 		return err
 	}
 	s.onFinalize()
 	return nil
+}
+
+func (s *finalizeHookStreamer) Cancel(ctx context.Context) {
+	if s.parentSpawnCallID != "" {
+		return
+	}
+	s.Streamer.Cancel(ctx)
 }
 
 // initChannel is a helper that looks up a factory by name and creates the
