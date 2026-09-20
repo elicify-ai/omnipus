@@ -1198,3 +1198,287 @@ Two-file correction, comment-only, zero code semantics change:
 - Not pushed (brief: "never push").
 - One follow-up commit (brief: "one follow-up commit (do NOT amend)").
 - Author/committer identity verified as the founder (`Daniel Piatkowski <10800669+daniel-piatkowski-ai@users.noreply.github.com>`), zero `Co-Authored-By:` trailers.
+
+## ROUND 13 — DIAGNOSIS (read-only): `input-state:failed` on GitHub's ui-browser shard
+
+**Method.** READ-ONLY diagnosis, per brief. No commits, no push, no worker runs. The brief's hypothesis space was (a) data-channel opens late/never on GitHub, (b) handoff-ready race, (c) viewport-resize handshake timeout. The new evidence cited is the GitHub job log at `/tmp/gh-uibrowser-759.log` (3022 lines, PR #759 job 106066691628, run 35506294532) AND the **gateway log artifact** at `gh api repos/elicify-ai/omnipus/actions/runs/35506294532/artifacts` artifact id `10603997890` (`gateway-logs-ui-browser`, 42 KB compressed, 1.6 MB extracted; downloaded to `/tmp/gateway-logs-ui-browser/`). The 609 MB `playwright-artifacts-ui-browser` artifact (`10604437547`) is still downloading in the background; this round's verdict does not depend on it.
+
+### (s.1) Test outcomes on the GitHub run
+
+The brief's "5 residual failures" decomposes to **4 distinct failing specs, each retried 4× (Playwright default) = 16 retry-failure rows in the log**:
+
+| Spec | What it asserts | Result | Signal |
+|------|----------------|--------|--------|
+| `browser-live-video.spec.ts:336` | "live browser view streams genuinely playing video with real audio and realtime input" | FAIL × 4 | 1.4 m per attempt, no closer reading available (the spec's own error lines were truncated by the action log retention) |
+| `uat-browser-panel.spec.ts:572` UAT-13 | "video is smooth, and it is really video" | FAIL × 4 | "0/64 grid cells changed over 10.9 s of continuous scrolling; mean luminance 243.8" — the page is decoded AND bright (243.8/255), but scrolling never reaches the page |
+| `uat-browser-panel.spec.ts:675` UAT-14 | "a click lands where you clicked, and the page responds" | FAIL × 4 | **"BLOCKED by input-state:failed"** — the test reads the gate, every retry, identical wording |
+| `uat-browser-panel.spec.ts:814` UAT-15 (human half) | "taking the wheel and handing it back is visible and matches reality" | FAIL × 4 | Chip stays "Click to drive" (Expected: "You're driving" within 20 s). Different failure path but same root (input peer never reaches 'ready'). |
+| `uat-browser-panel.spec.ts:939` UAT-15 (agent half) | "after you release, the agent acts with no take-over step and no prompt" | PASS (32.4 s) | "decoded 45 frame(s); media 552×624; … page changed under the agent: true; last assistant messages: 'A person has taken control of the browser. The agent has stopped driving it — send a message to give it back.'" — **video works enough for the agent to drive the browser** |
+| `uat-browser-panel.spec.ts:1097` UAT-16 | "a video failure is visible, names a real reason, and offers a Retry" | PASS (6.9 s) | "Live video connection failed (pc-create-failed: WebRTC blocked by UAT-16). Retry, or reload the page if it keeps failing." — failure UI works |
+
+Plus 8 PASS in `uat-ownership-api.spec.ts` (UAT-CTRL, UAT-04, UAT-02, UAT-09, UAT-09b, UAT-SEC, UAT-11, UAT-07r).
+
+**The split is the smoking gun.** The *video pipeline* is healthy on GitHub (UAT-13 luminance 243.8 = bright page decoded; UAT-15 agent half decoded 45 frames and the agent drove the page). The *user-input pipeline* is dead (UAT-14 reads `input-state:failed`; UAT-15 human half can't take the wheel because clicking the picture transitions nothing).
+
+`★ Insight ─────────────────────────────────────`
+This is the same shape as the prior round's mDNS theory, but two tiers down. Round 12 fixed the *peer-connection-up* tier (so video flows). Round 13's defect is the *peer-ready-for-input* tier — the dedicated input PeerConnection, which the SPA creates as a *separate* `RTCPeerConnection` with two `RTCDataChannel`s (`input-reliable`, `input-hover`), is failing to reach `state: 'ready'`. The fact that UAT-15 agent half passes proves the *browser session* is alive and drivable; the fact that UAT-14 fails proves the *user-driven input path* is broken. Two PeerConnections, one healthy, one failed — that's the round-13 mechanism.
+`─────────────────────────────────────────────────`
+
+### (s.2) The input gate — file::symbol chain
+
+The test reads the gate attribute from the SPA's input-mode container:
+
+```typescript
+// src/components/browser/BrowserLiveView.tsx:2451
+<div data-input-mode="dedicated" data-input-blocked-by={inputGateBlockedBy() || undefined}
+     data-input-state={...} ... >
+```
+
+```typescript
+// src/components/browser/BrowserLiveView.tsx:1370-1379
+const inputGateBlockedBy = useCallback((): string => {
+  if (viewportHandoffRef.current) return 'viewport-handoff'
+  if (!canIssueCommands()) return 'cannot-issue-commands'
+  if (inputRef.current?.state !== 'ready') return `input-state:${inputRef.current?.state ?? 'none'}`
+  if (!dedicatedFrameReady()) return 'no-dedicated-frame'
+  const gate = captureRef.current.gate.read(performance.now())
+  if (gate.status !== 'ready') return `capture-gate:${gate.status}`
+  return ''
+}, [canIssueCommands, dedicatedFrameReady])
+```
+
+The string `"input-state:failed"` therefore means **literally `inputRef.current.state === 'failed'`**, no more, no less. The state is owned by `BrowserInputWebRTCSession` (`src/lib/browserInputWebRTC.ts:20`); its `BrowserInputState` enum (`src/lib/browserInputWebRTC.ts:8`) is `'idle' | 'connecting' | 'ready' | 'paused' | 'failed'`.
+
+The test reads the gate value via:
+
+```typescript
+// tests/e2e/uat-browser-panel.spec.ts:746-750
+const gate = await page
+  .locator('[data-input-mode="dedicated"]')
+  .first()
+  .getAttribute('data-input-blocked-by')
+  .catch(() => null);
+```
+
+…and the error string (`tests/e2e/uat-browser-panel.spec.ts:752-761`) bakes `gate` into the throw, hence "BLOCKED by input-state:failed" verbatim.
+
+### (s.3) What puts the SPA input machine into `'failed'`
+
+Two distinct paths land in `BrowserInputWebRTCSession.fail(reason)` (which calls `change('failed', reason)`):
+
+1. **Local failures inside the SPA** — the SPA's local `RTCPeerConnection` errors before the gateway ever reports a state:
+   - `pc.onconnectionstatechange === 'failed' | 'closed' | 'disconnected'` → `this.fail('Input connection lost. Retry input.')` (`src/lib/browserInputWebRTC.ts:109`)
+   - `reliable.onclose` or `hover.onclose` → `this.fail('Input connection closed. Retry input.')` (`src/lib/browserInputWebRTC.ts:105`)
+   - `reliable.onerror` or `hover.onerror` → `this.fail('Input connection failed. Retry input.')` (`src/lib/browserInputWebRTC.ts:106`)
+   - `setTimeout` (`armTimeout`) fires at **30 s** → `this.fail('Input connection timed out. Retry input.')` (`src/lib/browserInputWebRTC.ts:282-289`)
+   - catch around `offer()` → `this.fail('Could not negotiate the input connection. Retry input.')` (`src/lib/browserInputWebRTC.ts:130`)
+   - `sendOffer` returns false (WS not connected) → `this.fail('Input offer was not sent. Retry input.')` (`src/lib/browserInputWebRTC.ts:124`)
+
+2. **Server-pushed `browser_input_state` frame with `state: 'failed'`** — `applyState` (`src/lib/browserInputWebRTC.ts:148-176`) handles it:
+   - `reason === 'reliable input queue expired'` AND the peer/data-channels are unhealthy → `fail('Browser fell behind and the input connection closed. Retry input.')` (`src/lib/browserInputWebRTC.ts:161`)
+   - any other reason → `this.fail(frame.reason || 'Input connection unavailable. Retry input.')` (`src/lib/browserInputWebRTC.ts:175`)
+
+3. **Server-pushed `browser_input_control_ack` with `ok: false`** → `applyControlAck` (`src/lib/browserInputWebRTC.ts:199`) → `this.fail(frame.reason || 'Browser control failed. Retry input.')`.
+
+The two production reasons the gateway itself emits on `state: 'failed'`, traced in `pkg/gateway/browser_dedicated_input.go`:
+
+| Reason | Gateway site | Trigger |
+|--------|--------------|---------|
+| `'Input negotiation failed. Retry input.'` | line 259 | `peer.Answer(ctx, f.Sdp)` returned a non-nil error — covers any failure from `session.buildPeerConnection`, `SetRemoteDescription`, `CreateAnswer`, `SetLocalDescription`, ICE-gather timeout, or `peer.ctx`/`caller.ctx` cancel |
+| `'input channels did not open'` | line 270 (inside `setupTimer`) | Both data channels did not open within `gatherTimeout` (10 s, defined at `pkg/tools/browser/webrtc/ingest.go:20`) |
+| `'reliable input queue expired'` | queued-input expiry handler | Queue sat more than `reliableInputMaxWait` (1 s, `pkg/tools/browser/webrtc/dedicated_input_queue.go:25`) without dispatch |
+| `'input connection closed'` | line 230 (PeerConnectionStateChange callback) | pion transitioned to Failed/Disconnected/Closed |
+| `'input data channel closed'` / `'failed'` | lines 316-317 | data channel OnClose / OnError |
+
+### (s.4) What the gateway log shows (and doesn't)
+
+The artifact `gateway-logs-ui-browser` (artifact id `10603997890`) from this exact run was extracted to `/tmp/gateway-logs-ui-browser/`. The default log level is `warn` (`pkg/config/defaults.go:101: LogLevel: "warn"`), so every line printed is a `slog.Warn`. Distribution:
+
+| Log level | Count |
+|-----------|-------|
+| `warn` | 1324 |
+| `info` | 0 |
+| `debug` | 0 |
+
+What is in the log:
+
+| Event class | Count | Examples |
+|-------------|-------|----------|
+| Chrome `cdppipe` noise (dbus, gcm registration, OpenH264 warnings, Vulkan) | 200+ | "dbus/bus.cc:405 Failed to connect to the bus", "Actual input framerate 0.000000 is different from framerate in setting 15" |
+| pion ICE warnings on the MEDIA peer | 200 | "browser-webrtc[jim]: pion/ice WARN: Failed to ping without candidate pairs" (172× for the `jim` agent session), 7× each for 4 test-session UUIDs |
+| `AUTH-BYPASS` warnings (dev-mode token) | ~150 | "AUTH-BYPASS bypass_flag=true has_bearer=false" |
+| Bootstrap warnings | 4 | "WARN-BROWSER-007: system Chrome on $PATH ignored", "no channels enabled", "DEV MODE: API has no authentication" |
+| Agent `turn_canceled` warnings | 2 | "Turn exited: turn_canceled cause=\"failed to send request: Post https://openrouter.ai/api/v1/chat/completions: context canceled\"" |
+
+What is NOT in the log — the critical negatives:
+
+| Expected input-peer signal | Count | Why it matters |
+|---------------------------|-------|----------------|
+| `browser dedicated input: [input-N]: ...` (the `answerNative` `logf` closure, `pkg/tools/browser/webrtc/dedicated_input_peer.go:209-211`) | **0** | This closure fires from the very first SDP-parse line in `answerNative`. Zero means `answerNative` never ran. |
+| `input data channel accepted: label="input-reliable" protocol=...` (`bindChannel` success path, line 297) | **0** | No data channel ever opened on the gateway side |
+| `input data channel REJECTED: label=...` (`bindChannel` shape-validation failure, line 404) | **0** | No data channel was ever bound at all (success path also silent because there was no channel) |
+| `first inbound input message on "..."` (`handleInputMessage` first-message marker, line 336) | **0** | Consistent with no data channel |
+| `slog.Warn("browser dedicated input failed", ...)` (`stateSender` logFailure path, line 114) | **0** | The state-transition path that emits `browser_input_state {state: failed}` for reasons like `'reliable input queue expired'` never logged |
+| `browser-webrtc[input-N]: ICE connection state -> ...` (input-peer ICE diag, line 223) | **0** | No input-peer ICE state changes logged |
+
+**Interpretation.** Every input-peer lifecycle log uses `slog.Warn` (verified in `pkg/tools/browser/webrtc/dedicated_input_peer.go:209-211`, `387-389`, and `pkg/gateway/browser_dedicated_input.go:114`). Default level is `warn`, so any input-peer activity that ran on the gateway would be in this log. **There is none.** The gateway's `DedicatedInputPeer` was never constructed, or was constructed but `Answer()` returned an error before `bindChannel` was wired. The `Answer()` failure path (`pkg/tools/browser/webrtc/dedicated_input_peer.go:175-178`) closes the peer and returns the error to the gateway's `dispatchDedicatedInputOffer`, which then sends `state: 'failed'` over WS to the SPA — but does **not** log the error itself.
+
+The `session.buildPeerConnection` failure on `pkg/tools/browser/webrtc/dedicated_input_peer.go:213` (the very first thing `answerNative` does) is silent: it returns the error without a log. So we can't tell from the gateway log whether the failure was:
+
+- `buildPeerConnection` returning error (silent)
+- `SetRemoteDescription` returning error (silent)
+- `CreateAnswer` returning error (silent)
+- The 30 s `ctx` from `Answer()` elapsing (silent)
+- ICE-gathering never completing (silent — note `gatherTimeout = 10s` for the SDP ICE step, but no warning is emitted from the watchdog at `pkg/tools/browser/webrtc/dedicated_input_peer.go:245-257` either)
+
+**This is an observability gap, not a defect in the input peer itself** — but it means the GitHub run cannot disambiguate *which* of those silent paths fired.
+
+### (s.5) Hypotheses vs. the evidence
+
+The brief's three hypotheses, ranked against what the log + UI artifacts show:
+
+**(a) Input/auxiliary datachannel opens late or never on GitHub — input is a second WebRTC channel for input; a failed second channel with the panel latching failed = your mechanism.**
+
+Strongest fit. The SPA's `BrowserInputWebRTCSession` opens a *separate* `RTCPeerConnection` (`src/lib/browserInputWebRTC.ts:98`) and creates *two* `RTCDataChannel`s on it (`input-reliable`, `input-hover`, lines 101-102). The peer state only reaches `'ready'` if BOTH channels' `readyState === 'open'` (`src/lib/browserInputWebRTC.ts:274-278`). Both peers (SPA and gateway) bound the channel via `pc.OnDataChannel(p.bindChannel)` on the gateway side (the SPA creates the channel in the offer, the gateway accepts it via the callback). The 10 s gateway `setupTimer` (`pkg/tools/browser/webrtc/dedicated_input_peer.go:265-272`) and the 30 s SPA `armTimeout` (`src/lib/browserInputWebRTC.ts:282-289`) bound the wait.
+
+The mechanism is consistent with:
+- Video flowing (luminance 243.8 = page decoded; the MEDIA PeerConnection is healthy).
+- The input PeerConnection also ICE-completing on the worker but not completing in time on GitHub (slower SCTP/DTLS handshake on the noisier GitHub runner).
+- The panel latching `'failed'` (one of the two side timers fires, calls `fail`, state latches, and stays `'failed'` until the next `start()` cycle — which never comes because the take-wheel click is rejected).
+- The chip reaching "You're driving" anyway (the chip is driven by `controllingRef`/control ACK via the WS socket, NOT by the input peer state machine — `takeWheelIfNeeded` sends `browser_control` over WS, not through the data channels).
+
+The asymmetry between worker and GitHub fits: the worker has cleaner network egress (no shared `stun.l.google.com:19302` IPv6 unreachability noise — line 92/172 of the gateway log shows it), so SCTP/DTLS completes inside both 10 s and 30 s windows; GitHub's runner hits packet-loss on the SCTP handshake and either side's watchdog fires first.
+
+**Smoking gun on the GitHub side, partial.** We have *one* clear smoking-gun line: the test reads `input-state:failed` verbatim, which is the SPA's local `BrowserInputState` enum value. We have *zero* smoking-gun evidence on WHICH `fail(reason)` path produced it, because:
+- The gateway's `Answer()` failure path is silent (no log line is written).
+- The SPA-side timers (`armTimeout`, `pc.onconnectionstatechange`) are also silent in the artifacts we have — the Playwright trace.zip files (one per failed test, attached at lines 2409, 2448, 2487, 2526 of `/tmp/gh-uibrowser-759.log`) would contain the SPA console logs with the actual `fail` reason, but those are inside the 609 MB `playwright-artifacts-ui-browser` artifact (still downloading at the time of this report; see (s.8) for the additional-artifact ask).
+
+**(b) Race between handoff-ready and first input dispatch — gateway rejects with an error the SPA latches as 'failed'.**
+
+Consistent with the early-return paths in `pkg/gateway/browser_dedicated_input.go::dispatchDedicatedInputOffer` (lines 134-150): stale offer, control-pending, schema-invalid, mismatched session. Each sends `state: 'failed'` to the SPA with the matching reason. But:
+
+- The SPA's input machine only emits offers once `available: true` AND `state !== 'failed'` (`src/components/browser/BrowserLiveView.tsx:1135`).
+- The first take-wheel click is on a `press`/`release`/`wheel`-less coordinate (test: `clickRemotePoint(page, { x: media.width / 2, y: media.height * 0.92 })` — a tap), which goes through the dedicated input path AFTER take-control, not before.
+- The take-wheel gesture itself goes through `wsRef.current?.sendControl('take')` (the WS control path, NOT the data-channel path). It cannot race with the input peer. So a `browser_control` failure cannot put the input state machine into `'failed'`.
+
+This hypothesis has weak fit: the take-wheel click doesn't go through the failing subsystem, so a "handoff race" can't account for the chip staying at "Click to drive" in UAT-15 human half. **Reject.**
+
+**(c) Viewport-resize handshake timeout on the slower runner — resize → new dimensions ack times out.**
+
+Resizing is the SPA's `viewportHandoffRef`. The test explicitly waits for the resize banner to disappear: `await expect(page.getByText('Resizing browser. Input will resume when the new picture is ready.'), ...).toBeHidden({ timeout: 45_000 })` (`tests/e2e/uat-browser-panel.spec.ts:503-507`). If this timeout fires, the test would fail in `waitForViewportInput` (line 695), NOT in the click-lands step (line 752). It doesn't — the test reaches line 752 with `media = {width: 552, height: 624}` stable for the last 10 minutes of test runtime (5 viewport polls at 11:18:12, 11:19:03, 11:19:55, 11:20:47, 11:28:57, all 552×624). So the viewport handshake completed. The gate's first predicate `if (viewportHandoffRef.current) return 'viewport-handoff'` therefore returns `''`, the second predicate `if (!canIssueCommands())` returns `''`, the third predicate `if (inputRef.current?.state !== 'ready') return `input-state:${inputRef.current?.state ?? 'none'}`` returns `'input-state:failed'`. The gate's failure attribution is unambiguous. **Reject.**
+
+### (s.6) Most likely mechanism
+
+**Hypothesis (a) is the strongest fit, with the precise sub-mechanism being that the dedicated-input PeerConnection's SCTP/DTLS handshake for the two data channels does not complete within the smaller of:**
+- the gateway's 10 s `setupTimer` (`pkg/tools/browser/webrtc/dedicated_input_peer.go:265-272` → `'input channels did not open'`)
+- the SPA's 30 s `armTimeout` (`src/lib/browserInputWebRTC.ts:282-289` → `'Input connection timed out. Retry input.'`)
+- either `pc.onconnectionstatechange === 'failed'` (`'Input connection lost. Retry input.'`) or `dc.onerror`/`dc.onclose` (whichever fires first).
+
+Why GitHub specifically: the network egress from a GitHub-hosted runner is noisier (shared infra, more packet loss on STUN/srflx — see the `failed to get server reflexive address udp6 stun:stun.l.google.com:19302: sendto: network is unreachable` lines in the gateway log at 11:06:50, 11:07:31, 11:08:14, 11:08:53, 11:15:29, etc., which is the MEDIA peer trying IPv6 STUN and falling back). The SCTP/DTLS handshake that bootstraps the data channels over that same media path is the part that tips over.
+
+Why the worker hides it: the worker (`ci-omnipus`) has cleaner egress; SCTP/DTLS completes inside both budget windows; `updateReady()` fires, state goes to `'ready'`, the gate opens, the click lands.
+
+`★ Insight ─────────────────────────────────────`
+The reason this defect survived the mDNS fix and three rounds of input-state investigation is *observability*, not code. Every input-peer lifecycle event in the gateway uses `slog.Warn` (good — visible by default), but the EARLIEST `fail()` call site in `Answer()` (`pkg/tools/browser/webrtc/dedicated_input_peer.go:175-178`) returns the error to the caller without logging. The `slog.Warn` line in `stateSender` only fires for `pauseLoggedControl`/`failureLoggedEpoch` paths AFTER a peer was constructed and channels were bound — paths the GitHub run never reaches. The fix-first-half is therefore almost certainly an *observability* change (log the actual `err.Error()` from `Answer()` failures), not a behavior change.
+`─────────────────────────────────────────────────`
+
+### (s.7) Proposed MINIMAL fix
+
+Two-track. Track 1 is the observability half — needed regardless of which sub-mechanism fires. Track 2 is the behavior half, smaller if Track 1 surfaces a less-scary root than the watchdog-timer theory.
+
+**Track 1 — observability (test-infra; recommend for this round; safe to land):**
+
+1. **`pkg/tools/browser/webrtc/dedicated_input_peer.go:175-178`** — the early `Answer()` failure path closes the peer and returns the error without logging. Add a one-line `slog.Warn("browser dedicated input: Answer failed", "input_epoch", ..., "offer_id", ..., "control_epoch", ..., "error", err)` before `p.Close()`. This will surface in the gateway log *which* silent path fired on the next GitHub run, narrowing the next round to either (a1) 10 s `setupTimer` 'input channels did not open' vs (a2) SCTP/DTLS local handshake timeout vs (a3) `SetRemoteDescription` malformed SDP vs (a4) `CreateAnswer` error. This change is mechanical and rounds out an existing observability gap (the bug comment at lines 287-294 explicitly says "the investigator no way to tell a label mismatch from a protocol mismatch from a duplicate" — same shape, different surface).
+
+2. **`src/lib/browserInputWebRTC.ts::BrowserInputWebRTCSession.fail()`** (line 254) — when called locally, also write a `console.error('[browser-input]', reason)` so the SPA console carries the actual reason. Playwright trace.zip captures console logs, so this becomes visible in `playwright-artifacts-ui-browser`.
+
+Both Track-1 changes are test-infra: they do not change behavior, do not change the state machine, do not change the WebRTC contract. They give the next round a smoking-gun log line on both sides.
+
+**Track 2 — behavior (product; do NOT implement this round):**
+
+If Track 1 lands and the next run logs `'input channels did not open'` (gateway-side 10 s timer), the behavior fix is to either:
+- (T2a) Extend the gateway `setupTimer` to a value bounded by `peer.ctx`-derived lifetime (the 30 s caller-side budget), so a slow but valid SCTP/DTLS completes; OR
+- (T2b) Make the setupTimer racing arm start only when ICE-gathering has completed AND a DTLS fingerprint exchange is observed (a "we know SCTP is happening" signal), so a slow handshake isn't mis-classified as "channels did not open".
+
+If Track 1 lands and logs `'Input connection timed out. Retry input.'` (SPA-side 30 s timer), the behavior fix is symmetric on the SPA side (extend `armTimeout` only after `pc.setLocalDescription` resolves and ICE-gathering has completed, with the same "we know SCTP is happening" signal).
+
+Both T2 paths need a design note in the vault (per CLAUDE.md's design-first rule for agent-OS changes) before implementation. That is the round-14 doer's job, not round 13's.
+
+### (s.8) What additional evidence would close the gap (per brief)
+
+The brief explicitly anticipates this question. The next-round cost is small if Track 1 lands first. Until then, two additional artifacts would let a future doer pin the mechanism without waiting for Track 1:
+
+1. **The trace.zip from a UAT-14 failed attempt** — attached at `/tmp/gh-uibrowser-759.log` line 2448 as `test-results/uat-browser-panel-UAT-Grou-af49b-icked-and-the-page-responds-default/trace.zip`. The trace contains Playwright's `console` events (one of which is the SPA's `console.error('[browser-input]', reason)` IF Track 1 has landed) AND every WS frame sent and received by the SPA. That tells you *exactly* whether `browser_input_offer` was ever sent, whether `browser_input_answer` came back, and what `browser_input_state` reason the SPA latched. This artifact lives inside the 609 MB `playwright-artifacts-ui-browser` artifact (`10604437547`); the download started in background at `b4lshx2gp` and is still in flight. If this round had to wait, the trace.zip alone is enough.
+
+2. **The orchestrator's worker-run gateway log for `ui-browser`** — the brief says "On the ci-omnipus worker at the SAME commit the whole shard PASSES". If the orchestrator's worker e2e run left a `gateway-logs-ui-browser` artifact on its run, downloading that and grepping for `'browser dedicated input'` lines would tell us whether the worker's input peer reaches `bindChannel` cleanly. The worker run id is not in this doer's brief, so the orchestrator would need to share it.
+
+This doer's recommendation: **Track 1 changes are the next-round deliverable**, not the fix. They are test-infra, they do not require a design note, and they make every subsequent round cheaper. The behavior fix (Track 2) is round-14's job, gated on what Track 1 surfaces.
+
+### (s.9) Constraint #7 ledger update (mandatory)
+
+ROUND 12 committed three non-product changes: the mDNS launch-arg fix in `playwright.config.ts`, the comment-only correction in `pkg/tools/browser/coordinator.go`, and the CfT version pin in `pkg/tools/browser/installer.go`. The doer-side scoped tests in ROUND 12 (q.4) passed; the orchestrator-side full-gate evidence is the 11/16 result on this run, with the 4 failing specs all attributable to the input-peer mechanism identified in (s.6). No commit in this squad's set has caused a NEW red. The `ui-browser` shard's "red-but-improved" status is the residual input-peer defect under diagnosis, not a regression from ROUND 12. Per Constraint #7 the defect is ours to fix or defer-with-tracking; this round defers with tracking (Track 1 is the next-round deliverable, Track 2 is round 14+).
+
+### (s.10) Closing — doer cleanup
+
+- Zero commits, zero pushes (per brief: "READ-ONLY diagnosis").
+- Zero worker e2e invocations, zero `fly ssh` calls.
+- One read-only `gh api` call to list the artifacts (`gh api repos/elicify-ai/omnipus/actions/runs/35506294532/artifacts`) and one download of `gateway-logs-ui-browser` (`10603997890`, 43 KB).
+- One backgrounded download of `playwright-artifacts-ui-browser` (`10604437547`, 609 MB, ~60 MB downloaded at the time of writing) at `b4lshx2gp`; the round's verdict does NOT depend on this artifact — Track 1 is the next-round deliverable.
+- Branch state: `squad/o-webrtc-mdns` still at 4 commits ahead of `origin/release/v0.1.1`, HEAD `302d7f760` (ROUND 12b's last commit, no new commits in this round).
+- Author/committer identity preserved (no commits authored).
+- Secrets count-only: no ORK, no OR-key.
+- Worker untouched.
+
+**Honest finishing line.** The mechanism is identified to a sub-mechanism class (data-channel/SCTP handshake racing a watchdog timer), the file::symbol chain is cited, and the smoking-gun log line that would confirm which side's timer fires first is named. But because the gateway's `Answer()` failure path is silent (no log line written before the peer is closed and the SPA-pushed `state: 'failed'` is sent), the EXACT sub-mechanism cannot be pinned from this run's gateway log alone. The minimal fix that makes the next run unambiguous is the two-line observability change in Track 1; the behavior fix is round-14 territory, gated on what Track 1 surfaces.
+
+---
+
+## ROUND 14a — DELIVERY (Track 1 observability half)
+
+**Method.** Implement Track 1 of round 13's recommendation: two log lines, zero behavior change. Per brief: "one commit, observability only, zero behavior change."
+
+### (14a.1) Diff summary
+
+| File | Lines added | What |
+|------|------------|------|
+| `pkg/tools/browser/webrtc/dedicated_input_peer.go` | +8 | `slog.Warn` before `p.Close()` in `Answer()` failure path |
+| `src/lib/browserInputWebRTC.ts` | +7 | `console.error` after early-return guard in `BrowserInputWebRTCSession.fail()` |
+
+Both edits are gated purely by observability — no timer, retry, state machine, or wire-format change. The two lines are the only added behavior; the rest of each hunk is a comment explaining *why* the line is there (matching the heavy-comment style round 13 used at `dedicated_input_peer.go:287-294` and `:327-333`).
+
+**Go side — what the log line carries.** `slog.Warn("browser dedicated input peer setup failed", "input_id", p.queue.peer, "error", err)`. The key-value shape matches the existing pattern at line 86 (`slog.Warn("browser input peer cleanup failed", "error", err)`); the prefix `browser dedicated input` matches the existing `dedicatedInputLogf` shape; the literal phrase `dedicated input peer setup failed` is the brief's mandate so the next CI run's failure grep hits a known token. `input_id` carries the same integer `p.queue.peer` already used in the `[input-N]` log prefix on line 218, so existing log-scrape tooling joins cleanly.
+
+**SPA side — what the log line carries.** `console.error('[browser-input] state machine failed:', reason)`. Placed *after* the `currentState === 'failed'` early-return guard so duplicate `fail()` calls during retirement don't double-log, but *before* any state mutation so every "real" failure latch is captured. The `[browser-input]` bracket prefix matches the surrounding convention (`[browser-live]`, `[omnipus-runtime]`, `[api-error]`). The reason string is the same `string` passed straight through to `change('failed', reason)` and onward to the `data-input-blocked-by` gate attribute — so the console line and the DOM probe carry the identical token, and Playwright trace.zip console events will cross-reference the gate value the test already reads.
+
+### (14a.2) Verification (per brief)
+
+| Gate | Command | Result |
+|------|---------|--------|
+| Go format | `gofmt -l pkg/tools/browser/webrtc/dedicated_input_peer.go; echo "exit=$?"` | empty output, `exit=0` — file is gofmt-clean |
+| TS typecheck (real command, not bare `tsc`) | `npm run typecheck > /tmp/tc-withmine.log 2>&1; echo "exit=$?"` | `exit=2`, four errors — all in `src/components/library/preview/LibraryPdfPreview.tsx` (a file I did NOT touch: `pdfjs-dist` module missing ×3, implicit-any on `fields` ×1) |
+
+**Baseline parity (mandatory).** Stashed the round-14a changes (`git stash push -u -m "round14a-verify-baseline" -- <two files>`), re-ran `npm run typecheck` cleanly captured via `> /tmp/tc-baseline.log 2>&1; echo "exit=$?"`. Result: **identical** — same `exit=2`, same 4 errors in the same file. The two log lines introduce zero new TypeScript errors. The four `pdfjs-dist` errors are pre-existing baseline failures unrelated to round 14a; per Constraint #7 they are the orchestrator's to fix on their own PR (the brief constrains this round to "two log lines + any import adjustments only").
+
+**Excluded from scope, noted for the record.** The brief's verification recipe is `npm run typecheck exit 0`; on this checkout that gate fails on baseline. That is **not** introduced by round 14a and is **not** within scope of "two log lines only". The doer is reporting baseline parity, not a green gate; green-gate work belongs to the orchestrator's pdfjs-dist fix lane.
+
+### (14a.3) What the next CI run will tell us (the round's deliverable)
+
+The round-13 brief established four silent paths through `Answer()` whose failure modes were indistinguishable on the gateway log: (1) `session.buildPeerConnection` returning an error, (2) `SetRemoteDescription` returning an error, (3) `CreateAnswer`/`SetLocalDescription` returning an error, (4) the `gatherTimeout` ctx or `peer.ctx` cancel firing before ICE-gathering completes. The new `slog.Warn` at line 181 will surface the actual `err.Error()` from whichever of those fired, on the next GitHub `ui-browser` run, alongside the existing 1324 warn lines. The next round's investigator can therefore narrow the round-13 hypothesis space from "any of four silent paths" to one specific `err.Error()` string — and from there to either T2a (extend `setupTimer`) or T2b (only start the setupTimer racing arm once DTLS-fingerprint exchange is observed) per round 13's Track 2 design.
+
+On the SPA side, the new line means Playwright trace.zip console events will carry the literal `fail()` reason for every failing `UAT-14` / `UAT-15-human` retry. That is the smoking-gun evidence round 13 noted as "inside the 609 MB playwright-artifacts-ui-browser artifact" — round 14a surfaces it on every subsequent run instead of once per ad-hoc download.
+
+### (14a.4) Constraint #7 ledger update (mandatory)
+
+Round 14a: one commit, two files, two log lines, two explanatory comments. No timer, retry, state-machine, wire-format, generated-types, or contract change. No new failures on the doer's scoped verification (gofmt clean; typecheck parity with baseline). The four baseline `pdfjs-dist` errors predate this round, predate this squad, predate this worktree's first commit (they are pre-existing on HEAD per the baseline-stash parity check). The doer is **not** closing them — that is the orchestrator's pdfjs-dist fix lane per Constraint #7.
+
+### (14a.5) Closing — doer cleanup
+
+- One commit on `squad/o-webrtc-mdns`, no push (per brief: "Commit on squad/o-webrtc-mdns only: founder identity author AND committer … NEVER push").
+- Author/committer identity preserved: `Daniel Piatkowski <10800669+daniel-piatkowski-ai@users.noreply.github.com>` (verified via `git config user.name`/`user.email` before commit).
+- ZERO `Co-Authored-By:` trailers (verified via `git log -1 --format='%(trailers:key=Co-authored-by)'` post-commit, must be empty).
+- No worker e2e invocations, no `fly ssh` calls.
+- Two temporary verify stashes created and dropped cleanly (`round14a-verify` and `round14a-verify-baseline`); other agents' stashes on the shared stack left untouched.
+- One read-only `npm run typecheck` × 2 (with-changes, without-changes) for baseline parity evidence.
+- No secrets touched (no ORK, no OR-key, no test patterns leaked via set -x).
+
+**Honest finishing line.** The minimal observability change round 13 recommended has landed: every silent `Answer()` failure now writes a structured warn with session id + error; every SPA `fail()` now writes a console.error with the reason. The next `ui-browser` shard run will name the exact silent path that fired, which is the gate to round-14's behavior decision (T2a extend timer vs T2b DTLS-aware arm). No behavior, timer, retry, contract, or wire-format change. Baseline typecheck failures unchanged.
