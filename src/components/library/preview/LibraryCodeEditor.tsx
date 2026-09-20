@@ -50,7 +50,7 @@ function loadChromeExtensions(): Promise<Extension[]> {
             fontSize: '12.5px',
           },
           '.cm-scroller': {
-            fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+            fontFamily: 'var(--type-code-family)',
           },
           '.cm-content': {
             caretColor: 'var(--color-accent)',

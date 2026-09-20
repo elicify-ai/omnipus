@@ -49,7 +49,7 @@ export function AdvancedDisclosure({
         <span className="flex flex-col items-start gap-0.5 text-left">
           <span>{title}</span>
           {summary && !open && (
-            <span className="text-[11px] font-normal text-[var(--color-muted)]">{summary}</span>
+            <span className="text-[11px] font-[var(--font-weight-regular)] text-[var(--color-muted)]">{summary}</span>
           )}
         </span>
         {open ? <CaretUp size={13} /> : <CaretDown size={13} />}

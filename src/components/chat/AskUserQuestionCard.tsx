@@ -214,7 +214,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               <span className="text-[color:var(--color-success)] font-medium whitespace-nowrap">
                 {a.free_text ?? (a.selected ?? []).join(', ')}
                 {a.auto_default && (
-                  <span className="text-[var(--color-accent)] font-normal" data-testid="ask-user-auto-marker">
+                  <span className="text-[var(--color-accent)] font-[var(--font-weight-regular)]" data-testid="ask-user-auto-marker">
                     {' '}
                     · auto
                   </span>

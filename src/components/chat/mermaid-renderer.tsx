@@ -196,7 +196,7 @@ async function getMermaid() {
         themeVariables: {
           darkMode: true,
           background: 'transparent',
-          fontFamily: '"Inter", system-ui, sans-serif',
+          fontFamily: 'var(--type-body-family)',
           fontSize: '14px',
 
           // Core: neutral node fill (a touch lighter than the surface-2 card so nodes read

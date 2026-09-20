@@ -28,7 +28,7 @@ function StatCard({ label, value, hero = false, unit }: StatCardProps) {
       >
         {value}
         {unit && (
-          <span className={`font-sans font-normal${hero ? ' text-sm ml-1 text-[var(--color-muted)]' : ' text-xs ml-1 text-[var(--color-muted)]'}`}>
+          <span className={`font-sans font-[var(--font-weight-regular)]${hero ? ' text-sm ml-1 text-[var(--color-muted)]' : ' text-xs ml-1 text-[var(--color-muted)]'}`}>
             {unit}
           </span>
         )}

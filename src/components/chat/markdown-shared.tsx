@@ -233,7 +233,7 @@ export function ShikiCodeBlock({ language, code }: { language: string | undefine
         padding: '0.75rem 1rem',
         fontSize: '11px',
         lineHeight: '1.65',
-        fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+        fontFamily: 'var(--type-code-family)',
         margin: 0,
       }}
     >

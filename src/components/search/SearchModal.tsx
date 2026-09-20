@@ -212,7 +212,7 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
         <Folder size={14} className="shrink-0" />
         <span className="flex-1 text-left truncate">{name}</span>
         {isHighlighted && (
-          <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-normal normal-case tracking-normal text-[var(--color-muted)]" aria-hidden="true">↵</span>
+          <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-[var(--font-weight-regular)] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
         )}
       </button>
       {onSwitch && (
@@ -363,7 +363,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
         <div className={cn('truncate text-sm font-medium flex items-center gap-1.5', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
           <span className="truncate">{session.title || 'Untitled session'}</span>
           {isHighlighted && (
-            <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-normal text-[var(--color-muted)]" aria-hidden="true">↵</span>
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-[var(--font-weight-regular)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
           )}
         </div>
         {/* flex-wrap + hiding the token count under 400px keeps the metadata legible on phones */}
@@ -834,7 +834,7 @@ export function SearchModal() {
             <MagnifyingGlass size={16} className="text-[var(--color-accent)]" />
             {mode === 'workspaces' ? 'Switch workspace' : 'Search sessions'}
             {mode === 'sessions' && wsFilter && (
-              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-normal text-[var(--color-secondary)]">
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-[var(--font-weight-regular)] text-[var(--color-secondary)]">
                 {workspaces.find((w) => w.id === wsFilter)?.name ?? 'Filtered'}
                 <button tabIndex={0} type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
                   <X size={10} />

@@ -1052,7 +1052,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <Button
               type="button"
               variant="outline"
-              className="justify-between h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-normal w-full"
+              className="justify-between h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-[var(--font-weight-regular)] w-full"
               disabled={depCandidates.length === 0}
             >
               <span className="truncate">

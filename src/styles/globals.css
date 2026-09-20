@@ -194,7 +194,7 @@ body {
   background-color: var(--color-primary);
   color: var(--color-secondary);
   font-family: var(--font-body);
-  line-height: 1.6;
+  line-height: var(--font-line-height-body);
   /* THE iOS scroll lock (stable version). overflow:hidden alone does not
      stop iPad/iOS Safari from PANNING THE VISUAL VIEWPORT when a scroll
      gesture lands on non-scrollable chrome (sidebar whitespace, the top

@@ -512,7 +512,7 @@ function McpServerSection({
           data-testid="advanced-disclosure-trigger"
         >
           <span className="truncate">{server}</span>
-          <span className="text-[11px] font-normal text-[var(--color-muted)] shrink-0">
+          <span className="text-[11px] font-[var(--font-weight-regular)] text-[var(--color-muted)] shrink-0">
             {serverTools.length} tool{serverTools.length !== 1 ? 's' : ''}
           </span>
           {open ? <CaretUp size={13} className="shrink-0" /> : <CaretDown size={13} className="shrink-0" />}

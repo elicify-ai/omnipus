@@ -1867,7 +1867,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
                   if (overrideCount === 0) return null
                   return (
-                    <span className="text-xs text-[var(--color-muted)] font-normal">
+                    <span className="text-xs text-[var(--color-muted)] font-[var(--font-weight-regular)]">
                       {overrideCount} overrides
                     </span>
                   )
@@ -1902,7 +1902,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <div className="flex items-center gap-2">
                 <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Skills</p>
                 {agentSkills.length > 0 && (
-                  <span className="text-xs text-[var(--color-muted)] font-normal">
+                  <span className="text-xs text-[var(--color-muted)] font-[var(--font-weight-regular)]">
                     {agentSkills.length} granted
                   </span>
                 )}

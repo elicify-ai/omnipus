@@ -81,7 +81,7 @@ function LettermarkChip({ slug, size, className }: LettermarkChipProps) {
         border: '1px solid var(--color-border, #2A2A2E)',
         color: '#FFFFFF',
         fontFamily: 'var(--font-outfit, Outfit, sans-serif)',
-        fontWeight: 700,
+        fontWeight: 'var(--font-weight-bold)',
         fontSize,
         lineHeight: 1,
         userSelect: 'none',

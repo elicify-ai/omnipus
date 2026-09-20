@@ -222,7 +222,7 @@ export function BehaviorFields({
             <div className="flex items-center gap-2">
               <Microphone size={13} className="text-[var(--color-accent)]" />
               <p className="text-xs font-medium text-[var(--color-secondary)]">
-                Voice <span className="text-[var(--color-muted)] font-normal">(optional)</span>
+                Voice <span className="text-[var(--color-muted)] font-[var(--font-weight-regular)]">(optional)</span>
               </p>
             </div>
             <p className="text-xs text-[var(--color-muted)]">

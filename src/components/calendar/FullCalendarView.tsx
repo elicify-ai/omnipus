@@ -193,7 +193,7 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
         <span
           style={{
             fontSize: '0.65rem',
-            fontWeight: 500,
+            fontWeight: 'var(--font-weight-medium)',
             flexShrink: 0,
             color: CHIP_TEXT_COLOR,
           }}
@@ -204,7 +204,7 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
       <span
         style={{
           fontSize: '0.7rem',
-          fontWeight: 600,
+          fontWeight: 'var(--font-weight-semibold)',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',

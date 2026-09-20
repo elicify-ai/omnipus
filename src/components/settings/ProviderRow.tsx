@@ -152,12 +152,12 @@ function ModelLimitLine({ providerId, row }: { providerId: string; row: ModelLim
         // FR-031: greyed with the literal copy — plain --color-muted text
         // (never a reduced-opacity treatment), so the state stays ≥ 4.5:1
         // against the row background instead of washing out below AA.
-        <Badge variant="muted" className="font-normal" data-testid={`model-limit-not-entitled-${providerId}-${row.id}`}>
+        <Badge variant="muted" className="font-[var(--font-weight-regular)]" data-testid={`model-limit-not-entitled-${providerId}-${row.id}`}>
           not available on this key
         </Badge>
       )}
       {row.limitsUnknown === true && (
-        <Badge variant="muted" className="font-normal" data-testid={`model-limit-limits-unknown-${providerId}-${row.id}`}>
+        <Badge variant="muted" className="font-[var(--font-weight-regular)]" data-testid={`model-limit-limits-unknown-${providerId}-${row.id}`}>
           limits unknown
         </Badge>
       )}
@@ -439,14 +439,14 @@ export function ProviderRow({
             {isDefault && (
               <Badge
                 variant="muted"
-                className="font-normal"
+                className="font-[var(--font-weight-regular)]"
                 data-testid={`default-badge-${provider.id}`}
               >
                 Default
               </Badge>
             )}
             {!signInCapable && connected && (
-              <Badge variant="muted" className="font-normal">
+              <Badge variant="muted" className="font-[var(--font-weight-regular)]">
                 {catalogMode === 'live' ? 'Live model list' : 'Manual models'}
               </Badge>
             )}

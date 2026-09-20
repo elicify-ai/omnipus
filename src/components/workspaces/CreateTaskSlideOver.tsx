@@ -692,7 +692,7 @@ export function CreateTaskSlideOver({
                 <Button
                   type="button"
                   variant="outline"
-                  className="justify-between h-9 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-normal"
+                  className="justify-between h-9 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-[var(--font-weight-regular)]"
                   disabled={depCandidates.length === 0}
                 >
                   <span className="truncate">

@@ -37,7 +37,7 @@ export function SubagentQuestionMessage({ message }: SubagentQuestionMessageProp
         <span className="text-[var(--color-muted)]">asked</span>
         {message.untrusted_origin && (
           <span
-            className="rounded border border-[var(--color-border)] px-1 py-px text-[9px] normal-case tracking-normal text-[var(--color-muted)]"
+            className="rounded border border-[var(--color-border)] px-1 py-px text-[9px] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]"
             data-testid="subagent-question-untrusted"
           >
             untrusted

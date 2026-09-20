@@ -98,7 +98,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               ) : agent.status === 'error' ? (
                 <Badge variant="destructive" className="text-[var(--color-error)] border-[var(--color-error)]/30 bg-[var(--color-error)]/10">error</Badge>
               ) : (
-                <Badge variant={badgeVariantFor(agent.type)} className="font-normal">
+                <Badge variant={badgeVariantFor(agent.type)} className="font-[var(--font-weight-regular)]">
                   {agent.type}
                 </Badge>
               )}
@@ -114,7 +114,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 // T068-28 / FR-014: text badge, never colour-only — the copy is the state.
                 <Badge
                   variant="warning"
-                  className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 font-normal"
+                  className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 font-[var(--font-weight-regular)]"
                 >
                   {bindingCopy}
                 </Badge>

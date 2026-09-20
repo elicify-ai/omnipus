@@ -131,7 +131,7 @@ function GoalAccordionSection({
         <span>{label}</span>
         {hint && (
           <span
-            className="normal-case tracking-normal text-[var(--color-accent)]"
+            className="normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-accent)]"
             data-testid={`${testId}-hint`}
           >
             — {hint}
