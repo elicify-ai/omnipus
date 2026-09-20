@@ -265,7 +265,7 @@ export function KnowledgeOutline({
                         '--knowledge-outline-indent-depth-px': INDENT_BASE_PX + clamped * INDENT_STEP_PX, paddingLeft: 'calc(var(--knowledge-outline-indent-depth-px) * 1px)',
                       } as import('react').CSSProperties}
                       className={
-                        "flex w-full items-baseline gap-2 py-1 pr-3 text-left text-xs transition-colors " +
+                        "flex w-full items-baseline gap-2 py-1 pr-3 text-left text-[length:var(--type-utility-xs-size)] transition-colors " +
                         "hover:bg-[var(--color-surface-2)] " +
                         (isActive
                           ? "text-[var(--color-accent)]"

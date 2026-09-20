@@ -3147,7 +3147,7 @@ export function BrowserLiveView({
           clears `mediaStream`, which flips `attached` false and routes the
           user to the top-level empty-state error instead. */}
       {attached && videoReady && !displayError && (frameGateState.status !== 'ready' || !frameGeometryReady) && (
-        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-black/80 px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-text-secondary)]">
+        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-black/80 px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-secondary)]">
           {frameCallbacksUnavailable || (frameGateState.status === 'locked' && frameGateState.reason === 'presentation-time-unavailable')
             ? 'Browser input is unavailable because this browser cannot confirm displayed video frames.'
             : frameGateState.status === 'ready' && !frameGeometryReady
