@@ -309,12 +309,26 @@ function visitNode(node, ctx, sourceFile) {
     if (name === 'style') visitStyleLike(node.initializer, ctx, sourceFile)
   } else if (ts.isCallExpression(node)) {
     const name = calleeName(node.expression)
-    // Dispatch by local name first (pre-existing behavior), then authenticate
-    // renamed imports: a builder imported as `clsx as formatClasses` has a
-    // callee name outside CLASS_BUILDERS, so its definition-site arguments
-    // would otherwise never be scanned anywhere (HIGH bypass, frozen
-    // 1577aee7). Authentication — not name matching — decides renamed callees.
-    if (CLASS_BUILDERS.has(name) || guardClassBuilder(node.expression, ctx)) {
+    // FIX-P1 finding 1: a bare CLASS_BUILDERS name is trusted ONLY when there
+    // is no local declaration anywhere in the file to collide with it
+    // (hasLocalNameCollision) -- an unresolvable bare name can only ever be
+    // the real ambient builder at runtime (anything else throws
+    // ReferenceError), so trusting it is sound. guardClassBuilder separately
+    // authenticates a renamed import: a builder imported as `clsx as
+    // formatClasses` has a callee name outside CLASS_BUILDERS, so its
+    // definition-site arguments would otherwise never be scanned anywhere
+    // (HIGH bypass, frozen 1577aee7). What must NOT dispatch here is a LOCAL
+    // function merely SHARING a CLASS_BUILDERS name (e.g. `function cx(...a)
+    // { return 'p-[7px]' }`): its arguments are not its class content, its
+    // return value is, and that is exactly what the generic
+    // pureFunctionReturns path below (reached via visitClassBuilderArg)
+    // analyzes -- dispatching it here made that path unreachable and hid the
+    // real returned literal (lead-verified, see FIX-P1 finding 1 evidence).
+    // hasLocalNameCollision is exactly what closes that gap: a same-file
+    // FunctionDeclaration/const/etc. named `cx` collides, so the bare-name
+    // trust is withdrawn and only guardClassBuilder's real-import
+    // authentication can still dispatch it.
+    if ((CLASS_BUILDERS.has(name) && !hasLocalNameCollision(sourceFile, name)) || guardClassBuilder(node.expression, ctx)) {
       for (const arg of node.arguments) visitClassBuilderArg(arg, ctx, sourceFile)
     }
   }
@@ -325,7 +339,14 @@ function visitClassLike(initializer, ctx, sourceFile) {
   if (!initializer) return
   const expr = unwrap(ts.isJsxExpression(initializer) ? initializer.expression : initializer)
   if (!expr) return
-  if (ts.isCallExpression(expr) && (CLASS_BUILDERS.has(calleeName(expr.expression)) || guardClassBuilder(expr.expression, ctx))) return
+  // FIX-P1 finding 1: same collision-gated bare-name rule as visitNode's
+  // dispatch (see its own header comment) -- a same-file local declaration
+  // sharing the CLASS_BUILDERS name withdraws the bare-name trust and falls
+  // through to visitClassBuilderArg's generic proofs instead of a no-op.
+  if (ts.isCallExpression(expr)) {
+    const name = calleeName(expr.expression)
+    if ((CLASS_BUILDERS.has(name) && !hasLocalNameCollision(sourceFile, name)) || guardClassBuilder(expr.expression, ctx)) return
+  }
   visitClassBuilderArg(expr, ctx, sourceFile)
 }
 
@@ -348,6 +369,21 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     const boundary = directForwardedParameter(expr, 'className') ?? forwardedClassLikeBoundary(expr)
       ?? (ts.isIdentifier(expr) ? bodyDestructuredClassBoundary(expr) : null)
     if (boundary) {
+      // FIX-P1 finding 2: a boundary exists to protect against an UNKNOWN
+      // caller's dynamic value. When the receiving component/function is
+      // never exported from this module and every one of its call sites
+      // resolvable in THIS SAME FILE supplies the class-like prop as a
+      // static string literal, there is no unknown caller left -- the
+      // literal(s) are ordinary spacing values, inspected directly instead
+      // of hidden behind a boundary marker. Narrow and sound (see
+      // sameFileLiteralClassProp's own header comment): a rename, a
+      // non-literal call site, zero call sites, or any export path all keep
+      // the existing conservative boundary exactly as before.
+      const sameFileLiterals = sameFileLiteralClassProp(expr, sourceFile)
+      if (sameFileLiterals) {
+        for (const literal of sameFileLiterals) visitClassBuilderArg(literal, ctx, sourceFile, location)
+        return
+      }
       pushFinding(ctx, RULE.extensionBoundary, `${boundary.symbol}#${boundary.name}`, 'Spacing extension boundary; caller-provided className is forwarded unchanged and requires exact central review.', withOrigin(location, expr))
       if (boundary.initializer) visitClassBuilderArg(boundary.initializer, ctx, sourceFile)
       return
@@ -520,19 +556,38 @@ function guardImport(identifier) {
 
 // Whole-file shadow rejection is deliberately conservative: an unrelated
 // binding with the same name cannot accidentally authenticate a local helper.
-function computeGuardImport(identifier, source) {
-  const matches = []
+// Factored out of computeGuardImport (FIX-P1 finding 1) so the CLASS_BUILDERS
+// bare-name dispatch fallback below can reuse the exact same collision test:
+// a name with NO local declaration anywhere in the file and no dynamic scope
+// can only ever resolve, at runtime, to whatever real ambient/global binding
+// it is -- for a project source file that is either a genuine import (already
+// separately authenticated by guardClassBuilder) or a ReferenceError, never a
+// same-file lookalike. A name WITH a local declaration is exactly the
+// lookalike shape the finding closes (`function cx(...) { return 'p-[7px]' }`)
+// and must fall through to the generic proofs instead of the bare-name trust.
+const nameCollisionMemo = new WeakMap()
+function hasLocalNameCollision(source, name) {
+  let perFile = nameCollisionMemo.get(source)
+  if (!perFile) { perFile = new Map(); nameCollisionMemo.set(source, perFile) }
+  if (perFile.has(name)) return perFile.get(name)
   let unsafe = false
   const visit = node => {
     if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionDeclaration(node)
       || ts.isFunctionExpression(node) || ts.isClassDeclaration(node) || ts.isClassExpression(node)
       || ts.isEnumDeclaration(node) || ts.isModuleDeclaration(node) || ts.isImportEqualsDeclaration(node))
-      && node.name && findNamedBinding(node.name, identifier.text)) unsafe = true
+      && node.name && findNamedBinding(node.name, name)) unsafe = true
     if (ts.isWithStatement(node) || (ts.isCallExpression(node) && calleeName(node.expression) === 'eval')) unsafe = true
     ts.forEachChild(node, visit)
   }
   visit(source)
-  if (unsafe || isReassignedWithin(source, identifier.text)) return null
+  const result = unsafe || isReassignedWithin(source, name)
+  perFile.set(name, result)
+  return result
+}
+
+function computeGuardImport(identifier, source) {
+  const matches = []
+  if (hasLocalNameCollision(source, identifier.text)) return null
   for (const statement of source.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier) || statement.importClause?.isTypeOnly) continue
     const clause = statement.importClause
@@ -596,12 +651,73 @@ function cvaFactoryDefinition(callee, ctx) {
 function guardClassBuilder(expression, ctx) {
   const callee = unwrap(expression)
   const imported = guardImport(callee)
-  if (!imported) return false
-  if (imported.specifier === 'clsx' && ['default', 'clsx'].includes(imported.imported)) return true
-  if (imported.specifier === 'classnames' && imported.imported === 'default') return true
-  if (imported.specifier === 'tailwind-merge' && ['twMerge', 'twJoin'].includes(imported.imported)) return true
-  if (imported.imported !== 'cn') return false
-  const declaration = resolveModuleExport(ctx, callee.getSourceFile().fileName, imported.specifier, imported.imported, new Set())
+  if (imported) {
+    if (imported.specifier === 'clsx' && ['default', 'clsx'].includes(imported.imported)) return true
+    if (imported.specifier === 'classnames' && imported.imported === 'default') return true
+    if (imported.specifier === 'tailwind-merge' && ['twMerge', 'twJoin'].includes(imported.imported)) return true
+    // cva/tv are deliberately NOT authenticated here even when genuinely
+    // imported: unlike clsx/classnames/twMerge/twJoin/cn, a bare cva/tv call's
+    // OWN arguments are not unconditionally "the resolved class content" --
+    // cva returns a variant-selector FUNCTION, not a class string, so a
+    // renamed cva call used directly as a value (`const badge = variants(...);
+    // <span className={badge}/>`) must stay unsupported (pinned by "keeps a
+    // renamed cva factory blocking in alias and direct positions"). The
+    // UNRENAMED case is covered by the CLASS_BUILDERS bare-name fallback
+    // below (a real import never collides with hasLocalNameCollision, since
+    // an ImportDeclaration is not one of the collision node kinds), and every
+    // renamed cva/tv call site is separately authenticated by the narrower,
+    // real-shape-aware isCvaCallee/cvaFactoryDefinition path.
+    if (imported.imported !== 'cn') return false
+    return verifyCnWrapperShape(resolveModuleExport(ctx, callee.getSourceFile().fileName, imported.specifier, imported.imported, new Set()))
+  }
+  // No import at all: authenticate a cn() wrapper declared AND used within
+  // THIS SAME FILE (src/lib/utils.ts's own real shape, mirrored locally in a
+  // single-module fixture that never imports it from anywhere) by the
+  // identical structural verification below, applied to the local
+  // declaration instead of a resolved cross-module export. Restricted to the
+  // literal name 'cn' -- same precision scope as the imported branch above;
+  // a differently-named local wrapper is not this proof's target. Uses
+  // soleLocalDeclaration, NOT functionDeclarationFor -- functionDeclarationFor
+  // falls back to resolving a same-named IMPORT when no local declaration is
+  // in scope, which would silently re-authenticate the exact shadow-import
+  // case guardImport's own whole-file shadow rejection exists to block
+  // ("keeps the alias unsupported when the consumer shadows the cn binding").
+  if (!ts.isIdentifier(callee) || callee.text !== 'cn') return false
+  return verifyCnWrapperShape(soleLocalDeclaration(callee.getSourceFile(), 'cn'))
+}
+
+// The single, unambiguous FunctionDeclaration binding `name` at module scope
+// -- same whole-file shadow-rejection philosophy as guardImport/
+// computeGuardImport's own "an unrelated binding with the same name cannot
+// accidentally authenticate a local helper", applied to a purely local
+// (non-imported) declaration instead of an import specifier. ANY other node
+// binding `name` anywhere in the file (a parameter, a `var`/`let`/`const`, a
+// second same-named function, a class, an enum, a dynamic scope) makes it
+// unsafe to trust, and so does a whole-file reassignment of it.
+function soleLocalDeclaration(source, name) {
+  const matches = []
+  let unsafe = false
+  const visit = node => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === name) matches.push(node)
+    else if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isFunctionExpression(node)
+      || ts.isClassDeclaration(node) || ts.isClassExpression(node) || ts.isEnumDeclaration(node)
+      || ts.isModuleDeclaration(node) || ts.isImportEqualsDeclaration(node))
+      && node.name && findNamedBinding(node.name, name)) unsafe = true
+    if (ts.isWithStatement(node) || (ts.isCallExpression(node) && calleeName(node.expression) === 'eval')) unsafe = true
+    ts.forEachChild(node, visit)
+  }
+  visit(source)
+  if (unsafe || matches.length !== 1 || isReassignedWithin(source, name)) return null
+  return matches[0]
+}
+
+// The exact structural shape src/lib/utils.ts's real cn() wrapper has: a
+// single rest parameter, a single statement, `return
+// mergeBuilder(clsxBuilder(inputs))`, both builders genuinely imported (or,
+// for mergeBuilder, extendTailwindMerge-derived), and the parameter forwarded
+// unchanged. Shared by both the imported-cn path and the local-declaration
+// path above so a lookalike cannot pass either route without the real shape.
+function verifyCnWrapperShape(declaration) {
   if (!declaration || !ts.isFunctionDeclaration(declaration) || !declaration.body || declaration.asteriskToken
     || declaration.modifiers?.some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword)
     || declaration.parameters.length !== 1 || declaration.body.statements.length !== 1
@@ -822,6 +938,146 @@ function bodyDestructuredClassBoundary(identifier) {
   if (!symbol) return null
   const boundaryName = destructuredParameterNames.has(match.source) ? `${match.source}.${match.property}` : match.property
   return { symbol, name: boundaryName, initializer: match.initializer }
+}
+
+// FIX-P1 finding 2 (dist/design-system-baseline/cli-lanes/c1-prep/FIX-P1): a
+// MODULE-PRIVATE component/function's class-like prop, read back unchanged
+// inside its own body, only needs the conservative extension-boundary
+// treatment because an UNKNOWN outside caller might pass a dynamic value.
+// When the receiver is never exported from this module (no `export`
+// modifier, no `export default`, no `export { name }`) and EVERY call site
+// resolvable in THIS SAME FILE supplies the prop as a static string literal,
+// there is no unknown caller left to protect against -- the literal(s) are
+// ordinary spacing values. Deliberately narrow, matching only the exact
+// shape this recovers soundly:
+//   - the read-site identifier must be a PLAIN parameter, or a destructured
+//     element whose local name is UNRENAMED from its source property --
+//     otherwise the outward-facing prop name a caller writes could differ
+//     from `expr.text`, and the call-site search below would be checking the
+//     wrong key (a renamed shape, e.g. `{ className: chevronClassName }`,
+//     falls through to the ordinary boundary exactly as before);
+//   - the receiver must be declared directly at module top level (a
+//     FunctionDeclaration, or a single-declarator top-level `const X = (...)
+//     => ...`) -- a nested/locally-scoped same-named function is left
+//     exactly as unproven as before, since a whole-module call-site scan
+//     would not be scoped correctly to it;
+//   - at least one call site must be found, and every one of them (a JSX
+//     element/self-closing element or a plain call expression naming the
+//     receiver) must supply the prop as a literal -- a single missing or
+//     dynamic value at any call site aborts the whole recovery.
+// This only ever RECOVERS a proof (substituting literals for a boundary
+// marker); it can never suppress a finding a non-literal or exported shape
+// would have produced, and it never touches the two-hop
+// bodyDestructuredClassBoundary or parameterMemberBoundary shapes below,
+// which stay exactly as conservative as before.
+function sameFileLiteralClassProp(expr, sourceFile) {
+  if (!ts.isIdentifier(expr)) return null
+  let fn = expr.parent
+  while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+  if (!fn) return null
+  const parameter = findParameterBinding(fn.parameters, expr.text)
+  if (!parameter) return null
+  if ('propertyName' in parameter && parameter.propertyName
+    && (!ts.isIdentifier(parameter.propertyName) || parameter.propertyName.text !== expr.text)) return null
+  if (isReassignedWithin(fn, expr.text)) return null
+  const statement = topLevelComponentStatement(fn, sourceFile)
+  if (!statement) return null
+  const symbol = receivingSymbol(fn)
+  if (!symbol || isExportedComponentName(statement, symbol, sourceFile)) return null
+  const sites = moduleCallSitesFor(symbol, sourceFile, fn)
+  if (sites.length === 0) return null
+  const literals = []
+  for (const site of sites) {
+    const literal = callSitePropLiteral(site, expr.text)
+    if (!literal) return null
+    literals.push(literal)
+  }
+  return literals
+}
+
+// The top-level statement declaring `fn`, restricted to the two shapes a
+// same-file call-site scan can be soundly scoped to: a top-level
+// FunctionDeclaration, or a top-level `const NAME = (...) => ...` /
+// `const NAME = function (...) {...}` with exactly one declarator (so `NAME`
+// is unambiguous). Anything nested inside another function/block -- or a
+// multi-declarator `const a = ..., b = ...` statement -- returns null; the
+// whole-module call-site scan below is only correctly scoped for a name bound
+// directly at module top level.
+function topLevelComponentStatement(fn, sourceFile) {
+  if (ts.isFunctionDeclaration(fn)) return sourceFile.statements.includes(fn) ? fn : null
+  if (ts.isArrowFunction(fn) || ts.isFunctionExpression(fn)) {
+    const declarator = fn.parent
+    if (!declarator || !ts.isVariableDeclaration(declarator) || declarator.initializer !== fn) return null
+    const list = declarator.parent
+    if (!list || !ts.isVariableDeclarationList(list) || list.declarations.length !== 1) return null
+    const statement = list.parent
+    return statement && ts.isVariableStatement(statement) && sourceFile.statements.includes(statement) ? statement : null
+  }
+  return null
+}
+
+// True when `symbol` is reachable from outside this module: the declaring
+// statement itself carries `export`/`export default`, or a separate
+// `export { symbol }` (optionally `export { local as symbol }`, matched by
+// LOCAL name since that is what a same-module reference would use) or
+// `export default symbol` re-exports it.
+function isExportedComponentName(statement, symbol, sourceFile) {
+  if (statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword || modifier.kind === ts.SyntaxKind.DefaultKeyword)) return true
+  for (const other of sourceFile.statements) {
+    if (ts.isExportAssignment(other) && ts.isIdentifier(other.expression) && other.expression.text === symbol) return true
+    if (ts.isExportDeclaration(other) && other.exportClause && ts.isNamedExports(other.exportClause)) {
+      for (const element of other.exportClause.elements) {
+        if ((element.propertyName?.text ?? element.name.text) === symbol) return true
+      }
+    }
+  }
+  return false
+}
+
+// Every same-file call site of `symbol`: a JSX element/self-closing element
+// tagged with the bare identifier `symbol`, or a plain call expression whose
+// callee is the bare identifier `symbol` -- excluding `fn` itself (its own
+// declaration is not a call site). A tag/callee reached through a property
+// access (`<Foo.Inner/>`) is not matched; that under-counts call sites
+// (missing one only makes `sites.length` smaller or zero) rather than
+// over-counting, so it can only fall back to the existing boundary, never
+// wrongly recover one.
+function moduleCallSitesFor(symbol, sourceFile, fn) {
+  const sites = []
+  const visit = (node) => {
+    if (node !== fn) {
+      if ((ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) && ts.isIdentifier(node.tagName) && node.tagName.text === symbol) {
+        sites.push({ kind: 'jsx', node })
+      } else if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === symbol) {
+        sites.push({ kind: 'call', node })
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return sites
+}
+
+// The static string literal a single call site supplies for `propName`, or
+// null when the prop is absent, shorthand (no initializer), or any non-
+// literal expression -- absence/dynamism is never assumed safe.
+function callSitePropLiteral(site, propName) {
+  if (site.kind === 'jsx') {
+    const attribute = site.node.attributes.properties.find((property) => ts.isJsxAttribute(property) && staticPropertyName(property.name) === propName)
+    if (!attribute || !attribute.initializer) return null
+    if (ts.isStringLiteral(attribute.initializer)) return attribute.initializer
+    if (ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression) {
+      const inner = unwrap(attribute.initializer.expression)
+      if (inner && (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner))) return inner
+    }
+    return null
+  }
+  const firstArgument = site.node.arguments[0] && unwrap(site.node.arguments[0])
+  if (!firstArgument || !ts.isObjectLiteralExpression(firstArgument)) return null
+  const property = firstArgument.properties.find((candidate) => ts.isPropertyAssignment(candidate) && staticPropertyName(candidate.name) === propName)
+  if (!property) return null
+  const value = unwrap(property.initializer)
+  return value && (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) ? value : null
 }
 
 // Item 1 port (typography.mjs::parameterMemberBoundary, Capability B): `X.
@@ -1651,7 +1907,11 @@ function chainHasDynamicElementAccess(node) {
 function directClassBuilderCallEmbed(node, ctx) {
   const parent = node.parent
   if (!parent || !ts.isCallExpression(parent) || !parent.arguments.includes(node)) return null
-  if (!CLASS_BUILDERS.has(calleeName(parent.expression)) && !guardClassBuilder(parent.expression, ctx)) return null
+  // FIX-P1 finding 1: same collision-gated bare-name rule as visitNode/
+  // visitClassLike (see visitNode's own header comment).
+  const name = calleeName(parent.expression)
+  const sourceFile = parent.getSourceFile()
+  if (!(CLASS_BUILDERS.has(name) && !hasLocalNameCollision(sourceFile, name)) && !guardClassBuilder(parent.expression, ctx)) return null
   return parent
 }
 

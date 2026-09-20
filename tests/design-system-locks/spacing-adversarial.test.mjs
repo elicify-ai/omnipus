@@ -1724,3 +1724,151 @@ describe('cva variant function call-site resolution (ported from ts-colors.mjs)'
 function syntaxes(findings, ruleId) {
   return findings.filter((finding) => finding.ruleId === ruleId).map((finding) => finding.syntax)
 }
+
+// FIX-P1 finding 1 (dist/design-system-baseline/cli-lanes/c1-prep/FIX-P1):
+// visitNode/visitClassLike/directClassBuilderCallEmbed used to dispatch a
+// CLASS_BUILDERS-named callee (cn/clsx/classNames/classnames/twMerge/twJoin/
+// cva/cx/tv) purely by bare name, so a same-file lookalike sharing one of
+// those 9 names was walked as though its ARGUMENTS were the class content --
+// when its real, unproven behavior is its RETURN VALUE. Fairness controls
+// mirror dist/design-system-baseline/cli-lanes/fanout/COMMON-RULES.md: the
+// clean value alone gives [], the bad value written directly gives a finding.
+describe('FIX-P1 finding 1: a CLASS_BUILDERS-named local lookalike is authenticated, not trusted by bare name', () => {
+  const path = 'src/components/Lookalike.tsx'
+
+  it('fairness control: the clean baseline (a registered spacing token, no class builder involved) gives no findings', () => {
+    assert.deepEqual(findings(path, "export const x = <p className={'p-[var(--space-2)]'} />"), [])
+  })
+
+  it('fairness control: a plain off-scale violation written directly still gives a finding', () => {
+    const result = findings(path, "export const x = <p className={'p-[7px]'} />")
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+  })
+
+  it('FORBIDDEN: a local `cx` lookalike that ignores its arguments and returns a bad literal is caught through its RETURN VALUE (the exact false green reproduced against this lane)', () => {
+    const source = "function cx(...a) { return 'p-[7px]' }\nexport const X = () => <div className={cx('safe')} />"
+    const result = findings(path, source)
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'),
+      'the lookalike\'s real returned literal must be caught, not hidden behind the bare CLASS_BUILDERS name')
+    assert.deepEqual(result.filter((f) => f.ruleId === 'spacing/unsupported'), [])
+  })
+
+  it('FORBIDDEN: the same lookalike shape under a different CLASS_BUILDERS name (`tv`) is caught the same way', () => {
+    const source = "function tv(...a) { return 'p-[13px]' }\nexport const X = () => <div className={tv('safe')} />"
+    const result = findings(path, source)
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[13px]'))
+  })
+
+  it('FORBIDDEN: a local `clsx` lookalike returning a bad literal is caught, even though `clsx` is one of the 9 trusted names', () => {
+    const source = "function clsx(...a) { return 'gap-[13px]' }\nexport const X = () => <div className={clsx('safe')} />"
+    const result = findings(path, source)
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'gap-[13px]'))
+  })
+
+  it('PERMITTED: an undeclared, unimported bare `cx(...)` call (no local declaration to collide with) is still trusted by name, so its own arguments are checked directly (back-compat: real source can never reach a bare name with no import and no local declaration except the real ambient builder)', () => {
+    const source = "export const X = () => <div className={cx('p-[7px]', 'shrink-0')} />"
+    const result = findings(path, source)
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+  })
+
+  it('PERMITTED: a genuinely authenticated cn() wrapper declared AND used in the SAME file (no import at all) still authenticates and reports its real off-scale argument', () => {
+    const source = "import { clsx } from 'clsx'\nimport { twMerge } from 'tailwind-merge'\nexport function cn(...inputs) { return twMerge(clsx(inputs)) }\nexport const X = () => <div className={cn('p-[7px]')} />"
+    const result = findings(path, source)
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+  })
+
+  it('mutation proof: reverting the dispatch condition to bare `CLASS_BUILDERS.has(name)` alone (dropping the hasLocalNameCollision gate and guardClassBuilder) would make the `cx` lookalike case above resolve to [] instead of the real off-scale finding -- pinning the finding non-empty is the sentinel', () => {
+    const source = "function cx(...a) { return 'p-[7px]' }\nexport const X = () => <div className={cx('safe')} />"
+    const result = findings(path, source)
+    assert.ok(result.length > 0)
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+  })
+})
+
+// FIX-P1 finding 2: a MODULE-PRIVATE component's class-like prop, read back
+// unchanged inside its own body, is registrable as an extension-boundary even
+// when its one same-file call site's literal is never inspected. Fairness
+// controls mirror dist/design-system-baseline/cli-lanes/fanout/COMMON-RULES.md.
+describe('FIX-P1 finding 2: a private component whose class-like prop is always a same-file literal is inspected directly, not boundary-registered', () => {
+  const path = 'src/components/PrivateBoundary.tsx'
+
+  it('fairness control: the clean baseline (a registered spacing token, no class builder involved) gives no findings', () => {
+    assert.deepEqual(findings(path, "export const x = <p className={'p-[var(--space-2)]'} />"), [])
+  })
+
+  it('fairness control: a plain off-scale violation written directly still gives a finding', () => {
+    const result = findings(path, "export const x = <p className={'p-[7px]'} />")
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+  })
+
+  it('FORBIDDEN: the exact reproduced shape -- a private Inner component whose only call site passes a literal boxClassName -- reports the literal directly and never registers Inner#boxClassName', () => {
+    const source = [
+      'function Inner({ boxClassName }) { return <div className={boxClassName} /> }',
+      'export function W() { return <Inner boxClassName="p-[7px]" /> }',
+    ].join('\n')
+    const result = findings(path, source)
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'),
+      'the single literal call-site value must be inspected as an ordinary spacing value')
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary'), [])
+  })
+
+  it('PERMITTED: the same shape stays boundary-registered when Inner is EXPORTED (an outside caller is possible)', () => {
+    const source = [
+      'export function Inner({ boxClassName }) { return <div className={boxClassName} /> }',
+      'export function W() { return <Inner boxClassName="p-[7px]" /> }',
+    ].join('\n')
+    const result = findings(path, source)
+    assert.ok(syntaxes(result, 'spacing/extension-boundary').includes('Inner#boxClassName'))
+  })
+
+  it('PERMITTED: the same shape stays boundary-registered when the one call site passes a DYNAMIC value', () => {
+    const source = [
+      'function Inner({ boxClassName }) { return <div className={boxClassName} /> }',
+      "export function W({ dynamic }) { return <Inner boxClassName={dynamic} /> }",
+    ].join('\n')
+    const result = findings(path, source)
+    assert.ok(syntaxes(result, 'spacing/extension-boundary').includes('Inner#boxClassName'))
+  })
+
+  it('PERMITTED: the same shape stays boundary-registered when ONE of two call sites is non-literal (a single dynamic site aborts the whole recovery)', () => {
+    const source = [
+      'function Inner({ boxClassName }) { return <div className={boxClassName} /> }',
+      'export function A() { return <Inner boxClassName="p-[7px]" /> }',
+      "export function B({ dynamic }) { return <Inner boxClassName={dynamic} /> }",
+    ].join('\n')
+    const result = findings(path, source)
+    assert.ok(syntaxes(result, 'spacing/extension-boundary').includes('Inner#boxClassName'))
+  })
+
+  it('PERMITTED: the same shape stays boundary-registered when the destructured element is RENAMED (the outward-facing prop name callers use is not the local read-site name)', () => {
+    const source = [
+      'function Inner({ className: chevronClassName }) { return <div className={chevronClassName} /> }',
+      'export function W() { return <Inner className="p-[7px]" /> }',
+    ].join('\n')
+    const result = findings(path, source)
+    assert.ok(result.some((f) => f.ruleId === 'spacing/extension-boundary' && f.syntax.endsWith('#chevronClassName')))
+  })
+
+  it('PERMITTED: two literal call sites for the same private component both get inspected', () => {
+    const source = [
+      'function Inner({ boxClassName }) { return <div className={boxClassName} /> }',
+      'export function A() { return <Inner boxClassName="p-[7px]" /> }',
+      'export function B() { return <Inner boxClassName="gap-[13px]" /> }',
+    ].join('\n')
+    const result = findings(path, source)
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary'), [])
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale').sort(), ['gap-[13px]', 'p-[7px]'].sort())
+  })
+
+  it('mutation proof: reverting sameFileLiteralClassProp to always return null (i.e. never recovering) would make the FORBIDDEN case above register Inner#boxClassName and never see p-[7px] -- pinning both the off-scale finding and the empty boundary list is the sentinel', () => {
+    const source = [
+      'function Inner({ boxClassName }) { return <div className={boxClassName} /> }',
+      'export function W() { return <Inner boxClassName="p-[7px]" /> }',
+    ].join('\n')
+    const result = findings(path, source)
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary'), [])
+    assert.ok(syntaxes(result, 'spacing/off-scale').includes('p-[7px]'))
+  })
+})
