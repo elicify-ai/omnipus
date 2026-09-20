@@ -1316,3 +1316,76 @@ describe('capability: array-callback property read — structural boundary', () 
     )
   })
 })
+
+// ---------------------------------------------------------------------------
+// FIX-P2 (2026-09-20, confirmed-defect closure): two CRITICAL findings in
+// walkClassExpression's ObjectLiteralExpression case and the CLASS_BUILDERS
+// dispatch, reproduced by a probe lane before this fix
+// (dist/design-system-baseline/cli-lanes/c1-prep/P2/probe-08-mixed-spread-explicit.json).
+//
+// 1. A SpreadAssignment/ShorthandPropertyAssignment member of an object
+//    literal was dropped with NO recursion and NO emitUnsupported — every
+//    other object-literal path in this file detects a spread and fails
+//    closed; this one silently produced nothing at all for whatever the
+//    spread/shorthand carried.
+// 2. CLASS_BUILDERS names (cn/clsx/cva/twMerge/classnames/classNames) were
+//    dispatched purely by identifier TEXT, so a local look-alike function of
+//    the same name was trusted exactly like the real utility — examining
+//    its CALL ARGUMENT (irrelevant to what it actually renders) instead of
+//    its real return value, which could hide an actual hazard behind a
+//    clean-looking argument.
+// ---------------------------------------------------------------------------
+describe('FIX-P2: object-literal spread/shorthand members and CLASS_BUILDERS look-alikes', () => {
+  it('FORBIDDEN: a spread-reached bad size is reported (or unsupported) — never silently dropped like the pre-fix scanner (reports only the explicit sibling)', () => {
+    const found = findings(`import clsx from 'clsx'
+const extra = { hidden: 'text-[10px]' }
+export const x = <div className={clsx({ ...extra, visible: 'text-[9px]' })} />`)
+    assert.deepEqual(
+      found.map((f) => `${f.ruleId} ${f.syntax}`),
+      ['typography/unsupported-text-utility ...extra', 'typography/arbitrary-text-size text-[9px]'],
+    )
+  })
+
+  it('FORBIDDEN: a shorthand-reached value is reported (or unsupported) — never silently dropped (`{ size }` used to vanish with zero findings)', () => {
+    const found = findings("import clsx from 'clsx'\nexport function X({ size }) { return <div className={clsx({ size })} /> }")
+    assert.deepEqual(
+      found.map((f) => `${f.ruleId} ${f.syntax}`),
+      ['typography/unsupported-text-utility size'],
+    )
+  })
+
+  it('PERMITTED: an ordinary explicit property assignment in an object literal classifies exactly as before', () => {
+    expectOne("import clsx from 'clsx'\nexport const x = <div className={clsx({ visible: 'text-[9px]' })} />", 'typography/arbitrary-text-size', 'text-[9px]')
+  })
+
+  it('FORBIDDEN: any other object-literal member kind (a method) fails closed instead of vanishing', () => {
+    const found = findings("import clsx from 'clsx'\nexport const x = <div className={clsx({ compute() { return 'text-[10px]' } })} />")
+    assert.deepEqual(
+      found.map((f) => `${f.ruleId} ${f.syntax}`),
+      ["typography/unsupported-text-utility compute() { return 'text-[10px]' }"],
+    )
+  })
+
+  it('FORBIDDEN (mutation proof): a local CLASS_BUILDER look-alike is not trusted — it used to examine the (clean-looking) call ARGUMENT instead of the function\'s real return value, silently missing the real hazard', () => {
+    // Pre-fix: this returned [] (zero findings) — 'text-base' is a clean
+    // argument, and the old bare-name dispatch classified THAT instead of
+    // ever looking at what the look-alike actually returns.
+    expectOne(
+      "function cn(...args) { return 'text-sm' }\nexport function X() { return <div className={cn('text-base')} /> }",
+      'typography/text-size-below-floor', 'text-sm',
+    )
+  })
+
+  it('PERMITTED: a real clsx import behaves exactly as before', () => {
+    expectOne("import clsx from 'clsx'\nexport function X() { return <div className={clsx('text-[10px]')} /> }", 'typography/arbitrary-text-size', 'text-[10px]')
+  })
+
+  it('PERMITTED: bare cn with no import and no local declaration in the file is still trusted (parity with the hundreds of existing fixtures that omit the import line)', () => {
+    expectOne("export function X() { return <div className={cn('text-[10px]')} /> }", 'typography/arbitrary-text-size', 'text-[10px]')
+  })
+
+  it('PERMITTED: cn()\'s own real definition shape at a real usage site still resolves the real argument (P10 parity, unaffected by the authentication gate)', () => {
+    expectOne(`export function cn(...inputs) { return twMerge(clsx(inputs)) }
+export const x = <p className={cn('text-[10px]')} />`, 'typography/arbitrary-text-size', 'text-[10px]')
+  })
+})

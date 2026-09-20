@@ -58,7 +58,7 @@ const PRINTER = ts.createPrinter({ removeComments: true, newLine: ts.NewLineKind
 export function scan({ path = '', source = '', policy, modules } = {}) {
   const filePath = String(path).replaceAll('\\', '/')
   const text = typeof source === 'string' ? source : String(source ?? '')
-  const ctx = { path: filePath, source: text, findings: [], maps: buildPolicyMaps(policy), modules, moduleCache: new Map() }
+  const ctx = { path: filePath, source: text, findings: [], maps: buildPolicyMaps(policy), modules, moduleCache: new Map(), governedPalettes: new Set() }
   const ext = extensionOf(filePath)
   if (!extensions.includes(ext)) {
     return [makeFinding(ctx, RULE.parseError, ext ? `unparseable-extension:${ext}` : 'unparseable-extension', `Unsupported file extension ${ext || '(none)'}; status coverage cannot be proven.`, 1, 1)]
@@ -525,6 +525,10 @@ function classifyValue(node, statusKey, env, syntaxNode = node) {
     reportOutcome(env, syntaxNode, statusKey, classifyTokenId(statusKey, tokenId, env.ctx.maps), tokenId)
     return
   }
+  if (ts.isBinaryExpression(core) && core.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    reportOutcome(env, syntaxNode, statusKey, 'unsupported', 'value built by string concatenation cannot be statically proven')
+    return
+  }
   if (classifyGovernedModulePaint(core, statusKey, env, syntaxNode)) return
   if (ts.isObjectLiteralExpression(core)) {
     classifyColorObject(core, statusKey, env, syntaxNode)
@@ -654,15 +658,38 @@ function walkObjectLiteral(node, env) {
     entries.push({ kind: 'prop', node: prop, key: resolveKey(prop.name, env.sf), value: prop.initializer, nameNode: prop.name })
   }
   const d4Entries = entries.filter((entry) => entry.kind === 'prop' && canonicalStatus(entry.key))
+  const resolvedCanonicalKeys = new Set(d4Entries.map((entry) => canonicalStatus(entry.key)))
+  // Shape-based detection (D4): a map whose resolvable keys are the full D4 status
+  // set (or a superset of it) is a governed status palette regardless of binding
+  // name. A second D4-shaped palette under an innocuous name is still blocking.
+  const shapeIsD4Palette = Object.keys(D4_HEX).every((status) => resolvedCanonicalKeys.has(status))
   const nested = d4Entries.some((entry) => {
     const value = unwrap(entry.value)
     return value && ts.isObjectLiteralExpression(value) && hasColorishProp(value)
   })
-  const isMap = env.inStatusMap || nested || (isStatusBindingName(env.bindingName) && d4Entries.length >= 1)
+  const nameSuggestsStatus = isStatusBindingName(env.bindingName) || isPaletteBindingName(env.bindingName)
+  const isMap = env.inStatusMap || nested || shapeIsD4Palette || (nameSuggestsStatus && d4Entries.length >= 1)
+  if (isMap && node.parent && ts.isVariableDeclaration(node.parent) && ts.isIdentifier(node.parent.name)) {
+    // Remember this binding so a later plain assignment into it (a mutation) can
+    // still be re-classified even though the mutation site itself carries no
+    // status-shaped literal to look at.
+    env.ctx.governedPalettes.add(node.parent.name.text)
+  }
   if (isMap) {
     for (const entry of entries) {
       if (entry.kind === 'spread') reportUnsupported(env, entry.node, 'spread')
       else if (entry.key === null && ts.isComputedPropertyName(entry.nameNode)) reportUnsupported(env, entry.node, 'computed property')
+    }
+  } else if (nameSuggestsStatus) {
+    // Not (yet) recognised as a governed map, but the binding name still claims a
+    // status/paint role and at least one entry resolves to a colour-looking value
+    // behind a key we cannot statically prove. Fail closed instead of silently
+    // dropping it — this is exactly the "all computed keys" shape a name-only gate
+    // is blind to. A non-colour value (e.g. an ordinary state label) is left alone.
+    for (const entry of entries) {
+      if (entry.kind === 'prop' && entry.key === null && ts.isComputedPropertyName(entry.nameNode) && isColorLikeNode(entry.value)) {
+        reportUnsupported(env, entry.node, 'computed property on a status-shaped binding resolves to a colour-like value that cannot be classified')
+      }
     }
   }
   for (const entry of entries) {
@@ -728,7 +755,48 @@ function walkBinary(node, env) {
     walkTs(node.right, next)
     return
   }
+  if (operator === ts.SyntaxKind.EqualsToken) {
+    walkAssignment(node, env)
+    return
+  }
   ts.forEachChild(node, (child) => walkTs(child, env))
+}
+
+// A plain assignment into a property of a governed status palette (by name or by
+// prior shape registration) must be re-classified against the mutated value — the
+// initial, correct definition must never stand in for what the binding holds after
+// a later write. An unresolvable property key on a governed binding fails closed.
+function mutationTargetKey(node, env) {
+  const core = unwrap(node)
+  if (!core) return null
+  const computed = ts.isElementAccessExpression(core)
+  if (!ts.isPropertyAccessExpression(core) && !computed) return null
+  const objectExpr = core.expression
+  const keyNode = computed ? core.argumentExpression : core.name
+  if (!ts.isIdentifier(objectExpr)) return null
+  const name = objectExpr.text
+  // A bare status-shaped name (e.g. kickoffAttemptStatus) is not enough on its
+  // own — that also matches ordinary non-colour state records (src/store/chat/
+  // store.ts::resolveKickoffAttempt). Require either a name that is BOTH
+  // status- and paint-shaped (statusPalette, chipStyleColors, ...) or prior
+  // shape registration as an actual D4 map; a plain status-named record must
+  // stay silent on mutation exactly as it does at definition time.
+  const governed = env.ctx.governedPalettes.has(name) || isPaletteBindingName(name)
+  if (!governed) return null
+  const keyText = computed
+    ? foldString(keyNode, env.sf)
+    : (ts.isIdentifier(keyNode) || ts.isPrivateIdentifier(keyNode) ? keyNode.text : null)
+  return { canonical: keyText ? canonicalStatus(keyText) : null, resolvable: keyText !== null }
+}
+
+function walkAssignment(node, env) {
+  const mutation = mutationTargetKey(node.left, env)
+  if (mutation) {
+    if (mutation.canonical) classifyValue(node.right, mutation.canonical, { ...env, inStatusMap: true }, node)
+    else if (!mutation.resolvable) reportUnsupported(env, node, 'status palette mutation with an unresolved property key')
+  }
+  walkTs(node.left, env)
+  walkTs(node.right, env)
 }
 
 function jsxNameText(node) {
@@ -767,31 +835,76 @@ function jsxAttrString(attr) {
   return ''
 }
 
+// A paint attribute that clearly names a status colour helper/binding (fill,
+// stroke, color, style) but that this element carries no status/data-status/
+// className channel to key against must fail closed rather than be skipped for
+// lack of a literal status key — e.g. style={{ background: getStatusHex(status) }}
+// on an element with no data-status/status/className attribute at all.
+function isStatusRelatedExpr(node) {
+  const core = unwrap(node)
+  if (!core) return false
+  if (ts.isCallExpression(core)) {
+    const callee = core.expression
+    const calleeName = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : ''
+    if (isPaletteBindingName(calleeName) || isStatusBindingName(calleeName)) return true
+    return core.arguments.some((arg) => isStatusRelatedExpr(arg))
+  }
+  if (ts.isIdentifier(core)) return isStatusBindingName(core.text) || core.text === 'status'
+  if (ts.isPropertyAccessExpression(core)) return isStatusBindingName(core.name.text) || isStatusRelatedExpr(core.expression)
+  if (ts.isElementAccessExpression(core)) return isStatusRelatedExpr(core.expression)
+  return false
+}
+
+function reportRuntimePaintIfStatusRelated(env, expr) {
+  const core = unwrap(expr)
+  if (!core) return
+  const targets = ts.isObjectLiteralExpression(core)
+    ? core.properties
+      .filter((prop) => ts.isPropertyAssignment(prop) && isColorPropertyName(resolveKey(prop.name, env.sf) ?? ''))
+      .map((prop) => prop.initializer)
+    : [core]
+  for (const target of targets) {
+    const value = unwrap(target)
+    if (value && (ts.isCallExpression(value) || ts.isIdentifier(value)) && isStatusRelatedExpr(value)) {
+      reportUnsupported(env, target, 'runtime status paint binding has no literal status key on this element to classify against')
+    }
+  }
+}
+
 function walkJsx(node, env) {
   const attrs = []
   for (const attr of node.attributes.properties) {
     if (ts.isJsxAttribute(attr) && attr.name) attrs.push(attr)
   }
   const keys = []
+  let hasStatusChannel = false
   for (const attr of attrs) {
     const name = jsxAttrName(attr)
     if (name === 'data-status' || name === 'data-task-status' || name === 'status') {
+      hasStatusChannel = true
       const canonical = canonicalStatus(jsxAttrString(attr))
       if (canonical) keys.push(canonical)
     }
-    if (name === 'className' || name === 'class') keys.push(...statusKeysFromSelector(jsxAttrString(attr).split(/\s+/).map((part) => `.${part}`).join(' ')))
+    if (name === 'className' || name === 'class') {
+      hasStatusChannel = true
+      keys.push(...statusKeysFromSelector(jsxAttrString(attr).split(/\s+/).map((part) => `.${part}`).join(' ')))
+    }
   }
   const statusKey = keys[0] ?? env.statusKey
   const next = { ...env, statusKey }
   for (const attr of attrs) {
     const name = jsxAttrName(attr)
-    if (statusKey && (name === 'fill' || name === 'stroke' || name === 'color' || name === 'style' || name === 'className' || name === 'class') && attr.initializer) {
+    const isPaintAttr = name === 'fill' || name === 'stroke' || name === 'color' || name === 'style' || name === 'className' || name === 'class'
+    if (statusKey && isPaintAttr && attr.initializer) {
       const paintEnv = { ...next, inStatusMap: true }
       if (ts.isStringLiteral(attr.initializer) || ts.isNoSubstitutionTemplateLiteral(attr.initializer)) classifyValue(attr.initializer, statusKey, paintEnv)
       else if (ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
         classifyValue(attr.initializer.expression, statusKey, paintEnv)
         walkTs(attr.initializer.expression, paintEnv)
       }
+    } else if (!statusKey && !hasStatusChannel && isPaintAttr && attr.initializer && ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
+      reportRuntimePaintIfStatusRelated(next, attr.initializer.expression)
+      walkTs(attr.initializer.expression, next)
     } else if (attr.initializer && ts.isJsxExpression(attr.initializer) && attr.initializer.expression) {
       walkTs(attr.initializer.expression, next)
     }

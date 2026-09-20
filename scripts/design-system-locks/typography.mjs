@@ -1350,7 +1350,8 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
         handledCalls.add(node)
         const reportClass = classWalker.classReporterFor(node)
         node.arguments.forEach((argument) => classWalker.walkClassExpression(argument, reportClass))
-      } else if (ts.isIdentifier(callee) && CLASS_BUILDERS.has(callee.text) && !handledCalls.has(node)) {
+      } else if (ts.isIdentifier(callee) && CLASS_BUILDERS.has(callee.text) && !handledCalls.has(node)
+        && authenticClassBuilderCallee(callee, { sourceFile, bindings, duplicateBindings })) {
         markClassBuilderTree(node)
         const reportClass = classWalker.classReporterFor(node)
         node.arguments.forEach((argument) => classWalker.walkClassExpression(argument, reportClass))
@@ -1440,7 +1441,8 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
         // variant resolver — its literal base/variants were already scanned
         // at the declaration site; the resolved variant is dynamic).
         const callee = node.expression
-        if (ts.isIdentifier(callee) && CLASS_BUILDERS.has(callee.text)) {
+        if (ts.isIdentifier(callee) && CLASS_BUILDERS.has(callee.text)
+          && authenticClassBuilderCallee(callee, { sourceFile, bindings, duplicateBindings })) {
           node.arguments.forEach((argument) => walkClassExpression(argument, sink))
           return
         }
@@ -1497,7 +1499,36 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
       }
       case ts.SyntaxKind.ObjectLiteralExpression:
         node.properties.forEach((property) => {
-          if (ts.isPropertyAssignment(property)) walkClassExpression(property.initializer, sink)
+          if (ts.isPropertyAssignment(property)) { walkClassExpression(property.initializer, sink); return }
+          if (ts.isShorthandPropertyAssignment(property)) { walkClassExpression(property.name, sink); return }
+          if (ts.isSpreadAssignment(property)) {
+            // FIX-P2 (2026-09-20, confirmed-defect closure): a spread member
+            // used to be dropped here with no recursion and no unsupported
+            // finding at all — every OTHER object-literal path in this file
+            // detects a spread and fails closed (classCarryingLeaves,
+            // importedRecordAllValues, arrayElementPropertyValues,
+            // derivedMemberTargets); this was the one silent exception,
+            // reachable from inside every class-builder call and every cva
+            // variants map (`clsx({ ...extra, visible: 'text-[9px]' })`
+            // reported only `visible`; the spread-reached value vanished).
+            // A spread whose source resolves to a provably stable (never
+            // reassigned/mutated/escaped — resolveRecordObjectLiteral's own
+            // absenceBindingUsesSafe/derivedValueEscapeSafe/
+            // exportNeverMutatedByImporters proofs) local or imported const
+            // object literal is walked exactly like an inline object
+            // literal, recursively — so a further nested spread/shorthand
+            // inside IT is proven the same way, or itself fails closed.
+            // Anything else fails closed here instead of vanishing.
+            const resolved = resolveRecordObjectLiteral(property.expression)
+            if (resolved) { walkClassExpression(resolved, sink); return }
+            emitUnsupported(property, sink)
+            return
+          }
+          // Any other object-literal member kind (a method, a get/set
+          // accessor) is not a class-content shape this lock can prove —
+          // fail closed rather than silently drop it, matching every other
+          // property kind above.
+          emitUnsupported(property, sink)
         })
         return
       case ts.SyntaxKind.ArrayLiteralExpression:
@@ -1822,13 +1853,21 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
           ? expression.argumentExpression.text : null
       const object = resolveRecordObjectLiteral(expression.expression)
       if (!object) return null
+      // FIX-P2 (2026-09-20, confirmed-defect closure): this spread check
+      // used to run only below, gating the key===null (enumerate-everything)
+      // branch — the key!==null branch looked a single static key up with
+      // `.find()` and, on a miss, returned [] ("proven absent"), even when
+      // the object had a spread that could genuinely carry that key.
+      // Hoisted above both branches: a spread anywhere in the object means
+      // neither branch can trust what IS or ISN'T on it, matching
+      // derivedMemberTargets' identical ordering elsewhere in this file.
+      if (object.properties.some((property) => ts.isSpreadAssignment(property))) return null
       if (key !== null) {
         const property = object.properties.find((candidate) => propertyKeyName(candidate) === key)
         if (!property) return [] // proven absent on this record entry: no class content, safe
         if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return null
         return classCarryingLeaves(ts.isPropertyAssignment(property) ? property.initializer : property.name, seen)
       }
-      if (object.properties.some((property) => ts.isSpreadAssignment(property))) return null
       const leaves = []
       for (const property of object.properties) {
         if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return null
@@ -2140,6 +2179,19 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
       for (const owner of owners) {
         const object = unwrapStatic(owner)
         if (!ts.isObjectLiteralExpression(object)) continue
+        // FIX-P2 (2026-09-20, confirmed-defect closure): a spread member
+        // used to be silently skipped by both branches below. For the
+        // key===null (enumerate-everything) branch that let an owner with a
+        // spread PLUS other explicit properties contribute a non-empty,
+        // apparently-complete `results` list while whatever the spread
+        // carried never appeared anywhere — the caller
+        // (walkClassExpression's PropertyAccessExpression case) treats
+        // `candidates.length > 0` as fully resolved and returns, never
+        // falling through to fail closed. Skipping the WHOLE owner here
+        // (never partially enumerating it) forces that fallback instead,
+        // matching classCarryingLeaves'/derivedMemberTargets' identical
+        // spread-anywhere-fails-closed rule.
+        if (object.properties.some((property) => ts.isSpreadAssignment(property))) continue
         if (key !== null) {
           const value = objectProperty(object, key)
           if (value) results.push(value)
@@ -3060,6 +3112,134 @@ function cvaDefinitionFor(expression, context) {
   if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return null
   const initializer = unwrapStatic(declaration.initializer)
   return initializer && ts.isCallExpression(initializer) && authenticCvaImport(initializer.expression) ? initializer : null
+}
+
+// FIX-P2 (2026-09-20, confirmed-defect closure): CLASS_BUILDERS names were
+// dispatched purely by IDENTIFIER TEXT with no check of what the name is
+// actually bound to in the file being scanned — a local `function cn() {
+// return 'always-safe' }` (or a clsx/cva/twMerge/classnames/classNames
+// look-alike) was trusted exactly as the real utility and could hide
+// arbitrary class content behind it. Parity with ts-colors.mjs's
+// isBoundTestNamespace/isZodImportBinding (FIX-S): a name with NO competing
+// LOCAL declaration anywhere reachable from the call site — the
+// overwhelmingly common real shape, `import { cn } from '@/lib/utils'` used
+// two lines below, or simply omitted from a narrow test fixture — is
+// trusted exactly like a genuine import (nothing contradicts it; imports
+// are never tracked as a "local declaration" here and cannot coexist with a
+// same-named local declaration in valid TS/JS anyway). Only a name that IS
+// locally bound to something else in this same file must additionally prove
+// itself a transparent single-parameter forward into a real CLASS_BUILDERS
+// chain (cn's own src/lib/utils.ts definition shape, P10) before it is
+// trusted; anything else — a different arity, a non-forwarding body, a
+// constant return, an arbitrary caller-supplied parameter of the same name
+// — falls through to the generic analysis exactly as an unauthenticated
+// call already does (never silently trusted, never silently dropped).
+function authenticClassBuilderCallee(identifier, ctx) {
+  if (!ts.isIdentifier(identifier)) return false
+  if (authenticClassBuilderImport(identifier)) return true
+  if (!hasCompetingLocalBinding(identifier, identifier.text, ctx)) return true
+  return transparentClassBuilderAlias(identifier, identifier.text, ctx)
+}
+
+// A real import authenticates its CLASS_BUILDERS-named local binding: `cva`
+// from 'class-variance-authority' (authenticCvaImport, already proven and
+// reused verbatim — never a second mechanism), `clsx` from 'clsx' (default
+// or named), `classnames`/`classNames` from 'classnames' (default import
+// bound under either spelling), `twMerge` (named) from 'tailwind-merge', and
+// `cn` (named) from a specifier that structurally resolves to
+// src/lib/utils — the repo's own utility. An npm package and this repo's
+// single canonical utils module are both authenticated by the IMPORT
+// STATEMENT alone, never by resolving and re-reading the target file.
+function authenticClassBuilderImport(identifier) {
+  const name = identifier.text
+  if (name === 'cva') return authenticCvaImport(identifier)
+  const sourceFile = identifier.getSourceFile()
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+    const clause = statement.importClause
+    if (!clause || clause.isTypeOnly) continue
+    const specifier = statement.moduleSpecifier.text
+    const named = clause.namedBindings && ts.isNamedImports(clause.namedBindings) ? clause.namedBindings : null
+    if (name === 'clsx' && specifier === 'clsx') {
+      if (clause.name?.text === 'clsx') return true
+      if (named?.elements.some((element) => !element.isTypeOnly && element.name.text === 'clsx' && (element.propertyName?.text ?? element.name.text) === 'clsx')) return true
+    }
+    if ((name === 'classnames' || name === 'classNames') && specifier === 'classnames') {
+      if (clause.name?.text === name) return true
+      if (named?.elements.some((element) => !element.isTypeOnly && element.name.text === name)) return true
+    }
+    if (name === 'twMerge' && specifier === 'tailwind-merge') {
+      if (named?.elements.some((element) => !element.isTypeOnly && element.name.text === 'twMerge' && (element.propertyName?.text ?? element.name.text) === 'twMerge')) return true
+    }
+    if (name === 'cn' && classBuilderImportBase(sourceFile.fileName, specifier) === 'src/lib/utils') {
+      if (named?.elements.some((element) => !element.isTypeOnly && element.name.text === 'cn' && (element.propertyName?.text ?? element.name.text) === 'cn')) return true
+    }
+  }
+  return false
+}
+
+// Structural specifier resolution for the repo's single canonical utils
+// module — the same '@/'/relative math governedModulePath uses elsewhere in
+// this file, but without requiring the target to be present in the governed
+// `modules` snapshot (an npm-package-shaped authentication by import
+// statement alone, not a cross-module content read).
+function classBuilderImportBase(fromPath, specifier) {
+  if (specifier.startsWith('@/')) return `src/${specifier.slice(2)}`
+  if (specifier.startsWith('.')) return path.posix.normalize(path.posix.join(path.posix.dirname(fromPath), specifier))
+  return null
+}
+
+// Whether `name` is bound to ANYTHING in a scope reachable from `identifier`
+// — a same-file top-level function declaration, a lexically-visible
+// const/parameter, or the flat top-level `bindings` map. An IMPORT is
+// deliberately not tracked here (imports are authenticated separately by
+// authenticClassBuilderImport and cannot coexist with a same-named local
+// declaration in valid TS/JS), so this answers exactly the question the
+// look-alike defect turns on: "is there a LOCAL declaration that could be
+// shadowing the trusted name". An ambiguous (duplicate) same-file
+// declaration counts as competing too — never blanket-trusted merely
+// because no SINGLE lexical match could be resolved.
+function hasCompetingLocalBinding(identifier, name, { sourceFile, bindings, duplicateBindings }) {
+  if (sameFileFunctionDeclaration(name, sourceFile)) return true
+  if (duplicateBindings.has(name) || hasMultipleVariableDeclarations(sourceFile, name)) return true
+  if (findLexicalBinding(identifier, name)) return true
+  if (bindings.has(name)) return true
+  return false
+}
+
+// The function-like node locally bound to `name`, when one exists — a
+// same-file function declaration, or a lexically-visible const bound to an
+// arrow/function expression. Returns null for anything else bound to `name`
+// (a plain value, a class, a parameter with no function initializer) —
+// those are look-alikes with no forwarding proof available at all, and
+// transparentClassBuilderAlias below correctly returns false for them.
+function classBuilderLocalFunctionFor(identifier, name, { sourceFile, bindings, duplicateBindings }) {
+  const fnDecl = sameFileFunctionDeclaration(name, sourceFile)
+  if (fnDecl) return fnDecl
+  if (duplicateBindings.has(name) || hasMultipleVariableDeclarations(sourceFile, name)) return null
+  const lexical = findLexicalBinding(identifier, name)
+  const initializer = lexical?.initializer ?? (bindings.has(name) ? bindings.get(name) : null)
+  const candidate = initializer ? unwrapStatic(initializer) : null
+  return candidate && (ts.isArrowFunction(candidate) || ts.isFunctionExpression(candidate)) ? candidate : null
+}
+
+// A local declaration for a CLASS_BUILDERS name is trusted ONLY when it is
+// provably the SAME transparent single-parameter forward
+// classBuilderOwnParameterForward already recognizes at cn()'s own
+// definition site (P10) — reusing that exact structural proof rather than
+// inventing a second mechanism. Anything else (wrong arity, extra
+// statements, a non-forwarding return, a name mismatch) is precisely the
+// "local look-alike" this fix must not trust, and falls through to the
+// generic analysis instead.
+function transparentClassBuilderAlias(identifier, name, ctx) {
+  const fn = classBuilderLocalFunctionFor(identifier, name, ctx)
+  if (!fn || fn.parameters.length !== 1) return false
+  const parameter = fn.parameters[0]
+  if (!ts.isIdentifier(parameter.name)) return false
+  if (classBuilderDeclarationName(fn) !== name) return false
+  const returned = classBuilderSingleReturnExpression(fn)
+  if (!returned) return false
+  return classBuilderChainForwardsParameter(returned, parameter.name.text, new Set())
 }
 
 function pureFunctionReturns(call, context) {
