@@ -464,33 +464,34 @@ function applyAssignmentTarget(context, target, node) {
 // already tracked as aliases (sequential re-aliasing only).
 function valueOfExpression(context, expression) {
   if (!expression) return null
-  if (ts.isStringLiteral(expression) && RAW_INTRINSICS.has(expression.text)) return `raw-${expression.text}`
-  if (ts.isConditionalExpression(expression)) {
-    const whenTrue = valueOfExpression(context, expression.whenTrue)
-    const whenFalse = valueOfExpression(context, expression.whenFalse)
+  const unwrapped = unwrapTypeWrapper(expression)
+  if (ts.isStringLiteral(unwrapped) && RAW_INTRINSICS.has(unwrapped.text)) return `raw-${unwrapped.text}`
+  if (ts.isConditionalExpression(unwrapped)) {
+    const whenTrue = valueOfExpression(context, unwrapped.whenTrue)
+    const whenFalse = valueOfExpression(context, unwrapped.whenFalse)
     const raw = new Set([whenTrue, whenFalse].filter((value) => value === 'raw-button' || value === 'raw-dialog'))
     if (raw.size === 2) return 'raw-button-or-dialog'
     if (raw.size === 1) return [...raw][0]
     return whenTrue === whenFalse ? whenTrue : null
   }
-  if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
-    const name = memberName(expression)
-    if (name === 'confirm' && resolvesToBrowserObject(context, expression.expression)) return 'confirm'
-    if (name === 'document' && resolvesToBrowserObject(context, expression.expression)) return 'document'
-    if (name === 'createElement' && resolvesToDocument(context, expression.expression)) return 'dom-factory'
-    if (name && FACTORY_NAMES.has(name) && resolvesToReactNamespace(context, expression.expression)) return 'react-factory'
+  if (ts.isPropertyAccessExpression(unwrapped) || ts.isElementAccessExpression(unwrapped)) {
+    const name = memberName(unwrapped)
+    if (name === 'confirm' && resolvesToBrowserObject(context, unwrapped.expression)) return 'confirm'
+    if (name === 'document' && resolvesToBrowserObject(context, unwrapped.expression)) return 'document'
+    if (name === 'createElement' && resolvesToDocument(context, unwrapped.expression)) return 'dom-factory'
+    if (name && FACTORY_NAMES.has(name) && resolvesToReactNamespace(context, unwrapped.expression)) return 'react-factory'
     return null
   }
-  if (ts.isIdentifier(expression)) {
-    const builtin = BUILTIN_GLOBAL_VALUES.get(expression.text)
+  if (ts.isIdentifier(unwrapped)) {
+    const builtin = BUILTIN_GLOBAL_VALUES.get(unwrapped.text)
     if (builtin) {
-      const binding = lookupName(context, expression.text)
+      const binding = lookupName(context, unwrapped.text)
       return binding === null || binding.value === builtin ? builtin : null
     }
-    return lookupName(context, expression.text)?.value ?? null
+    return lookupName(context, unwrapped.text)?.value ?? null
   }
-  if (isRequireCall(context, expression)) {
-    const specifier = stringModuleArgument(expression)
+  if (isRequireCall(context, unwrapped)) {
+    const specifier = stringModuleArgument(unwrapped)
     if (specifier && REACT_MODULES.has(specifier)) return 'react-ns'
   }
   return null
@@ -506,37 +507,88 @@ function memberName(expression) {
 // name is unbound (true global reference) or provably an alias of it. A local
 // binding with no tracked value (parameter, unrelated import, plain local)
 // shadows the global and blocks detection — review controls-review-03/04.
+//
+// TypeScript wrappers around the object of a member access or a call target
+// are a runtime no-op (parens `(x)`, non-null `x!`) or erased entirely at
+// compile time (`x as T`, `x satisfies T`, the angle-bracket `<T>x` form), so
+// the emitted code is identical to the unwrapped expression. Every resolver
+// and call-target check below unwraps through `unwrapTypeWrapper` first —
+// otherwise `(window).confirm(...)`, `(window as any).confirm(...)`,
+// `window!.confirm(...)`, `(window satisfies Window).confirm(...)`,
+// `(React as any).createElement(...)` and `(document as any).createElement(...)`
+// all read as "object is not a bare identifier" and silently pass review-08's
+// fixture family through unreported (found in the FIX-P4 defect report).
+function isTypeWrapperNode(node) {
+  return (
+    ts.isParenthesizedExpression(node)
+    || ts.isAsExpression(node)
+    || ts.isSatisfiesExpression(node)
+    || ts.isNonNullExpression(node)
+    || ts.isTypeAssertionExpression(node)
+  )
+}
+
+function unwrapTypeWrapper(expression) {
+  let current = expression
+  while (current && isTypeWrapperNode(current)) {
+    current = current.expression
+  }
+  return current
+}
+
+// The inverse walk: starting from a reference, climb back OUT through any
+// wrapper nodes that hold it as their `.expression`, to find the nearest
+// semantically meaningful parent and the node (the reference itself, or the
+// outermost wrapper around it) that sits directly under that parent. The
+// escape-exclusion checks below key off of the same call-target / initializer
+// / tracked-assignment shapes already checked for the bare form; a wrapper
+// must not change what those checks see, or a wrapped reference that is
+// legitimately tracked elsewhere (`(window.confirm)(...)`, `const c =
+// (window.confirm)`) gets counted as escaping AND as its normal alias/call
+// finding — one source occurrence reported twice.
+function effectiveParentContext(node) {
+  let current = node
+  let parent = current.parent
+  while (parent && isTypeWrapperNode(parent) && parent.expression === current) {
+    current = parent
+    parent = current.parent
+  }
+  return { parent, effectiveNode: current }
+}
 
 function resolvesToBrowserObject(context, expression) {
-  if (!ts.isIdentifier(expression)) return false
-  if (CONFIRM_OBJECTS.has(expression.text)) {
-    const binding = lookupName(context, expression.text)
+  const unwrapped = unwrapTypeWrapper(expression)
+  if (!ts.isIdentifier(unwrapped)) return false
+  if (CONFIRM_OBJECTS.has(unwrapped.text)) {
+    const binding = lookupName(context, unwrapped.text)
     return binding === null || binding.value === 'browser-object'
   }
-  return lookupName(context, expression.text)?.value === 'browser-object'
+  return lookupName(context, unwrapped.text)?.value === 'browser-object'
 }
 
 function resolvesToDocument(context, expression) {
-  if (ts.isIdentifier(expression)) {
-    if (expression.text === 'document') {
+  const unwrapped = unwrapTypeWrapper(expression)
+  if (ts.isIdentifier(unwrapped)) {
+    if (unwrapped.text === 'document') {
       const binding = lookupName(context, 'document')
       return binding === null || binding.value === 'document'
     }
-    return lookupName(context, expression.text)?.value === 'document'
+    return lookupName(context, unwrapped.text)?.value === 'document'
   }
-  if (ts.isPropertyAccessExpression(expression) && expression.name.text === 'document') {
-    return resolvesToBrowserObject(context, expression.expression)
+  if (ts.isPropertyAccessExpression(unwrapped) && unwrapped.name.text === 'document') {
+    return resolvesToBrowserObject(context, unwrapped.expression)
   }
   return false
 }
 
 function resolvesToReactNamespace(context, expression) {
-  if (!ts.isIdentifier(expression)) return false
-  if (expression.text === 'React') {
+  const unwrapped = unwrapTypeWrapper(expression)
+  if (!ts.isIdentifier(unwrapped)) return false
+  if (unwrapped.text === 'React') {
     const binding = lookupName(context, 'React')
     return binding === null || binding.value === 'react-ns'
   }
-  return lookupName(context, expression.text)?.value === 'react-ns'
+  return lookupName(context, unwrapped.text)?.value === 'react-ns'
 }
 
 // ---------------------------------------------------------------------------
@@ -544,7 +596,10 @@ function resolvesToReactNamespace(context, expression) {
 // ---------------------------------------------------------------------------
 
 function handleCallExpression(context, node) {
-  const callee = node.expression
+  // The call target itself can be wrapped the same way as a member-access
+  // object (`(confirm)('sure?')`, `(window.confirm)('sure?')`); unwrap once,
+  // up front, so every branch below sees the real callee shape.
+  const callee = unwrapTypeWrapper(node.expression)
   if (callee.kind === ts.SyntaxKind.ImportKeyword) {
     reportWholeModuleReach(context, node, stringModuleArgument(node), (specifier) => `import("${specifier}")`)
     return
@@ -570,15 +625,27 @@ function handleCallExpression(context, node) {
   }
   if (ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee)) {
     const name = memberName(callee)
-    if (name === 'confirm' && resolvesToBrowserObject(context, callee.expression)) {
-      reportConfirmCall(context, node, `the ${displayName(callee.expression)} member`)
+    // A computed key that isn't a string literal (`window['con' + 'firm']`)
+    // cannot be proven to be anything in particular — including "not
+    // confirm/createElement/a React factory". Once the object side is
+    // provably one of the tracked globals, fail closed and report exactly as
+    // if the (unknowable) key had matched, rather than staying silent.
+    const computedNonLiteral = ts.isElementAccessExpression(callee) && name === null
+    if ((name === 'confirm' || computedNonLiteral) && resolvesToBrowserObject(context, callee.expression)) {
+      reportConfirmCall(
+        context,
+        node,
+        computedNonLiteral
+          ? `a computed member of ${displayName(callee.expression)} that cannot be statically resolved (fail-closed: the key must be a literal to rule out confirm)`
+          : `the ${displayName(callee.expression)} member`,
+      )
       return
     }
-    if (name === 'createElement' && resolvesToDocument(context, callee.expression)) {
+    if ((name === 'createElement' || computedNonLiteral) && resolvesToDocument(context, callee.expression)) {
       reportDomCreateElementCall(context, node)
       return
     }
-    if (name && FACTORY_NAMES.has(name) && resolvesToReactNamespace(context, callee.expression)) {
+    if (((name && FACTORY_NAMES.has(name)) || computedNonLiteral) && resolvesToReactNamespace(context, callee.expression)) {
       reportFactoryCall(context, node)
     }
   }
@@ -586,13 +653,13 @@ function handleCallExpression(context, node) {
 
 function handleEscapedConfirmReference(context, node) {
   if (memberName(node) !== 'confirm' || !resolvesToBrowserObject(context, node.expression)) return
-  const parent = node.parent
-  if (ts.isCallExpression(parent) && parent.expression === node) return
-  if (ts.isVariableDeclaration(parent) && parent.initializer === node) return
+  const { parent, effectiveNode } = effectiveParentContext(node)
+  if (ts.isCallExpression(parent) && parent.expression === effectiveNode) return
+  if (ts.isVariableDeclaration(parent) && parent.initializer === effectiveNode) return
   if (
     ts.isBinaryExpression(parent)
     && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
-    && parent.right === node
+    && parent.right === effectiveNode
     && (ts.isIdentifier(parent.left) || ts.isObjectLiteralExpression(parent.left))
   ) return
   context.findings.push(
@@ -603,8 +670,10 @@ function handleEscapedConfirmReference(context, node) {
 function handleEscapedConfirmIdentifier(context, node) {
   if (valueOfExpression(context, node) !== 'confirm') return
   const parent = node.parent
-  if (ts.isCallExpression(parent) && parent.expression === node) return
-  if (ts.isVariableDeclaration(parent) && (parent.name === node || parent.initializer === node)) return
+  const { parent: effectiveParent, effectiveNode } = effectiveParentContext(node)
+  if (ts.isCallExpression(effectiveParent) && effectiveParent.expression === effectiveNode) return
+  if (ts.isVariableDeclaration(parent) && parent.name === node) return
+  if (ts.isVariableDeclaration(effectiveParent) && effectiveParent.initializer === effectiveNode) return
   if (ts.isParameter(parent) && parent.name === node) return
   if (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node)) return
   if (ts.isPropertyAccessExpression(parent) && parent.name === node) return
@@ -612,10 +681,10 @@ function handleEscapedConfirmIdentifier(context, node) {
   if ('name' in parent && parent.name === node && !ts.isShorthandPropertyAssignment(parent)) return
   if (ts.isBinaryExpression(parent) && parent.left === node) return
   if (
-    ts.isBinaryExpression(parent)
-    && parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
-    && parent.right === node
-    && (ts.isIdentifier(parent.left) || ts.isObjectLiteralExpression(parent.left))
+    ts.isBinaryExpression(effectiveParent)
+    && effectiveParent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    && effectiveParent.right === effectiveNode
+    && (ts.isIdentifier(effectiveParent.left) || ts.isObjectLiteralExpression(effectiveParent.left))
   ) return
   context.findings.push(
     makeFinding(RULES.GLOBAL_CONFIRM, context.filePath, 'window.confirm', 'Tracked browser confirm reference escapes the direct-call and local-alias flow; use the ConfirmDialog composite (design-system-definition.md D5) or register an exception.', ...positionOf(node))
@@ -627,7 +696,9 @@ function displayName(expression) {
 }
 
 function isRequireCall(context, expression) {
-  return !!expression && ts.isCallExpression(expression) && ts.isIdentifier(expression.expression) && expression.expression.text === 'require' && lookupName(context, 'require') === null
+  if (!expression || !ts.isCallExpression(expression)) return false
+  const callee = unwrapTypeWrapper(expression.expression)
+  return ts.isIdentifier(callee) && callee.text === 'require' && lookupName(context, 'require') === null
 }
 
 function stringModuleArgument(call) {
@@ -636,7 +707,8 @@ function stringModuleArgument(call) {
 }
 
 function reportConfirmCall(context, node, via) {
-  const syntax = ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression) ? 'window.confirm(...)' : 'confirm(...)'
+  const callee = unwrapTypeWrapper(node.expression)
+  const syntax = ts.isPropertyAccessExpression(callee) || ts.isElementAccessExpression(callee) ? 'window.confirm(...)' : 'confirm(...)'
   context.findings.push(
     makeFinding(RULES.GLOBAL_CONFIRM, context.filePath, syntax, `Browser confirm() reached via ${via}; use the ConfirmDialog composite (design-system-definition.md D5) or register an exception.`, ...positionOf(node))
   )

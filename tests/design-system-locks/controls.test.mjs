@@ -915,3 +915,118 @@ test('limits: a spread with no checkbox, switch, or dynamic indicator stays allo
   const source = 'export const Fixture = (props: Record<string, unknown>) => <input {...props} />'
   assert.deepEqual(ruleIds(source), [])
 })
+
+// ---------------------------------------------------------------------------
+// FIX-P4 defect closure — TypeScript wrappers around the object of a member
+// access or a call target (dist/design-system-baseline/cli-lanes/c1-prep/FIX-P4).
+//
+// Specification sources (expected values derive from these, never from the
+// implementation under test):
+//   - Parentheses are a runtime no-op and `as`/`satisfies`/`!`/angle-bracket
+//     assertions are erased at compile time, so `(window).confirm(...)`,
+//     `(window as any).confirm(...)`, `window!.confirm(...)`,
+//     `(window satisfies Window).confirm(...)`, an aliased
+//     `const w = window as any; w.confirm(...)`, `(React).createElement(...)`,
+//     `(React as any).createElement(...)` and `(document as any).createElement(...)`
+//     all call the real browser confirm or element factory at runtime and
+//     must report identically to their unwrapped form (E1/D5, contract.json
+//     failClosed).
+//   - A computed member access whose key is not a string literal cannot be
+//     proven to be anything in particular; once the object side is provably
+//     one of the tracked globals, contract.json failClosed requires a report,
+//     never silence — but an ordinary object/computed-key pair that is not a
+//     tracked global must stay unreported (no over-broad matching).
+// ---------------------------------------------------------------------------
+
+test('FIX-P4: flags a parenthesized window.confirm(...) call the same as the bare form', () => {
+  assert.deepEqual(syntaxes("export const ask = () => (window).confirm('Delete?')"), ['window.confirm(...)'])
+})
+
+test('FIX-P4: flags an `as any`-cast window.confirm(...) call', () => {
+  assert.deepEqual(syntaxes("export const ask = () => (window as any).confirm('Delete?')"), ['window.confirm(...)'])
+})
+
+test('FIX-P4: flags a non-null-asserted window!.confirm(...) call', () => {
+  assert.deepEqual(syntaxes("export const ask = () => window!.confirm('Delete?')"), ['window.confirm(...)'])
+})
+
+test('FIX-P4: flags a `satisfies`-qualified window.confirm(...) call', () => {
+  assert.deepEqual(syntaxes("export const ask = () => (window satisfies Window).confirm('Delete?')"), ['window.confirm(...)'])
+})
+
+test('FIX-P4: flags an angle-bracket type-assertion window.confirm(...) call', () => {
+  const findings = scan({ path: 'src/features/fixture.ts', source: "export const ask = () => (<any>window).confirm('Delete?')", policy: {}, catalog: CATALOG })
+  assert.deepEqual(findings.map((finding) => finding.syntax), ['window.confirm(...)'])
+})
+
+test('FIX-P4: flags confirm reached through an `as any`-cast alias', () => {
+  const source = "const w = window as any\nexport const ask = () => w.confirm('Delete?')"
+  assert.deepEqual(syntaxes(source), ['window.confirm(...)'])
+})
+
+test('FIX-P4: flags a parenthesized React.createElement("button", ...) call', () => {
+  const source = "import * as React from 'react'\nexport const X = () => (React).createElement('button', null, 'go')"
+  assert.deepEqual(syntaxes(source), ['createElement("button")'])
+})
+
+test('FIX-P4: flags an `as any`-cast React.createElement("button", ...) call', () => {
+  const source = "import * as React from 'react'\nexport const X = () => (React as any).createElement('button', null, 'go')"
+  assert.deepEqual(syntaxes(source), ['createElement("button")'])
+})
+
+test('FIX-P4: flags an `as any`-cast document.createElement("button") call', () => {
+  assert.deepEqual(syntaxes("export const X = () => (document as any).createElement('button')"), ['document.createElement("button")'])
+})
+
+test('FIX-P4: flags a call target wrapped directly, not just its object', () => {
+  assert.deepEqual(syntaxes("export const ask = () => (window.confirm)('Delete?')"), ['window.confirm(...)'])
+  assert.deepEqual(syntaxes("export const ask = () => (confirm)('Delete?')"), ['confirm(...)'])
+})
+
+test('FIX-P4: a wrapped non-browser object is not mistaken for the tracked global', () => {
+  const source = "const obj = { confirm: () => true }\nexport const ask = () => (obj).confirm('Delete?')"
+  assert.deepEqual(ruleIds(source), [])
+})
+
+test('FIX-P4: an `as`-cast of an unrelated local value is not mistaken for the tracked global', () => {
+  const source = "type Ok = { confirm: () => boolean }\nexport function ask(x: Ok) { return (x as Ok).confirm() }"
+  assert.deepEqual(ruleIds(source), [])
+})
+
+test('FIX-P4: a parenthesized non-browser array/element access stays allowed', () => {
+  assert.deepEqual(ruleIds('const arr = [1, 2, 3]\nexport const x = () => (arr)[0]'), [])
+})
+
+test('FIX-P4: fails closed on a computed, non-literal confirm key on the browser object', () => {
+  assert.deepEqual(syntaxes("export const ask = () => (window)['con' + 'firm']('Delete?')"), ['window.confirm(...)'])
+})
+
+test('FIX-P4: fails closed on a computed key reached through globalThis', () => {
+  const source = "const key = 'confirm'\nexport const ask = () => globalThis[key]('Delete?')"
+  assert.deepEqual(syntaxes(source), ['window.confirm(...)'])
+})
+
+test('FIX-P4: does not fail closed on a computed key against an unrelated object', () => {
+  const source = "const obj = { run: () => {} }\nconst key = 'ru' + 'n'\nexport const x = () => obj[key]()"
+  assert.deepEqual(ruleIds(source), [])
+})
+
+test('FIX-P4: a literal, non-confirm key on the browser object stays allowed', () => {
+  assert.deepEqual(ruleIds("export const ask = () => window['alert']('hi')"), [])
+})
+
+// A parenthesized/cast reference is still tracked through the normal
+// alias/call flow (one finding at the call site) rather than ALSO tripping
+// the escaped-reference check on the wrapped inner node — a wrapper must not
+// double-count the same source occurrence (contract.json occurrence
+// counting; file header "one source occurrence is not counted twice").
+
+test('FIX-P4: a parenthesized confirm alias initializer is not double-counted', () => {
+  const source = "const c = (window.confirm)\nexport const ask = () => c('Delete?')"
+  assert.deepEqual(syntaxes(source, 'controls/global-confirm'), ['confirm(...)'])
+})
+
+test('FIX-P4: an `as`-cast confirm alias initializer is not double-counted', () => {
+  const source = "const c = window.confirm as any\nexport const ask = () => c('Delete?')"
+  assert.deepEqual(syntaxes(source, 'controls/global-confirm'), ['confirm(...)'])
+})
