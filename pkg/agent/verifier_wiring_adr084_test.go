@@ -13,8 +13,10 @@
 //     audit correlation id.
 //   - finding 5: RegisterVerifierBudget / RegisterVerifierCapture had no
 //     production caller, so the tool-call and byte caps never fired and the
-//     injection capture accumulated nothing; VerifierGodModeRefusalReason was
-//     never consulted, so a full Judge turn ran under god mode.
+//     injection capture accumulated nothing.
+//
+// It also carries the regression guard for issue #761, which removed the
+// JUDGE-FR-057 god-mode adjudication refusal.
 //
 // EVERY test here drives a REAL adjudication through al.JudgeCriteria and
 // asserts on what the PRODUCTION path did. None of them registers a budget, a
@@ -225,13 +227,16 @@ func TestVerifierBudget_UnregisteredAfterTheTurn(t *testing.T) {
 	}
 }
 
-// --- finding 5: the god-mode capability gate is consulted ------------------
+// --- issue #761: god mode no longer blocks adjudication --------------------
 
-// TestVerifierAdjudication_RefusedUnderGodMode proves JUDGE-FR-057's refusal
-// happens in production: under god mode (which floors every tool at allow) the
-// adjudication is refused with the machine-readable reason, and — the part
-// FR-057 is explicit about — no Judge turn runs at all.
-func TestVerifierAdjudication_RefusedUnderGodMode(t *testing.T) {
+// TestVerifierAdjudication_StillAdjudicatesUnderGodMode is the regression guard
+// for issue #761, which removed the JUDGE-FR-057 god-mode refusal. God mode
+// floors only the GLOBAL policy layer and leaves the per-agent policy in force,
+// so the verifier keeps its deny-all-except-read-only ceiling even under god
+// mode. FR-057's premise is therefore false and its refusal is gone: an
+// adjudication under god mode must run to a real verdict, exactly as it does
+// with god mode off. Re-adding the gate fails here.
+func TestVerifierAdjudication_StillAdjudicatesUnderGodMode(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, func(cfg *config.Config) {
 		cfg.Sandbox.GodMode = true
 	})
@@ -244,21 +249,19 @@ func TestVerifierAdjudication_RefusedUnderGodMode(t *testing.T) {
 	judgeInst.Provider = p
 
 	result := al.JudgeCriteria(context.Background(), proseInputForTask("t-godmode"))
-	if !result.Unavailable {
-		t.Fatalf("adjudication must be refused under god mode; got verdict %+v", result.Verdict)
+	if result.Unavailable {
+		t.Fatalf("adjudication must NOT be refused under god mode (issue #761); Reason = %q", result.Reason)
 	}
-	if !strings.HasPrefix(result.Reason, VerifierGodModeRefusalReasonPrefix) {
-		t.Errorf("Reason = %q, want the %q prefix so the operator sees a distinct, actionable state",
-			result.Reason, VerifierGodModeRefusalReasonPrefix)
+	if result.Verdict == nil || !result.Verdict.Met {
+		t.Errorf("verdict = %+v, want a real met verdict under god mode", result.Verdict)
 	}
-	if p.callCount() != 0 {
-		t.Errorf("the Judge ran %d LLM call(s) under god mode; FR-057 requires the refusal BEFORE any turn",
-			p.callCount())
+	if p.callCount() == 0 {
+		t.Error("the Judge ran no LLM call under god mode; the removed FR-057 gate appears to be back")
 	}
 }
 
-// TestVerifierAdjudication_GodModeOffStillAdjudicates is the control: the gate
-// must refuse ONLY under god mode.
+// TestVerifierAdjudication_GodModeOffStillAdjudicates is the baseline for the
+// test above: the ordinary, god-mode-off adjudication path.
 func TestVerifierAdjudication_GodModeOffStillAdjudicates(t *testing.T) {
 	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	p := &wiringJudgeProvider{respond: func(int) *providers.LLMResponse {

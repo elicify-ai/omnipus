@@ -2,6 +2,21 @@
 
 > **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
+> **Update 2026-09-20 (issue #761): FR-057 and FR-057a are SUPERSEDED.** The Judge no longer refuses
+> to adjudicate while god mode is on. Both requirements rested on one premise — that god mode floors
+> every tool at `allow` and so erases the Judge's read-only ceiling — and that premise is now false.
+> God mode sets the **global** tool policy to `allow` for every tool and removes global permission
+> prompting; the per-agent policy still applies, and an agent is never granted a tool its own policy
+> denies. The Judge's seed denies everything except its read-only set, so that set is what it holds
+> under god mode too. FR-058 – FR-061a are unaffected and are now the whole of D10's tool-policy
+> closure. The visible defect this fixes: under god mode, completed plan-member tasks ended "failed"
+> with an adjudication refusal, and `blocked_by` chains never cleared.
+>
+> `judge_refused_god_mode` **stays in the contract as a deprecated `GoalStatusFrame.state` value that
+> is never emitted** — removing a published wire enum value would be a breaking change, and nothing
+> produces it. The original FR-057 / FR-057a text is kept below, struck through, because the history
+> matters. Superseded by [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md).
+
 **Created**: 2026-09-09
 **Status**: Draft
 **Source of truth**: [`docs/internal/architecture/ADR-084-judge-as-an-active-reviewer.md`](../architecture/ADR-084-judge-as-an-active-reviewer.md) **revision 7** (greenfield — the rubric migration is removed at revision 4; revision 5 corrects four factual premises; revision 6 §7 narrows D4's residual-risk acceptance and D10's confinement scope; **revision 7 §8 makes completion a tool call (D12), makes the Judge claim-triggered and off the critical path (D13), and replaces the exit-code gate with a three-tier evidence model (D14)**)
@@ -536,7 +551,9 @@ Miss those two and every goal-status frame carrying a criterion with `status: un
 fails zod at the SPA edge and is dropped with a counter — **the goal card blanks in production with
 `make verify-contracts` green.** That is C14's exact failure mode, on the very frame FR-076 exists
 to change. Two further shapes this change touches were unnamed anywhere: `GoalStatusFrame.state`
-(FR-057a's `judge_refused_god_mode` and FR-083's CAS reason), which is duplicated the same way; and
+(FR-057a's `judge_refused_god_mode` — **deprecated and never emitted since 2026-09-20, issue #761,
+but still a value of the enum, so it is still a copy that must stay in sync** — and FR-083's CAS
+reason), which is duplicated the same way; and
 the agent-card payload FR-078's degraded badge needs.
 
 **Resolution:** FR-073 becomes a **table enumerating every copy of every changed shape by path**,
@@ -761,8 +778,8 @@ goal never has any). Its wording must not assume a repository, a diff or a test 
 | `pkg/agent/tool_result_admit.go::admitToolResult` / `toolResultAdmission` / `admittedToolResult` | modify | **The choke point** (its own doc comment: "admitToolResult is the choke point (FR-009)"). One function, holding `{Tool, ToolCallID, Content, IsError, ParallelN}` in and the exact admitted `Message` out, reached from 11 call sites in `loop.go`. FR-030's capture and FR-009a's banner both live **here**, once — not at the call sites, and not in `loop.go` (FR-030 mechanism, FR-009a, W2). `toolResultAdmission` carries **no tool arguments**, so the capture joins the call's parameters from the turn's own recorded tool calls (`cloneEventArguments(toolArgs)`, `loop.go:11999`). |
 | `pkg/memory/projection.go::ProjectionKey` | pattern only | Precedent, not a dependency: *"The key is composite"* — because providers reuse tool-call ids. FR-030's capture key follows it (m6). |
 | `pkg/agent/empty_in_place.go` (B-29b notes, lines 105 and 234) | unchanged | *"providers reuse ids such as `call_0` on every turn"* — the reason FR-030's capture cannot be keyed by tool-call id alone. |
-| `pkg/agent/goal_triggers.go::runGoalAdjudication` | modify | The `if jr.Unavailable` branch (`:458`) logs "round not consumed" and returns without touching `GoalRoundsUsed` (C3, C19). `emitGoalStatusFrame(…, goalPillJudging)` at `:440` already fires **before** dispatch — the `judging` pill exists and is now a regression property (FR-086 is retired: under D13 there is no turn for the operator to wait through). Its `if jr.Unavailable` branch returning **without calling `deliverSteer`** is what makes C25's slower loop real. Owner of FR-057a's and FR-083's reasons on the goal-status frame (W4a), and of FR-102's `claim_overturned` state. |
-| `pkg/agent/task_executor.go::adjudicateClaim` | modify | Owner of FR-057a's and FR-083's reasons on the **task run record** (W4a). |
+| `pkg/agent/goal_triggers.go::runGoalAdjudication` | modify | The `if jr.Unavailable` branch (`:458`) logs "round not consumed" and returns without touching `GoalRoundsUsed` (C3, C19). `emitGoalStatusFrame(…, goalPillJudging)` at `:440` already fires **before** dispatch — the `judging` pill exists and is now a regression property (FR-086 is retired: under D13 there is no turn for the operator to wait through). Its `if jr.Unavailable` branch returning **without calling `deliverSteer`** is what makes C25's slower loop real. Owner of FR-057a's and FR-083's reasons on the goal-status frame (W4a), and of FR-102's `claim_overturned` state. *(2026-09-20, issue #761: FR-057a is superseded, so only FR-083's `cas_loss` reason is carried here.)* |
+| `pkg/agent/task_executor.go::adjudicateClaim` | modify | Owner of FR-057a's and FR-083's reasons on the **task run record** (W4a). *(2026-09-20, issue #761: FR-057a is superseded, so only FR-083's `cas_loss` reason is carried here.)* |
 | `pkg/task/criterion.go::normalizeCriteria` / `NormalizeCriteria` | modify | The load-time normaliser (`:358` / `:431`); already backfills `c.Status = CritPending` at `:393`. FR-006b's persisted clause count is computed here, on the same precedent. |
 | `contracts/components/schemas/AcceptanceCriterion.yaml` / `AcceptanceCriterionInput.yaml` | modify | `status` enum is `[pending, met, unmet]`; the SPA status icon reads this, never the verdict (C14). |
 | `contracts/asyncapi.yaml` (inline `JudgeVerdictFrame`) | modify | Second hand-written copy of the per-criterion shape; the one openapi-zod-client reads (C14). |
@@ -796,7 +813,7 @@ goal never has any). Its wording must not assume a repository, a diff or a test 
 | `pkg/agent/judge.go::persistEvidence` | unchanged | `if taskID == "" { return nil }`. So **goal- and plan-scope adjudications carry no `EvidenceRecord` at all**, and FR-030a's clause (iii) is permanently unavailable at goal scope — the scope of the motivating incident (m5). Reachability there rests on clauses (i) and (ii) alone. |
 | `pkg/agent/instance.go::NewAgentInstance` | modify | `readRestrict` from global defaults (C6). |
 | `pkg/agent/loop_mcp.go::registerServerTools` | unchanged | Loops `registry.ListAgentIDs()` with no per-agent filter — verified. |
-| `pkg/tools/compositor.go::resolveEffectivePolicyWith` | unchanged | `if cfg.GodMode { return config.ToolPolicyAllow }` short-circuits before the per-agent map. |
+| `pkg/tools/compositor.go::resolveEffectivePolicyWith` | unchanged by this spec | ~~`if cfg.GodMode { return config.ToolPolicyAllow }` short-circuits before the per-agent map.~~ **Corrected 2026-09-20 (issue #761):** god mode sets the **global** layer to `allow` and the normal global × agent merge then runs, strictest wins. The per-agent map is always consulted, so a per-agent `deny` still denies. |
 | `pkg/session/unified.go::UnifiedStore.parentIndex` / `ChildCount` | NOT used | See C4. |
 | `contracts/components/schemas/CriterionVerdict.yaml` | modify | `additionalProperties: false` (C2). |
 | `pkg/gateway/gateway.go::seedSystemAgentEagerSouls` | extend | Boot-time soul seeding (backfill-when-empty only). §I's capability self-check runs alongside it and **writes nothing**. |
@@ -943,8 +960,11 @@ does not follow it.
 **Independent test**: with god mode on, with an MCP server connected, with an extra skill
 installed, and with `RestrictToWorkspace=false`, the Judge's effective surface is unchanged.
 
-1. **Given** `cfg.GodMode == true`, **When** a verifier turn is about to dispatch, **Then** it is
-   refused and the adjudication is `Unavailable`.
+1. ~~**Given** `cfg.GodMode == true`, **When** a verifier turn is about to dispatch, **Then** it is
+   refused and the adjudication is `Unavailable`.~~ **SUPERSEDED 2026-09-20 (issue #761) — see the
+   update at the top of this spec.** Replaced by: **Given** `cfg.GodMode == true`, **When** a
+   verifier turn dispatches, **Then** it runs, and the Judge's effective policy for every tool
+   outside its read-only seed is still `deny`.
 2. **Given** a connected MCP server whose tools resolve `allow` from the ceiling, **When** the
    Judge's effective policy is resolved for any `mcp_*` tool, **Then** it is `deny`.
 3. **Given** an operator-installed skill, **When** the Judge's skill menu is built, **Then** only
@@ -1213,8 +1233,10 @@ zero Judge calls; a goal whose agent claims receives its answer first and its ve
 - When the Judge cannot reach the session or path a criterion needs, the outcome is
   `unable_to_verify`.
 - When a named path does not exist, the outcome is `unmet`.
-- When god mode is on, the system refuses to run a verifier turn.
-- When any `mcp_*` tool's policy is resolved for the Judge, it is `deny`.
+- ~~When god mode is on, the system refuses to run a verifier turn.~~ **Superseded 2026-09-20
+  (issue #761).** When god mode is on, a verifier turn runs as it always does, and the Judge's
+  effective tool surface is the same read-only set it holds with god mode off.
+- When any `mcp_*` tool's policy is resolved for the Judge, it is `deny` — with god mode on or off.
 - When a verifier turn exceeds its tool-call or byte cap, further tool calls are refused.
 - When a verifier turn fails **after** making progress — timeout, mid-turn SEC-26 denial, provider
   error or window-guard exit — the adjudication resolves `unable_to_verify` and does not retry that
@@ -1360,7 +1382,7 @@ other. Every row below is a hand-sync obligation; only the `$ref` rows are free.
 | 7 | " | inline | `contracts/asyncapi.yaml` → `GoalStatusFrame.criteria[].status` (`:4616`) → `_asyncapi-zod-schemas.generated.ts:837`, `z.enum([...]).strict()` | **hand-sync — miss it and the goal card blanks in production** |
 | 8 | " | inline | `contracts/asyncapi.yaml` → `GoalStatusFrame.dod[].status` (`:4719`) → `…generated.ts:867` | **hand-sync — same failure** |
 | 9 | " | `$ref` | `GoalStatusFrame.yaml` `criteria`/`dod`, `Goal.yaml`, `Plan.yaml`, `Task.yaml`, `TaskCreateRequest.yaml` | inherits — not sync points |
-| 10 | `GoalStatusFrame.state` enum (+ `judge_refused_god_mode` FR-057a, + the CAS state FR-083, **+ `blocked` FR-093 and `claim_overturned` FR-102, rev 7**) | canonical | `contracts/components/schemas/GoalStatusFrame.yaml` (`:98–109`) | authoritative |
+| 10 | `GoalStatusFrame.state` enum (+ `judge_refused_god_mode` FR-057a — **deprecated and never emitted since 2026-09-20, issue #761; kept in the enum because removing a published value is a breaking change** — + the CAS state FR-083, **+ `blocked` FR-093 and `claim_overturned` FR-102, rev 7**) | canonical | `contracts/components/schemas/GoalStatusFrame.yaml` (`:98–109`) | authoritative |
 | 11 | " | inline | `contracts/asyncapi.yaml` (`:4492` region) → `…generated.ts:808` | **hand-sync** |
 | 12 | agent-card degraded-state field (FR-078) | canonical | `contracts/components/schemas/Agent.yaml`, `$ref`'d once from `openapi.yaml:277`; consumed by `pkg/gateway/rest.go`'s `getAgent`/`listAgents` | authoritative, no duplicate |
 
@@ -1908,27 +1930,59 @@ under Explicit Non-Behaviors and tested by
 
 ### I. Capability closures (D10) — shipping preconditions for D1
 
-- **FR-057**: When `cfg.GodMode` is true, `runVerifierAdjudication` MUST refuse **before creating a
-  verifier session** and MUST return `unavailable=true` with the machine-readable reason
-  `god_mode: adjudication refused because god mode floors every tool at allow`. It MUST NOT run a
-  Judge turn.
-- **FR-057a**: The god-mode refusal MUST surface as a **distinct, operator-visible state**, not
-  only a log line and not only `Unavailable`. As specified in revision 2 the refusal wedges every
-  goal and task silently: `Unavailable: true` means "round not consumed" and re-arm, forever; at
-  task scope the task stays `in_progress` with no attempt consumed; and the operator sees
-  `judge_unavailable`, indistinguishable from a provider outage they cannot fix by waiting.
-  Therefore:
-  - the reason MUST be carried onto the goal-status frame and the task run record, not only the log;
-  - the SPA MUST render a distinct `judge_refused_god_mode` state (pill on the goal/task card) and
-    a warning in Settings → Security naming god mode as the cause and its removal as the action.
+- **FR-057**: **SUPERSEDED 2026-09-20 (issue #761).** *Superseded by the god-mode policy fix in
+  `pkg/tools/compositor.go::resolveEffectivePolicyWith`, recorded in
+  [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md). The refusal is removed from
+  the product; there is no replacement requirement, because there is nothing left to refuse.*
+  - ~~When `cfg.GodMode` is true, `runVerifierAdjudication` MUST refuse **before creating a
+    verifier session** and MUST return `unavailable=true` with the machine-readable reason
+    `god_mode: adjudication refused because god mode floors every tool at allow`. It MUST NOT run a
+    Judge turn.~~
+  - **Why the premise failed.** FR-057 existed because god mode was believed to floor every tool at
+    `allow`, which would have handed the Judge `bash` and the rest of the write surface. It does not.
+    God mode sets the **global** tool policy to `allow` for every tool and removes global permission
+    prompting; the per-agent policy still applies, and an agent is never granted a tool its own
+    policy denies. The Judge's seed (`denyAllThenOverride`, plus FR-058's `mcp_*: deny`) denies
+    everything except its read-only set, and that seed is what decides the Judge's reach whether god
+    mode is on or off.
+  - **What it costs.** Nothing that FR-058 – FR-061a did not already cover. Those four closures are
+    now the whole of D10's tool-policy protection, and they are the ones that were doing the work.
+  - **Behaviour now**: with god mode on, an adjudication dispatches normally and the Judge holds its
+    ordinary read-only surface. No `god_mode:` reason is ever produced.
+- **FR-057a**: **SUPERSEDED 2026-09-20 (issue #761).** *Same supersession as FR-057. With no refusal,
+  there is no refusal state to render. `judge_refused_god_mode` remains a value of
+  `GoalStatusFrame.state` in the contract, marked **deprecated and never emitted** — removing a
+  published wire enum value would be a breaking change for any client already parsing it, and
+  nothing produces it.*
+  - ~~The god-mode refusal MUST surface as a **distinct, operator-visible state**, not
+    only a log line and not only `Unavailable`. As specified in revision 2 the refusal wedges every
+    goal and task silently: `Unavailable: true` means "round not consumed" and re-arm, forever; at
+    task scope the task stays `in_progress` with no attempt consumed; and the operator sees
+    `judge_unavailable`, indistinguishable from a provider outage they cannot fix by waiting.
+    Therefore:~~
+    - ~~the reason MUST be carried onto the goal-status frame and the task run record, not only the log;~~
+    - ~~the SPA MUST render a distinct `judge_refused_god_mode` state (pill on the goal/task card) and
+      a warning in Settings → Security naming god mode as the cause and its removal as the action.~~
+  - **The wedge FR-057a described was real, and it is what issue #761 reported.** Under god mode,
+    completed plan-member tasks ended "failed" with an adjudication refusal and `blocked_by` chains
+    never cleared. Removing the refusal removes the wedge at its source rather than labelling it.
+  - **The carriage requirement it created is still needed, for other reasons.** FR-083's `cas_loss`
+    reason rides the same surfaces — goal-status frame and task run record, not only the log — and
+    that obligation stands on FR-083's own account.
 - **FR-058**: `systemAgentSeed(IDJudge)` MUST include an explicit `"mcp_*": deny` wildcard,
   stamped onto the map returned by `denyAllThenOverride` rather than passed into it (C5).
   - **Two loose ends to close, both assertions rather than changes.** (1) `ValidateToolPolicyCoverage`
     and `ValidateSubmittedToolPolicyMap` now see a **non-catalog key** in a System Agent's policy
     map; the spec requires a test asserting neither rejects it and neither logs it as drift.
-    (2) `resolveEffectivePolicyWith` short-circuits on `cfg.GodMode` **before** the per-agent map is
+    (2) ~~`resolveEffectivePolicyWith` short-circuits on `cfg.GodMode` **before** the per-agent map is
     consulted, so FR-058 provides no protection under god mode at all. FR-057 is load-bearing for
-    FR-058, not merely adjacent to it, and the two must ship together.
+    FR-058, not merely adjacent to it, and the two must ship together.~~
+    **Corrected 2026-09-20 (issue #761).** The short-circuit is gone. God mode sets the **global**
+    layer to `allow` and then runs the normal global × agent merge, strictest wins, so the Judge's
+    own `mcp_*: deny` still resolves to `deny`. FR-058 protects under god mode exactly as it does
+    with god mode off, and it no longer depends on FR-057 (which is superseded — see above). The
+    FR-058 test `TestJudgeEffectivePolicy_MCPToolDeniedDespiteAllowCeiling` should be read as
+    covering both postures.
 - **FR-059**: `systemAgentSkills(IDJudge)` MUST return a **non-nil, empty** `[]string{}`.
   - **Documentation value only.** ADR §2.1 C3's premise that a `nil` allowlist means "unrestricted"
     is stale: `context.go::skillAllowed` denies every name for a nil OR empty allowlist (ADR-072 D5,
@@ -2011,7 +2065,8 @@ under Explicit Non-Behaviors and tested by
   `$OMNIPUS_HOME/sessions/<other>/transcript.jsonl` from a Judge instance is refused — not by the
   value of a field. A field-value test would have passed against revision 2's inert pin.
 - **FR-061a**: FR-057 – FR-061a MUST land and be green **before** any FR-001 – FR-009a change is
-  merged (ADR prerequisite).
+  merged (ADR prerequisite). *(Read as FR-058 – FR-061a from 2026-09-20, issue #761: FR-057 and
+  FR-057a are superseded and there is nothing left in them to land.)*
   - **Two mechanisms, because they enforce different things.** The Go guard test
     `TestADR084_D1DoesNotShipWithoutClosures` enforces **co-presence at HEAD**: it fails if the
     rubric's prohibition is absent while any closure assertion is absent. It cannot enforce merge
@@ -2313,8 +2368,10 @@ Five properties this change makes materially worse and which nothing above bound
   outage. Adjudications lasting 420 s exercise the CAS path far more often than 32 s ones did, and
   E-10's "loser is `Unavailable`" is exactly FR-057a's wedge shape. The loser MUST return a
   distinct machine-readable reason (`cas_loss: another adjudication for this unit is in flight`)
-  carried onto the same surfaces as FR-057a's, and MUST NOT be reported to the operator as judge
-  unavailability.
+  carried onto the same surfaces as FR-057a's — **the goal-status frame and the task run record,
+  not only the log** — and MUST NOT be reported to the operator as judge unavailability.
+  *(FR-057a itself is superseded as of 2026-09-20, issue #761; its carriage requirement is spelled
+  out here so FR-083 no longer depends on reading a superseded requirement. FR-083 stands.)*
 - **FR-084**: **Audit.** A Judge that now reads files MUST emit audit entries for those reads —
   `read` and `path.access_denied` — attributed to the Judge's agent id and correlated to the
   adjudication id, so an operator can answer "what did the verifier open" from the audit log rather
@@ -3133,15 +3190,27 @@ Traces to: US-9 AC-1, FR-067, FR-068, E-2
 *(The rubric's own truncated-read wording, FR-007, is asserted only by constant inspection — see
 the note opening section A. Its enforceable half is FR-007a, above.)*
 
-**Scenario: god mode refuses the verifier turn, distinguishably** *(Error Path)*
-Traces to: US-6 AC-1, FR-057, FR-057a
+**Scenario: god mode refuses the verifier turn, distinguishably** *(Error Path)* — **SUPERSEDED
+2026-09-20 (issue #761); replaced by the scenario immediately below**
+Traces to: US-6 AC-1, FR-057, FR-057a *(both superseded)*
+- ~~**Given** `cfg.GodMode == true`~~
+- ~~**When** an adjudication dispatches~~
+- ~~**Then** no verifier session is created and no verifier turn runs~~
+- ~~**And** the result is `Unavailable` with the machine-readable reason `god_mode: …`~~
+- ~~**And** that reason reaches the goal-status frame and the task run record, not only the log~~
+- ~~**And** the SPA renders `judge_refused_god_mode`, distinct from `judge_unavailable`~~
+- ~~**And** no round is consumed~~
+
+**Scenario: god mode does not widen the Judge, and does not stop it** *(Happy Path)*
+Traces to: US-6 AC-1 (as replaced), FR-058
 - **Given** `cfg.GodMode == true`
+- **And** the global tool policy therefore resolves `allow` for every tool
 - **When** an adjudication dispatches
-- **Then** no verifier session is created and no verifier turn runs
-- **And** the result is `Unavailable` with the machine-readable reason `god_mode: …`
-- **And** that reason reaches the goal-status frame and the task run record, not only the log
-- **And** the SPA renders `judge_refused_god_mode`, distinct from `judge_unavailable`
-- **And** no round is consumed
+- **Then** a verifier session is created and the verifier turn runs to a verdict
+- **And** no `god_mode:` reason is produced on any surface
+- **And** the Judge's effective policy for `bash`, for `write_file` and for any `mcp_*` tool is
+  still `deny`, because its own per-agent policy denies them
+- **And** a plan-member task that claims completion is adjudicated and its dependants unblock
 
 **Scenario: an MCP tool resolves deny for the Judge even with an allow ceiling** *(Error Path)*
 Traces to: US-6 AC-2, FR-058
@@ -3860,8 +3929,8 @@ each says so. Rows marked **(fails today)** are the ones that prove a closure ex
 | FR-054a | `TestVerifierTimeout_AfterProgress_ProviderErrorDoesNotRetry` | Go integration | same |
 | FR-055 | `TestVerifierTimeout_ZeroProgress_UnavailableAndRetries` | Go integration | same |
 | FR-056 | `TestVerifierBudget_ToolCallCapClampedBySEC26Window` — table over `MaxAgentLLMCallsPerHour` ∈ {0, 8, 20, 200} with a configured cap of 25; expected effective caps {25, 1, 4, 25}, plus exactly one WARN per binding clamp | Go unit | same |
-| FR-057, FR-057a | `TestRunVerifierAdjudication_GodModeRefusal_SurfacesDistinctReason` — oracle: no verifier session created, reason prefix `god_mode:`, and the reason present on the goal-status frame / task run record | Go integration | `pkg/agent/verifier_capability_gate_adr084_test.go` |
-| FR-057a | `renders judge_refused_god_mode distinctly from judge_unavailable` | vitest | `src/components/workspaces/GoalStatusPill.test.tsx` |
+| ~~FR-057, FR-057a~~ | ~~`TestRunVerifierAdjudication_GodModeRefusal_SurfacesDistinctReason` — oracle: no verifier session created, reason prefix `god_mode:`, and the reason present on the goal-status frame / task run record~~ **SUPERSEDED 2026-09-20 (issue #761).** Both requirements are superseded; this test asserted the refusal and goes with it. Replaced by a test that the opposite holds: with `cfg.GodMode == true` an adjudication dispatches, a verdict is produced, and no `god_mode:` reason appears on any surface | Go integration | `pkg/agent/verifier_capability_gate_adr084_test.go` |
+| ~~FR-057a~~ | ~~`renders judge_refused_god_mode distinctly from judge_unavailable`~~ **SUPERSEDED 2026-09-20 (issue #761).** Nothing emits `judge_refused_god_mode`, so there is no render obligation. The enum value stays in the contract, deprecated | vitest | `src/components/workspaces/GoalStatusPill.test.tsx` |
 | FR-058 | `TestJudgeSeed_MCPWildcardDenied` | Go unit | `pkg/coreagent/judge_seed_test.go` (extend) |
 | FR-058 | `TestJudgeEffectivePolicy_MCPToolDeniedDespiteAllowCeiling` | Go unit | `pkg/tools/compositor_judge_mcp_adr084_test.go` |
 | FR-058 | `TestToolPolicyValidators_AcceptNonCatalogWildcardOnSystemAgent` — oracle: neither `ValidateToolPolicyCoverage` nor `ValidateSubmittedToolPolicyMap` rejects or drift-logs `mcp_*` | Go unit | `pkg/config/judge_mcp_wildcard_adr084_test.go` |
@@ -3997,11 +4066,11 @@ but the plan must be read as a chain with one side branch, not as eight worktree
 
 | Wave | Decisions | Owns (files) | Depends on |
 |---|---|---|---|
-| **W1** (prereq, `security-lead` for the fspolicy slice) | D10 — god mode, MCP, skills, **real** read confinement | `pkg/coreagent/core.go` (seed + skills only), `pkg/agent/instance.go`, `pkg/agent/context.go` (project-shelf nil for the verifier turn — FR-059a), **`pkg/tools/resolvepath.go`** and **`pkg/fspolicy/policy.go`** (FR-060/060a — *security-lead*, changes the shared filesystem gate), `pkg/tools/filesystem_docextract_test.go` (both postures), **new** `pkg/agent/verifier_capability_gate.go`, **new** `pkg/tools/compositor_judge_mcp_adr084_test.go`, `pkg/coreagent/judge_seed_test.go`, **new** `scripts/check-adr084-closures.sh` (+ `.test.sh`, `Makefile`, `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`) | — |
+| **W1** (prereq, `security-lead` for the fspolicy slice) | D10 — ~~god mode,~~ MCP, skills, **real** read confinement *(the god-mode refusal is superseded — 2026-09-20, issue #761; the other three closures are unchanged and are now the whole of D10)* | `pkg/coreagent/core.go` (seed + skills only), `pkg/agent/instance.go`, `pkg/agent/context.go` (project-shelf nil for the verifier turn — FR-059a), **`pkg/tools/resolvepath.go`** and **`pkg/fspolicy/policy.go`** (FR-060/060a — *security-lead*, changes the shared filesystem gate), `pkg/tools/filesystem_docextract_test.go` (both postures), **new** `pkg/agent/verifier_capability_gate.go`, **new** `pkg/tools/compositor_judge_mcp_adr084_test.go`, `pkg/coreagent/judge_seed_test.go`, **new** `scripts/check-adr084-closures.sh` (+ `.test.sh`, `Makefile`, `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`) | — |
 | **W2** (prereq) | D9 — configurable + raised timeout, caps, progress classification, **the tool-result capture seam, and FR-009a's injection banner** | `pkg/config/config.go` (+ judge-timeout / cap / token-ceiling keys), **new** `pkg/agent/verifier_budget.go`, `pkg/agent/judge.go` (**timeout consts only**), **`pkg/agent/tool_result_admit.go`** — `admitToolResult`, the shipped choke point, carrying **both** FR-030's capture (C10) and **FR-009a's injection banner** (moved here from W4: same string, same choke point, one implementation), **`pkg/agent/loop.go`** — the tool-dispatch point inside `turnLoop`, which is the only place that can refuse a call once a cap is reached (FR-051/052 — `verifier_budget.go` alone cannot refuse anything). The ctx seams (`WithReadConfined`, the capture handle) follow the shipped `tools.WithVerifierSessionScope` precedent | — |
-| **W3** (the one parallel lane) | D8 — contract + SPA render **only** | Every row of the [copies table](#every-copy-of-every-changed-shape-by-path-fr-073-c20) marked authoritative or hand-sync: `CriterionVerdict.yaml`, `JudgeVerdictFrame.yaml`, **`contracts/asyncapi.yaml`** (inline `JudgeVerdictFrame`, **`GoalStatusFrame.criteria[]`, `GoalStatusFrame.dod[]`, `GoalStatusFrame.state`**), `contracts/openapi.yaml`, `AcceptanceCriterion.yaml` + `AcceptanceCriterionInput.yaml` (status enum FR-076 **and** FR-006b's clause count), `GoalStatusFrame.yaml`, `Agent.yaml` (FR-078 badge field), `AgentUpdateRequest.yaml` (FR-080's `reset_soul`), `pkg/api/generated/`, `src/lib/api/generated/`, **`pkg/task/verdict.go`** (FR-070a Go fields), `pkg/task/criterion.go` (status constant + FR-006b's persisted count), `pkg/gateway/replay.go`, `src/components/workspaces/CriteriaVerdictList.tsx` (+ test), `src/components/agents/AgentCard.tsx` (FR-078 badge), the goal-status pill (FR-057a, FR-083, and **rev 7's two new `GoalStatusFrame.state` values — `blocked` (FR-093) and `claim_overturned` (FR-102) — in BOTH copies, rows 10–11 of the copies table**). **W3 records FR-085's rollout choice.** *(FR-086's visibility choice is retired — D13 removes the wait it was about.)* It no longer owns the status writer — see W4a | — |
+| **W3** (the one parallel lane) | D8 — contract + SPA render **only** | Every row of the [copies table](#every-copy-of-every-changed-shape-by-path-fr-073-c20) marked authoritative or hand-sync: `CriterionVerdict.yaml`, `JudgeVerdictFrame.yaml`, **`contracts/asyncapi.yaml`** (inline `JudgeVerdictFrame`, **`GoalStatusFrame.criteria[]`, `GoalStatusFrame.dod[]`, `GoalStatusFrame.state`**), `contracts/openapi.yaml`, `AcceptanceCriterion.yaml` + `AcceptanceCriterionInput.yaml` (status enum FR-076 **and** FR-006b's clause count), `GoalStatusFrame.yaml`, `Agent.yaml` (FR-078 badge field), `AgentUpdateRequest.yaml` (FR-080's `reset_soul`), `pkg/api/generated/`, `src/lib/api/generated/`, **`pkg/task/verdict.go`** (FR-070a Go fields), `pkg/task/criterion.go` (status constant + FR-006b's persisted count), `pkg/gateway/replay.go`, `src/components/workspaces/CriteriaVerdictList.tsx` (+ test), `src/components/agents/AgentCard.tsx` (FR-078 badge), the goal-status pill (FR-057a — **its value ships deprecated and never emitted, 2026-09-20, issue #761; the enum entry stays, the render obligation does not** — FR-083, and **rev 7's two new `GoalStatusFrame.state` values — `blocked` (FR-093) and `claim_overturned` (FR-102) — in BOTH copies, rows 10–11 of the copies table**). **W3 records FR-085's rollout choice.** *(FR-086's visibility choice is retired — D13 removes the wait it was about.)* It no longer owns the status writer — see W4a | — |
 | **W4** | D2a/D2b/D2c/D5/D5a + the attribution model — three-state outcome, empty-quote rewrite, grounding, attribution, distinctness, check demotion | `pkg/agent/judge.go` (parser + rung dispatch + **`summarizeVerdict`** (FR-022) + **`buildJudgeUserContent`** (FR-002a)), `pkg/agent/verifier_adjudication.go` (mapping loop + dedupe + FR-018a's return shape). **Consumes** W2's capture and banner; must not edit `tool_result_admit.go` or `loop.go` | W1, W2, W3 |
-| **W4a** (new — the projection and its call sites) | FR-076 step 2's verdict→criterion-status writer **and every call site that must carry a reason or an outcome** | **new** `pkg/agent/verdict_status_projection.go` (the writer), plus its call sites: `pkg/agent/judge.go::finalizeVerdict`, `pkg/agent/task_executor.go::adjudicateClaim` (FR-057a's and FR-083's reasons on the **task run record**), `pkg/agent/goal_triggers.go::runGoalAdjudication` → `emitGoalStatusFrame` (FR-057a's and FR-083's reasons on the **goal-status frame** — the only `Unavailable` surface), FR-020a's aggregate counter. **Why it is its own wave:** revision 5 gave W3 the writer but not its call sites, which all live in `pkg/agent`; declared W3 the one parallel lane with "Depends on: —"; and left W3's own test unable to go green until W4 produced an outcome to project. A contracts-and-SPA lane cannot own engine call sites, and a lane that needs W4's output is not parallel | W3, W4 |
+| **W4a** (new — the projection and its call sites) | FR-076 step 2's verdict→criterion-status writer **and every call site that must carry a reason or an outcome** | **new** `pkg/agent/verdict_status_projection.go` (the writer), plus its call sites: `pkg/agent/judge.go::finalizeVerdict`, `pkg/agent/task_executor.go::adjudicateClaim` (FR-057a's and FR-083's reasons on the **task run record**), `pkg/agent/goal_triggers.go::runGoalAdjudication` → `emitGoalStatusFrame` (FR-057a's and FR-083's reasons on the **goal-status frame** — the only `Unavailable` surface) *(2026-09-20, issue #761: FR-057a is superseded, so both call sites carry FR-083's `cas_loss` reason only)*, FR-020a's aggregate counter. **Why it is its own wave:** revision 5 gave W3 the writer but not its call sites, which all live in `pkg/agent`; declared W3 the one parallel lane with "Depends on: —"; and left W3's own test unable to go green until W4 produced an outcome to project. A contracts-and-SPA lane cannot own engine call sites, and a lane that needs W4's output is not parallel | W3, W4 |
 | **W5** | D1a — descendant scope | `pkg/agent/verifier_adjudication.go::resolveVerifierSessionScope` **only** (rebases onto W4) | W4 |
 | **W6** | D7 — provenance + investigation log (derived from W2's capture, not the transcript) + FR-069a's disagreement WARN | **new** `pkg/agent/verifier_provenance.go`, **one call site inside `verifier_adjudication.go`'s per-criterion mapping loop — the region W4 owns**, so it is a serialization point, not an addition (see below) | W4, W5 |
 | **W7** | D1 + D2d — rubric rewrite; §I — capability self-check, degraded state, legacy gating, reset | `pkg/coreagent/core.go` (**rubric constant only** — including FR-077's two capability sentinels), **new** `pkg/gateway/judge_rubric_selfcheck.go`, one call site in `pkg/gateway/gateway.go` beside `seedSystemAgentEagerSouls`. **No** `judge_rubric_history.go`, **no** `judge_soul_migration.go` — those were D6's and D6 is removed | **W1, W2** (hard, ADR prerequisite), W4 |
@@ -4092,11 +4161,15 @@ duplicated holdout H1 exactly. It lives as H1 alone. SC-003 is retired with D6.
 - **SC-003**: RETIRED with D6 (ADR-084 rev 4).
 - **SC-003a**: On an install whose `rubricDeclaresOutcome` is false, 0 of 20 previously-`met`
   criteria become `unable_to_verify`, and 0 soul files are modified.
-- **SC-004**: With god mode on, 0 verifier turns dispatch, and 100 % of refusals surface a reason
-  distinguishable from a provider outage.
+- **SC-004**: ~~With god mode on, 0 verifier turns dispatch, and 100 % of refusals surface a reason
+  distinguishable from a provider outage.~~ **SUPERSEDED 2026-09-20 (issue #761).** Replaced by:
+  with god mode on, 100 % of adjudications dispatch and complete, 0 produce a `god_mode:` reason,
+  and the Judge's effective policy for every tool outside its read-only seed is still `deny`.
 - **SC-005**: `resolveEffectivePolicyWith` returns `deny` for 100% of sampled `mcp_*` names for the
-  Judge, with an `allow` global ceiling in place **and god mode off** (under god mode it returns
-  `allow` by design — which is what FR-057 exists for).
+  Judge, with an `allow` global ceiling in place — ~~**and god mode off** (under god mode it returns
+  `allow` by design — which is what FR-057 exists for)~~ **and with god mode on or off
+  (corrected 2026-09-20, issue #761: god mode sets the global layer to `allow`, the per-agent
+  `mcp_*: deny` still wins the merge, so the sample must be run in both postures)**.
 - **SC-006**: A Judge instance under `RestrictToWorkspace=false` refuses 100 % of **reads, directory
   listings and `send_file` disclosures** outside its turn workspace, **including through a
   symlink** — all three operations in `ResolvePath`'s escape branch, not reads alone — while a
@@ -4204,7 +4277,7 @@ duplicated holdout H1 exactly. It lives as H1 alone. SC-003 is retired with D6.
 | FR-054a | US-7 | Mid-turn SEC-26 denial after progress does not retry | `TestVerifierTimeout_AfterProgress_MidTurnSEC26DenialDoesNotRetry`, `…ProviderErrorDoesNotRetry` |
 | FR-055 | US-7 | Zero-progress timeout | `TestVerifierTimeout_ZeroProgress_UnavailableAndRetries` |
 | FR-056 | US-7 | Tool-call cap clamped by the SEC-26 window | `TestVerifierBudget_ToolCallCapClampedBySEC26Window` |
-| FR-057, FR-057a | US-6 | God mode refuses the verifier turn, distinguishably | `TestRunVerifierAdjudication_GodModeRefusal_SurfacesDistinctReason`, vitest `renders judge_refused_god_mode…` |
+| ~~FR-057, FR-057a~~ | US-6 | ~~God mode refuses the verifier turn, distinguishably~~ **SUPERSEDED 2026-09-20 (issue #761)** — replaced by "God mode does not widen the Judge, and does not stop it" | *(the refusal test and the pill vitest go with them; the replacement scenario is covered by FR-058's policy tests run in both postures)* |
 | FR-058 | US-6 | MCP tool resolves deny | `TestJudgeSeed_MCPWildcardDenied`, `TestJudgeEffectivePolicy_MCPToolDeniedDespiteAllowCeiling`, `TestToolPolicyValidators_AcceptNonCatalogWildcardOnSystemAgent` |
 | FR-059 | US-6 | Skill allowlist explicit and empty | `TestJudgeSeed_SkillAllowlistIsNonNilAndEmpty`, `TestSeedSystemAgents_ReEnforcesJudgeSkillAllowlist` |
 | FR-059a | US-6 | Workspace project-shelf skill is denied to the Judge | `TestJudgeInstance_WorkspaceProjectShelfSkillIsDenied` |
@@ -4389,7 +4462,9 @@ H1 is the sole home of the "original failing run returns `met`" check — it was
 is removed from Success Criteria because it is the only SC requiring a live provider. H7 overlaps
 SC-004/005/006 and the god-mode BDD deliberately: the SCs assert each closure in isolation against
 fakes, H7 asserts all four together against a real over-permissive install, which is the
-configuration an operator actually produces. H2–H6 and H8 are independent. H6 and H8 both cover a
+configuration an operator actually produces. *(2026-09-20, issue #761: the god-mode BDD it overlaps
+is now "god mode does not widen the Judge, and does not stop it"; SC-004 was superseded in the same
+pass. The overlap and the reason for it are unchanged.)* H2–H6 and H8 are independent. H6 and H8 both cover a
 loop that revision 5 made unreachable or unbounded, so a green H6 or H8 is only meaningful with
 FR-024's `rubricInstructsQuote` gate (C16) and FR-020a's aggregate bound (C19) actually in place.
 
@@ -4457,9 +4532,14 @@ migrated — that is the point. Confirm all four:
 ### H7 — The over-permissive operator (Edge Case)
 
 Enable god mode, connect an MCP server with a write tool, install a third-party skill, and set
-`RestrictToWorkspace=false`. Attempt a goal adjudication. The Judge must not run at all; when god
+`RestrictToWorkspace=false`. Attempt a goal adjudication. ~~The Judge must not run at all; when god
 mode is switched off, it must run with no MCP tool, no third-party skill, and no read outside its
-workspace.
+workspace.~~ **Revised 2026-09-20 (issue #761):** the Judge must run — and must run with no MCP
+tool, no third-party skill, and no read outside its workspace, **with god mode still on**. Then
+switch god mode off and confirm the same four closures hold unchanged. The point of the holdout is
+unchanged: it tests all four closures together against a real over-permissive install, which is the
+configuration an operator actually produces. What changed is that the expected outcome is a
+completed adjudication rather than a refusal.
 
 
 ### H8 — The rotating "cannot verify" (Error Path)

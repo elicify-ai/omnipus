@@ -102,20 +102,37 @@ func TestJudgeEffectivePolicy_MCPToolDeniedDespiteAllowCeiling(t *testing.T) {
 				"deny somewhere, not FR-058's wildcard)")
 	})
 
-	t.Run("god mode still floors every tool at allow, even for the Judge's mcp_* deny (documented O14 precedence, unaffected by FR-058)", func(t *testing.T) {
-		// Not a gap in FR-058 — god mode's override is documented to
-		// short-circuit BEFORE the global x agent merge for every tool and
-		// every agent uniformly (resolveEffectivePolicyWith's own doc
-		// comment). Pinned here so a future change to FR-058's wildcard
-		// cannot accidentally special-case the Judge out of god mode's
-		// documented (if dangerous) behaviour without a test noticing.
+	t.Run("god mode lifts the GLOBAL ceiling but not the Judge's own mcp_* deny (O14 x FR-058)", func(t *testing.T) {
+		// God mode floors the GLOBAL layer at "allow" and then runs the
+		// normal global x agent merge UNCHANGED (resolveEffectivePolicyWith's
+		// own doc comment). It therefore removes the operator's restrictions,
+		// never the Judge's own: FR-058's per-agent wildcard is the Judge's
+		// tool ceiling and survives god mode intact. Pinned here because the
+		// opposite used to be true — god mode short-circuited ahead of the
+		// merge and returned "allow" for every tool, silently erasing this
+		// exact guarantee.
 		cfg := &ToolPolicyCfg{
 			Policies: judgePolicies,
 			GodMode:  true,
 		}
 		got := ResolveEffectivePolicy(cfg, "mcp_context7_query")
+		assert.Equal(t, "deny", got,
+			"JUDGE-FR-058: god mode must not hand the Judge an MCP tool its own per-agent policy denies — "+
+				"god mode floors the GLOBAL layer at allow, and global allow x agent deny is deny")
+	})
+
+	t.Run("differentiation: under the SAME god mode, a tool the Judge does NOT deny resolves allow", func(t *testing.T) {
+		// Without this, the deny above could pass for a degenerate
+		// implementation that ignored god mode entirely. A non-MCP tool the
+		// Judge has no opinion on has no agent-side entry at all, so the
+		// god-mode global allow alone decides.
+		cfg := &ToolPolicyCfg{
+			Policies: judgePolicies,
+			GodMode:  true,
+		}
+		got := ResolveEffectivePolicy(cfg, "read_file")
 		assert.Equal(t, "allow", got,
-			"god mode floors every tool at allow uniformly; FR-058 does not (and structurally cannot, per "+
-				"resolveEffectivePolicyWith) carve out an exception for MCP tools under god mode")
+			"god mode does floor the global layer at allow: a tool with no per-agent entry (and no global "+
+				"entry either, since GlobalPolicies is empty here) must resolve allow, not the fail-closed deny")
 	})
 }

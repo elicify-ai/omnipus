@@ -1089,6 +1089,7 @@ The spec's C2 row (spec:30) leads with a bolded *"The compositor **fails CLOSED*
 
 ```go
 // pkg/tools/compositor.go:162-201
+// SUPERSEDED 2026-09-20 (issue #761) — this line no longer exists; see the box below.
 if cfg.GodMode { return config.ToolPolicyAllow }          // ← short-circuits the ENTIRE merge
 g := resolveFromMap(toolName, cfg.GlobalPolicies, globalWildcards)
 a := resolveFromMap(toolName, cfg.Policies, agentWildcards)
@@ -1117,6 +1118,15 @@ Two corrections to the spec's framing:
    Error log") is therefore **wrong under god-mode**, and SC-008 has no god-mode row. Add a dataset
    row `god-mode enabled → allow regardless of either map`. This is a genuine coverage gap, not a
    wording quibble.
+
+   > **Superseded history — correction 2026-09-20 (issue #761).** This finding was accurate about
+   > the code on 2026-07-27 and is kept as the record of that review. It no longer describes the
+   > product. The short-circuit is deleted: god mode now sets the **global** side to `allow` for
+   > every tool and the merge then runs unchanged, so a per-agent `deny` still denies and the
+   > code block quoted above is stale. The dataset row this finding asked for became rows 10, 11
+   > and 11a of the spec, and row 11's expected value is now `deny`, not `allow`. See the
+   > correction block at the top of `list-jobs-spec.md` and
+   > [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md).
 
 ### 8.3 `denyAllThenOverride` ⇒ a new tool ships DISABLED on a fresh install — ✅ **VERIFIED, and the spec is more precise than the question**
 

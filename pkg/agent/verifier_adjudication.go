@@ -1418,26 +1418,16 @@ func (al *AgentLoop) runVerifierAdjudication(
 			})
 	}()
 
-	// JUDGE-FR-057/FR-057a (review finding 5): god mode floors EVERY tool at
-	// "allow" (Constraint #6's sandbox-off posture), which erases the
-	// verifier's narrow read-only surface and makes FR-058's "mcp_*": deny
-	// stamp resolve to nothing — resolveEffectivePolicyWith short-circuits on
-	// cfg.GodMode before any per-agent map is consulted. An adjudication run
-	// under that posture cannot be trusted, so it is refused BEFORE a verifier
-	// session is created and BEFORE any Judge turn runs, exactly as FR-057
-	// requires. Returned as unavailable (round NOT consumed) carrying the
-	// machine-readable "god_mode: " reason, so the operator sees a distinct,
-	// actionable state — not silence, and not a fail-closed unmet that would
-	// burn the goal's rounds for a posture problem. Deliberately NOT retried
-	// on the backoff schedule: god mode clears by operator action, not by
-	// waiting, and a retry loop would only spin.
-	if godModeReason, refuse := VerifierGodModeRefusalReason(GodModeActive(vs.va.al.GetConfig())); refuse {
-		logger.ErrorCF("agent",
-			"verifier: adjudication refused — god mode is active (JUDGE-FR-057); "+
-				"no verifier session was created and no Judge turn ran",
-			map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "reason": godModeReason})
-		return nil, "", "", true, godModeReason, nil, nil
-	}
+	// There is deliberately NO god-mode refusal here (issue #761, removing
+	// JUDGE-FR-057/FR-057a). That refusal rested on one premise: that god mode
+	// floors EVERY tool at "allow" and so erases the verifier's narrow
+	// read-only surface. It no longer holds — god mode now floors only the
+	// GLOBAL policy layer and leaves the per-agent policy in force, so under
+	// god mode the verifier KEEPS its deny-all-except-read-only ceiling
+	// (read_file, list_directory, inspect_session) and FR-058's "mcp_*": deny
+	// stamp still resolves. With its premise gone the refusal had no basis, so
+	// it was removed rather than left standing as a posture check that only
+	// looked protective. Do not re-add it.
 
 	vs.va.windowText = vs.va.al.resolveVerifierWindowText(vs.va.in)
 
@@ -1834,8 +1824,7 @@ func (va *agentLoopRunVerifierAdjudication) finalizeVerdicts() agentLoopRunVerif
 //   - the turn was refused for a cause only an operator can fix: the Judge's
 //     provider or model is not configured, its context window is unknown, or
 //     the provider rejected its credentials. Retrying only held the goal card
-//     on "judging" until the round timeout (the god-mode refusal above is the
-//     precedent for refusing to spin);
+//     on "judging" until the round timeout, so refusing beats spinning;
 //   - the turn ended at the output-token limit before its verdict was
 //     complete. The same request truncates the same way again (ADR-087 D1's
 //     rationale, translate_error.go's isRetryable).
@@ -1845,7 +1834,7 @@ func (va *agentLoopRunVerifierAdjudication) finalizeVerdicts() agentLoopRunVerif
 
 // JudgeMisconfiguredReasonPrefix prefixes the Reason of an adjudication withheld
 // because the Judge's turn was refused for a cause only an operator can clear.
-// Distinct from VerifierGodModeRefusalReasonPrefix and from a transient-outage
+// Distinct from JudgeOutputTruncatedReasonPrefix and from a transient-outage
 // reason, so the three are never merged in what the operator sees.
 const JudgeMisconfiguredReasonPrefix = "judge_misconfigured: "
 

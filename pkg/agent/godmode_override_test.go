@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // withGodModeAvailable flips the process-level availability gate for the
@@ -55,16 +56,31 @@ func TestAgentToolsCfgToPolicy_GodMode_FloorsAndIsNonDestructive(t *testing.T) {
 	globalCfg.Sandbox.ToolPolicies = map[string]string{"system.exec": "deny"}
 
 	agentCfg := &config.AgentToolsCfg{}
-	agentCfg.Builtin.Policies = map[string]config.ToolPolicy{"fetch_url": "ask"}
+	agentCfg.Builtin.Policies = map[string]config.ToolPolicy{
+		"fetch_url": "ask",
+		"mcp_thing": "deny", // a system agent's own ceiling — must survive god mode
+	}
 
 	withGodModeAvailable(t, true)
 	got := agentToolsCfgToPolicy(globalCfg, agentCfg)
 	if !got.GodMode {
 		t.Fatal("god mode active: ToolPolicyCfg.GodMode must be true")
 	}
-	if len(got.Policies) != 0 || len(got.GlobalPolicies) != 0 {
-		t.Fatalf("god mode active: policy maps must be empty (override is total), got agent=%v global=%v",
+	// Issue #761: the maps MUST be populated under god mode. Leaving them nil
+	// made the agent side resolve to "" so `case a == "": return g` handed back
+	// the god-mode "allow" for every tool, defeating the per-agent ceiling that
+	// resolveEffectivePolicyWith exists to preserve.
+	if len(got.Policies) == 0 || len(got.GlobalPolicies) == 0 {
+		t.Fatalf("god mode active: policy maps must still be populated (#761), got agent=%v global=%v",
 			got.Policies, got.GlobalPolicies)
+	}
+	// The property that actually matters, end to end through the real resolver:
+	// god mode lifts the GLOBAL ceiling but never an agent's own deny.
+	if p := tools.ResolveEffectivePolicy(got, "mcp_thing"); p != string(config.ToolPolicyDeny) {
+		t.Errorf("god mode active: per-agent deny must survive, mcp_thing = %q, want deny", p)
+	}
+	if p := tools.ResolveEffectivePolicy(got, "system.exec"); p != string(config.ToolPolicyAllow) {
+		t.Errorf("god mode active: global deny must be lifted, system.exec = %q, want allow", p)
 	}
 
 	// Switch off and confirm the prior decisions are restored.
