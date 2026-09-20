@@ -869,7 +869,8 @@ func (c *BrowserCoordinator) launchChrome(ctx context.Context) error {
 	//   * ExtensionID is `pkg/tools/browser/captureext.ExtensionID`
 	//     (the deterministic ID the wave-plan's manifest `key` pins).
 	//   * ExtensionDir is seeded at agent-register time by
-	//     pkg/agent/loop_wire.go::WireBrowserTools (around line 1185),
+	//     pkg/agent/loop_wire.go::registerBrowserTools (method on
+	//     *registerSharedToolsWire3, around line 1185 for the assignment),
 	//     which calls captureext.Seed(<$OMNIPUS_HOME>/browser) and assigns
 	//     BOTH fields onto browserCfg on success.
 	//   * exec_resolver.go::managedExecAllocatorOpts then appends
