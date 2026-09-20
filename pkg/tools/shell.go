@@ -283,7 +283,11 @@ var (
 		// reinstate a blanket rule here without reading that file's threat
 		// notes first.
 		regexp.MustCompile(`\$\{[^}]+\}`),
-		regexp.MustCompile("`[^`]+`"),
+		// Legacy backtick substitutions are judged structurally by
+		// substitutionGuard, alongside $(...). That guard still refuses command
+		// position, dangerous inner commands, and hostile outer commands, while
+		// deliberately no longer treating every prose fragment wrapped in
+		// backticks as executable shell syntax (issue #767).
 		regexp.MustCompile(`\|\s*sh\b`),
 		regexp.MustCompile(`\|\s*bash\b`),
 		regexp.MustCompile(`;\s*rm\s+-[rf]`),
@@ -370,18 +374,37 @@ var (
 	// "check the agents dir"), and the own-tree exception that makes reaching
 	// them sometimes correct (fspolicy.DeniedPathsFor) is inherently
 	// contextual — a static text guard has no turn to evaluate that against.
-	// The five ALWAYS names are never legitimate in ANY turn, which is what
-	// makes a context-free literal match safe for them and not for the rest.
+	// Every ALWAYS entry remains covered, but issue #767 proved that the words
+	// "system" and "config.json" are legitimate in prose. Those two are
+	// therefore path-shaped below; all other names retain literal coverage.
 	secretGuardPatterns = buildSecretGuardPatterns()
 )
 
 // buildSecretGuardPatterns compiles one case-insensitive-by-construction
-// (applyDenyPatterns lowercases the command before matching) word-boundary
-// regex per fspolicy.SecretEntriesAlways entry.
+// (applyDenyPatterns lowercases the command before matching) regex per
+// fspolicy.SecretEntriesAlways entry. Most names remain context-free because
+// merely exposing them is unsafe. The two ordinary-language exceptions are
+// narrowed to explicit path components below.
 func buildSecretGuardPatterns() []*regexp.Regexp {
 	out := make([]*regexp.Regexp, 0, len(fspolicy.SecretEntriesAlways))
 	for _, name := range fspolicy.SecretEntriesAlways {
-		out = append(out, regexp.MustCompile(`\b`+regexp.QuoteMeta(strings.ToLower(name))+`\b`))
+		var pattern string
+		switch name {
+		case "config.json":
+			// Catch config.json only as an explicit path component. A bare
+			// filename in prose is deliberately allowed; the protected file lives
+			// under $OMNIPUS_HOME, so a real reference from an agent workspace
+			// carries a path separator and also reaches the path/platform guards.
+			pattern = `[/\\]config\.json\b`
+		case "system":
+			// Catch the protected system directory when it is traversed as a
+			// path. The ordinary word "system" and a bare filename are
+			// deliberately allowed; paths such as system/audit.jsonl are not.
+			pattern = `\bsystem[/\\]`
+		default:
+			pattern = `\b` + regexp.QuoteMeta(strings.ToLower(name)) + `\b`
+		}
+		out = append(out, regexp.MustCompile(pattern))
 	}
 	return out
 }
