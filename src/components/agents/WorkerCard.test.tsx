@@ -77,6 +77,11 @@ describe('WorkerCard — content', () => {
     renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'opencode' } }))
     expect(screen.getByText('opencode')).toBeInTheDocument()
   })
+
+  it('shows a visible Running state while the worker has an active turn', () => {
+    renderCard(makeWorker({ status: 'active' }))
+    expect(screen.getByText('Running')).toBeInTheDocument()
+  })
 })
 
 describe('WorkerCard — omitted colleague affordances', () => {

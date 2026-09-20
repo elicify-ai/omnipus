@@ -558,6 +558,7 @@ export function AgentListScreen() {
   const { data: agents = [], isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
+    refetchInterval: 5_000,
   })
 
   const { data: workspaces = [] } = useQuery({
