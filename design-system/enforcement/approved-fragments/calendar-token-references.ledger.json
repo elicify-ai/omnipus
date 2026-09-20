@@ -11,24 +11,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "feb8b10c3f9bb2ebf999da07d17d3d9480e03f241d62234b3c36fa3370bede31",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-now-indicator-color)",
-      "owner": "C1 lane 2: Calendar and workspace management",
-      "replacement": "Reference the governed accent/now-indicator token directly in application indicator rules; keep the FullCalendar override token-driven.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "e2c7823754604d05f33e86d22993d917449418ef1219ba5eb4cf40b045729af5",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-list-event-hover-bg-color)",
-      "owner": "C1 lane 2: Calendar and workspace management",
-      "replacement": "Reference the governed surface-3/list-hover token directly in application list rules; keep the FullCalendar override token-driven.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "e082a5d25439021ed8d7b18f564a7d3b2199261c2b4eabe8a1a24ee1c14e0607",
       "ruleId": "css-colors/unregistered-token",
       "path": "src/styles/fullcalendar-theme.css",

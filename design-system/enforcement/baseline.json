@@ -128,6 +128,13 @@
       "count": 2
     },
     {
+      "fingerprint": "0758c523d06dc56ca6d792a9542934cee564b86c0c91bce1e5092a7de4acc997",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/workspaces/team/WorkspaceTeamGraph.tsx",
+      "syntax": "<div role=\"button\">",
+      "count": 1
+    },
+    {
       "fingerprint": "07848317eb79983900c5209170abd41d1b2bd27a8ada2fb5992e96bb75629199",
       "ruleId": "controls/raw-button",
       "path": "src/components/skills/SkillBrowser.tsx",
@@ -464,13 +471,6 @@
       "count": 1
     },
     {
-      "fingerprint": "1c2527afb298f0a3eea5074a1dec33f2ed3eb71f3df892af3d8f4c4b8f5c457c",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#141416",
-      "count": 1
-    },
-    {
       "fingerprint": "1c30c2b0d411e8da52ddee6735cb76d3d6c40e611adf89022fcaeaf7659ad1e2",
       "ruleId": "controls/raw-button",
       "path": "src/components/agents/WorkerCard.tsx",
@@ -618,6 +618,13 @@
       "count": 1
     },
     {
+      "fingerprint": "22e74328ec85fb4f3e123abc2a8a783b02c6157de2a1c5ac29b7df8c5ee504fd",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/chat/ChatImage.tsx",
+      "syntax": "<img role=\"button\">",
+      "count": 1
+    },
+    {
       "fingerprint": "2357ce56588ea17f3f477eff90189e828de8317f07315d454988dd06b9da8c72",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -660,13 +667,6 @@
       "count": 1
     },
     {
-      "fingerprint": "2482c649eb3c5f06b835cb665e5f0bac92de6ff9f22ebcd9614c3e27a61096be",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#2d3748",
-      "count": 1
-    },
-    {
       "fingerprint": "248bb0352f4bb89aa859ebad05f00f51c0fc637e8bda278b797846a29c0da9a7",
       "ruleId": "typography/arbitrary-text-size",
       "path": "src/components/library/preview/viewparts/TablePart.tsx",
@@ -678,13 +678,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/CreateAgentWizard.tsx",
       "syntax": "#22c55e",
-      "count": 1
-    },
-    {
-      "fingerprint": "254d37cd5f373788e004445f8805956065048e41c21306825755b9d5e851371c",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#d4af37",
       "count": 1
     },
     {
@@ -961,13 +954,6 @@
       "count": 3
     },
     {
-      "fingerprint": "346960a49ad8e794bd8704198f5a95be5e46c8d359542685a5d5476f65226351",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#ef4444",
-      "count": 1
-    },
-    {
       "fingerprint": "349c16d3715d82dbca9d038a10f5130673eff0a3e6cbedd145cc694700922f05",
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/ActivityBar.tsx",
@@ -1008,6 +994,13 @@
       "path": "src/components/library/LibraryPreviewPane.tsx",
       "syntax": "<button>",
       "count": 3
+    },
+    {
+      "fingerprint": "367343f29a0d27b2c0cdf71bd27ce374b29ff8f383d6bbe72f7c33d413017c89",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/workspaces/graph/TaskNode.tsx",
+      "syntax": "<motion.div role=\"button\">",
+      "count": 1
     },
     {
       "fingerprint": "3688e8fe48bfca2d380b1fda244de2c60a1ff0a85271d4113cec8e30ca2c36d1",
@@ -1339,20 +1332,6 @@
       "count": 1
     },
     {
-      "fingerprint": "4557d54d75dcb93b63ca12fd43c00ead7e5453bf877729e4535ada52641edc26",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#dc2626",
-      "count": 1
-    },
-    {
-      "fingerprint": "4558f7f28828907fe280bf1efc524d5021e0cca3052d19b1d6099a46e58ce30f",
-      "ruleId": "ts-colors/undefined-token",
-      "path": "src/components/settings/DevicesSection.tsx",
-      "syntax": "var(--forge-gold)",
-      "count": 1
-    },
-    {
       "fingerprint": "45edd3d07806bf9c2052c3ac0ca216de776f1e0125f95cf46a91682280a42c83",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/ProvidersSection.tsx",
@@ -1619,13 +1598,6 @@
       "count": 1
     },
     {
-      "fingerprint": "558795f11a3eab45e1c4d9ad70e334329688da48060a7aa74173aaed53c6de54",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#111113",
-      "count": 1
-    },
-    {
       "fingerprint": "55a8bfabe580f881c89c551ba978c400301de6a6a1dfc97b42814ff6e1eb4db4",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -1658,13 +1630,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "bg-purple-500/10",
-      "count": 1
-    },
-    {
-      "fingerprint": "57821c184f28496f24e86fe930be26f44fbde6de05d15f9f0cd717bddf0203e3",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#e2e8f0",
       "count": 1
     },
     {
@@ -1708,13 +1673,6 @@
       "path": "src/components/chat/tools/GenericToolCall.tsx",
       "syntax": "text-amber-400",
       "count": 3
-    },
-    {
-      "fingerprint": "59498a10d07b3642e02894d28e8fe40ba7bea0be29ec8194e0e8aa05f396d656",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#10b981",
-      "count": 1
     },
     {
       "fingerprint": "5a3eb3f6412cb0716c3b86cb5ac89beddf1d8d5cd2b40c3e8ae60780a28b777e",
@@ -1763,13 +1721,6 @@
       "ruleId": "spacing/off-scale",
       "path": "src/components/chat/tools/GenericToolCall.tsx",
       "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
-      "fingerprint": "600716a2b7956d38f202304174d492543860ff78471b81a010e99115f2b8b6ab",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#eab308",
       "count": 1
     },
     {
@@ -2039,13 +1990,6 @@
       "count": 1
     },
     {
-      "fingerprint": "6bb149fba20a425668a25c9fc878fdd51ff40dbbc547849311f9c84b387c7c05",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#9ca3af",
-      "count": 1
-    },
-    {
       "fingerprint": "6bbec28a936f654ad7ced1401ecfb8a3bd3005435ce6f7c444c31d878efd88f5",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/LibraryEntryRow.tsx",
@@ -2057,13 +2001,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/routes/onboarding.tsx",
       "syntax": "bg-red-500/10",
-      "count": 1
-    },
-    {
-      "fingerprint": "6c2b453d73b8e0d64b94ca54fab3dbc8da9df83e34aa7cd7393df87d4027f43d",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "#c49e2f",
       "count": 1
     },
     {
@@ -2092,6 +2029,13 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/routes/onboarding.tsx",
       "syntax": "#2d3748",
+      "count": 1
+    },
+    {
+      "fingerprint": "6dae83ba7dfee5bfb74241dbad621baee9b205996bad0bf5e0b6f6ae409c2e6c",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/workspaces/TaskCard.tsx",
+      "syntax": "<div role=\"button\">",
       "count": 1
     },
     {
@@ -2134,6 +2078,13 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "border-amber-500/30",
+      "count": 1
+    },
+    {
+      "fingerprint": "70a5cc40f61ef65a21930e8199b75e1ad00312ad051e6279eac6e5f00ff8f85a",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/settings/DiagnosticsSection.tsx",
+      "syntax": "<div role=\"button\">",
       "count": 1
     },
     {
@@ -2599,13 +2550,6 @@
       "count": 1
     },
     {
-      "fingerprint": "902597ce59b280ec12b09c2709abf3a21db1ca53d2b06c5b4f1ddf173919fc24",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#0a0a0b",
-      "count": 2
-    },
-    {
       "fingerprint": "90b04ce36ecb740df214098b7af84c86ad9de8709500d5f9c9d48df378801e5c",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/screens/ConnectorsScreen.tsx",
@@ -2743,13 +2687,6 @@
       "ruleId": "typography/arbitrary-text-size",
       "path": "src/components/library/preview/viewparts/FiguresPart.tsx",
       "syntax": "text-[1.15rem]",
-      "count": 1
-    },
-    {
-      "fingerprint": "982d54888b300d83d8058ff15a1224fa262a69632349c04479efb1bb1220ef39",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#222228",
       "count": 1
     },
     {
@@ -2900,13 +2837,6 @@
       "count": 1
     },
     {
-      "fingerprint": "a00884ea2bd7ef6608add7112bb6c38fb129b2cbee647b5ed1718139c322831e",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/ui/brand-disclaimer.tsx",
-      "syntax": "#e2e8f0",
-      "count": 1
-    },
-    {
       "fingerprint": "a01cc7052f3da9c8408c45eb226488a43bc934f78d94bccea5a17baccaec38ae",
       "ruleId": "typography/line-height-arbitrary",
       "path": "src/components/library/preview/LibraryCodePreview.tsx",
@@ -3005,13 +2935,6 @@
       "count": 1
     },
     {
-      "fingerprint": "a324125c8006522f7cf188203404592f1bbc36ff485d453874bbadf04ede3cfa",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#c49e2f",
-      "count": 1
-    },
-    {
       "fingerprint": "a3c012de8e05dc08ff6bae08b7929400198537c6c021e1a7e064830c3215ad6a",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -3082,13 +3005,6 @@
       "count": 1
     },
     {
-      "fingerprint": "a91b38007cc00f01ba3f4ec7e2230d986f4465d8e63a44aa9595d93b1e175cf7",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#8ea3bd",
-      "count": 1
-    },
-    {
       "fingerprint": "a925500c4a43d4f47b9d4b32c38e18282d9dc34248aa12ba84c2a756c68c3203",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/SecuritySection.tsx",
@@ -3121,13 +3037,6 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/SecuritySection.tsx",
       "syntax": "import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "abd920e2cf0a44532886482b3a717d50ab8f2b1a4862b087da196c107525043d",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#3b82f6",
       "count": 1
     },
     {
@@ -3289,13 +3198,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/AgentProfile.tsx",
       "syntax": "#d4af37",
-      "count": 1
-    },
-    {
-      "fingerprint": "b41cfbd4934c9484102d0fd2c7761f60fb1b09029e78439304510f74ea37901e",
-      "ruleId": "typography/missing-arbitrary-type-hint",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "text-[var(--color-primary-fg,var(--color-secondary))]",
       "count": 1
     },
     {
@@ -3999,13 +3901,6 @@
       "count": 1
     },
     {
-      "fingerprint": "d4ff5ec32bfeaa690b6070bb52618d37c8933bfa04cc2e79819a770c3ab75e2c",
-      "ruleId": "ts-colors/undefined-token",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "var(--color-primary-fg)",
-      "count": 1
-    },
-    {
       "fingerprint": "d61c3f0ac85519ed3fce5f1cc979c174f62004d2cb45677e2560bd0bbb7b6220",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/layout/AppShell.tsx",
@@ -4251,13 +4146,6 @@
       "count": 1
     },
     {
-      "fingerprint": "e2c7823754604d05f33e86d22993d917449418ef1219ba5eb4cf40b045729af5",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-list-event-hover-bg-color)",
-      "count": 1
-    },
-    {
       "fingerprint": "e309c143d3e11ce6fc157b058ca8a201e0d9985eaa266bacebdd8e9ea7beea82",
       "ruleId": "spacing/off-scale",
       "path": "src/components/chat/tools/FileReadPreview.tsx",
@@ -4290,6 +4178,13 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/shared/PolicyBadge.tsx",
       "syntax": "bg-amber-500/20",
+      "count": 1
+    },
+    {
+      "fingerprint": "e479e6ec7f0b6ee017ce5c0e0d93f684ca15fafad9c4ca48d7f28a95c01fefee",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/library/LibraryEntryRow.tsx",
+      "syntax": "<div role=\"button\">",
       "count": 1
     },
     {
@@ -4517,6 +4412,13 @@
       "count": 1
     },
     {
+      "fingerprint": "f072e06ff509be874f893576f972d02f4ac7b8e6608232a473e360e28839f42a",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/ui/toast-container.tsx",
+      "syntax": "<div role={expr}>",
+      "count": 1
+    },
+    {
       "fingerprint": "f09237d3bb1c124411d46fbc5241ef0928e0c2bc08ba2e1d7059c6e0d67c9ecd",
       "ruleId": "css-colors/raw-color",
       "path": "src/styles/library.css",
@@ -4641,13 +4543,6 @@
       "path": "src/components/chat/RateLimitIndicator.tsx",
       "syntax": "bg-amber-500/5",
       "count": 1
-    },
-    {
-      "fingerprint": "feb8b10c3f9bb2ebf999da07d17d3d9480e03f241d62234b3c36fa3370bede31",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-now-indicator-color)",
-      "count": 2
     },
     {
       "fingerprint": "ffba5137776f0b1a0bb969253f37aa79039bc5a72bdb06586b5bf1d617242e21",

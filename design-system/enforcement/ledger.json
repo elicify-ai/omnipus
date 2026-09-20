@@ -164,6 +164,15 @@
       "expiryCheckpoint": "C1"
     },
     {
+      "fingerprint": "0758c523d06dc56ca6d792a9542934cee564b86c0c91bce1e5092a7de4acc997",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/workspaces/team/WorkspaceTeamGraph.tsx",
+      "syntax": "<div role=\"button\">",
+      "owner": "C2 Lane 2: Calendar and workspace management/team/settings",
+      "replacement": "Replace raw `<div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
+      "expiryCheckpoint": "C2"
+    },
+    {
       "fingerprint": "07848317eb79983900c5209170abd41d1b2bd27a8ada2fb5992e96bb75629199",
       "ruleId": "controls/raw-button",
       "path": "src/components/skills/SkillBrowser.tsx",
@@ -596,15 +605,6 @@
       "expiryCheckpoint": "C2"
     },
     {
-      "fingerprint": "1c2527afb298f0a3eea5074a1dec33f2ed3eb71f3df892af3d8f4c4b8f5c457c",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#141416",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#141416` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "1c30c2b0d411e8da52ddee6735cb76d3d6c40e611adf89022fcaeaf7659ad1e2",
       "ruleId": "controls/raw-button",
       "path": "src/components/agents/WorkerCard.tsx",
@@ -794,6 +794,15 @@
       "expiryCheckpoint": "C5"
     },
     {
+      "fingerprint": "22e74328ec85fb4f3e123abc2a8a783b02c6157de2a1c5ac29b7df8c5ee504fd",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/chat/ChatImage.tsx",
+      "syntax": "<img role=\"button\">",
+      "owner": "C2 Lane 3: Chat, sessions and conversation surfaces",
+      "replacement": "Replace raw `<img role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
+      "expiryCheckpoint": "C2"
+    },
+    {
       "fingerprint": "2357ce56588ea17f3f477eff90189e828de8317f07315d454988dd06b9da8c72",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -848,15 +857,6 @@
       "expiryCheckpoint": "C2"
     },
     {
-      "fingerprint": "2482c649eb3c5f06b835cb665e5f0bac92de6ff9f22ebcd9614c3e27a61096be",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#2d3748",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#2d3748` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "248bb0352f4bb89aa859ebad05f00f51c0fc637e8bda278b797846a29c0da9a7",
       "ruleId": "typography/arbitrary-text-size",
       "path": "src/components/library/preview/viewparts/TablePart.tsx",
@@ -872,15 +872,6 @@
       "syntax": "#22c55e",
       "owner": "C1 Lane 5: Agents and skills",
       "replacement": "Replace raw colour literal `#22c55e` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "254d37cd5f373788e004445f8805956065048e41c21306825755b9d5e851371c",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#d4af37",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#d4af37` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -1235,15 +1226,6 @@
       "expiryCheckpoint": "C2"
     },
     {
-      "fingerprint": "346960a49ad8e794bd8704198f5a95be5e46c8d359542685a5d5476f65226351",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#ef4444",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#ef4444` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "349c16d3715d82dbca9d038a10f5130673eff0a3e6cbedd145cc694700922f05",
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/ActivityBar.tsx",
@@ -1295,6 +1277,15 @@
       "syntax": "<button>",
       "owner": "C2 Lane 4: Library, knowledge, media and document previews",
       "replacement": "Replace raw `<button>` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
+      "expiryCheckpoint": "C2"
+    },
+    {
+      "fingerprint": "367343f29a0d27b2c0cdf71bd27ce374b29ff8f383d6bbe72f7c33d413017c89",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/workspaces/graph/TaskNode.tsx",
+      "syntax": "<motion.div role=\"button\">",
+      "owner": "C2 Lane 1: Workspace board, list, graph and task/plan controls",
+      "replacement": "Replace raw `<motion.div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
       "expiryCheckpoint": "C2"
     },
     {
@@ -1721,24 +1712,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "4557d54d75dcb93b63ca12fd43c00ead7e5453bf877729e4535ada52641edc26",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#dc2626",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#dc2626` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "4558f7f28828907fe280bf1efc524d5021e0cca3052d19b1d6099a46e58ce30f",
-      "ruleId": "ts-colors/undefined-token",
-      "path": "src/components/settings/DevicesSection.tsx",
-      "syntax": "var(--forge-gold)",
-      "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
-      "replacement": "Resolve `var(--forge-gold)` to a registered token id (map to the existing semantic/component token with the same resolved value, or use the governed token for that role); an undefined token must not survive C1.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "45edd3d07806bf9c2052c3ac0ca216de776f1e0125f95cf46a91682280a42c83",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/ProvidersSection.tsx",
@@ -2081,15 +2054,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "558795f11a3eab45e1c4d9ad70e334329688da48060a7aa74173aaed53c6de54",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#111113",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#111113` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "55a8bfabe580f881c89c551ba978c400301de6a6a1dfc97b42814ff6e1eb4db4",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -2132,15 +2096,6 @@
       "syntax": "bg-purple-500/10",
       "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Replace raw colour literal `bg-purple-500/10` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "57821c184f28496f24e86fe930be26f44fbde6de05d15f9f0cd717bddf0203e3",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#e2e8f0",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#e2e8f0` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -2195,15 +2150,6 @@
       "syntax": "text-amber-400",
       "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
       "replacement": "Replace raw colour literal `text-amber-400` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "59498a10d07b3642e02894d28e8fe40ba7bea0be29ec8194e0e8aa05f396d656",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#10b981",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#10b981` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -2267,15 +2213,6 @@
       "syntax": "ml-[3px]",
       "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
       "replacement": "Move `ml-[3px]` onto the registered 4px/8px spacing scale using the nearest governed token that preserves the rendered value (hairline/1px exception only where justified).",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "600716a2b7956d38f202304174d492543860ff78471b81a010e99115f2b8b6ab",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#eab308",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#eab308` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -2621,15 +2558,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "6bb149fba20a425668a25c9fc878fdd51ff40dbbc547849311f9c84b387c7c05",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#9ca3af",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#9ca3af` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "6bbec28a936f654ad7ced1401ecfb8a3bd3005435ce6f7c444c31d878efd88f5",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/LibraryEntryRow.tsx",
@@ -2645,15 +2573,6 @@
       "syntax": "bg-red-500/10",
       "owner": "C1 Lane 1: Workspace board, list, graph and task/plan controls",
       "replacement": "Replace raw colour literal `bg-red-500/10` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "6c2b453d73b8e0d64b94ca54fab3dbc8da9df83e34aa7cd7393df87d4027f43d",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "#c49e2f",
-      "owner": "C1 Lane 2: Calendar and workspace management/team/settings",
-      "replacement": "Replace raw colour literal `#c49e2f` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -2691,6 +2610,15 @@
       "owner": "C1 Lane 1: Workspace board, list, graph and task/plan controls",
       "replacement": "Replace raw colour literal `#2d3748` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
+    },
+    {
+      "fingerprint": "6dae83ba7dfee5bfb74241dbad621baee9b205996bad0bf5e0b6f6ae409c2e6c",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/workspaces/TaskCard.tsx",
+      "syntax": "<div role=\"button\">",
+      "owner": "C2 Lane 1: Workspace board, list, graph and task/plan controls",
+      "replacement": "Replace raw `<div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
+      "expiryCheckpoint": "C2"
     },
     {
       "fingerprint": "6db74082308e19ebad0b8f1e8e7843827466d43e1355922cb0abd09c827175b1",
@@ -2745,6 +2673,15 @@
       "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Replace raw colour literal `border-amber-500/30` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
+    },
+    {
+      "fingerprint": "70a5cc40f61ef65a21930e8199b75e1ad00312ad051e6279eac6e5f00ff8f85a",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/settings/DiagnosticsSection.tsx",
+      "syntax": "<div role=\"button\">",
+      "owner": "C2 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "Replace raw `<div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
+      "expiryCheckpoint": "C2"
     },
     {
       "fingerprint": "7183c1366c3d4bf2314e99fa8575804d4cbe1e589347cbdc5710e897ff7bf6ad",
@@ -3341,15 +3278,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "902597ce59b280ec12b09c2709abf3a21db1ca53d2b06c5b4f1ddf173919fc24",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#0a0a0b",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#0a0a0b` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "90b04ce36ecb740df214098b7af84c86ad9de8709500d5f9c9d48df378801e5c",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/screens/ConnectorsScreen.tsx",
@@ -3527,15 +3455,6 @@
       "syntax": "text-[1.15rem]",
       "owner": "C1 Lane 4: Library, knowledge, media and document previews",
       "replacement": "Replace arbitrary text size `text-[1.15rem]` with the governed type-scale token matching the intended role and size.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "982d54888b300d83d8058ff15a1224fa262a69632349c04479efb1bb1220ef39",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#222228",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#222228` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -3728,15 +3647,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "a00884ea2bd7ef6608add7112bb6c38fb129b2cbee647b5ed1718139c322831e",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/ui/brand-disclaimer.tsx",
-      "syntax": "#e2e8f0",
-      "owner": "C1 Lead—shared foundations: Catalog foundation/primitive/composite internals",
-      "replacement": "Replace raw colour literal `#e2e8f0` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "a01cc7052f3da9c8408c45eb226488a43bc934f78d94bccea5a17baccaec38ae",
       "ruleId": "typography/line-height-arbitrary",
       "path": "src/components/library/preview/LibraryCodePreview.tsx",
@@ -3863,15 +3773,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "a324125c8006522f7cf188203404592f1bbc36ff485d453874bbadf04ede3cfa",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#c49e2f",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#c49e2f` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "a3c012de8e05dc08ff6bae08b7929400198537c6c021e1a7e064830c3215ad6a",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -3962,15 +3863,6 @@
       "expiryCheckpoint": "C5"
     },
     {
-      "fingerprint": "a91b38007cc00f01ba3f4ec7e2230d986f4465d8e63a44aa9595d93b1e175cf7",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#8ea3bd",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#8ea3bd` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "a925500c4a43d4f47b9d4b32c38e18282d9dc34248aa12ba84c2a756c68c3203",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/SecuritySection.tsx",
@@ -4014,15 +3906,6 @@
       "owner": "C5 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Relocate `import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
       "expiryCheckpoint": "C5"
-    },
-    {
-      "fingerprint": "abd920e2cf0a44532886482b3a717d50ab8f2b1a4862b087da196c107525043d",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#3b82f6",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Replace raw colour literal `#3b82f6` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
     },
     {
       "fingerprint": "ad025de75a0856b5f89257f9757d540181e0b9f5b0b864eb05b84f9f71697413",
@@ -4229,15 +4112,6 @@
       "syntax": "#d4af37",
       "owner": "C1 Lane 5: Agents and skills",
       "replacement": "Replace raw colour literal `#d4af37` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "b41cfbd4934c9484102d0fd2c7761f60fb1b09029e78439304510f74ea37901e",
-      "ruleId": "typography/missing-arbitrary-type-hint",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "text-[var(--color-primary-fg,var(--color-secondary))]",
-      "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "State the intended type for `text-[var(--color-primary-fg,var(--color-secondary))]` with the proper utility hint (length: for size, color: for colour) and separately resolve the referenced token to a registered id; a type hint never approves an unknown token.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -5141,15 +5015,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "d4ff5ec32bfeaa690b6070bb52618d37c8933bfa04cc2e79819a770c3ab75e2c",
-      "ruleId": "ts-colors/undefined-token",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "var(--color-primary-fg)",
-      "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "Resolve `var(--color-primary-fg)` to a registered token id (map to the existing semantic/component token with the same resolved value, or use the governed token for that role); an undefined token must not survive C1.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "d61c3f0ac85519ed3fce5f1cc979c174f62004d2cb45677e2560bd0bbb7b6220",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/layout/AppShell.tsx",
@@ -5465,15 +5330,6 @@
       "expiryCheckpoint": "C2"
     },
     {
-      "fingerprint": "e2c7823754604d05f33e86d22993d917449418ef1219ba5eb4cf40b045729af5",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-list-event-hover-bg-color)",
-      "owner": "C1 lane 2: Calendar and workspace management",
-      "replacement": "Reference the governed surface-3/list-hover token directly in application list rules; keep the FullCalendar override token-driven.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "e309c143d3e11ce6fc157b058ca8a201e0d9985eaa266bacebdd8e9ea7beea82",
       "ruleId": "spacing/off-scale",
       "path": "src/components/chat/tools/FileReadPreview.tsx",
@@ -5517,6 +5373,15 @@
       "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Replace raw colour literal `bg-amber-500/20` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
       "expiryCheckpoint": "C1"
+    },
+    {
+      "fingerprint": "e479e6ec7f0b6ee017ce5c0e0d93f684ca15fafad9c4ca48d7f28a95c01fefee",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/library/LibraryEntryRow.tsx",
+      "syntax": "<div role=\"button\">",
+      "owner": "C2 Lane 4: Library, knowledge, media and document previews",
+      "replacement": "Replace raw `<div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
+      "expiryCheckpoint": "C2"
     },
     {
       "fingerprint": "e49ebe11a94ce9177ce11e4274801d8256fdd1342018b25fa1d0028f16ab2297",
@@ -5807,6 +5672,15 @@
       "expiryCheckpoint": "C1"
     },
     {
+      "fingerprint": "f072e06ff509be874f893576f972d02f4ac7b8e6608232a473e360e28839f42a",
+      "ruleId": "controls/raw-button",
+      "path": "src/components/ui/toast-container.tsx",
+      "syntax": "<div role={expr}>",
+      "owner": "C1 Lead—shared foundations: UI feedback and picker primitives",
+      "replacement": "Replace raw `<div role={expr}>` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
+      "expiryCheckpoint": "C1"
+    },
+    {
       "fingerprint": "f09237d3bb1c124411d46fbc5241ef0928e0c2bc08ba2e1d7059c6e0d67c9ecd",
       "ruleId": "css-colors/raw-color",
       "path": "src/styles/library.css",
@@ -5966,15 +5840,6 @@
       "syntax": "bg-amber-500/5",
       "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
       "replacement": "Replace raw colour literal `bg-amber-500/5` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "feb8b10c3f9bb2ebf999da07d17d3d9480e03f241d62234b3c36fa3370bede31",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-now-indicator-color)",
-      "owner": "C1 lane 2: Calendar and workspace management",
-      "replacement": "Reference the governed accent/now-indicator token directly in application indicator rules; keep the FullCalendar override token-driven.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -6611,6 +6476,34 @@
       "path": "src/components/ui/query-error-state.tsx",
       "syntax": "QueryErrorState#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: QueryErrorState's own destructured prop `className` is declared at src/components/ui/query-error-state.tsx:20:3 and flows unmodified to 1 sink(s) — src/components/ui/query-error-state.tsx:25:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/radio-group.tsx",
+      "syntax": "RadioGroup#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: RadioGroup's own destructured prop `className` is declared at src/components/ui/radio-group.tsx:77:66 and flows unmodified to 1 sink(s) — src/components/ui/radio-group.tsx:88:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/radio-group.tsx",
+      "syntax": "RadioGroupItem#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: RadioGroupItem's own destructured prop `className` is declared at src/components/ui/radio-group.tsx:114:13 and flows unmodified to 1 sink(s) — src/components/ui/radio-group.tsx:174:9 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/segmented-control.tsx",
+      "syntax": "SegmentedControl#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: SegmentedControl's own destructured prop `className` is declared at src/components/ui/segmented-control.tsx:65:38 and flows unmodified to 1 sink(s) — src/components/ui/segmented-control.tsx:75:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/segmented-control.tsx",
+      "syntax": "SegmentedControlItem#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: SegmentedControlItem's own destructured prop `className` is declared at src/components/ui/segmented-control.tsx:95:13 and flows unmodified to 1 sink(s) — src/components/ui/segmented-control.tsx:112:9 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
     },
     {
@@ -7693,6 +7586,34 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/radio-group.tsx",
+      "syntax": "RadioGroup#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: RadioGroup's own destructured prop `className` is declared at src/components/ui/radio-group.tsx:77:66 and flows unmodified to 1 sink(s) — src/components/ui/radio-group.tsx:88:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/radio-group.tsx",
+      "syntax": "RadioGroupItem#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: RadioGroupItem's own destructured prop `className` is declared at src/components/ui/radio-group.tsx:114:13 and flows unmodified to 1 sink(s) — src/components/ui/radio-group.tsx:174:9 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/segmented-control.tsx",
+      "syntax": "SegmentedControl#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: SegmentedControl's own destructured prop `className` is declared at src/components/ui/segmented-control.tsx:65:38 and flows unmodified to 1 sink(s) — src/components/ui/segmented-control.tsx:75:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/segmented-control.tsx",
+      "syntax": "SegmentedControlItem#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: SegmentedControlItem's own destructured prop `className` is declared at src/components/ui/segmented-control.tsx:95:13 and flows unmodified to 1 sink(s) — src/components/ui/segmented-control.tsx:112:9 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
       "path": "src/components/ui/select.tsx",
       "syntax": "SelectContent#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: SelectContent's own destructured prop `className` is declared at src/components/ui/select.tsx:64:6 and flows unmodified to 1 sink(s) — src/components/ui/select.tsx:68:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
@@ -8711,6 +8632,34 @@
       "path": "src/components/ui/query-error-state.tsx",
       "syntax": "QueryErrorState#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: QueryErrorState's own destructured prop `className` is declared at src/components/ui/query-error-state.tsx:20:3 and flows unmodified to 1 sink(s) — src/components/ui/query-error-state.tsx:25:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/radio-group.tsx",
+      "syntax": "RadioGroup#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: RadioGroup's own destructured prop `className` is declared at src/components/ui/radio-group.tsx:77:66 and flows unmodified to 1 sink(s) — src/components/ui/radio-group.tsx:88:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/radio-group.tsx",
+      "syntax": "RadioGroupItem#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: RadioGroupItem's own destructured prop `className` is declared at src/components/ui/radio-group.tsx:114:13 and flows unmodified to 1 sink(s) — src/components/ui/radio-group.tsx:174:9 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/segmented-control.tsx",
+      "syntax": "SegmentedControl#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: SegmentedControl's own destructured prop `className` is declared at src/components/ui/segmented-control.tsx:65:38 and flows unmodified to 1 sink(s) — src/components/ui/segmented-control.tsx:75:11 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/segmented-control.tsx",
+      "syntax": "SegmentedControlItem#className",
+      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: SegmentedControlItem's own destructured prop `className` is declared at src/components/ui/segmented-control.tsx:95:13 and flows unmodified to 1 sink(s) — src/components/ui/segmented-control.tsx:112:9 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
     },
     {
