@@ -71,6 +71,25 @@ These are the remaining C1 items that a script refused rather than guessed. Each
 |---|---|---|
 | Tree indent custom properties | `spacing/invalid-var`, 4 sites (`Sidebar`, `FileTreeView`, `KnowledgeOutline`, `SearchModal`) | Each sets a pixel number in JS and multiplies by `1px`: `calc(var(--x-indent-depth-px) * 1px)`. The step is 14px and the base 12px -- the legacy 14px-root values D10 already maps to 16px and 12px. The fix is to set a unitless depth COUNT and multiply by tokens (note `--space-3` is 16px; `--space-4` is 24px -- an earlier draft of this note named the wrong token, which would have made the step 50% larger than D10 specifies): `calc(var(--space-2-5) + var(--depth) * var(--space-3))`. That is the same normalisation already applied to `px-4`/`p-4` in 87 places, so it needs no new decision -- but it is a structural change to nested tree indentation in four files, and there is no visual baseline to catch a regression (issue #753), so it wants care rather than a bulk edit. |
 
+| 8 | seven parallel lanes + final sweep | every non-controls family | 82 files | exit 0 | full vitest 658 files, 10,013 pass, 0 fail | typography 69->21, spacing 64->12, css-colors 24->4, status 18->3 | af865be2d |
+| 8b | three scanner patterns taught + ledger rebuilt | 5 blocking `*/unsupported` findings | 4 scanners, 4 fixture suites | exit 0 | locks 1815 pass, ds-unit 525 pass | **audit PASS, 0 errors, 0 blocking, 0 unresolved**; ledger 639 -> 464 | 9cc417de2 |
+
+## C1 close — state at 2026-09-20
+
+**The checkpoint-B audit PASSES with 0 errors.** Remaining debt is 760 occurrences, and the shape of it matters more than the number:
+
+| Bucket | Count | What it is |
+|---|---|---|
+| C2/C5/C6 phases | 408 | 352 raw buttons, 53 low-level imports, 2 checkbox-as-switch, 1 global confirm |
+| C1 decided to stay | ~312 | `ts-colors/raw-color`: Tailwind OKLCH classes that are NOT byte-identical to our hexes, plus governed data palettes (file-type icons, priority P1-P5, audit-log taxonomy, mermaid themes, avatar colours) |
+| C1 genuinely outstanding | ~40 | letter-spacing (9, needs 3 new tokens at 0.07/0.08/0.2em), off-scale (5), arbitrary text sizes (5), status-mismatch (3), root-dependent (3), and singles |
+
+C1 started at 3,269 and is now about 40 real items. The ~312 are a decision already taken, not work in waiting.
+
+**Still required to declare C1 closed:** the ~40 leftovers, the three letter-spacing tokens, switching the four C1 locks from baselining to blocking, and the founder's look at the running app.
+
+**Visual evidence captured** (under `dist/design-system-baseline/cli-lanes/c1-apply/`): `board-chips.png` renders the real `STATUS_BADGE` classes before and after against the built stylesheet -- `in_progress` and `blocked` were the same yellow on the left and are distinct on the right; `code-lineheight.png` shows 1.65 / 1.4 / 1.6 side by side, which is how the code line-height ruling was decided; `destructive-button.png` shows white versus near-black on the error red; `proof/` holds real browser screenshots of the running app.
+
 ## Rulings taken during the lane sweep (2026-09-20)
 
 Taken by the lead under the founder's "get the rest done, add a visual check where in doubt" directive. Each states the evidence, not the preference.
