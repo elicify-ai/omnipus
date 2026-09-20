@@ -791,13 +791,14 @@ func (al *AgentLoop) processSystemMessage(
 		// silently dropped at the gate even after that stamping fix —
 		// discovered while regression-testing D6b (goal_keeper_repairs_test.go's
 		// TestKeeper_SenderGateUnwedged_TwoFullIdleCycles).
-		SenderID:            msg.Sender.CanonicalID,
-		UserMessage:         fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
-		DefaultResponse:     "Background task completed.",
-		SendResponse:        true,
-		TranscriptSessionID: transcriptSessionID,
-		TranscriptStore:     transcriptStore,
-		WorkspaceID:         workspaceID,
+		SenderID:             msg.Sender.CanonicalID,
+		UserMessage:          fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
+		DefaultResponse:      "Background task completed.",
+		SendResponse:         true,
+		SuppressToolFeedback: true,
+		TranscriptSessionID:  transcriptSessionID,
+		TranscriptStore:      transcriptStore,
+		WorkspaceID:          workspaceID,
 	})
 }
 

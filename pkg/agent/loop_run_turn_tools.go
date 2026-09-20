@@ -1049,7 +1049,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 		// separate concern from AsyncNotifier (FR-N2, async-notifier-spec.md)
 		// — it happens regardless of whether ContentForLLM() also triggers
 		// a new turn below.
-		if !result.Silent && result.ForUser != "" {
+		if !result.Silent && result.ForUser != "" && !ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback {
 			outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer outCancel()
 			// M1: capture and log publish errors instead of silently discarding them.
@@ -1457,7 +1457,8 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.toolResult.ArtifactTags = buildArtifactTags(ex.rx.rr.rq.ri.turnMediaStore, ex.toolResult.Media)
 	}
 
-	if !ex.toolResult.Silent && ex.toolResult.ForUser != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse {
+	if !ex.toolResult.Silent && ex.toolResult.ForUser != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse &&
+		!ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,

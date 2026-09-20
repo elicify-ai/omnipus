@@ -584,7 +584,7 @@ type processOptions struct {
 	InitialSteeringMessages []providers.Message   // Steering messages from refactor/agent
 	DefaultResponse         string                // Response when LLM returns empty
 	SendResponse            bool                  // Whether to send response via bus
-	SuppressToolFeedback    bool                  // Whether to suppress inline tool feedback messages
+	SuppressToolFeedback    bool                  // Whether to suppress inline tool call and result feedback
 	NoHistory               bool                  // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
