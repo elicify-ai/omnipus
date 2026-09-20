@@ -1795,11 +1795,13 @@ type agentLoopInspectSessionStore struct {
 // very first pass) and again from SetPlanStore for every already-registered
 // agent once the gateway installs the real store.
 //
-// Every dependency gap is logged LOUDLY (Error, never silently) at wiring
-// time so an unwired seam is visible in the boot log — on top of, not
-// instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
+// Every unexpected dependency gap is logged LOUDLY (Error, never silently)
+// at wiring time so an unwired seam is visible in the boot log — on top of,
+// not instead of, each tool's own Wave-1 fail-closed Execute() behavior (nil
 // store / nil checker / nil dispatcher => explicit error result, never an
-// implicit allow or a silently-dead no-op tool).
+// implicit allow or a silently-dead no-op tool). The nil plan store on the
+// documented first boot pass is expected and stays at DEBUG; the tools still
+// fail closed until SetPlanStore performs the second pass.
 // The six tools below (the ADR-052 four, plus ADR-055's plan_correct and
 // stop_plan) are registered via RegisterReplacing, not Register:
 // this function is called once per agent at registerSharedTools time AND
@@ -1814,7 +1816,7 @@ func (al *AgentLoop) wirePlanToolsForAgent(agent *AgentInstance, planStore *plan
 	}
 
 	if planStore == nil {
-		logger.WarnCF("agent", "wirePlanToolsForAgent: plan store not yet installed — "+
+		logger.DebugCF("agent", "wirePlanToolsForAgent: plan store not yet installed — "+
 			"create_plan/execute_plan register but will fail closed until SetPlanStore runs",
 			map[string]any{"agent_id": agent.ID})
 	}
