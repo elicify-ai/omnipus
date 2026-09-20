@@ -20,7 +20,7 @@ export function FiguresPart({ part }: { part: ViewResultPart }) {
         )}
         {totals.map((t, i) => (
           <div key={`${t.property}|${t.op}|${t.unit ?? ' '}|${i}`} className="flex flex-col gap-[var(--space-0-5)]" data-testid="viewpart-figure">
-            <span className="text-[length:var(--type-caption-size)] uppercase tracking-[0.07em] text-[var(--color-muted)]">
+            <span className="text-[length:var(--type-caption-size)] uppercase tracking-[var(--font-letter-spacing-metric-label)] text-[var(--color-muted)]">
               {aggregateLabel(t.op)} {t.property}
               {t.unit !== undefined && ` · ${t.unit}`}
             </span>

@@ -233,13 +233,11 @@ function AgentsLibraryView({
                   }}
                   aria-current={workspaceFilter === 'all' ? 'true' : undefined}
                   className="flex w-full items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
-                  style={{
-                    color:
-                      workspaceFilter === 'all'
-                        ? 'var(--color-accent)'
-                        : 'var(--color-secondary)',
-                    fontWeight: workspaceFilter === 'all' ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)',
-                  }}
+                  style={
+                    workspaceFilter === 'all'
+                      ? { color: 'var(--color-accent)', fontWeight: 'var(--font-weight-semibold)' }
+                      : { color: 'var(--color-secondary)', fontWeight: 'var(--font-weight-regular)' }
+                  }
                 >
                   All agents
                 </button>
@@ -254,13 +252,11 @@ function AgentsLibraryView({
                     }}
                     aria-current={workspaceFilter === ws.id ? 'true' : undefined}
                     className="flex w-full items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
-                    style={{
-                      color:
-                        workspaceFilter === ws.id
-                          ? 'var(--color-accent)'
-                          : 'var(--color-secondary)',
-                      fontWeight: workspaceFilter === ws.id ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)',
-                    }}
+                    style={
+                      workspaceFilter === ws.id
+                        ? { color: 'var(--color-accent)', fontWeight: 'var(--font-weight-semibold)' }
+                        : { color: 'var(--color-secondary)', fontWeight: 'var(--font-weight-regular)' }
+                    }
                   >
                     <Users size={12} />
                     {ws.name}

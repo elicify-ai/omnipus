@@ -831,6 +831,36 @@ jobs:
       - run: npm run build:storybook
       - run: npm run test:storybook
       - run: npm run test:design-system:browser
+      # Appearance gate (issue #753): pixel screenshots of the static
+      # Storybook build, diffed against tests/design-system/screenshot.spec.ts-snapshots/.
+      # Must run after build:storybook, and must never fall back to the dev
+      # server (rule 11 / this suite's own header comment: 16-of-18 vs
+      # 18-of-18 evidence). STORYBOOK_STATIC_DIR makes
+      # playwright.design-system.config.ts serve dist/storybook itself, with
+      # Playwright's own webServer managing start/stop for this one step --
+      # no separate long-running process to coordinate across steps.
+      #
+      # NON-BLOCKING UNTIL LINUX BASELINES EXIST. The committed baselines were
+      # captured on macOS and Playwright bakes the platform into every snapshot
+      # filename (`*-chromium-darwin.png`); this runner is ubuntu-latest and
+      # looks for `-linux`. So on the first run this step reports every image
+      # as missing, which is a real gap and not something to paper over -- but
+      # failing every PR before anyone can capture the Linux set would only
+      # teach people to ignore it. It therefore runs, uploads its evidence, and
+      # does not block, until the `-linux` baselines are generated and
+      # committed (issue #774). Flip continue-on-error back to false in the
+      # same commit that adds them -- a gate that never blocks is not a gate.
+      - run: npm run test:design-system:screenshot
+        continue-on-error: true
+        env:
+          STORYBOOK_STATIC_DIR: dist/storybook
+      - name: Upload appearance-gate diff evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: design-system-appearance-diffs
+          path: test-results/design-system-browser-artifacts/screenshot-*
+          if-no-files-found: ignore
       - run: npm run verify:design-system
       # Stage B enforcement audit (design-system/enforcement/contract.json): complete
       # six-scanner audit at checkpoint B with the live token policy, canonical

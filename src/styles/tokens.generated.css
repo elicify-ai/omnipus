@@ -66,12 +66,17 @@
   --font-family-body: 'Inter', system-ui, -apple-system, sans-serif;
   --font-family-heading: 'Outfit', system-ui, -apple-system, sans-serif;
   --font-family-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-letter-spacing-calendar-label: 0.04em;
+  --font-letter-spacing-metric-label: 0.07em;
   --font-letter-spacing-normal: 0em;
+  --font-letter-spacing-pairing-code: 0.2em;
+  --font-letter-spacing-table-header: 0.08em;
   --font-letter-spacing-tight: -0.025em;
   --font-letter-spacing-wide: 0.025em;
   --font-line-height-body: 1.6;
   --font-line-height-compact: 1.4;
   --font-line-height-heading: 1.25;
+  --font-line-height-none: 1;
   --font-line-height-tight: 1.1;
   --font-measure-body: 65ch;
   --font-measure-code: none;
@@ -186,6 +191,7 @@
   --space-6: 40px;
   --space-7: 48px;
   --space-8: 64px;
+  --space-9: 80px;
   --space-content-padding: var(--space-4);
   --space-control-gap: var(--space-2);
   --space-layout-gutter: var(--space-5);

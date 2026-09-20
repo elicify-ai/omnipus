@@ -4,6 +4,12 @@
 chat tab (`src/routes/_app/workspaces.$workspaceId.chat.tsx`) — chat is a tab of
 Workspace, not a sibling product (module map, "Product vs kernel").
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## Tests
 
 - CI group `components-chat` (pattern `src/components/chat/` in

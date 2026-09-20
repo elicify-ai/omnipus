@@ -98,7 +98,7 @@
   font-size: var(--type-utility-xs-size);
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--font-letter-spacing-calendar-label);
   padding: var(--space-2) var(--space-1);
   text-decoration: none;
 }
@@ -117,9 +117,12 @@
   transition: background 0.12s ease;
 }
 
-/* Today cell: gold tint applied via --fc-today-bg-color above */
+/* Today cell: gold tint. --fc-today-bg-color (above) still carries the same
+ * tint for FullCalendar's own internal default styling elsewhere in its
+ * bundled CSS; this explicit override reads the registered token expression
+ * directly rather than through that unregistered custom-property alias. */
 .fc .fc-day-today {
-  background-color: var(--fc-today-bg-color) !important;
+  background-color: color-mix(in srgb, var(--color-accent) 7%, transparent) !important;
 }
 
 /* Out-of-range days (previous/next month overflow) */
@@ -216,7 +219,7 @@
   color: var(--color-accent);
   opacity: 0.45;
   pointer-events: none;
-  line-height: 1;
+  line-height: var(--font-line-height-none);
 }
 
 .fc .fc-daygrid-day-bg {
@@ -314,7 +317,7 @@
   padding: 0 4px;
   font-size: var(--type-caption-size);
   font-weight: var(--font-weight-semibold);
-  line-height: 1;
+  line-height: var(--font-line-height-none);
   color: var(--color-accent);
   background: var(--color-surface-0);
   white-space: nowrap;
@@ -377,7 +380,7 @@
   color: var(--color-muted);
   font-size: var(--type-utility-xs-size);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--font-letter-spacing-calendar-label);
   text-transform: uppercase;
   border-color: var(--color-border);
 }
@@ -479,8 +482,12 @@
 /* Selection highlight (dateClick / slot-select)                       */
 /* ------------------------------------------------------------------ */
 
+/* --fc-highlight-color (top of file) still carries the same tint for
+ * FullCalendar's own internal default styling elsewhere; this explicit
+ * override reads the registered token expression directly rather than
+ * through that unregistered custom-property alias. */
 .fc .fc-highlight {
-  background: var(--fc-highlight-color) !important;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
   border-radius: 4px;
 }
 

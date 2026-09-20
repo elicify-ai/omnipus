@@ -1,0 +1,125 @@
+{
+  "version": 1,
+  "component": "DisclosureRow",
+  "exports": [
+    "DisclosureRow"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/disclosure-row.tsx",
+  "documentation": "docs/internal/design/components/disclosure-row.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "collapsed",
+    "expanded",
+    "not-expandable"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/disclosure-row.stories.tsx",
+      "exports": [
+        "Default",
+        "Disabled",
+        "Toggle",
+        "NarrowViewport"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "disclosure-row-unit",
+      "kind": "unit",
+      "file": "src/components/ui/disclosure-row.test.tsx",
+      "test": "DisclosureRow — base contract toggles aria-expanded/onExpandedChange and omits aria-expanded plus disables the row when not expandable",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/disclosure-row.stories.tsx",
+      "test": "Toggle",
+      "story": "Toggle",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "disclosure-row-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "DisclosureRow [check:disclosure-row-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

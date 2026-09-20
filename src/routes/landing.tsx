@@ -56,7 +56,7 @@ function LandingPage() {
   return (
     <div className="min-h-screen bg-[var(--color-primary)] text-[var(--color-secondary)]">
       {/* Hero */}
-      <section className="flex flex-col items-center justify-center min-h-screen px-[var(--space-4)] py-[80px] text-center gap-[var(--space-5)]">
+      <section className="flex flex-col items-center justify-center min-h-screen px-[var(--space-4)] py-[var(--space-9)] text-center gap-[var(--space-5)]">
         {/* Warning fix #6: explicit size at all 3 breakpoints (phone/tablet/desktop) */}
         <img
           src={OmnipusAvatar}
@@ -98,7 +98,7 @@ function LandingPage() {
       </section>
 
       {/* Features — Warning fix #5: use <Card> component */}
-      <section className="px-[var(--space-4)] py-[80px] max-w-6xl mx-auto">
+      <section className="px-[var(--space-4)] py-[var(--space-9)] max-w-6xl mx-auto">
         <h2 className="font-headline text-3xl md:text-4xl font-bold text-center mb-[var(--space-3)]">
           Built for professionals who demand more
         </h2>

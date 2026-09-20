@@ -32,14 +32,14 @@ function UnitGrid({ crosstab, unit }: { crosstab: ViewResultCrosstab; unit: stri
       <table className="w-full border-collapse text-[length:var(--type-caption-size)]">
         <thead>
           <tr>
-            <th className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
+            <th className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] font-medium uppercase tracking-[var(--font-letter-spacing-table-header)] text-[var(--color-muted)]">
               {crosstab.row_property}
               {unit !== undefined && ` · ${unit}`}
             </th>
             {crosstab.column_keys.map((ck) => (
               <th
                 key={ck}
-                className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]"
+                className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right text-[length:var(--type-caption-size)] font-medium uppercase tracking-[var(--font-letter-spacing-table-header)] text-[var(--color-muted)]"
               >
                 {keyLabel(ck)}
               </th>

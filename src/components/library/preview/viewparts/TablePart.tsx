@@ -292,7 +292,7 @@ export function TablePart({
               {columns.map((property) => (
                 <th
                   key={property}
-                  className={`border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] ${
+                  className={`border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-[var(--font-letter-spacing-table-header)] text-[var(--color-muted)] ${
                     numeric.has(property) ? 'text-right' : 'text-left'
                   }`}
                 >

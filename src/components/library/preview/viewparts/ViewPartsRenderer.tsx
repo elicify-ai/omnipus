@@ -242,7 +242,7 @@ export function ViewPartsRenderer({
               className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-secondary)]"
               data-testid="view-aggregate"
             >
-              <span className="text-[length:var(--type-caption-size)] uppercase tracking-[0.07em] text-[var(--color-muted)]">{t.label}</span>{' '}
+              <span className="text-[length:var(--type-caption-size)] uppercase tracking-[var(--font-letter-spacing-metric-label)] text-[var(--color-muted)]">{t.label}</span>{' '}
               <span className="font-mono tabular-nums">{t.value}</span>
               {t.unit !== undefined && <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{t.unit}</span>}
               <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{t.scope}</span>

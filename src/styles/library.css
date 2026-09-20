@@ -47,6 +47,7 @@
 @source "../components/ui/query-error-state.tsx";
 @source "../components/ui/radio-group.tsx";
 @source "../components/ui/segmented-control.tsx";
+@source "../components/ui/disclosure-row.tsx";
 
 @theme inline {
   --font-headline: var(--type-page-title-family);

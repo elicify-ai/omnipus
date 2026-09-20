@@ -455,7 +455,7 @@ export function SignInDialog({
                 <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)]">2. Enter this code</p>
                 <div className="flex items-center gap-[var(--space-2)]">
                   <output
-                    className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-center text-lg font-mono font-bold tracking-[0.2em] text-[var(--color-secondary)]"
+                    className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-center text-lg font-mono font-bold tracking-[var(--font-letter-spacing-pairing-code)] text-[var(--color-secondary)]"
                     data-testid="user-code"
                   >
                     {phase.userCode}

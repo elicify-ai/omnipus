@@ -6,6 +6,12 @@ leftover dump — new calendar code belongs here, not there); this folder holds
 the views and editors (`FullCalendarView`, `CalendarToolbar`,
 `CalendarEventSlideOver`, `RecurrenceEditor`).
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## No raw cron — anywhere in the UI
 
 - Product-wide ban: no cron entry or display in any UI. Recurrence is edited

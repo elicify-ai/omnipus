@@ -88,7 +88,7 @@ test('public library dependency graph cannot reach application state or domain c
   // New shared modules require a deliberate boundary update and catalog classification.
   const controls = new Set([
     'accordion', 'alert-dialog', 'avatar', 'badge', 'button', 'calendar', 'card', 'checkbox',
-    'command', 'date-picker', 'date-time-picker', 'dialog', 'dropdown-menu',
+    'command', 'date-picker', 'date-time-picker', 'dialog', 'disclosure-row', 'dropdown-menu',
     'input', 'label', 'popover', 'progress', 'radio-group', 'segmented-control',
     'select', 'separator', 'sheet',
     'slider', 'smart-select', 'switch', 'table', 'tabs', 'textarea',

@@ -194,6 +194,14 @@
       "description": "Current body line height."
     },
     {
+      "id": "font.lineHeight.none",
+      "css": "--font-line-height-none",
+      "layer": "primitive",
+      "kind": "lineHeight",
+      "value": 1,
+      "description": "Unity line height for tight glyph/badge chrome (e.g. a centered \"+\" affordance or an inline time badge) that must not add vertical space beyond the glyph itself."
+    },
+    {
       "id": "font.letterSpacing.tight",
       "css": "--font-letter-spacing-tight",
       "layer": "primitive",
@@ -216,6 +224,38 @@
       "kind": "dimension",
       "value": "0.025em",
       "description": "Current wide label tracking."
+    },
+    {
+      "id": "font.letterSpacing.calendarLabel",
+      "css": "--font-letter-spacing-calendar-label",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.04em",
+      "description": "FullCalendar weekday-header and list-day-header uppercase tracking (fullcalendar-theme.css)."
+    },
+    {
+      "id": "font.letterSpacing.metricLabel",
+      "css": "--font-letter-spacing-metric-label",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.07em",
+      "description": "Uppercase caption tracking for library view-part figure and part-label chrome (FiguresPart, ViewPartsRenderer)."
+    },
+    {
+      "id": "font.letterSpacing.tableHeader",
+      "css": "--font-letter-spacing-table-header",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.08em",
+      "description": "Uppercase caption tracking for library view-part table and crosstab column headers (CrosstabPart, PartChrome, TablePart)."
+    },
+    {
+      "id": "font.letterSpacing.pairingCode",
+      "css": "--font-letter-spacing-pairing-code",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "0.2em",
+      "description": "Wide tracking for a monospaced device-pairing code (SignInDialog)."
     },
     {
       "id": "font.measure.display",
@@ -745,6 +785,14 @@
       "kind": "dimension",
       "value": "64px",
       "description": "Eight-grid spacing step."
+    },
+    {
+      "id": "space.scale.9",
+      "css": "--space-9",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "80px",
+      "description": "Ten-grid spacing step."
     },
     {
       "id": "space.control.gap",

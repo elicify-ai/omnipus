@@ -68,7 +68,7 @@ describe('non-colour foundation token contract', () => {
   it('defines one closed 4px/8px spacing scale and preserves exceptional fixed geometry', () => {
     // 2px and 12px are the intermediate rungs the founder approved on 2026-09-20
     // (definition D10 amendment): D10's own mapping needs them for Tailwind's odd steps.
-    const allowed = ['0px', '2px', '4px', '8px', '12px', '16px', '24px', '32px', '40px', '48px', '64px']
+    const allowed = ['0px', '2px', '4px', '8px', '12px', '16px', '24px', '32px', '40px', '48px', '64px', '80px']
     const scale = source.tokens
       .filter(({ id }) => id.startsWith('space.scale.'))
       .map(({ value }) => value)

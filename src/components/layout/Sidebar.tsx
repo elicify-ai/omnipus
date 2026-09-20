@@ -575,14 +575,14 @@ export function Sidebar() {
                         navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                         if (!effectivelyPinned) close()
                       }}
-                      className="flex items-center gap-[var(--space-2)] w-full pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[13px] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                      className="flex items-center gap-[var(--space-2)] w-full pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
                     >
                       <Plus size={12} /> New chat
                     </button>
                     {sessionsError ? (
-                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[13px] text-[var(--color-error)]">Could not load sessions</p>
+                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">Could not load sessions</p>
                     ) : workspaceSessions.length === 0 ? (
-                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[13px] text-[var(--color-muted)] opacity-60">No sessions yet</p>
+                      <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-60">No sessions yet</p>
                     ) : (
                       // Pure navigation rows — manage lives behind "More…".
                       // ADR-057 US-19/FR-093: renders a TREE, not a flat list
@@ -602,7 +602,7 @@ export function Sidebar() {
                       <button tabIndex={0}
                         type="button"
                         onClick={() => useUiStore.getState().openSearchModal(project.id)}
-                        className="flex items-center gap-[var(--space-1)] w-full pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[13px] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+                        className="flex items-center gap-[var(--space-1)] w-full pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
                       >
                         More…
                       </button>
@@ -975,7 +975,7 @@ function SidebarSessionRow({
           onClick={onSelect}
           aria-current={isActive ? 'page' : undefined}
           className={cn(
-            'flex items-center gap-[var(--space-1)] flex-1 min-w-0 py-[var(--space-1)] pl-[var(--space-1)] text-[13px] transition-colors text-left',
+            'flex items-center gap-[var(--space-1)] flex-1 min-w-0 py-[var(--space-1)] pl-[var(--space-1)] text-[length:var(--type-caption-size)] transition-colors text-left',
             isActive
               ? 'text-[var(--color-accent)] font-medium'
               : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'

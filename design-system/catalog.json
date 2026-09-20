@@ -293,6 +293,20 @@
       "publicTypes": []
     },
     {
+      "source": "src/components/ui/disclosure-row.tsx",
+      "classification": "primitive",
+      "exports": [
+        "DisclosureRow",
+        "DisclosureRowProps"
+      ],
+      "publicExports": [
+        "DisclosureRow"
+      ],
+      "publicTypes": [
+        "DisclosureRowProps"
+      ]
+    },
+    {
       "source": "src/components/ui/dropdown-menu.tsx",
       "classification": "primitive",
       "exports": [

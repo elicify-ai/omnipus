@@ -122,7 +122,7 @@ export function ExcludedLine({ count, reason }: { count: number; reason?: string
  *  column headers: small caps, muted, count alongside. */
 export function GroupHeaderLabel({ label, count, absent }: { label: string; count: number; absent?: boolean | undefined }) {
   return (
-    <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
+    <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-[var(--font-letter-spacing-table-header)] text-[var(--color-muted)]">
       {absent ? 'Not set' : label === '' ? '(empty)' : label}
       <span className="ml-[var(--space-1)] normal-case text-[var(--color-muted)]/70">{count}</span>
     </span>

@@ -177,13 +177,6 @@
       "count": 1
     },
     {
-      "fingerprint": "0af94f3194fcebf16200c515653f5c6fb8caaa33fbc0dff62b91ca04c7c4ae01",
-      "ruleId": "typography/letter-spacing-arbitrary",
-      "path": "src/components/library/preview/viewparts/FiguresPart.tsx",
-      "syntax": "tracking-[0.07em]",
-      "count": 1
-    },
-    {
       "fingerprint": "0b296a838e9cfe3794ea892a129bc8f58666da4db399dc2997c0e15af48d4658",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/AttachmentCard.tsx",
@@ -513,13 +506,6 @@
       "count": 1
     },
     {
-      "fingerprint": "2b23af3925fdfa3623ce1474a21bb899394951987ee9bdefd767c359e5df0a78",
-      "ruleId": "typography/letter-spacing-arbitrary",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "letter-spacing: 0.04em",
-      "count": 2
-    },
-    {
       "fingerprint": "2c1f04bb5d8c54a90188658365e50d2fa6e2cd7548e99a51d6e2cf6d07e8c51f",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/library/LibraryExplorer.tsx",
@@ -779,13 +765,6 @@
       "count": 1
     },
     {
-      "fingerprint": "3eadeb544937ccc30c01d64c7544e2444d3be16beeea94f1128faf0b3e9921cd",
-      "ruleId": "typography/letter-spacing-arbitrary",
-      "path": "src/components/library/preview/viewparts/TablePart.tsx",
-      "syntax": "tracking-[0.08em]",
-      "count": 1
-    },
-    {
       "fingerprint": "3ecc4d6ee0c43f933d6d70770c2f88131c8bce9cc7e4200fe915a2eccf4ba58f",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/knowledge/KnowledgeRailPanel.tsx",
@@ -821,13 +800,6 @@
       "count": 1
     },
     {
-      "fingerprint": "405c971d0c35ffcc4e06815e53f99cd71b6359f318bca1a7447b0103508bc2e9",
-      "ruleId": "typography/font-weight-arbitrary",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "fontWeight: workspaceFilter === ws.id ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)'",
-      "count": 1
-    },
-    {
       "fingerprint": "406b1ddc7189e572a8e9f5e8628b9974f8d0874cc4d580bf77d871517704f042",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryDownloadCard.tsx",
@@ -860,13 +832,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/AskUserQuestionCard.tsx",
       "syntax": "#1a1503",
-      "count": 1
-    },
-    {
-      "fingerprint": "43b2b13e0863dc98c408627857f9c4a4364d68b5ba16f60ef2e465f70d78ce96",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
-      "syntax": "py-1",
       "count": 1
     },
     {
@@ -938,13 +903,6 @@
       "path": "src/components/workspaces/team/WorkspaceTeamGraph.tsx",
       "syntax": "<button>",
       "count": 3
-    },
-    {
-      "fingerprint": "4afc41aef9eb99e078db52b9db585e86b412c9c12e1aafc1f1a9e4689cd0ccae",
-      "ruleId": "typography/letter-spacing-arbitrary",
-      "path": "src/components/library/preview/viewparts/ViewPartsRenderer.tsx",
-      "syntax": "tracking-[0.07em]",
-      "count": 1
     },
     {
       "fingerprint": "4b3abc66696b318af470768d51721f3073bc48dd2e6caec8b070b3e8c0f38a94",
@@ -1395,24 +1353,10 @@
       "count": 1
     },
     {
-      "fingerprint": "6f9ed2926dca0127ea212ae31f9b49b51fd6f9c11dce5ae43736e6d00455da68",
-      "ruleId": "spacing/off-scale",
-      "path": "src/routes/landing.tsx",
-      "syntax": "py-[80px]",
-      "count": 2
-    },
-    {
       "fingerprint": "6fe7eb1b1b642bcbc531e9e6a1742b78bd7a49eaacc2566dd74c1726fdf2bf58",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "border-amber-500/30",
-      "count": 1
-    },
-    {
-      "fingerprint": "70995c2964d6c7476f240c57bd02d787e702f4e03f6638b7bcf9957478868468",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/screens/UsageScreen.tsx",
-      "syntax": "py-[80px]",
       "count": 1
     },
     {
@@ -1434,13 +1378,6 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/workspaces/TaskDetailPanel.tsx",
       "syntax": "import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "74708090d277ac1eee44bc47bc36b08c1d6557322338aae7082dcd1abc1ca370",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
-      "syntax": "gap-2",
       "count": 1
     },
     {
@@ -1526,13 +1463,6 @@
       "path": "src/components/providers/CustomEndpointPanel.tsx",
       "syntax": "<button>",
       "count": 2
-    },
-    {
-      "fingerprint": "7c0f380faa3f007dadd394f368023b57d052551518985c6b1dcbef91e7a0b2c4",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "text-[13px]",
-      "count": 5
     },
     {
       "fingerprint": "7de1b11ef7c3aae158bf4a787109658e08f8a742b04177e7c91cc4747742eca7",
@@ -1644,13 +1574,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/ExecutorSelector.tsx",
       "syntax": "text-amber-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "87658587861701e3e5e394aaff892db22daed41dd66e9f70e310d2a1757244b3",
-      "ruleId": "typography/letter-spacing-arbitrary",
-      "path": "src/components/library/preview/viewparts/PartChrome.tsx",
-      "syntax": "tracking-[0.08em]",
       "count": 1
     },
     {
@@ -2277,13 +2200,6 @@
       "count": 1
     },
     {
-      "fingerprint": "b651db880832724811762aa8c2fd93c76fcda0561b01744f81da54eabbef0ed0",
-      "ruleId": "typography/font-weight-arbitrary",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "fontWeight: workspaceFilter === 'all' ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)'",
-      "count": 1
-    },
-    {
       "fingerprint": "b6b36598300f009ac5f7f9d4f4440cdbdff767d6cbec1b07a0eec3fc14598fd7",
       "ruleId": "controls/raw-button",
       "path": "src/components/connectors/EmailMailboxPanel.tsx",
@@ -2592,13 +2508,6 @@
       "count": 1
     },
     {
-      "fingerprint": "c8195d660c4cc7424c59c71e398e57150b5c4776e6a2eaab420292b34234d83c",
-      "ruleId": "typography/letter-spacing-arbitrary",
-      "path": "src/components/library/preview/viewparts/CrosstabPart.tsx",
-      "syntax": "tracking-[0.08em]",
-      "count": 2
-    },
-    {
       "fingerprint": "c8a4c2f3b458b4ac7cf4768be8d04f34c22117faae65883c6b462c8545d0cc82",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -2680,13 +2589,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/mermaid-renderer.tsx",
       "syntax": "#141416",
-      "count": 1
-    },
-    {
-      "fingerprint": "cd786c69658e7d02e76395206c6e8fe1cd51a3e2f6054dd28b13b3e21f52f9f0",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-today-bg-color)",
       "count": 1
     },
     {
@@ -2830,13 +2732,6 @@
       "count": 1
     },
     {
-      "fingerprint": "d873e211e35d69a499db272425cd0d9be1a3044f156ad6df07573fef1e44acd7",
-      "ruleId": "typography/letter-spacing-arbitrary",
-      "path": "src/components/providers/SignInDialog.tsx",
-      "syntax": "tracking-[0.2em]",
-      "count": 1
-    },
-    {
       "fingerprint": "d8f3375097f4288df97b639c3266b876ed31a4ea90cafd332a9cf03e362e793a",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/CommandPreview.tsx",
@@ -2858,13 +2753,6 @@
       "count": 3
     },
     {
-      "fingerprint": "db7ae026279efaa0158bc5ed97734c5e1ff3fa06fa97c72b1ded3633a9220b16",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
-      "syntax": "pr-3",
-      "count": 1
-    },
-    {
       "fingerprint": "dbf8c7aca9d37e6ee65b55d77308dbeb19b51eb3e7649356b244435a9dd7a036",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -2877,13 +2765,6 @@
       "path": "src/components/library/LibraryEntryRow.tsx",
       "syntax": "#4f46e5",
       "count": 1
-    },
-    {
-      "fingerprint": "dd412efce70214fabe4e72e8f396cd0e4d989ca1b8d1948382ce8faa5c7dd574",
-      "ruleId": "typography/line-height-arbitrary",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "line-height: 1",
-      "count": 2
     },
     {
       "fingerprint": "dd50d2f3c45dd8ba3ec4f2ce6a6ba42bd6c5ffa78080ee8fa21cd62665896cdd",
@@ -2946,13 +2827,6 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/calendar/RecurrenceEditor.tsx",
       "syntax": "import { FormError } from \"src/components/ui/FormError\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "e082a5d25439021ed8d7b18f564a7d3b2199261c2b4eabe8a1a24ee1c14e0607",
-      "ruleId": "css-colors/unregistered-token",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "var(--fc-highlight-color)",
       "count": 1
     },
     {
