@@ -213,7 +213,7 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 			Downloads map[string][]cftManifestDownloadRef `json:"downloads"`
 		}{
 			cftChannel: {
-				Version: "131.0.6778.999",
+				Version: cftPinnedVersion,
 				Downloads: map[string][]cftManifestDownloadRef{
 					cftDownloadID: {{Platform: platform, URL: srv.URL + "/zip"}},
 				},

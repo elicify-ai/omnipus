@@ -259,7 +259,7 @@ func TestInstaller_EnsureChromium_LinuxDownloadsFullChromeByDefault(t *testing.T
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftFullChromeDownloadID: srv.URL + "/zip",
 			cftDownloadID:           srv.URL + "/should-not-be-fetched",
 		}))
@@ -329,7 +329,7 @@ func TestInstaller_SelectDownloadBuild_MissingFromManifest_ReturnsLoudError(t *t
 		// must hold even when a usable-looking lighter alternative IS
 		// available, because the lighter alternative cannot satisfy the
 		// requested capability.
-		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftDownloadID: srv.URL + "/zip",
 		}))
 	})
@@ -386,7 +386,7 @@ func TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity(t *te
 	// route now (after start) still takes effect, exactly like the original
 	// EnsureChromium download test's pattern.
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftFullChromeDownloadID: srv.URL + "/zip",
 			cftDownloadID:           srv.URL + "/should-not-be-fetched",
 		}))
@@ -448,7 +448,7 @@ func TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity(t *te
 	badSrv := httptest.NewServer(badMux)
 	defer badSrv.Close()
 	badMux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftFullChromeDownloadID: badSrv.URL + "/zip",
 		}))
 	})
@@ -465,12 +465,12 @@ func TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity(t *te
 		t.Fatalf("expected exactly 1 zip fetch attempt on the bad-hash install")
 	}
 	// No binary must have been extracted anywhere under badZipRoot.
-	expectBadBin := fullBuild.binaryFullPath(filepath.Join(badZipRoot, "131.0.6778.999"), platform)
+	expectBadBin := fullBuild.binaryFullPath(filepath.Join(badZipRoot, cftPinnedVersion), platform)
 	if _, statErr := os.Stat(expectBadBin); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected no binary at %s after a bad-hash rejection, stat err: %v", expectBadBin, statErr)
 	}
 	// No leftover .part-* temp files or the .zip itself either.
-	versionDir := filepath.Join(badZipRoot, "131.0.6778.999")
+	versionDir := filepath.Join(badZipRoot, cftPinnedVersion)
 	entries, _ := os.ReadDir(versionDir)
 	for _, e := range entries {
 		if strings.Contains(e.Name(), ".part-") || strings.HasSuffix(e.Name(), ".zip") {
@@ -539,7 +539,7 @@ func TestInstaller_ExtractFailure_CleansUpPartialInstall(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(manifestFor(t, "131.0.6778.777", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftFullChromeDownloadID: srv.URL + "/zip",
 		}))
 	})
@@ -562,7 +562,7 @@ func TestInstaller_ExtractFailure_CleansUpPartialInstall(t *testing.T) {
 
 	// The build's own extraction subdirectory must actually be gone from
 	// disk, not merely orphaned and silently ignored.
-	buildDir := filepath.Join(root, "131.0.6778.777", build.subdir(platform))
+	buildDir := filepath.Join(root, cftPinnedVersion, build.subdir(platform))
 	if _, statErr := os.Stat(buildDir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected the partial extraction subdirectory to be removed, stat err: %v", statErr)
 	}
@@ -596,7 +596,7 @@ func TestInstaller_EnsureChromiumBuild_WritesIntegrityManifestOnSuccess(t *testi
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(manifestFor(t, "131.0.6778.555", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftFullChromeDownloadID: srv.URL + "/zip",
 		}))
 	})
@@ -669,7 +669,7 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftDownloadID: srv.URL + "/zip",
 		}))
 	})
@@ -687,7 +687,7 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 		t.Fatalf("expected exactly 1 zip fetch attempt, got %d", zipHits)
 	}
 	// No binary must have been extracted anywhere under root.
-	expectBin := build.binaryFullPath(filepath.Join(root, "131.0.6778.999"), platform)
+	expectBin := build.binaryFullPath(filepath.Join(root, cftPinnedVersion), platform)
 	if _, statErr := os.Stat(expectBin); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected no binary at %s after a headerless-download rejection, stat err: %v", expectBin, statErr)
 	}
@@ -725,7 +725,7 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
+		_, _ = w.Write(manifestFor(t, cftPinnedVersion, platform, map[string]string{
 			cftDownloadID: srv.URL + "/zip",
 		}))
 	})
@@ -799,5 +799,87 @@ func TestInstaller_SelectDownloadBuild_PerGOOS(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// TestInstaller_PinnedVersionMismatch_Errors is the square-12 / round-12
+// regression test for the ADR-047-prescribed version pin (the prescribed
+// mitigation that was never implemented before this commit, see the
+// cftPinnedVersion constant's doc comment for the cost — the round-1..10
+// probe set ran against a different CfT than the e2e gate actually shipped,
+// and the runtime evidence never lined up with the regression under test).
+//
+// The Stable channel floats; a silently-bumped major is the exact failure
+// mode that broke both the July D2 spike receipt and the Sep e2e run.
+// EnsureChromiumBuild must REFUSE a version mismatch loudly (naming both
+// the manifest's observed version and the pinned target) so the operator
+// sees the version delta at install time, not via a downstream symptom
+// 45s later. An operator can still set tools.browser.exec_path to a local
+// binary outside the managed path; the pin only governs the managed
+// download route.
+//
+// The reverse direction (a manifest that serves the pinned version) is
+// the path every other installer test in this file already exercises —
+// they all construct their manifest with `cftPinnedVersion` as the
+// version string, so any future drift on the pin immediately fails the
+// whole installer test set. This test pins the other half of the
+// contract: the version mismatch path.
+func TestInstaller_PinnedVersionMismatch_Errors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix-only path layout")
+	}
+	platform, err := cftPlatform()
+	if err != nil {
+		t.Skipf("unsupported platform: %v", err)
+	}
+
+	// Deliberately serve a different version than the pin. The
+	// test only needs the manifest body to be parseable; we never
+	// need a real /zip, because the pin check runs BEFORE the
+	// download step (and a successful manifest fetch + channel
+	// lookup are both required to even reach the pin check).
+	const observedVersion = "999.0.9999.99-wrong"
+
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(manifestFor(t, observedVersion, platform, map[string]string{
+			// The download URL is irrelevant — the pin check
+			// rejects before any fetch. Point it at the
+			// server anyway so the fixture is fully
+			// well-formed.
+			cftFullChromeDownloadID: srv.URL + "/zip",
+		}))
+	})
+	// Register /zip so the URL is reachable in case the pin check
+	// ever regresses to a download-first ordering (it must not).
+	mux.HandleFunc("/zip", func(w http.ResponseWriter, _ *http.Request) {
+		t.Errorf("/zip must not be reached on a version-pin mismatch")
+		_, _ = w.Write([]byte("unreachable"))
+	})
+	withManifestURL(t, srv.URL+"/manifest")
+
+	root := t.TempDir()
+	_, err = EnsureChromium(context.Background(), root)
+	if err == nil {
+		t.Fatal("expected EnsureChromium to reject a Stable-channel version that does not match cftPinnedVersion, got nil error")
+	}
+	// The error must name BOTH versions so the operator can see
+	// the delta at install time — never a generic "manifest invalid"
+	// that hides the real cause.
+	if !strings.Contains(err.Error(), cftPinnedVersion) {
+		t.Fatalf("expected the error to name the pinned version %q, got: %v", cftPinnedVersion, err)
+	}
+	if !strings.Contains(err.Error(), observedVersion) {
+		t.Fatalf("expected the error to name the manifest's observed version %q, got: %v", observedVersion, err)
+	}
+	// And no binary may have been written under root — the
+	// rejection must happen BEFORE the download/extract stage.
+	entries, _ := os.ReadDir(root)
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), cftPinnedVersion) {
+			t.Fatalf("expected no install directory under %s on a pin mismatch, found %q", root, e.Name())
+		}
 	}
 }
