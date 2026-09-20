@@ -15,6 +15,20 @@ export const SCANNER_FILES = Object.freeze([
   'status.mjs',
 ])
 export const SOURCE_EXTENSIONS = Object.freeze(['.css', '.js', '.jsx', '.ts', '.tsx', '.svg'])
+// Extensions that are unambiguously executable JS/TS source BY FILE-FORMAT
+// DEFINITION — the alternate module-system spellings of extensions already
+// in SOURCE_EXTENSIONS (Node and TypeScript both force .mjs/.mts to ESM and
+// .cjs/.cts to CommonJS; neither is ever data, docs, or a lockfile) — but
+// that no scanner in SCANNER_FILES currently claims. Collecting these
+// alongside SOURCE_EXTENSIONS (see walk() below) means a file like this can
+// never again vanish from scannedFileCount with zero signal: it now reaches
+// runScanners' existing per-file "unsupported coverage gap" error instead of
+// being dropped during collection, which is what made that error path
+// structurally dead for exactly the case it exists for. Genuinely
+// non-source formats (.md, .json, .lock, images, ...) are still dropped
+// silently in walk() below -- this list is deliberately not a catch-all
+// for "any file we found".
+export const PLAUSIBLE_UNSUPPORTED_SOURCE_EXTENSIONS = Object.freeze(['.mjs', '.cjs', '.mts', '.cts'])
 export const COVERAGE_FILE = 'coverage.mjs'
 export const CANONICAL_GENERATED_TOKEN_PATHS = Object.freeze([
   'src/styles/tokens.generated.css',
@@ -22,7 +36,27 @@ export const CANONICAL_GENERATED_TOKEN_PATHS = Object.freeze([
   'src/design-system/tokens.ts',
 ])
 
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'coverage'])
+// Directory names that can NEVER legitimately be authored product source,
+// regardless of how deep they sit under a source root: a package manager
+// owns everything under node_modules and Git owns everything under .git,
+// so a same-named product directory is not a possibility to protect
+// against the way it is for dist/coverage below. Skip these by bare name
+// at any depth -- this is what keeps a vendored/nested node_modules or a
+// submodule's .git out of the scan without needing a path allowlist.
+const ALWAYS_SKIP_DIR_NAMES = new Set(['node_modules', '.git'])
+// Directory names that ARE plausible product-directory names (a "dist"
+// builder feature, a "coverage" dashboard) -- unlike node_modules/.git,
+// treating these as skip-by-bare-name-anywhere silently drops real source
+// (src/coverage/instrumentation-badge.tsx was the P5 finding). This repo's
+// own tooling agrees real build/coverage output for dist and coverage is
+// only ever produced as a TOP-LEVEL sibling of the source roots -- never
+// nested inside them: see eslint.config.js's own ignore list ('dist/**',
+// 'coverage/**' at the repo root) and the vite/vitest build config, neither
+// of which ever emits into src/ or packages/ui/src/. So these are skipped
+// only by an EXACT repository-root-relative path match, never by bare name
+// -- a directory nested under a source root that happens to be named
+// "dist" or "coverage" is ordinary source and gets scanned like any other.
+const SKIP_DIR_TOP_LEVEL_PATHS = new Set(['dist', 'coverage'])
 const DEFAULT_SRC_ROOTS = Object.freeze(['src', 'packages/ui/src'])
 // Each E1 lock must retain its own applicability; a different lock scanning
 // the same extension cannot replace the missing checks.
@@ -269,7 +303,9 @@ function walk(directory, root, files, errors) {
       continue
     }
     if (stats.isDirectory()) {
-      if (!SKIP_DIRS.has(name)) walk(absolute, root, files, errors)
+      if (ALWAYS_SKIP_DIR_NAMES.has(name)) continue
+      if (SKIP_DIR_TOP_LEVEL_PATHS.has(path)) continue
+      walk(absolute, root, files, errors)
       continue
     }
     if (!stats.isFile()) {
@@ -277,7 +313,12 @@ function walk(directory, root, files, errors) {
       continue
     }
     const extension = extname(name).toLowerCase()
-    if (!SOURCE_EXTENSIONS.includes(extension)) continue
+    // A plausible-but-unsupported extension (PLAUSIBLE_UNSUPPORTED_SOURCE_
+    // EXTENSIONS) is collected here on purpose: it must still reach
+    // runScanners' "unsupported" gate below, not vanish before it. Anything
+    // in neither list is genuinely not source (.md, .json, .lock, images,
+    // ...) and is dropped here without error, same as before.
+    if (!SOURCE_EXTENSIONS.includes(extension) && !PLAUSIBLE_UNSUPPORTED_SOURCE_EXTENSIONS.includes(extension)) continue
     if (!POSIX_FILE.test(path)) {
       addError(errors, 'invalid-path', `applicable source path is not a safe repository-relative POSIX file: ${path}`, { path })
       continue

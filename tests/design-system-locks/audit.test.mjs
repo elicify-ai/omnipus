@@ -6,6 +6,7 @@ import { dirname, resolve } from 'node:path'
 import test, { after } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
+  PLAUSIBLE_UNSUPPORTED_SOURCE_EXTENSIONS,
   SCANNER_FILES,
   SOURCE_EXTENSIONS,
   audit,
@@ -776,4 +777,116 @@ test('unknown checkpoint and missing src tree fail without dumping the tree', as
   const missing = await run(empty, { scanners: [scanner(['.tsx'], () => [])] })
   assert.ok(codes(missing.report).includes('missing-source-tree'))
   assert.equal(Object.hasOwn(missing.report, 'files'), false)
+})
+
+// --- FIX-COV: a product directory named "coverage" and an unsupported-but-
+// plausible extension used to vanish from collection with zero signal
+// (confirmed against the real, unmodified scanners by the P5 probe at
+// dist/design-system-baseline/cli-lanes/c1-prep/P5/partB/run-audit-probe.mjs).
+// These tests lock the fix: an unscanned source file must now be impossible
+// to miss, while genuinely non-source paths keep today's silent skip.
+
+test('a product directory literally named "coverage" (or "dist") is scanned, not silently skipped', async () => {
+  const root = fixture()
+  const { code, report } = await run(root, {
+    files: {
+      // src/coverage/... is a real P5 finding: SKIP_DIRS used to match this
+      // directory by bare name at any depth, so a genuine violation here
+      // produced no finding AND no error -- total silence.
+      'src/coverage/instrumentation-badge.tsx': 'const color = "#ff0000"\n',
+      // Same bug, same fix, for "dist" -- a plausible product-directory name
+      // (e.g. a distribution-builder feature), not just "coverage".
+      'src/dist/build-info.tsx': 'const color = "#00ff00"\n',
+    },
+    scanners: [scanner(['.tsx'], ({ path, source }) => (
+      source.includes('#ff0000') ? [finding('css-colors.raw-hex', path, '#ff0000')]
+        : source.includes('#00ff00') ? [finding('css-colors.raw-hex', path, '#00ff00')]
+          : []
+    ))],
+  })
+  assert.equal(code, 1)
+  assert.equal(report.scannedFileCount, 2)
+  assert.deepEqual(
+    report.errors.filter((error) => error.code === 'new-debt').map((error) => error.path).sort(),
+    ['src/coverage/instrumentation-badge.tsx', 'src/dist/build-info.tsx'],
+  )
+})
+
+test('an unsupported-but-plausible source extension produces the coverage-gap error, not silence', async () => {
+  assert.deepEqual([...PLAUSIBLE_UNSUPPORTED_SOURCE_EXTENSIONS].sort(), ['.cjs', '.cts', '.mjs', '.mts'])
+  const root = fixture()
+  const files = { 'src/ok.tsx': 'export {}\n' }
+  for (const extension of PLAUSIBLE_UNSUPPORTED_SOURCE_EXTENSIONS) {
+    files[`src/unusual-extension${extension}`] = 'export const risky = true\n'
+  }
+  const { code, report } = await run(root, {
+    files,
+    // Only .tsx is claimed -- none of the plausible-unsupported extensions
+    // are handled by any scanner, matching the real scanner catalog today.
+    scanners: [scanner(['.tsx'], () => [])],
+  })
+  assert.equal(code, 1)
+  assert.equal(report.scannedFileCount, 1 + PLAUSIBLE_UNSUPPORTED_SOURCE_EXTENSIONS.length)
+  const unsupported = report.errors.filter((error) => error.code === 'unsupported')
+  assert.deepEqual(
+    unsupported.map((error) => error.path).sort(),
+    PLAUSIBLE_UNSUPPORTED_SOURCE_EXTENSIONS.map((extension) => `src/unusual-extension${extension}`).sort(),
+  )
+  for (const error of unsupported) {
+    assert.match(error.message, /unsupported coverage gap: no scanner handles/)
+    assert.equal(error.ruleId, 'enforcement.unsupported-syntax')
+  }
+
+  // Genuinely non-source formats must keep today's silent skip: no finding,
+  // no error, not counted.
+  const controlRoot = fixture()
+  const control = await run(controlRoot, {
+    files: { 'src/ok.tsx': 'export {}\n', 'src/notes.md': '# not source\n', 'src/data.json': '{}\n' },
+    scanners: [scanner(['.tsx'], () => [])],
+  })
+  assert.equal(control.code, 0, JSON.stringify(control.report.errors))
+  assert.equal(control.report.scannedFileCount, 1)
+})
+
+test('genuine build/dependency output nested under a source root is still skipped', async () => {
+  const root = fixture()
+  const { code, report } = await run(root, {
+    files: {
+      'src/ok.tsx': 'export {}\n',
+      // node_modules and .git are never legitimately product source at any
+      // depth, unlike "coverage"/"dist" above -- a nested occurrence must
+      // still be excluded with no finding, no error, not counted.
+      'src/vendor/node_modules/pkg/index.tsx': 'const color = "#ff0000"\n',
+      'src/vendor/.git/HEAD': 'ref: refs/heads/main\n',
+    },
+    scanners: [scanner(['.tsx'], ({ path, source }) => (
+      source.includes('#ff0000') ? [finding('css-colors.raw-hex', path, '#ff0000')] : []
+    ))],
+  })
+  assert.equal(code, 0, JSON.stringify(report.errors))
+  assert.equal(report.ok, true)
+  assert.equal(report.scannedFileCount, 1)
+  assert.deepEqual(report.errors, [])
+})
+
+test('dist/coverage are skipped only at an exact repository-root-relative path, never by nested bare name', async () => {
+  const root = fixture()
+  write(root, 'dist/legacy.tsx', 'const color = "#ff0000"\n')
+  write(root, 'coverage/legacy.tsx', 'const color = "#00ff00"\n')
+  write(root, 'node_modules/pkg/legacy.tsx', 'const color = "#0000ff"\n')
+  write(root, 'ok/normal.tsx', 'export {}\n')
+  const report = await audit({
+    root,
+    checkpoint: 'B',
+    baseline: baselineDoc([]),
+    ledger: ledgerDoc([]),
+    policy: defaultPolicy,
+    scanners: [scanner(['.tsx'], ({ path, source }) => {
+      const match = source.match(/#[0-9a-f]{6}/i)
+      return match ? [finding('css-colors.raw-hex', path, match[0])] : []
+    })],
+    srcRoots: ['.'],
+  })
+  assert.equal(report.scannedFileCount, 1)
+  assert.deepEqual(report.debt.fingerprints.map((item) => item.path), [])
 })
