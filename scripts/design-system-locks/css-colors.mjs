@@ -137,6 +137,24 @@ const NAMED_COLORS = new Set([
   'marktext', 'graytext',
 ])
 
+/**
+ * The CSS Color Module Level 4 system color keywords (lowercase). These
+ * resolve to the user's OS palette and are the only legitimate use of a
+ * "raw color" keyword — but ONLY inside a `@media (forced-colors: active)`
+ * block (see isInForcedColorsActiveMedia). The same keyword anywhere else
+ * (including bare, or inside `@media (forced-colors: none)` / unconditional
+ * CSS) remains raw-color debt: nothing about the keyword itself is exempt,
+ * only its use in the one context where its OS-palette behavior is the
+ * point. `AccentColor`/`AccentColorText` are included for completeness even
+ * though they are not yet used anywhere in the codebase.
+ */
+const SYSTEM_COLOR_KEYWORDS = new Set([
+  'canvas', 'canvastext', 'linktext', 'visitedtext', 'activetext',
+  'buttonface', 'buttontext', 'buttonborder', 'field', 'fieldtext',
+  'highlight', 'highlighttext', 'selecteditem', 'selecteditemtext',
+  'mark', 'marktext', 'graytext', 'accentcolor', 'accentcolortext',
+])
+
 const HEX_LENGTHS = new Set([3, 4, 6, 8])
 
 /** Splits a declaration value into offset-carrying tokens. Offsets are 0-based character indexes into the value string. */
@@ -239,7 +257,7 @@ function isRelativeColorForm(tokens, lparenIndex) {
  * and reports raw colors, unregistered color-position var() references, and
  * unsupported tokens through `report(ruleId, syntax, token)`.
  */
-function walkValueTokens({ prop, value, identContext, colorDepth, ctx, messages, report }) {
+function walkValueTokens({ prop, value, identContext, colorDepth, ctx, messages, report, forcedColorsActive = false }) {
   const tokens = tokenizeValue(value)
   const frames = []
   let depth = colorDepth
@@ -284,11 +302,11 @@ function walkValueTokens({ prop, value, identContext, colorDepth, ctx, messages,
       frames[frames.length - 1] = FRAME_VAR_ARGS
       continue
     }
-    checkWordToken(token, identContext, emit)
+    checkWordToken(token, identContext, emit, forcedColorsActive)
   }
 }
 
-function checkWordToken(token, identContext, report) {
+function checkWordToken(token, identContext, report, forcedColorsActive = false) {
   const text = token.text
   if (text.startsWith('#')) {
     if (/^#[0-9a-fA-F]+$/.test(text) && HEX_LENGTHS.has(text.length - 1)) {
@@ -301,7 +319,9 @@ function checkWordToken(token, identContext, report) {
   if (text.startsWith('--')) return
   const lower = text.toLowerCase()
   if (COLOR_KEYWORD_EXEMPTS.has(lower)) return
-  if (NAMED_COLORS.has(lower) && !identContext) report(RULE_RAW_COLOR, lower, token)
+  if (!NAMED_COLORS.has(lower) || identContext) return
+  if (forcedColorsActive && SYSTEM_COLOR_KEYWORDS.has(lower)) return
+  report(RULE_RAW_COLOR, lower, token)
 }
 
 /**
@@ -311,13 +331,13 @@ function checkWordToken(token, identContext, report) {
  * a declaration has. `emitAt(ruleId, syntax, offset, message)` reports at an
  * offset into `params`; callers translate that to a file line/column.
  */
-function walkAtRuleCondition(params, ctx, emitAt) {
+function walkAtRuleCondition(params, ctx, emitAt, forcedColorsActive = false) {
   const tokens = tokenizeValue(params)
-  walkConditionTokens(tokens, 0, tokens.length, params, ctx, emitAt)
+  walkConditionTokens(tokens, 0, tokens.length, params, ctx, emitAt, forcedColorsActive)
 }
 
 /** Scans a flat run of condition tokens for parenthesized feature groups. */
-function walkConditionTokens(tokens, from, to, fullText, ctx, emitAt) {
+function walkConditionTokens(tokens, from, to, fullText, ctx, emitAt, forcedColorsActive) {
   const unbalanced = (syntax, offset) => emitAt(
     RULE_UNSUPPORTED,
     syntax,
@@ -336,7 +356,7 @@ function walkConditionTokens(tokens, from, to, fullText, ctx, emitAt) {
         unbalanced(`unbalanced parentheses in condition: ${truncate(fullText, 60)}`, token.start)
         return
       }
-      walkConditionGroup(tokens, i + 1, close, fullText, ctx, emitAt)
+      walkConditionGroup(tokens, i + 1, close, fullText, ctx, emitAt, forcedColorsActive)
       i = close
       continue
     }
@@ -354,7 +374,7 @@ function walkConditionTokens(tokens, from, to, fullText, ctx, emitAt) {
       // "function call" by token shape alone) is safe to recurse into: the group
       // walk below only ever reports a genuine single-identifier ':' declaration,
       // so recursing never manufactures a finding from ordinary combinator text.
-      if (lower !== 'selector') walkConditionGroup(tokens, i + 2, close, fullText, ctx, emitAt)
+      if (lower !== 'selector') walkConditionGroup(tokens, i + 2, close, fullText, ctx, emitAt, forcedColorsActive)
       i = close
       continue
     }
@@ -362,7 +382,7 @@ function walkConditionTokens(tokens, from, to, fullText, ctx, emitAt) {
 }
 
 /** Scans the content of one parenthesized condition group for a `prop: value` feature test. */
-function walkConditionGroup(tokens, from, to, fullText, ctx, emitAt) {
+function walkConditionGroup(tokens, from, to, fullText, ctx, emitAt, forcedColorsActive) {
   if (from >= to) return
   let colonIdx = -1
   for (let k = from; k < to; k += 1) {
@@ -378,7 +398,7 @@ function walkConditionGroup(tokens, from, to, fullText, ctx, emitAt) {
     // container feature takes a color value, so that case is left clean, not noise.
     const hasNested = tokens.slice(from, to)
       .some((t) => t.kind === 'lparen' || (t.kind === 'word' && ['and', 'or', 'not'].includes(t.text.toLowerCase())))
-    if (hasNested) walkConditionTokens(tokens, from, to, fullText, ctx, emitAt)
+    if (hasNested) walkConditionTokens(tokens, from, to, fullText, ctx, emitAt, forcedColorsActive)
     return
   }
   const propTokens = tokens.slice(from, colonIdx).filter((t) => t.kind === 'word')
@@ -403,6 +423,7 @@ function walkConditionGroup(tokens, from, to, fullText, ctx, emitAt) {
     identContext: isIdentContextProperty(prop),
     colorDepth: isColorContextProperty(prop) ? 1 : 0,
     ctx,
+    forcedColorsActive,
     messages: atRuleConditionMessages(prop, value),
     report: (ruleId, syntax, token, message) => emitAt(ruleId, syntax, valueStart + (token?.start ?? 0), message),
   })
@@ -652,6 +673,83 @@ function truncate(text, limit) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text
 }
 
+/**
+ * Detects whether an @media condition text requires forced-colors: active —
+ * i.e. the feature test `(forced-colors: active)` appears at some
+ * conjunctive/disjunctive position that is not wrapped in a not(...)
+ * negation. `@media (forced-colors: active)`, `screen and (forced-colors:
+ * active)`, and `(forced-colors: active) or (color)` all qualify;
+ * `@media (forced-colors: none)`, `@media not (forced-colors: active)`, and
+ * an unrelated `@media (prefers-contrast: more)` do not. This mirrors
+ * walkConditionTokens/walkConditionGroup's own recursive descent through
+ * parens and and/or/not/style() combinators, but answers a yes/no structural
+ * question instead of reporting colors.
+ */
+function hasActiveForcedColorsCondition(params) {
+  const tokens = tokenizeValue(params)
+  return scanForForcedColorsActive(tokens, 0, tokens.length, false)
+}
+
+function scanForForcedColorsActive(tokens, from, to, negated) {
+  for (let i = from; i < to; i += 1) {
+    const token = tokens[i]
+    if (token.kind === 'lparen') {
+      const close = matchingParenIndex(tokens, i)
+      if (close === -1) return false
+      if (!negated && isForcedColorsActiveFeature(tokens, i + 1, close)) return true
+      if (scanForForcedColorsActive(tokens, i + 1, close, negated)) return true
+      i = close
+      continue
+    }
+    if (token.kind === 'word' && tokens[i + 1]?.kind === 'lparen') {
+      const lower = token.text.toLowerCase()
+      const close = matchingParenIndex(tokens, i + 1)
+      if (close === -1) return false
+      if (lower === 'selector') {
+        i = close
+        continue
+      }
+      const childNegated = negated || lower === 'not'
+      if (!childNegated && isForcedColorsActiveFeature(tokens, i + 2, close)) return true
+      if (scanForForcedColorsActive(tokens, i + 2, close, childNegated)) return true
+      i = close
+      continue
+    }
+  }
+  return false
+}
+
+/** True when tokens[from..to) is exactly the feature test `forced-colors : active`. */
+function isForcedColorsActiveFeature(tokens, from, to) {
+  const inner = tokens.slice(from, to).filter((t) => t.kind !== 'comment')
+  if (inner.length !== 3) return false
+  const [propTok, colonTok, valTok] = inner
+  if (propTok.kind !== 'word' || colonTok.kind !== 'operator' || colonTok.text !== ':' || valTok.kind !== 'word') {
+    return false
+  }
+  return propTok.text.toLowerCase() === 'forced-colors' && valTok.text.toLowerCase() === 'active'
+}
+
+/**
+ * True when `node` sits inside an ancestor `@media` at-rule whose condition
+ * requires forced-colors: active (see hasActiveForcedColorsCondition). A
+ * declaration/condition under any such ancestor can only ever run when
+ * forced-colors is active — nested at-rules AND their conditions together,
+ * so any one qualifying ancestor is sufficient, regardless of what other
+ * conditions also apply.
+ */
+function isInForcedColorsActiveMedia(node) {
+  let parent = node.parent
+  while (parent) {
+    if (parent.type === 'atrule' && normalizeProperty(parent.name) === 'media'
+      && hasActiveForcedColorsCondition(parent.params ?? '')) {
+      return true
+    }
+    parent = parent.parent
+  }
+  return false
+}
+
 function requireScanArgs(path, source, policy) {
   if (typeof path !== 'string' || path.length === 0) throw new Error('css-colors: scan requires a non-empty path')
   if (typeof source !== 'string') throw new Error('css-colors: scan requires source to be a string')
@@ -695,6 +793,7 @@ export function scan({ path, source, policy }) {
         identContext: isIdentContextProperty(decl.prop),
         colorDepth: isColorContextProperty(decl.prop) ? 1 : 0,
         ctx,
+        forcedColorsActive: isInForcedColorsActiveMedia(decl),
         messages: declarationMessages(decl.prop, decl.value),
         report: (ruleId, syntax, token, message) => {
           const at = position(token?.start ?? 0)
@@ -713,7 +812,7 @@ export function scan({ path, source, policy }) {
       walkAtRuleCondition(params, ctx, (ruleId, syntax, offset, message) => {
         const at = position(offset)
         findings.push({ ruleId, path, syntax, message, line: at.line, column: at.column })
-      })
+      }, isInForcedColorsActiveMedia(atRule))
     }
   })
   return findings

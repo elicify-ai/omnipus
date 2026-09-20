@@ -58,6 +58,17 @@ function loadPolicy() {
   return {
     tokenCssNames: tokens.map((token) => token.css),
     resolvedTokens: resolved,
+    // Mirrors scripts/design-system-locks/policy.mjs::createPolicy exactly
+    // (the real, production policy shape) -- resolvedCssTokens is the
+    // contract-mandated CSS-name-keyed map (contract.json: "Do not derive
+    // CSS names from token IDs"). Without it, spacing.mjs's id-derived
+    // fallback cannot resolve --space-0-5/--space-2-5 (foundations.json
+    // names their token ids after the pixel VALUE, "space.scale.2px" /
+    // "space.scale.12px", not the scale index, which the id-only regex
+    // cannot invert) -- exercised by the C1 Gap 1 runtime-multiplier fixture
+    // tests below, which use --space-2-5 inside a calc() exactly like the
+    // real Sidebar.tsx site they reproduce.
+    resolvedCssTokens: Object.fromEntries(tokens.map((token) => [token.css, resolved[token.id]])),
   }
 }
 
@@ -652,6 +663,103 @@ describe('explicit spacing extension boundaries', () => {
       assert.ok(syntaxes(findings, RULE.unsupported).length > 0)
     }
     assert.equal(byRule(invalid, RULE.extensionBoundary).length, 0)
+  })
+})
+
+// C1 Gap 1: runtime tree-indent depth multiplied by registered spacing
+// tokens (design-system/enforcement/contract.json's failClosed clause --
+// */unsupported is BLOCKING, never baselinable -- is exactly why this needed
+// a real fix, not a baseline entry). These four fixtures reproduce the real
+// call sites verbatim (values read from the actual source files, not
+// guessed) so the test fails against the pre-fix scanner and passes against
+// the fixed one. Positive/legitimate shapes only; the required near-miss
+// coverage (raw pixel term, unregistered dimensional token used additively,
+// two runtime multipliers) lives in spacing-adversarial.test.mjs.
+describe('C1 Gap 1: runtime depth multiplier extension boundary', () => {
+  it('reclassifies Sidebar.tsx\'s depth-multiplier calc() from unsupported to extension-boundary', () => {
+    // src/components/layout/Sidebar.tsx: style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))' }}
+    const source = `
+      export const Row = ({ depth }: { depth: number }) => (
+        <div style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))' } as any} />
+      )
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.extensionBoundary), [
+      'padding-left: calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))',
+    ])
+    assert.equal(byRule(findings, RULE.unsupported).length, 0)
+    assert.equal(byRule(findings, RULE.invalidVar).length, 0)
+  })
+
+  it('keeps Sidebar.tsx\'s two "+ 18px" alignment-offset sites as unsupported findings (deliberate: a raw literal is never a registered token)', () => {
+    // src/components/layout/Sidebar.tsx (both the top-level and nested-row sites)
+    const source = `
+      export const Row = ({ depth }: { depth: number }) => (
+        <div style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + 18px)' } as any} />
+      )
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [
+      'padding-left: calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + 18px)',
+    ])
+    assert.equal(byRule(findings, RULE.extensionBoundary).length, 0)
+  })
+
+  it('reclassifies SearchModal.tsx\'s single-term depth-multiplier calc() from invalid-var to extension-boundary', () => {
+    // src/components/search/SearchModal.tsx: paddingLeft: 'calc(var(--search-modal-indent-depth) * var(--space-3))'
+    const source = `
+      export const Row = ({ depth }: { depth: number }) => (
+        <div style={depth > 0 ? { '--search-modal-indent-depth': depth, paddingLeft: 'calc(var(--search-modal-indent-depth) * var(--space-3))' } as any : undefined} />
+      )
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.extensionBoundary), [
+      'padding-left: calc(var(--search-modal-indent-depth) * var(--space-3))',
+    ])
+    assert.equal(byRule(findings, RULE.invalidVar).length, 0)
+  })
+
+  it('reclassifies KnowledgeOutline.tsx\'s token-plus-multiplier calc() from invalid-var to extension-boundary', () => {
+    // src/components/library/knowledge/KnowledgeOutline.tsx: paddingLeft: 'calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))'
+    const source = `
+      export const Row = ({ clamped }: { clamped: number }) => (
+        <div style={{ '--knowledge-outline-indent-depth': clamped, paddingLeft: 'calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))' } as any} />
+      )
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.extensionBoundary), [
+      'padding-left: calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))',
+    ])
+    assert.equal(byRule(findings, RULE.invalidVar).length, 0)
+  })
+
+  it('reclassifies FileTreeView.tsx\'s template-literal depth-multiplier calc() from unsupported to extension-boundary', () => {
+    // src/components/chat/tools/FileTreeView.tsx: style={{ paddingLeft: `calc(var(--space-2-5) * ${entry.indent})` }}
+    const source = `
+      export const Row = ({ entry }: { entry: { indent: number } }) => (
+        <div style={{ paddingLeft: \`calc(var(--space-2-5) * \${entry.indent})\` }} />
+      )
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.extensionBoundary), [
+      'padding-left: `calc(var(--space-2-5) * ${...})`',
+    ])
+    assert.equal(byRule(findings, RULE.unsupported).length, 0)
+  })
+
+  it('still rejects a template-literal interpolation that is not a calc() term (near miss: fused unit suffix)', () => {
+    // `${entry.indent}px` alone -- a raw interpolated dimension, never wrapped
+    // in calc(), so the placeholder substitution's boundary check must
+    // refuse it (the synthetic var() would be fused directly against "px")
+    // and it must fall back to the ordinary dynamic-style-value finding.
+    const source = `
+      export const Row = ({ entry }: { entry: { indent: number } }) => (
+        <div style={{ paddingLeft: \`\${entry.indent}px\` }} />
+      )
+    `
+    const findings = tsx(source)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['padding-left: {expr}'])
+    assert.equal(byRule(findings, RULE.extensionBoundary).length, 0)
   })
 })
 

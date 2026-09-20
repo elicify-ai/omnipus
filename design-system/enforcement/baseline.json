@@ -2,31 +2,10 @@
   "version": 1,
   "fingerprints": [
     {
-      "fingerprint": "006f0b15c57ee7963a67863bf5956e43ec17e0955ecba719d58c94b86300bc8c",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/connectors/EmailMailboxPanel.tsx",
-      "syntax": "text-red-400",
-      "count": 2
-    },
-    {
-      "fingerprint": "00e1caad61e6d5519986ef77aebb2e88e86e0a528570489055f920876792bdd4",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "pb-1",
-      "count": 1
-    },
-    {
       "fingerprint": "014129b5ae71e17fa9f7226feed2258790eff16b04e547a29756d83a682b65e3",
       "ruleId": "css-colors/raw-color",
       "path": "src/styles/fullcalendar-theme.css",
       "syntax": "rgb(255,255,255,0.015)",
-      "count": 1
-    },
-    {
-      "fingerprint": "026e4ef185237e9f27b9eb79b493f7907e8193d738abc2001360b4bb95c42d6e",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/workspaces/taskStatusConfig.ts",
-      "syntax": "next: \"text-[color:var(--color-accent)] bg-[var(--color-accent)]/10\"",
       "count": 1
     },
     {
@@ -55,13 +34,6 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/library/preview/LibraryImagePreview.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "03d9a3c1fdf0527cf74cb7faab55be08e9e3fd0776fdca6a6d9206a3b7f25b0b",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#f97316",
       "count": 1
     },
     {
@@ -121,6 +93,13 @@
       "count": 1
     },
     {
+      "fingerprint": "07011c0328b9f9c91d87f259c03740cdbef44267014e26f188f7dc5886f4f322",
+      "ruleId": "spacing/off-scale",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "pl-[188px]",
+      "count": 2
+    },
+    {
       "fingerprint": "07364295d501f80f8bbe13e46ae2f2ca37e003966deaf7d723d4c44a9920d8bb",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/LibraryEntryRow.tsx",
@@ -139,13 +118,6 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/skills/SkillBrowser.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "0815366d8062125221af5ba93c2fb12efcb2fb63650f8820c6938e53ce215645",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SandboxSection.tsx",
-      "syntax": "rgba(234,179,8,0.35)",
       "count": 1
     },
     {
@@ -174,13 +146,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryDownloadCard.tsx",
       "syntax": "#db2777",
-      "count": 1
-    },
-    {
-      "fingerprint": "098c4dc836461831ec9a478657a4ce61c61071e789a0a8ff6dc3eaae6e78c8a9",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/login.tsx",
-      "syntax": "rgba(212,175,55,0.25)",
       "count": 1
     },
     {
@@ -223,13 +188,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/AttachmentCard.tsx",
       "syntax": "#7c3aed",
-      "count": 1
-    },
-    {
-      "fingerprint": "0b652641c3e08025be11d01636b4625e048145cec72e458c0b209d0a4b187ccf",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/login.tsx",
-      "syntax": "rgba(212,175,55,0.055)",
       "count": 1
     },
     {
@@ -296,13 +254,6 @@
       "count": 1
     },
     {
-      "fingerprint": "104e64bb451ffbb4d4fd6c3a6548bb498be5e8fb89fc8d6f7e3e66f6d4c066f3",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/library/preview/LibraryCodeEditor.tsx",
-      "syntax": "rgba(212, 175, 55, 0.25)",
-      "count": 1
-    },
-    {
       "fingerprint": "1054f6dc8bb8c14030e64b010403dad66498ca66a366997d90cceda313b9c6f4",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/ProvidersSection.tsx",
@@ -310,24 +261,10 @@
       "count": 1
     },
     {
-      "fingerprint": "10569fdc92bd99db12b2e5339c502691a8f7cc455a29df6ec6edc9e12ef33383",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/settings/PromptGuardSection.tsx",
-      "syntax": "p-3",
-      "count": 1
-    },
-    {
       "fingerprint": "106088f0943271c39ac51744332b6ad99c71e25bca6b11f9bb11d4094aaa1bfd",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/ExecAllowlistSection.tsx",
       "syntax": "import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "10d33c0dfff66ea6df0f67842cc2a42e26d5c81ef51287ecda7a120f80038f38",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/workspaces/TaskChecklistField.tsx",
-      "syntax": "\"shrink-0 text-[color:var(--color-warning)]\"",
       "count": 1
     },
     {
@@ -352,60 +289,11 @@
       "count": 1
     },
     {
-      "fingerprint": "11b92aa8279a972f9fd9f90853ea0529d68a1855f1f4f7440f9d832bc1cfcfcd",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DefaultModelCard.tsx",
-      "syntax": "text-red-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "133440c55bd9089d370fefa294724e7499c6c286bde42f43e8e64272d2ea2601",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/workspaces/TaskDetailPanel.tsx",
-      "syntax": "text-white",
-      "count": 2
-    },
-    {
       "fingerprint": "147125fee0c1e7c7aa3ed073a475ca5802fb4e0ce2df460dc09324136b2d790c",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/preview/viewparts/TilesPart.tsx",
       "syntax": "<button>",
       "count": 1
-    },
-    {
-      "fingerprint": "164f7f11a8e63ec1a64ada757b9032f9160899e1befd09711448418543eaa1a6",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "px-1.5",
-      "count": 1
-    },
-    {
-      "fingerprint": "16a5141e992ae63625fd95ab76f250773b6ba37733a12a45b5d24cebb48d9db6",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/library/preview/LibraryCodeEditor.tsx",
-      "syntax": "rgba(212, 175, 55, 0.06)",
-      "count": 1
-    },
-    {
-      "fingerprint": "171ae040d392c59105ff48a92fc69c0b7fdb536ecc0f209d869b448436055d1e",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(16,185,129,0.06)",
-      "count": 1
-    },
-    {
-      "fingerprint": "17361198ca4d4d12001eae088e14cd1aec618e1fccc666b2ffd7c79bc0e6eafa",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SandboxSection.tsx",
-      "syntax": "bg-yellow-500/5",
-      "count": 1
-    },
-    {
-      "fingerprint": "1744944e0b89d7b4510948e0067dfcf12b1dc629e3615af272a9f98171459356",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/ToolPolicyEditor.tsx",
-      "syntax": "border-red-500/40",
-      "count": 2
     },
     {
       "fingerprint": "17989564963c6bba66f58b013abac999071062ef6a01b37f50cf3b63adac7f17",
@@ -419,27 +307,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/RateLimitIndicator.tsx",
       "syntax": "bg-emerald-500/5",
-      "count": 1
-    },
-    {
-      "fingerprint": "198ca08c6f299ffb81afc1c814812350482ec47ea77c1d4bd9e2c441a81a6743",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/ToolPolicyEditor.tsx",
-      "syntax": "text-red-400",
-      "count": 2
-    },
-    {
-      "fingerprint": "1ab68e1cafae2bfe8a3a687e4294b7b6a72e428ae66be8920b4c313e84b16f30",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SandboxSection.tsx",
-      "syntax": "#fff",
-      "count": 2
-    },
-    {
-      "fingerprint": "1b240ef1baba24bb8f9de2b1a5e559466ae0c96aa077911ebbd2aebbd9f449d0",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/ui/brand-icon.tsx",
-      "syntax": "#1a1a1c",
       "count": 1
     },
     {
@@ -471,13 +338,6 @@
       "count": 1
     },
     {
-      "fingerprint": "1cc815ffd2c0fb86484fee757a947efba271ab463f8ba820545c43f21d009416",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/workspaces/ChipListInput.tsx",
-      "syntax": "gap-1",
-      "count": 1
-    },
-    {
       "fingerprint": "1cee8172ab1f591c38c42be5353794a39c17493c8edf5442b7f080433af85acb",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -497,13 +357,6 @@
       "path": "src/components/settings/GodModeControl.tsx",
       "syntax": "<button>",
       "count": 2
-    },
-    {
-      "fingerprint": "1d7628ed43441bbfcca4a9cb16e08fd42de1345480f84ce410619e7d8725c5be",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/BrowserNavigate.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
     },
     {
       "fingerprint": "1d97ca297ebd4858da15e7ed8fa9cd136aa3281a81aeb46612c78f5c406fbb6d",
@@ -527,52 +380,10 @@
       "count": 1
     },
     {
-      "fingerprint": "1f6b8511b75d28b2b80005f20bbc5b1b1b1653cba79714ca5591757fe23bdb4d",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom,var(--space-0)))]",
-      "count": 1
-    },
-    {
       "fingerprint": "2018127e82f67b3ed73ffc8ba61e113d6d174643c6b3aabe7bf724c01b875ffb",
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/team/AddAgentPicker.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "204299efecd6c88a6a11166c9213806481ef5a853c32783f0ef5bff095a51fd9",
-      "ruleId": "typography/missing-arbitrary-type-hint",
-      "path": "src/components/browser/BrowserLiveView.tsx",
-      "syntax": "text-[var(--color-text-secondary)]",
-      "count": 1
-    },
-    {
-      "fingerprint": "207a846cf7eeddad6615335a251b77ed3279b6cfd44eeab4224d96428a35d7d2",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/agents/ShellDenyPatternsEditor.tsx",
-      "syntax": "px-3",
-      "count": 1
-    },
-    {
-      "fingerprint": "211c611c95265f3801a052076f2310dcbd2ccf6d65cf903d9f8b2db98999f7bb",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/skills/McpServerModal.tsx",
-      "syntax": "py-2",
-      "count": 2
-    },
-    {
-      "fingerprint": "2151bfc70d487ee75ab902ff9e21ea2af90bf742b7264791907c745f5b2b4ca2",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/calendar/types.ts",
-      "syntax": "inbox: { bg: \"#94A3B8\", icon: \"Circle\" }",
-      "count": 1
-    },
-    {
-      "fingerprint": "21c3fad01f38aaf209e9cf38f4bc5c1a5fbffea99a8fb23099cd956a72580123",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/agents/ShellDenyPatternsEditor.tsx",
-      "syntax": "py-2",
       "count": 1
     },
     {
@@ -594,13 +405,6 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "2265274e79266fc429fbcadd917f04672cb220ac74c555baa667bda6b3f81e2c",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(234,179,8,0.25)",
       "count": 1
     },
     {
@@ -632,13 +436,6 @@
       "count": 9
     },
     {
-      "fingerprint": "23cf03947bd5f9811d1b05de614ee8c8af001e82ffb6ca58f163bf94d5d90372",
-      "ruleId": "spacing/off-scale",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "padding: 0 6px",
-      "count": 1
-    },
-    {
       "fingerprint": "242d392b9ad935011685c4a59d6524657c438dd1c0959fdc70609683e9365568",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/RateLimitIndicator.tsx",
@@ -651,13 +448,6 @@
       "path": "src/components/settings/DevicesSection.tsx",
       "syntax": "<button>",
       "count": 1
-    },
-    {
-      "fingerprint": "248bb0352f4bb89aa859ebad05f00f51c0fc637e8bda278b797846a29c0da9a7",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/library/preview/viewparts/TablePart.tsx",
-      "syntax": "text-[13px]",
-      "count": 2
     },
     {
       "fingerprint": "24a6a69c190169211d186e270eb15769c43e5a314701f86ea84381563f5528bc",
@@ -688,38 +478,10 @@
       "count": 2
     },
     {
-      "fingerprint": "27578a2b2da983b89c30b7f317c94b762f8a048382acfa22828665c7fa50e51d",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "rgb(212,175,55,0.07)",
-      "count": 1
-    },
-    {
-      "fingerprint": "283c411bfea88d57b3988328ac243d378434cbb481d057231499c1e2facb1236",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/RiskySettingControl.tsx",
-      "syntax": "text-emerald-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "28c042cce024fc6a5933a18c7c5d20110cb3bb25b1c82dd46c6b708a1b900b57",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/calendar/types.ts",
-      "syntax": "next: { bg: \"#94A3B8\", icon: \"Circle\" }",
-      "count": 1
-    },
-    {
       "fingerprint": "29243e05ad276c379be399b53ee1ec1d6f6807afb3e4082dd62551e110e4d052",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/ui/sheet.tsx",
       "syntax": "bg-black/60",
-      "count": 1
-    },
-    {
-      "fingerprint": "292dd38a1975c6b2ceab5f29167cb1bd363ebf5ce7033d15b255c7c1e96d76fe",
-      "ruleId": "spacing/invalid-var",
-      "path": "src/components/chat/tools/FileTreeView.tsx",
-      "syntax": "padding-left: calc(var(--file-tree-view-indent-depth-px) * 1px)",
       "count": 1
     },
     {
@@ -758,24 +520,10 @@
       "count": 2
     },
     {
-      "fingerprint": "2c0e6eb3495ae4981ba71231cd78710412e8bffa5f21e9e9bcbc018a0cae529b",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/IntegrationsSection.tsx",
-      "syntax": "text-red-400",
-      "count": 1
-    },
-    {
       "fingerprint": "2c1f04bb5d8c54a90188658365e50d2fa6e2cd7548e99a51d6e2cf6d07e8c51f",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/library/LibraryExplorer.tsx",
       "syntax": "import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from \"src/components/ui/alert-dialog\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "2c2a064f4273d58dd6a04be6c6b2b46ff15ac140e16e65346a872bca63e8ab4b",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/RiskySettingControl.tsx",
-      "syntax": "bg-emerald-500/20",
       "count": 1
     },
     {
@@ -814,13 +562,6 @@
       "count": 1
     },
     {
-      "fingerprint": "2f907e65f071fa667540943080b430373e1f37d00fe1a5b9ad112ff26272e526",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/library/preview/BasePreview.tsx",
-      "syntax": "-mb-px",
-      "count": 2
-    },
-    {
       "fingerprint": "2ff80bcc9bd10380f99f6dddaa3a62d303043d1e450f7c19fe52b917348603f9",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/routes/onboarding.tsx",
@@ -832,20 +573,6 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/tools/WebSearchResult.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "320885d96a8f8af28a694ef648618452d3221cac88823e4a2709749343ae3fd6",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/library/preview/viewparts/ViewPartsRenderer.tsx",
-      "syntax": "text-[13px]",
-      "count": 2
-    },
-    {
-      "fingerprint": "321967ecfe1023a422b8629936ee5931cabdff8fc20e2c1eabbe81256bb3dc96",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/GoalSetupFailureLine.tsx",
-      "syntax": "ml-[3px]",
       "count": 1
     },
     {
@@ -863,24 +590,10 @@
       "count": 1
     },
     {
-      "fingerprint": "33115e4e69b7558cd0485841921d49418b6acc812f331f51af68a750a716c0c2",
-      "ruleId": "typography/font-size-below-floor",
-      "path": "src/components/library/preview/viewparts/ChartPart.tsx",
-      "syntax": "fontSize: 9",
-      "count": 6
-    },
-    {
       "fingerprint": "331905f531ea180b625da53402194443399dda9c0b1776af0a4f6efe4f704494",
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/tools/WebFetchPreview.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "3327f04064a6edd05034aa0ddea3230a967e61341d24e806577d66809a5213f6",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/PolicyBadge.tsx",
-      "syntax": "border-red-500/40",
       "count": 1
     },
     {
@@ -889,13 +602,6 @@
       "path": "src/components/workspaces/graph/GraphView.tsx",
       "syntax": "rgba(0,0,0,0.35)",
       "count": 1
-    },
-    {
-      "fingerprint": "3388dbddc87a6b28f7b1ea4c393961d68c355be8d21ac69b12520e3dd814a535",
-      "ruleId": "typography/font-family-off-token",
-      "path": "src/components/chat/ActivityPanel.tsx",
-      "syntax": "font-sans",
-      "count": 3
     },
     {
       "fingerprint": "33c6623bc321f6c10d9a3d27fadd53526b497014e820b5710a0ca37aed9f2ca5",
@@ -940,13 +646,6 @@
       "count": 2
     },
     {
-      "fingerprint": "35222e26c6851e1b0c08188bb81dd0e93a4f21ef0d9699dde5e6d8452e25023a",
-      "ruleId": "spacing/invalid-var",
-      "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
-      "syntax": "padding-left: calc(var(--knowledge-outline-indent-depth-px) * 1px)",
-      "count": 1
-    },
-    {
       "fingerprint": "3542511b04581bfad490e16a8b9d942faf3610b5c665afb6ef3bce970068b32c",
       "ruleId": "controls/raw-button",
       "path": "src/components/providers/ProviderDetailPanel.tsx",
@@ -989,13 +688,6 @@
       "count": 1
     },
     {
-      "fingerprint": "372f5a38bde339ee55e9c5a1eb0bb2a3d59931c70ae7a942502e321afec0ae4c",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/onboarding.tsx",
-      "syntax": "rgba(212,175,55,0.12)",
-      "count": 2
-    },
-    {
       "fingerprint": "37504b1244f2a873aaad6d845516e312d07ef146d287bb46fba1dbfc079df005",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryDownloadCard.tsx",
@@ -1003,31 +695,10 @@
       "count": 2
     },
     {
-      "fingerprint": "3794b2cd72ba10bd1e3c3da29a0b258950306d7aa728bfbccc13a10e928f14c8",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(239,68,68,0.25)",
-      "count": 2
-    },
-    {
-      "fingerprint": "38615749da06d4018f3ccf81e172883fa73459a9b6585b6c2dc22ce27d00959e",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/library/preview/viewparts/PartChrome.tsx",
-      "syntax": "text-[13px]",
-      "count": 1
-    },
-    {
       "fingerprint": "38ba336d1f55b6ebc7f5df16eb114d7d4abea44384192a48974f4c8c4bd5ab02",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/AgentProfile.tsx",
       "syntax": "text-amber-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "38e5b85814ca79f23e4ae3aeded41f522ced443bafcbfd1e92ac2b7fe84d2e9e",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/ExecAllowlistSection.tsx",
-      "syntax": "text-red-400",
       "count": 1
     },
     {
@@ -1066,13 +737,6 @@
       "count": 1
     },
     {
-      "fingerprint": "3ae7dbd6dc175611456a0b6f00281b59734717c5d40e2c4f637c1faf7fb56768",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/calendar/FullCalendarView.tsx",
-      "syntax": "gap: 3px",
-      "count": 1
-    },
-    {
       "fingerprint": "3b45f1899d3419c3859a5079fa6bcc7e7ab6bceb18df177083d5792e83966895",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/MemorySection.tsx",
@@ -1087,31 +751,10 @@
       "count": 1
     },
     {
-      "fingerprint": "3bacd788d64a93aed9b463bcb0308bfaba315ef8c43dc9d32e1802d1ed40b13e",
-      "ruleId": "ts-colors/undefined-token",
-      "path": "src/components/settings/SkillTrustSection.tsx",
-      "syntax": "var(--color-border-hover)",
-      "count": 1
-    },
-    {
-      "fingerprint": "3c2ae1a59179f846669132dcb53d2bfa6d8c3193f6ccbda9e88952d96eda0911",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(234,179,8,0.06)",
-      "count": 1
-    },
-    {
       "fingerprint": "3c9d5e55173d18c91f7736f62ff2cef240b1b60cbdf638c726043e3103a074cc",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/ui/model-selector.tsx",
       "syntax": "import { orderModels, RECOMMENDED_CHIP_LABEL, recommendedModelIds, shouldVirtualiseModelList } from \"src/components/ui/model-ordering\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "3cd74d5e8c8483e5c39c864ea43c6717820f7d92cff61d32418d6d83841609e1",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SandboxSection.tsx",
-      "syntax": "rgba(234,179,8,0.08)",
       "count": 1
     },
     {
@@ -1120,20 +763,6 @@
       "path": "src/components/screens/ConnectorsScreen.tsx",
       "syntax": "bg-red-500/10",
       "count": 2
-    },
-    {
-      "fingerprint": "3d297686f23e195a98a8641935535181dcdfb277fe8e35227ed8ff7520777f0a",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/settings/SsrfEditor.tsx",
-      "syntax": "py-1",
-      "count": 1
-    },
-    {
-      "fingerprint": "3d361c7550d86aadc0571cf20c796aae362fbd61f060fb6e225d903aab3df6e2",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/library/preview/LibraryCodeEditor.tsx",
-      "syntax": "rgba(212, 175, 55, 0.08)",
-      "count": 1
     },
     {
       "fingerprint": "3e0a61b46c61517be9f40eb5e5956647ad9189ccb8f5c017cc0da6acf8f74563",
@@ -1147,13 +776,6 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/tools/FileTreeView.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "3ea0ead05d44fe55c0bd826eb0d3e0ab06a3c9e88d5c266161bef219c285a328",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/workspaces/ChipListInput.tsx",
-      "syntax": "px-2",
       "count": 1
     },
     {
@@ -1199,6 +821,13 @@
       "count": 1
     },
     {
+      "fingerprint": "405c971d0c35ffcc4e06815e53f99cd71b6359f318bca1a7447b0103508bc2e9",
+      "ruleId": "typography/font-weight-arbitrary",
+      "path": "src/components/screens/AgentListScreen.tsx",
+      "syntax": "fontWeight: workspaceFilter === ws.id ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)'",
+      "count": 1
+    },
+    {
       "fingerprint": "406b1ddc7189e572a8e9f5e8628b9974f8d0874cc4d580bf77d871517704f042",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryDownloadCard.tsx",
@@ -1224,20 +853,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/GodModeControl.tsx",
       "syntax": "bg-white",
-      "count": 1
-    },
-    {
-      "fingerprint": "4204e57f062271331f551077af277d94125ba73cebc1194c712f4ea7673b812d",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/PolicyBadge.tsx",
-      "syntax": "bg-emerald-500/20",
-      "count": 1
-    },
-    {
-      "fingerprint": "432c102dacdf739bf85c4c8faf4dc8c8b5223567e45134a0ea05ae672bdd17f6",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/connectors/EmailMailboxPanel.tsx",
-      "syntax": "hover:bg-red-700",
       "count": 1
     },
     {
@@ -1267,20 +882,6 @@
       "path": "src/components/shared/PolicyBadge.tsx",
       "syntax": "text-amber-400",
       "count": 1
-    },
-    {
-      "fingerprint": "44abdb80a8a2af7b1e62e0d2dc4819c9c73eb530dae946ebb7ee1e51c18c41ca",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/workspaces/ConfirmActionModal.tsx",
-      "syntax": "text-white",
-      "count": 1
-    },
-    {
-      "fingerprint": "44cfbc67fe4fb4ce0f64b163412fa5488120097685a6ea7b87ef4524fc395dc1",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/library/preview/viewparts/CrosstabPart.tsx",
-      "syntax": "text-[13px]",
-      "count": 2
     },
     {
       "fingerprint": "44e30e4db33ccda4afb23816619075ac9db5ec14b3291bb074975187a98daa54",
@@ -1318,20 +919,6 @@
       "count": 1
     },
     {
-      "fingerprint": "48cd25113e4b96d4e03402dd94a2c0d0b87f4e43c147db86b5b47dadacd36b19",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/workspaces/WorkspaceSettingsTab.tsx",
-      "syntax": "text-white",
-      "count": 1
-    },
-    {
-      "fingerprint": "49431a7c68120d6813406caac93211e47e448cfd11da74e795b2cd995bb582e6",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(59,130,246,0.06)",
-      "count": 1
-    },
-    {
       "fingerprint": "494e590a4b3754ff6f0be18f55562aeb77c6d1f8730441351bf27beecbec9b48",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/LibraryAddMountDialog.tsx",
@@ -1344,13 +931,6 @@
       "path": "src/components/agents/AgentCard.tsx",
       "syntax": "<button>",
       "count": 2
-    },
-    {
-      "fingerprint": "4a457da6a999395270a69c1a24384a3943faf21c55a4efb278fae01ee8775598",
-      "ruleId": "spacing/invalid-var",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "padding-left: calc(var(--sidebar-indent-depth-px) * 1px)",
-      "count": 3
     },
     {
       "fingerprint": "4ad671b595c346e63dd2deeb4836c7743a8f824b3b50cceffed833319b6ab4c3",
@@ -1458,13 +1038,6 @@
       "count": 1
     },
     {
-      "fingerprint": "501351092d303091740b00841fbc52be1d234a71f5eed5a6122048963b626f97",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/chat/UntrustedChildText.tsx",
-      "syntax": "#d4af37",
-      "count": 1
-    },
-    {
       "fingerprint": "501f247ea410ac01b448dae05383fa13924f2aa18d99f362ff3fcec130283738",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/LibraryEntryRow.tsx",
@@ -1483,13 +1056,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/workspaces/ListView.tsx",
       "syntax": "bg-blue-500/20",
-      "count": 1
-    },
-    {
-      "fingerprint": "512c861187cf3b7814f9768ef85d5515a62513ce3c8a7718d2c96a77bfc47749",
-      "ruleId": "typography/font-family-off-token",
-      "path": "src/components/screens/UsageScreen.tsx",
-      "syntax": "font-sans",
       "count": 1
     },
     {
@@ -1535,13 +1101,6 @@
       "count": 2
     },
     {
-      "fingerprint": "546d40c263364ce1fdf50e101dc434dc930504138765cd3cc630a373ef48cd96",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/FileTreeView.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
       "fingerprint": "54a785ea47af341cae79ab05a72d131d8bb3e60a31b9a47a634ad6de0cb76918",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/RateLimitIndicator.tsx",
@@ -1563,27 +1122,6 @@
       "count": 1
     },
     {
-      "fingerprint": "56953a967fe9255926840c38b5ea7e0b22bede0c6d458b1e6ad88f354dd9b68a",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/ui/command.tsx",
-      "syntax": "rgba(212,175,55,0.12)",
-      "count": 1
-    },
-    {
-      "fingerprint": "56c0099ffc54203b65130d86a8742041d6a189b5f59635b63e224b3ff9694753",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "text-white",
-      "count": 2
-    },
-    {
-      "fingerprint": "56e7821f65af9ea503694b10a9410f59e3ea768737214634fa25d923e0e03c75",
-      "ruleId": "spacing/off-scale",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "padding: 6px 4px",
-      "count": 1
-    },
-    {
       "fingerprint": "5756265d15292f290b60a92e7a7943b6f05098e657ee1028ecfc37aebb0257e6",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -1598,25 +1136,11 @@
       "count": 1
     },
     {
-      "fingerprint": "5881407439b5fe7bff63254bf60ff270e8e45aab7fc8ee88cae4dc5e5aadf31e",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/WebSearchResult.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
       "fingerprint": "58a6c4498b880e181ed81b5af8eee9ceac13972b7725cc42aa545efaa8c41dd0",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "bg-zinc-500/10",
       "count": 2
-    },
-    {
-      "fingerprint": "58b9693179c39848844e3ac86f2fd9fb2dbc5715b5d71dc7b5c0f91d9b68157f",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/chat/tools/SetGoalToolUI.tsx",
-      "syntax": "\"flex cursor-pointer list-none items-center gap-[var(--space-1)] py-[var(--space-0-5)] text-[var(--color-muted)]\"",
-      "count": 1
     },
     {
       "fingerprint": "590b589a61d2e7d287a2f9982e93d4c503f09f9c915d4ef6a555e209bd09f282",
@@ -1633,31 +1157,10 @@
       "count": 3
     },
     {
-      "fingerprint": "5a3eb3f6412cb0716c3b86cb5ac89beddf1d8d5cd2b40c3e8ae60780a28b777e",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/connectors/EmailMailboxPanel.tsx",
-      "syntax": "bg-red-600",
-      "count": 1
-    },
-    {
       "fingerprint": "5a7f95bd261cad55b34ebfd9bd7e6a163bfa12112048a464c2a20f506b9f4f6c",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/LibraryEntryRow.tsx",
       "syntax": "#db2777",
-      "count": 1
-    },
-    {
-      "fingerprint": "5b02859d7004e4bd604f946e62bea8971648cbd061e97248d71470a4b5d5429a",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/settings/DefaultModelCard.tsx",
-      "syntax": "\"mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-red-400\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "5b4bf9bdbfbba8ea1d0354e044e6cd855088c40f327cf7d1ff1442468cbcea28",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/markdown-shared.tsx",
-      "syntax": "padding: 0.75rem 1rem",
       "count": 1
     },
     {
@@ -1666,27 +1169,6 @@
       "path": "src/components/ui/error-boundary.tsx",
       "syntax": "<button>",
       "count": 2
-    },
-    {
-      "fingerprint": "5d45ccad407b0c1ff7f0f1c39570c11f06b7e215cf48404b32c81ab5d6237296",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/AllowedPathsEditor.tsx",
-      "syntax": "bg-yellow-500/10",
-      "count": 1
-    },
-    {
-      "fingerprint": "5dd409ca39f71cfdb3ce574f4a6b554eeab885a36cdadfaae76e6593f532b470",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/GenericToolCall.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
-      "fingerprint": "602f4e56199f8fad53e04c0ff57ee9f27de7b3cab98a60ae3b1661c61d7ef0e4",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/calendar/FullCalendarView.tsx",
-      "syntax": "rgba(212,175,55,0.06)",
-      "count": 1
     },
     {
       "fingerprint": "60ae53aa401261568f1f49bff081e4b1642d9e2ba086bfd1a383e6b93c763063",
@@ -1701,27 +1183,6 @@
       "path": "src/components/chat/tools/GenericToolCall.tsx",
       "syntax": "border-amber-500/40",
       "count": 3
-    },
-    {
-      "fingerprint": "61352ab26e557eb29f3e0a6b2a9e962ef8074977882f4775beec46f8ba05cad5",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/workspaces/TaskDetailPanel.tsx",
-      "syntax": "\"h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "613d53d4d29037a2c4d071bc7851b3049045e8390dd75076c3b1b1696f6d41fe",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/ProvidersSection.tsx",
-      "syntax": "text-red-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "614850a90f0d93435091f12f6086bdcb9d31164361e641eeac6b038aac033351",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/chat/AttachmentCard.tsx",
-      "syntax": "hover:text-white",
-      "count": 1
     },
     {
       "fingerprint": "614e4cad65b36bce82410e9516ec27f0ca25d66cfdcfa5c835aa96e4bd885369",
@@ -1752,13 +1213,6 @@
       "count": 1
     },
     {
-      "fingerprint": "61d3078572b86ba15b3729c8b128135cbe2eb4db207ba4d2f10b5792800a0014",
-      "ruleId": "ts-colors/undefined-token",
-      "path": "src/components/browser/BrowserLiveView.tsx",
-      "syntax": "var(--color-text-secondary)",
-      "count": 1
-    },
-    {
       "fingerprint": "61f4df45397a245f75973f778a3e9184500db0aa4cbe8e96608e9f1b9a70a8a8",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/screens/ConnectorsScreen.tsx",
@@ -1780,31 +1234,10 @@
       "count": 3
     },
     {
-      "fingerprint": "634afe5816b1d64f7b30ed3a9484cab40b42ddd8f4a58b265afd86eb6d044936",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/SubagentBlock.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
       "fingerprint": "638556fcd14ed5672904c14132b73610faee4d7b88c4035c0762b42b9a310f3a",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/settings/RemoveProviderDialog.tsx",
       "syntax": "import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from \"src/components/ui/alert-dialog\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "638b6540371cc166db725bec2efd5258709d29b0429401ae56c97073e72b933d",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/library/preview/LibraryCodeEditor.tsx",
-      "syntax": "rgba(212, 175, 55, 0.3)",
-      "count": 1
-    },
-    {
-      "fingerprint": "63ca8f580d290e5279c8fb92af3ef073e46224ade002cdd0059d9b36deb93d1c",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/workspaces/ChipListInput.tsx",
-      "syntax": "py-0.5",
       "count": 1
     },
     {
@@ -1813,13 +1246,6 @@
       "path": "src/components/skills/ChannelConfigPanel.tsx",
       "syntax": "<button>",
       "count": 3
-    },
-    {
-      "fingerprint": "642a53835e51789233a67cdc6f0460c8e5ebae03e49801466af1f32f8f48e82b",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/login.tsx",
-      "syntax": "rgba(212,175,55,0.14)",
-      "count": 1
     },
     {
       "fingerprint": "6479097075ece47e9a0fe23c77313ce4a8c0b1bf3df21b06c838ce18fe364e0d",
@@ -1892,45 +1318,10 @@
       "count": 1
     },
     {
-      "fingerprint": "68e2fc1696983108ad9740e538e987accc9a2c3113e6cbee1f14a7ce8e90480e",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "mt-0.5",
-      "count": 1
-    },
-    {
-      "fingerprint": "6913ec642a295c283a79b3c934a6673906a6f6992c59f168492fd3177aa6cbe4",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/workspaces/TaskChecklistField.tsx",
-      "syntax": "\"text-[color:var(--color-warning)]\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "69430e6e4d0deb5c19904daa5f5d165e2a04a3d638ef18e841bcad9a78ad2de5",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/ToolPolicyEditor.tsx",
-      "syntax": "bg-emerald-500/20",
-      "count": 2
-    },
-    {
       "fingerprint": "69e9ee489a4a9035810dc054823567e4ddcbd2bbf13a4b0e3366083a74256bab",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/workspaces/graph/TaskNode.tsx",
       "syntax": "text-blue-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "6aeafc228753be1eebcce841058cca2c3dd5080a11d14f4045f3cff64263d608",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "text-[13px]",
-      "count": 4
-    },
-    {
-      "fingerprint": "6b27553bcef7d43a36c472b3a449dbb7874f3a314b7adb0c644bfd150e05378c",
-      "ruleId": "typography/unregistered-font-size-token",
-      "path": "src/styles/globals.css",
-      "syntax": "font-size: clamp(12px, var(--user-font-size), 20px)",
       "count": 1
     },
     {
@@ -2004,31 +1395,24 @@
       "count": 1
     },
     {
-      "fingerprint": "6dd13cb228098dcd930ad0b8bc03f3667845fdf76972f5f9d67f5ae336cfa7b4",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/ui/brand-icon.tsx",
-      "syntax": "#2a2a2e",
-      "count": 1
-    },
-    {
-      "fingerprint": "6e42a25e0b4ad3f7d489f491fb12ea5a016264912ffef483fe65216d023a71e7",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/ToolPolicyEditor.tsx",
-      "syntax": "text-emerald-400",
+      "fingerprint": "6f9ed2926dca0127ea212ae31f9b49b51fd6f9c11dce5ae43736e6d00455da68",
+      "ruleId": "spacing/off-scale",
+      "path": "src/routes/landing.tsx",
+      "syntax": "py-[80px]",
       "count": 2
-    },
-    {
-      "fingerprint": "6eec4ef44c9ee6f95b6e6453f090ce541a3f782969c3eb72d1aaffcb3c161b0d",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/library/preview/viewparts/ListPart.tsx",
-      "syntax": "text-[13px]",
-      "count": 1
     },
     {
       "fingerprint": "6fe7eb1b1b642bcbc531e9e6a1742b78bd7a49eaacc2566dd74c1726fdf2bf58",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "border-amber-500/30",
+      "count": 1
+    },
+    {
+      "fingerprint": "70995c2964d6c7476f240c57bd02d787e702f4e03f6638b7bcf9957478868468",
+      "ruleId": "spacing/off-scale",
+      "path": "src/components/screens/UsageScreen.tsx",
+      "syntax": "py-[80px]",
       "count": 1
     },
     {
@@ -2050,13 +1434,6 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/workspaces/TaskDetailPanel.tsx",
       "syntax": "import { AutoSaveIndicator } from \"src/components/ui/AutoSaveIndicator\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "7331c15ef07910cc6113c87d970f2856a57d8a15f61c1814fe8a710ad430cebb",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/library/preview/LibraryPdfPreview.tsx",
-      "syntax": "rgba(212, 175, 55, 0.2)",
       "count": 1
     },
     {
@@ -2088,31 +1465,10 @@
       "count": 4
     },
     {
-      "fingerprint": "75238374ca2a552a3c5efaeb0921d1ab31ff5822b2f93d3291375cbbd9cb7d3f",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/PolicyBadge.tsx",
-      "syntax": "border-emerald-500/40",
-      "count": 1
-    },
-    {
       "fingerprint": "759df3d19bc568d112e73312d74cc822880e956dfdf1c643f4c107906d69b768",
       "ruleId": "ts-colors/raw-color",
       "path": "src/routes/onboarding.tsx",
       "syntax": "#d4af37",
-      "count": 1
-    },
-    {
-      "fingerprint": "75e6e9b6189eada4ae7a21898dad3fec7de679a495142880f80258fddcaa9f0b",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(239,68,68,0.06)",
-      "count": 2
-    },
-    {
-      "fingerprint": "7702a234a14e9986d2297d6b848774093f8e27a44b533e3b07bab778d2585276",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "px-2",
       "count": 1
     },
     {
@@ -2151,13 +1507,6 @@
       "count": 1
     },
     {
-      "fingerprint": "7aa9086f46c11cac6b8acf224b5979932e5a24b4414568efe773961dff3203ea",
-      "ruleId": "typography/text-size-below-floor",
-      "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
-      "syntax": "text-xs",
-      "count": 1
-    },
-    {
       "fingerprint": "7b0c23468ac5efcc5e7e33311a67a4f5868b86a3c7b66f8d799f6836b45c4071",
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/ComposerMediaLibrary.tsx",
@@ -2170,13 +1519,6 @@
       "path": "src/components/chat/RateLimitIndicator.tsx",
       "syntax": "border-emerald-500/30",
       "count": 1
-    },
-    {
-      "fingerprint": "7bd725865062aa5ea9ed693a997b8988f433d887dbb88a2ef274fa6d143fcf21",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/agents/AgentProfile.tsx",
-      "syntax": "pl-[11.75rem]",
-      "count": 2
     },
     {
       "fingerprint": "7bed6ba82589361603ba4b47f90511bc95a8968a6e44947651d2bdebb9b7cf09",
@@ -2193,20 +1535,6 @@
       "count": 5
     },
     {
-      "fingerprint": "7c8d9e0acc0b86e0d2e1653499e72ffb6aa253fc2af05a8c16d2c5d46b373a25",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/components/workspaces/reactflow-theme.css",
-      "syntax": "rgb(0,0,0,0.5)",
-      "count": 1
-    },
-    {
-      "fingerprint": "7d2772a24bfba9fc938388b4b5cb45824c8efec1397df6b83b64654b5174b025",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/settings/GodModeControl.tsx",
-      "syntax": "py-3.5",
-      "count": 1
-    },
-    {
       "fingerprint": "7de1b11ef7c3aae158bf4a787109658e08f8a742b04177e7c91cc4747742eca7",
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/team/EdgeModeEditor.tsx",
@@ -2218,27 +1546,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/workspaces/ListView.tsx",
       "syntax": "text-yellow-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "7dec23437343245e6b85d94c5b3b1ea05683036ffab8fe1e1407b500cb920cb1",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/workspaces/taskStatusConfig.ts",
-      "syntax": "blocked: \"text-[color:var(--color-warning)] bg-[var(--color-warning)]/10\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "7e40fd58865fc712dc70a23ef652b44bbf41148c14a53280a108dc16f0b5fa03",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/settings/SkillTrustSection.tsx",
-      "syntax": "p-3",
-      "count": 1
-    },
-    {
-      "fingerprint": "7e4f4e13635e987bdfba46611791a95cb7f55f690840e2e0b0742ca6d20c2d12",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(59,130,246,0.25)",
       "count": 1
     },
     {
@@ -2270,20 +1577,6 @@
       "count": 1
     },
     {
-      "fingerprint": "81905c1603d88dced03433e0b4723fba8319c77f5da7c1c652be42050f1f6f6b",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/connectors/EmailMailboxPanel.tsx",
-      "syntax": "border-red-500/30",
-      "count": 1
-    },
-    {
-      "fingerprint": "81c466b564d4f03c52ce0a5965b21a4cc8da68964a5f608351b716b186b1dd9b",
-      "ruleId": "typography/font-family-off-token",
-      "path": "src/components/chat/GoalPillTray.tsx",
-      "syntax": "font-sans",
-      "count": 1
-    },
-    {
       "fingerprint": "81ff009bfd49b52b77616a4db73a3fafd17f74895691aa1bead66f34e8ca5065",
       "ruleId": "controls/raw-button",
       "path": "src/components/browser/BrowserLiveView.tsx",
@@ -2305,18 +1598,11 @@
       "count": 1
     },
     {
-      "fingerprint": "8375671dff8f06b21aeb34317a943bc5b319be6ceda7ca251937127df436084f",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/BashOutput.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
       "fingerprint": "83fd61c20c436b1c864cde50f53c0273bd8b7a46d714006ab11a33feeb8de0ef",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "text-red-400",
-      "count": 4
+      "count": 3
     },
     {
       "fingerprint": "841cf920a2df1dc40871a19dcd4a1c30fda3f53c13e26cf53cd01a060eef2ef9",
@@ -2347,13 +1633,6 @@
       "count": 1
     },
     {
-      "fingerprint": "84bb48d7de3724e58c843f4571d5e372db43d6b18c1aeae555c968f6dfdc65c1",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/onboarding.tsx",
-      "syntax": "rgba(212,175,55,0.14)",
-      "count": 1
-    },
-    {
       "fingerprint": "853f8edcbb72f1f422a849defb9b9d780383427ce1c10f5d6664a24811765ad3",
       "ruleId": "controls/raw-button",
       "path": "src/routes/_app/agents.tsx",
@@ -2365,13 +1644,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/ExecutorSelector.tsx",
       "syntax": "text-amber-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "873724ba2f92f1a1697e40eab579339dca5182dfe4fd1f3193f285c3f0d3f83f",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/calendar/types.ts",
-      "syntax": "done: { bg: \"#34D399\", icon: \"CheckCircle\" }",
       "count": 1
     },
     {
@@ -2401,13 +1673,6 @@
       "path": "src/components/library/preview/LibraryPdfPreview.tsx",
       "syntax": "document.createElement(\"button\")",
       "count": 1
-    },
-    {
-      "fingerprint": "8883211e3b27dd6245bf8bbe6e4aa7830cc3f701a84246828456a8a0339e7711",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "#0a0a0b",
-      "count": 2
     },
     {
       "fingerprint": "88c2e9de812ddcdc469653b28e3edaa16c820576faf328cbfcaa8f8045dcbe8b",
@@ -2536,13 +1801,6 @@
       "count": 1
     },
     {
-      "fingerprint": "92d4ffe23b483a5487f1a73e8e46ec78df6446a2c58b415d55c7d70dbbb027e2",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/library.css",
-      "syntax": "canvastext",
-      "count": 3
-    },
-    {
       "fingerprint": "93061e8bda37bf4653efcc934c615fe6c92199cf010a6926ac27f73345f638e2",
       "ruleId": "controls/raw-button",
       "path": "src/components/sessions/SessionTree.tsx",
@@ -2568,13 +1826,6 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/screens/SkillsScreen.tsx",
       "syntax": "import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from \"src/components/ui/alert-dialog\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "9391bfd2c4a120fa7a11643332ecd26967c191215f8982ed175a058bd53333d5",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/workspaces/taskStatusConfig.ts",
-      "syntax": "in_progress: \"text-[color:var(--color-warning)] bg-[var(--color-warning)]/10\"",
       "count": 1
     },
     {
@@ -2606,39 +1857,11 @@
       "count": 1
     },
     {
-      "fingerprint": "953c8875689e2d850c7bdd3bc3af8f260901e474e0cc91679b1129255dc1aaa9",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/library/preview/BasePreview.tsx",
-      "syntax": "text-[13px]",
-      "count": 1
-    },
-    {
       "fingerprint": "95bbb0bee6bd5ddb313f9a7f55496dadd13d7782c5559cb9f60ced530fd6b059",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/browser/BrowserLiveView.tsx",
       "syntax": "bg-black/80",
       "count": 2
-    },
-    {
-      "fingerprint": "96fb009a03a691b8291371c3ad8237307653a0e856dbaaa28c840b44a524361f",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/skills/McpServerModal.tsx",
-      "syntax": "px-3",
-      "count": 2
-    },
-    {
-      "fingerprint": "9788666dc16ac3d598e00a933af180a8f54369d64ef5a3506e3e377e2584e929",
-      "ruleId": "spacing/off-scale",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "padding: 6px 8px",
-      "count": 1
-    },
-    {
-      "fingerprint": "981295cd507eb4cc119688a147d89afe7a5d7d94b7ab312b9ae88ab6e0934555",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/library/preview/viewparts/FiguresPart.tsx",
-      "syntax": "text-[1.15rem]",
-      "count": 1
     },
     {
       "fingerprint": "98a071d5d4cad2f05a7bff525f362cd0871ca404e547e1afef8f8c2b468eaca2",
@@ -2676,13 +1899,6 @@
       "count": 1
     },
     {
-      "fingerprint": "99b3adcfc31d635f0183320379135e619b3fa4c6025572ce6d67881d5b627c57",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/calendar/types.ts",
-      "syntax": "failed: { bg: \"#F87171\", icon: \"XCircle\" }",
-      "count": 1
-    },
-    {
       "fingerprint": "9a3aa657f718d9b57a1e24d73fbf99dd2d2fdaed19c2203ee25cda71ef46fab7",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/library/preview/LibraryTextPreview.tsx",
@@ -2697,24 +1913,10 @@
       "count": 4
     },
     {
-      "fingerprint": "9b7d5271fea70e4b03e892bfb04a7e1b9ec40a43f78c186f2b007160c5997903",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "rgb(212,175,55,0.12)",
-      "count": 1
-    },
-    {
       "fingerprint": "9bad946650b41531b3b9e586a497502713898c081b3b574ba28a71ad091d8bc7",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/skills/ChannelConfigPanel.tsx",
       "syntax": "border-amber-500/30",
-      "count": 1
-    },
-    {
-      "fingerprint": "9c7c02be33b6a80cc8c5ad7fcbf551370f101f4ba0d2a35587bc27a8800387a9",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/workspaces/graph/TaskNode.tsx",
-      "syntax": "rgba(212,175,55,0.25)",
       "count": 1
     },
     {
@@ -2746,13 +1948,6 @@
       "count": 1
     },
     {
-      "fingerprint": "9f7eaee3fdec51ac19a1ce000f68765c82d613d5b8b4e8447b955d8d4f170565",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/screens/UsageScreen.tsx",
-      "syntax": "py-20",
-      "count": 1
-    },
-    {
       "fingerprint": "9f7fc10499b35324b86bc09fecb9be7bff30b49ab40f93c238880146728716a9",
       "ruleId": "controls/raw-button",
       "path": "src/components/settings/IntegrationsSection.tsx",
@@ -2774,20 +1969,6 @@
       "count": 4
     },
     {
-      "fingerprint": "9fdffc260a296d3656cec93763e9ac5f8e0c1d5a9125bd27f5ad5e32114eb747",
-      "ruleId": "spacing/invalid-var",
-      "path": "src/components/search/SearchModal.tsx",
-      "syntax": "padding-left: calc(var(--search-modal-indent-depth-px) * 1px)",
-      "count": 1
-    },
-    {
-      "fingerprint": "a01cc7052f3da9c8408c45eb226488a43bc934f78d94bccea5a17baccaec38ae",
-      "ruleId": "typography/line-height-arbitrary",
-      "path": "src/components/library/preview/LibraryCodePreview.tsx",
-      "syntax": "leading-[1.65]",
-      "count": 1
-    },
-    {
       "fingerprint": "a083a5f84b41922f22bcff41b62464492142a97bf571304e391dd334f88c7098",
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/mermaid-renderer.tsx",
@@ -2802,39 +1983,11 @@
       "count": 11
     },
     {
-      "fingerprint": "a0f5d3489697cccfed4036205bd853d006d8a5c2d44855a7456a6f2bcb796b39",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/ActivityPanel.tsx",
-      "syntax": "ml-[3px]",
-      "count": 3
-    },
-    {
-      "fingerprint": "a111de0d6e4b4c1bc352c6c344e698c9eca92bdea4db023b9a382eb4db52d042",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/AllowedPathsEditor.tsx",
-      "syntax": "border-yellow-500/40",
-      "count": 1
-    },
-    {
-      "fingerprint": "a127a09763907b36ac78a827d174a3df3483984de4e1c954f0d884a2424b4af7",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/library/preview/LibraryAudioPreview.tsx",
-      "syntax": "p-4",
-      "count": 1
-    },
-    {
       "fingerprint": "a1d46fff97457807d89fd5ef1d1ff80497ccbd18f51bc77aa32ab039b6f4d74d",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/knowledge/KnowledgeViewsList.tsx",
       "syntax": "<button>",
       "count": 2
-    },
-    {
-      "fingerprint": "a21fd00387ea1c79aee86902dac7ee9e9b8c6d9393b692abdfa34c1849212170",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/PolicyBadge.tsx",
-      "syntax": "bg-red-500/20",
-      "count": 1
     },
     {
       "fingerprint": "a23451784ea2cd35e2272cf24e257683c5f3ef09d456420c8727c21a662645ae",
@@ -2855,13 +2008,6 @@
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/calendar/RecurrenceEditor.tsx",
       "syntax": "import { DateTriggerButton } from \"src/components/ui/date-picker\"",
-      "count": 1
-    },
-    {
-      "fingerprint": "a2895e10c7119a81da214ed163494bc5beb9331b203542b392b3f6f8f373db7a",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "rgb(212,175,55,0.25)",
       "count": 1
     },
     {
@@ -2921,13 +2067,6 @@
       "count": 1
     },
     {
-      "fingerprint": "a77c3a8c9ef836a6357be14c6fc5de6a985e1bb372f5f5b4d20fbd9cfb624528",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/connectors/EmailMailboxPanel.tsx",
-      "syntax": "bg-red-500/10",
-      "count": 1
-    },
-    {
       "fingerprint": "a83cd2b0c1fe9258ebea6aabdfe2514b15f66d87bdb5a9b4d7632b51cd0ef51d",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/tools/FileReadPreview.tsx",
@@ -2947,13 +2086,6 @@
       "path": "src/components/chat/composer/ModelPicker.tsx",
       "syntax": "import { ModelSelector } from \"src/components/ui/model-selector\"",
       "count": 1
-    },
-    {
-      "fingerprint": "a925500c4a43d4f47b9d4b32c38e18282d9dc34248aa12ba84c2a756c68c3203",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SecuritySection.tsx",
-      "syntax": "text-red-400",
-      "count": 3
     },
     {
       "fingerprint": "aad776ab07a4578b036d730205eef1fff01bc0311ea3327ed56c9b42edaa5f1f",
@@ -3005,13 +2137,6 @@
       "count": 1
     },
     {
-      "fingerprint": "addeada32c811d056bad42ef403a902dd7efba42178b0cea87e53d4840ca0edf",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DataSection.tsx",
-      "syntax": "text-red-400",
-      "count": 1
-    },
-    {
       "fingerprint": "ae0a266927c13903ad48ed6035e8cde20874135595d875ddb91ed6392ba10c3d",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
@@ -3030,13 +2155,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/skills/SkillBrowser.tsx",
       "syntax": "text-amber-300",
-      "count": 1
-    },
-    {
-      "fingerprint": "ae16f6830be9bb9d054d08c9520e090b40dc1c7c06b8d981c8fdc80c2e3669b4",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/settings/GodModeControl.tsx",
-      "syntax": "px-4",
       "count": 1
     },
     {
@@ -3082,20 +2200,6 @@
       "count": 4
     },
     {
-      "fingerprint": "b21e8406d1d2d59004de028fe5c4163bf747700871876d20cdf740def71db430",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "gap-3",
-      "count": 1
-    },
-    {
-      "fingerprint": "b242cc467ac41fb7db7b6db4f95ee914e6a141dfb4ec254b520993e0c2a094cb",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/ToolPolicyEditor.tsx",
-      "syntax": "border-emerald-500/40",
-      "count": 2
-    },
-    {
       "fingerprint": "b25756e7052dff84190ba81a9efecc7fa62da70e85d7ff4ca94ee9747d2dbbb6",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -3131,31 +2235,10 @@
       "count": 1
     },
     {
-      "fingerprint": "b3d56bc5cefc7acda1b4b8341767925d3ce3637d9ad316524854744c5c988682",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/agents/AgentProfile.tsx",
-      "syntax": "#d4af37",
-      "count": 1
-    },
-    {
-      "fingerprint": "b446ef3c119246caaccc21ceced4027fbaf1d7dac17410dbe99ea20a2b1070fe",
-      "ruleId": "typography/font-weight-arbitrary",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "fontWeight: workspaceFilter === ws.id ? 600 : 400",
-      "count": 1
-    },
-    {
       "fingerprint": "b48e32109d041b0e8bb0c642250da74850009eaebb51b827c2bd32c0df6691a3",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/AttachmentCard.tsx",
       "syntax": "#0ea5e9",
-      "count": 1
-    },
-    {
-      "fingerprint": "b4bf697332c7e77b6b0dfd0fc2ea1f8c83bf0eca5493dfda401a75656b1d2127",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SandboxSection.tsx",
-      "syntax": "border-yellow-500/30",
       "count": 1
     },
     {
@@ -3191,6 +2274,13 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "bg-amber-500/10",
+      "count": 1
+    },
+    {
+      "fingerprint": "b651db880832724811762aa8c2fd93c76fcda0561b01744f81da54eabbef0ed0",
+      "ruleId": "typography/font-weight-arbitrary",
+      "path": "src/components/screens/AgentListScreen.tsx",
+      "syntax": "fontWeight: workspaceFilter === 'all' ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)'",
       "count": 1
     },
     {
@@ -3234,13 +2324,6 @@
       "path": "src/components/screens/ConnectorsScreen.tsx",
       "syntax": "import { BrandDisclaimer } from \"src/components/ui/brand-disclaimer\"",
       "count": 1
-    },
-    {
-      "fingerprint": "b83935bac329f2a1eff07f618c7ee704bbfb9f42515d93e54266415b2797f33b",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/ToolPolicyEditor.tsx",
-      "syntax": "bg-red-500/20",
-      "count": 2
     },
     {
       "fingerprint": "b84a145086e441e70b0286f8dd4b476ba93b83f679e0a3c69c18137c6622e942",
@@ -3334,13 +2417,6 @@
       "count": 1
     },
     {
-      "fingerprint": "bd915a8bfbf6a6471240e80ae428bbcf12afc70ed52239b1ff5f742bf028dbed",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/library.css",
-      "syntax": "highlight",
-      "count": 1
-    },
-    {
       "fingerprint": "bdfdb002fb26ea95e989c92821d5a2b87bc51723198273794250c61871dc1266",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -3352,13 +2428,6 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/layout/CrossWorkspaceApprovalBanner.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "bea3e1974a4dbb14435367338c763945054ed2f1319c323c0efab43550260a47",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/settings/SsrfEditor.tsx",
-      "syntax": "px-3",
       "count": 1
     },
     {
@@ -3376,13 +2445,6 @@
       "count": 3
     },
     {
-      "fingerprint": "bf2600fe9dd11f8e4ebb7438b9bebb5a75b36c6ab94d9867869287c26e269a4c",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/PolicyBadge.tsx",
-      "syntax": "text-emerald-400",
-      "count": 1
-    },
-    {
       "fingerprint": "bf69c41512bf9be16631a32f98e2f60667a4c4d4a8a1a75e2fba98d07492f5e5",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/LibraryExplorer.tsx",
@@ -3397,24 +2459,10 @@
       "count": 2
     },
     {
-      "fingerprint": "bfd204d9184b4d066d82ee7b3a1831ce28b952edb6c03fa771ccc88fc04f69bd",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SandboxSection.tsx",
-      "syntax": "bg-yellow-500/10",
-      "count": 1
-    },
-    {
       "fingerprint": "c02ad63b1a729432848d31ce3921bf4d66bb3f24e709b0752742eaac0c20fce7",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryPdfPreview.tsx",
       "syntax": "rgb(0 0 255 / 0.25)",
-      "count": 1
-    },
-    {
-      "fingerprint": "c08e459ed9d711a35517c2cbf9e6edd68a34d26ed91eb129a469fd618b6687ee",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/workspaces/graph/TaskNode.tsx",
-      "syntax": "text-[13px]",
       "count": 1
     },
     {
@@ -3423,13 +2471,6 @@
       "path": "src/components/shared/ToolPolicyEditor.tsx",
       "syntax": "<button>",
       "count": 4
-    },
-    {
-      "fingerprint": "c16d31aa5d28b8399f1cd11d787094d3f62dff1dd93a30cf50366816743299b7",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "py-2",
-      "count": 1
     },
     {
       "fingerprint": "c1a03f8b4d512edc75914e2c362f862e1528323f73bdee5ba096695c0a4be93c",
@@ -3474,13 +2515,6 @@
       "count": 1
     },
     {
-      "fingerprint": "c36f27fa8603f15a11572d7e3e42656767c5d01b8845a66bf3e2b7666c79c12e",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/onboarding.tsx",
-      "syntax": "rgba(212,175,55,0.055)",
-      "count": 1
-    },
-    {
       "fingerprint": "c3f2b04a5a62fbcd07de6f628115649a80526d9d22c78dcdcadf370a65784549",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/connectors/EmailMailboxPanel.tsx",
@@ -3514,13 +2548,6 @@
       "path": "src/components/workspaces/ListView.tsx",
       "syntax": "bg-yellow-500/20",
       "count": 1
-    },
-    {
-      "fingerprint": "c517eae4d180cd607eb65335370fbfca1a7d1d60b7a98259e1704f284a1f498c",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/skills/McpServerModal.tsx",
-      "syntax": "gap-1.5",
-      "count": 2
     },
     {
       "fingerprint": "c5a6c52f0374148d12f7d311154eed93defb60d595c2ef2539038fe5ea34c7e0",
@@ -3558,13 +2585,6 @@
       "count": 3
     },
     {
-      "fingerprint": "c7b6981cf0f81909f25ae5177ac61f003b8ac54f652af0299a6a4ace3bbd4574",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/SetGoalToolUI.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
       "fingerprint": "c7fd0bd05b9aaf9f5b4ed847478921cd015bd5e41b9ffe1328fb8a96b4954098",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/AttachmentCard.tsx",
@@ -3590,13 +2610,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/layout/AppShell.tsx",
       "syntax": "border-amber-500/30",
-      "count": 1
-    },
-    {
-      "fingerprint": "c8b2dcb27e9543da5b4aaa08b963871f4f1cc723845c74510582a2d1d0e25caf",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/calendar/types.ts",
-      "syntax": "in_progress: { bg: \"#60A5FA\", icon: \"CircleNotch\" }",
       "count": 1
     },
     {
@@ -3635,27 +2648,6 @@
       "count": 1
     },
     {
-      "fingerprint": "ca448f27f363b8e764571923ffe7daf506715682a79e52f5b466b377562517dc",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/routes/landing.tsx",
-      "syntax": "py-20",
-      "count": 2
-    },
-    {
-      "fingerprint": "ca80b7e993e7d9806fb2ccf608f8df66d2b3448f202bf996a7ba9bd6833cc86a",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/calendar/types.ts",
-      "syntax": "blocked: { bg: \"#FBBF24\", icon: \"Prohibit\" }",
-      "count": 1
-    },
-    {
-      "fingerprint": "ca9b5567c33dda11b6346c1d0913cc3012120b8fe1fa404fd87bb4b16ff5ebf2",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/login.tsx",
-      "syntax": "rgba(212,175,55,0.08)",
-      "count": 1
-    },
-    {
       "fingerprint": "cad339c01272c5ffc6ab1c6ad381eb432001fa76178c4fdf8debda09895f20e9",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/workspaces/graph/DependencyEdge.tsx",
@@ -3688,13 +2680,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/mermaid-renderer.tsx",
       "syntax": "#141416",
-      "count": 1
-    },
-    {
-      "fingerprint": "cc6f7412527d6b315bc7a1213fd3560d9fc731d30e9cf0bf0980b687e97443cf",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/PolicyBadge.tsx",
-      "syntax": "text-red-400",
       "count": 1
     },
     {
@@ -3754,13 +2739,6 @@
       "count": 1
     },
     {
-      "fingerprint": "d0d0833128aaa03bfb974ad2c82759b5ade7b6fa6e3fe6325a0ac7d4fa85748c",
-      "ruleId": "typography/font-family-off-token",
-      "path": "src/components/chat/SubagentBlock.tsx",
-      "syntax": "font-sans",
-      "count": 4
-    },
-    {
       "fingerprint": "d177b5a7a1b981addaa5230acd4c28e3c3267ac86ac5f2c4a416e35e86c1e5f1",
       "ruleId": "ts-colors/raw-color",
       "path": "src/lib/calendar/eventMapping.ts",
@@ -3817,31 +2795,10 @@
       "count": 1
     },
     {
-      "fingerprint": "d48ec209f67fc80dedce5d065e6f9a6234f7fadf440f4a5e4021923f65a2c62a",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "rgb(0,0,0,0.5)",
-      "count": 1
-    },
-    {
       "fingerprint": "d61c3f0ac85519ed3fce5f1cc979c174f62004d2cb45677e2560bd0bbb7b6220",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/layout/AppShell.tsx",
       "syntax": "text-amber-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "d6475c357ee80b8d8490fe00cb48ca68e12b48397f0579ca51d9d32081ef68e5",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/globals.css",
-      "syntax": "#0000",
-      "count": 2
-    },
-    {
-      "fingerprint": "d73edb8477d0be20d36ba56300670d24f749e5a90b497e41e27ca5a981ba3341",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/ToolCallBadge.tsx",
-      "syntax": "ml-[3px]",
       "count": 1
     },
     {
@@ -3856,13 +2813,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/shared/RiskySettingControl.tsx",
       "syntax": "border-amber-500/40",
-      "count": 1
-    },
-    {
-      "fingerprint": "d840bfc00a9d32ce0399a4dc031cccaac33c6dfba679b8c3ecd89fd993c5eb24",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/DiagnosticsSection.tsx",
-      "syntax": "rgba(16,185,129,0.25)",
       "count": 1
     },
     {
@@ -3894,13 +2844,6 @@
       "count": 1
     },
     {
-      "fingerprint": "d9d7a3997cdffec1f5a8fd6155b9a726fc72042b4c05e573cae352f21ccd9049",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/workspaces/PlansFilterBand.tsx",
-      "syntax": "text-white",
-      "count": 1
-    },
-    {
       "fingerprint": "da07685c1102b049db09b769616c1b81191f820a8ff41484ccb0319b29a02681",
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/TaskActionButton.tsx",
@@ -3915,13 +2858,6 @@
       "count": 3
     },
     {
-      "fingerprint": "dab099c0cec061e8ff84e65ed28851dd7520e9126233fb38d34ce15351725ef3",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/onboarding.tsx",
-      "syntax": "rgba(212,175,55,0.06)",
-      "count": 1
-    },
-    {
       "fingerprint": "db7ae026279efaa0158bc5ed97734c5e1ff3fa06fa97c72b1ded3633a9220b16",
       "ruleId": "spacing/root-dependent",
       "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
@@ -3933,13 +2869,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "border-violet-500/30",
-      "count": 1
-    },
-    {
-      "fingerprint": "dc16f6ef3974f6895f1a9e051259d5c5382a9daac7b765f56c89cc0c2e37c36d",
-      "ruleId": "typography/line-height-arbitrary",
-      "path": "src/components/chat/markdown-shared.tsx",
-      "syntax": "lineHeight: 1.65",
       "count": 1
     },
     {
@@ -3978,13 +2907,6 @@
       "count": 1
     },
     {
-      "fingerprint": "de354efa7ae97b90e0a57081486f8ef2339a013e28093f7602291df078e6dfdf",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/connectors/EmailMailboxPanel.tsx",
-      "syntax": "text-white",
-      "count": 1
-    },
-    {
       "fingerprint": "de519f4cfbd64147a3898ce387f2f8681e6461505a7726025b42233dac111f86",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -3999,13 +2921,6 @@
       "count": 1
     },
     {
-      "fingerprint": "debfffc2175e214f19688d9494914f777de7f8a2990678708e1c04847811ce5b",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/settings/SandboxSection.tsx",
-      "syntax": "border-yellow-500/40",
-      "count": 1
-    },
-    {
       "fingerprint": "def75424b1e9ed286732583fb74d75284fa0324fed38e459becd2e66fb51d7b2",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/preview/BasePreview.tsx",
@@ -4017,13 +2932,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/preview/LibraryDownloadCard.tsx",
       "syntax": "#b45309",
-      "count": 1
-    },
-    {
-      "fingerprint": "df3ae78d9e773b8f44ebc02c271fd9187199a358ccddcdf11b6b827f2e3f36b5",
-      "ruleId": "ts-colors/undefined-token",
-      "path": "src/components/settings/PromptGuardSection.tsx",
-      "syntax": "var(--color-border-hover)",
       "count": 1
     },
     {
@@ -4048,31 +2956,10 @@
       "count": 1
     },
     {
-      "fingerprint": "e0dd84730881479a5dc32afedeb16cea76aaa85e9ebdc59f9120d65ad800546d",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/styles/globals.css",
-      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top,var(--space-0)))",
-      "count": 1
-    },
-    {
-      "fingerprint": "e1ee931d39ef43c132bd7fb600319c3fa02356b05c2fef6630da7847c51a16e1",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/chat/ComposerMediaLibrary.tsx",
-      "syntax": "hover:text-white",
-      "count": 1
-    },
-    {
       "fingerprint": "e1f78d0d683e9ce5e5794a7e10c0194a7b70931255ef2491b2b05992c0ddfbe7",
       "ruleId": "controls/raw-button",
       "path": "src/components/library/preview/viewparts/TablePart.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "e309c143d3e11ce6fc157b058ca8a201e0d9985eaa266bacebdd8e9ea7beea82",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/FileReadPreview.tsx",
-      "syntax": "ml-[3px]",
       "count": 1
     },
     {
@@ -4088,13 +2975,6 @@
       "path": "src/components/library/preview/VideoEmbed.tsx",
       "syntax": "<button>",
       "count": 2
-    },
-    {
-      "fingerprint": "e44ba6af6b41d698d98659112013b778e323851b3b4c0c938a1f44d9d01a9a3d",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/layout/AppShell.tsx",
-      "syntax": "text-white",
-      "count": 1
     },
     {
       "fingerprint": "e45e0b16aaebf4bbb0f4ec8dde416c654ef874d248a4b8ea67b8594cbcca8cfd",
@@ -4118,13 +2998,6 @@
       "count": 1
     },
     {
-      "fingerprint": "e51b1706790c04c509b13d036e652103c51922360574ab00d75de43779aa8efc",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/library/preview/LibraryPdfPreview.tsx",
-      "syntax": "rgba(212, 175, 55, 0.12)",
-      "count": 1
-    },
-    {
       "fingerprint": "e59a758185cbc8e575d93a0d4ab0dee7a4f2fe20692af99851cf05a876d4bb5f",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -4137,13 +3010,6 @@
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "text-violet-400",
       "count": 1
-    },
-    {
-      "fingerprint": "e676a0be20e1d3363c62ed745c8c3a1d1e92cc913504ecb53392fab377484b4f",
-      "ruleId": "typography/font-family-off-token",
-      "path": "src/components/chat/tools/GenericToolCall.tsx",
-      "syntax": "font-sans",
-      "count": 13
     },
     {
       "fingerprint": "e67c06edd5d81eb56f5102a3a86f0b44c10ee5721871b590f753bab0a525bf78",
@@ -4195,13 +3061,6 @@
       "count": 1
     },
     {
-      "fingerprint": "ea4caed00074a4c504b6fb49890e30b20bcdf487dbd737b3ddfcef06f63abc32",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/shared/RiskySettingControl.tsx",
-      "syntax": "border-emerald-500/40",
-      "count": 1
-    },
-    {
       "fingerprint": "ea753b9298bebe95bd798d4d34efa29379fc773e84a9723d45f87b51e94fdf04",
       "ruleId": "controls/global-confirm",
       "path": "src/components/library/preview/unsavedGuard.ts",
@@ -4209,31 +3068,10 @@
       "count": 1
     },
     {
-      "fingerprint": "eacb8da76bf33e03d8f3ecf8d03196353e0f30c673bcbad05d796830269db994",
-      "ruleId": "typography/unregistered-font-size-token",
-      "path": "src/styles/library.css",
-      "syntax": "font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum))",
-      "count": 1
-    },
-    {
-      "fingerprint": "ead5f72717798d0c170147eea64c5b374c8ca3994a53902385aef451ab0980e9",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/library/preview/LibraryVideoPreview.tsx",
-      "syntax": "p-4",
-      "count": 1
-    },
-    {
       "fingerprint": "eaf95ad74c1448ec8252c9e4ea2345bae7e705206ec709bade17dd6fd4cfcb9c",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/AgentFormFields.tsx",
       "syntax": "#a855f7",
-      "count": 1
-    },
-    {
-      "fingerprint": "eb050f1d8864d0350dc4e917fecaf929065c721252a7fabb5cfdcd66d0a5dcc1",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "rgb(212,175,55,0.05)",
       "count": 1
     },
     {
@@ -4269,13 +3107,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/LibraryEntryRow.tsx",
       "syntax": "#b45309",
-      "count": 1
-    },
-    {
-      "fingerprint": "ed4b0fda35675212f5deeb30f115b5e8e944ee341a25145845c925e6beb440a9",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/components/chat/MediaActionToolbar.tsx",
-      "syntax": "#22c55e",
       "count": 1
     },
     {
@@ -4328,13 +3159,6 @@
       "count": 2
     },
     {
-      "fingerprint": "f04a422bcbd1332852ffc49c8f09019ce8131df2fe71eea7eba80bc9c895cf78",
-      "ruleId": "spacing/off-scale",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "margin-left: 6px",
-      "count": 1
-    },
-    {
       "fingerprint": "f072e06ff509be874f893576f972d02f4ac7b8e6608232a473e360e28839f42a",
       "ruleId": "controls/raw-button",
       "path": "src/components/ui/toast-container.tsx",
@@ -4342,24 +3166,10 @@
       "count": 1
     },
     {
-      "fingerprint": "f09237d3bb1c124411d46fbc5241ef0928e0c2bc08ba2e1d7059c6e0d67c9ecd",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/library.css",
-      "syntax": "canvas",
-      "count": 5
-    },
-    {
       "fingerprint": "f38af8a0640a21618160a4cdfe813359730cd9487f846fc5ef6e161932d5c1e2",
       "ruleId": "controls/raw-button",
       "path": "src/components/settings/ReAuthDialog.tsx",
       "syntax": "<button>",
-      "count": 1
-    },
-    {
-      "fingerprint": "f495665bb21c486a5d025c301fcf15c077177f30f62b9169b30ced6b27f3f74f",
-      "ruleId": "typography/font-weight-arbitrary",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "fontWeight: workspaceFilter === 'all' ? 600 : 400",
       "count": 1
     },
     {
@@ -4384,20 +3194,6 @@
       "count": 1
     },
     {
-      "fingerprint": "f72132448adeeeaa9cd7d56945eedcccc112cf5ccf515486e0a120bbab0c3ba4",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/WebFetchPreview.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
-    },
-    {
-      "fingerprint": "f98d17df22a7ff0e6c2323091a83f602f1ab47638168d1602c2b216c899d3787",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/library/preview/LibraryPdfPreview.tsx",
-      "syntax": "\"mt-[var(--space-2)] text-[var(--color-muted)]\"",
-      "count": 1
-    },
-    {
       "fingerprint": "f9bc5feebdc9ca5584c992f58e859ccd7a083bbdc7ba9dfd9426794e4d028537",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/workspaces/CreateTaskSlideOver.tsx",
@@ -4412,13 +3208,6 @@
       "count": 1
     },
     {
-      "fingerprint": "faf8c35af41f2bfbbcbee55a6dedf2e56c5ff7e79c1dac28df084bcdc53a04ba",
-      "ruleId": "typography/arbitrary-text-size",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "text-[11px]",
-      "count": 1
-    },
-    {
       "fingerprint": "fb0fd7b7d163e2e43d900ca3087e3b4d19dba53578ac6c9b07014b4d14f7c0e7",
       "ruleId": "controls/raw-button",
       "path": "src/components/settings/SandboxSection.tsx",
@@ -4430,13 +3219,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/providers/ProviderValidationBanner.tsx",
       "syntax": "border-amber-500/40",
-      "count": 1
-    },
-    {
-      "fingerprint": "fb59bd7af837d6e7c2b664d75c7500c3ba197c7c99b4db5b9c0534a3960793f4",
-      "ruleId": "ts-colors/raw-color",
-      "path": "src/routes/onboarding.tsx",
-      "syntax": "rgba(212,175,55,0.35)",
       "count": 1
     },
     {
@@ -4466,13 +3248,6 @@
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "text-emerald-400",
       "count": 2
-    },
-    {
-      "fingerprint": "ffdbb4cf1af2d43605789debd3039b57e80fb185d1f87d0e9e36e0c4baccd508",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/chat/tools/BrowserTool.tsx",
-      "syntax": "ml-[3px]",
-      "count": 1
     }
   ]
 }

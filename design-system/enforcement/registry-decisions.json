@@ -288,6 +288,41 @@
       "decision": "approve",
       "category": "root font-size clamp() bounded by registered tokens",
       "evidence": "line 63: every bound in the clamp() is a registered token; the only non-token leaf is --user-font-size, the runtime user font-size preference written by ProfileSection.tsx -- a founder-approved permanent non-token category. typography.mjs reclassifies this to extension-boundary (not a silent pass) only when every OTHER leaf is a registered token, mirroring the safe-area env() carve-out; a clamp() with a raw pixel bound still reports."
+    },
+    {
+      "path": "src/components/chat/tools/FileTreeView.tsx",
+      "syntax": "padding-left: `calc(var(--space-2-5) * ${...})`",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 129 (anchored on `calc(var(--space-2-5)`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-left: calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 960, line 1003, line 1018 (anchored on `--sidebar-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-left: calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 960, line 1003, line 1018 (anchored on `--sidebar-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
+      "syntax": "padding-left: calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 265, line 266 (anchored on `--knowledge-outline-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/search/SearchModal.tsx",
+      "syntax": "padding-left: calc(var(--search-modal-indent-depth) * var(--space-3))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 110 (anchored on `--search-modal-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
     }
   ]
 }

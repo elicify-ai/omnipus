@@ -80,6 +80,24 @@ const SUBFLOOR_RESOLVED_POLICY = {
   resolvedTokens: { 'type.caption.size': '10px' },
 }
 
+// §D1 root font-size tokens (design-system/tokens/foundations.json:
+// font.root.minimum/default/maximum), keyed by CSS name via resolvedCssTokens
+// exactly as policy.mjs supplies them (contract.json: "canonical policy.mjs
+// always supplies exact declared CSS custom property to resolved value map").
+// Values match src/styles/tokens.generated.css (--font-root-minimum: 12px;
+// --font-root-default: 14px; --font-root-maximum: 20px), the real fixture
+// this policy exists to reproduce: src/styles/library.css and globals.css's
+// `font-size: clamp(var(--font-root-minimum), var(--user-font-size, var(--font-root-default)), var(--font-root-maximum))`.
+const FONT_ROOT_CLAMP_POLICY = {
+  tokenCssNames: ['--font-root-minimum', '--font-root-default', '--font-root-maximum'],
+  resolvedTokens: {},
+  resolvedCssTokens: {
+    '--font-root-minimum': '12px',
+    '--font-root-default': '14px',
+    '--font-root-maximum': '20px',
+  },
+}
+
 function findings(source, { path = 'src/fixture.tsx', policy = POLICY, modules } = {}) {
   return scan({ path, source, policy, modules })
 }
@@ -1049,6 +1067,90 @@ describe('CSS declarations', () => {
 
   it('rejects the sub-floor keyword font-size declarations', () => {
     expectOne('.a { font-size: xx-small; }', 'typography/font-size-below-floor', 'font-size: xx-small', { path: 'src/fixture.css' })
+  })
+})
+
+describe('§D1 root clamp() with the runtime font-size preference (--user-font-size)', () => {
+  // False positive found in review: a fully-tokenized clamp() whose only
+  // non-token leaf is --user-font-size (the runtime, JS-written accessibility
+  // preference — never meant to be a registered design token, per
+  // ProfileSection.tsx and design-system/enforcement/ledger.json's founder-
+  // approved permanent-category entry) was reported as
+  // typography/unregistered-font-size-token, the same rule that fires for a
+  // genuinely missing/misspelled token. The correct classification mirrors
+  // spacing.mjs::analyzeEnvironmentSpacing's safe-area env() carve-out:
+  // typography/extension-boundary — still blocking, still requires exact
+  // central review, but no longer tells an engineer to go register a token
+  // that must never exist.
+
+  it('reclassifies the real library.css/globals.css shape as extension-boundary, not unregistered-font-size-token', () => {
+    const found = expectOne(
+      '.root { font-size: clamp(var(--font-root-minimum), var(--user-font-size, var(--font-root-default)), var(--font-root-maximum)); }',
+      'typography/extension-boundary',
+      'font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum))',
+      { path: 'src/fixture.css', policy: FONT_ROOT_CLAMP_POLICY },
+    )
+    assert.match(found.message, /--user-font-size/)
+    assert.match(found.message, /extension boundary/i)
+  })
+
+  it('reclassifies the same shape with no default-fallback var() (var(--user-font-size) alone)', () => {
+    expectOne(
+      '.root { font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum)); }',
+      'typography/extension-boundary',
+      'font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum))',
+      { path: 'src/fixture.css', policy: FONT_ROOT_CLAMP_POLICY },
+    )
+  })
+
+  it('ADVERSARIAL: still reports clamp(12px, var(--user-font-size), 20px) — raw pixel bounds are not "fully tokenized" (the pre-existing §D1 root-clamp fixture, unchanged)', () => {
+    expectOne(
+      '.root { font-size: clamp(12px, var(--user-font-size, 14px), 20px); }',
+      'typography/unregistered-font-size-token',
+      'font-size: clamp(12px, var(--user-font-size), 20px)',
+      { path: 'src/fixture.css', policy: FONT_ROOT_CLAMP_POLICY },
+    )
+  })
+
+  it('ADVERSARIAL: a raw pixel bound on only one side still forces the ordinary unregistered path (partial tokenization does not qualify)', () => {
+    expectOne(
+      '.root { font-size: clamp(var(--font-root-minimum), var(--user-font-size), 20px); }',
+      'typography/unregistered-font-size-token',
+      'font-size: clamp(var(--font-root-minimum), var(--user-font-size), 20px)',
+      { path: 'src/fixture.css', policy: FONT_ROOT_CLAMP_POLICY },
+    )
+  })
+
+  it('ADVERSARIAL: a genuinely unregistered token alongside --user-font-size still reports unregistered, not extension-boundary', () => {
+    expectOne(
+      '.root { font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--not-a-real-token)); }',
+      'typography/unregistered-font-size-token',
+      'font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--not-a-real-token))',
+      { path: 'src/fixture.css', policy: FONT_ROOT_CLAMP_POLICY },
+    )
+  })
+
+  it('ADVERSARIAL: a bare font-size: var(--user-font-size) with no clamp/bounds is still unregistered (the carve-out is clamp/min/max-scoped, not a blanket exemption for the name)', () => {
+    expectOne(
+      '.root { font-size: var(--user-font-size); }',
+      'typography/unregistered-font-size-token',
+      'font-size: var(--user-font-size)',
+      { path: 'src/fixture.css', policy: FONT_ROOT_CLAMP_POLICY },
+    )
+  })
+
+  it('a sub-floor bound still reports below-floor even with --user-font-size present (the carve-out never masks a real floor violation)', () => {
+    const subFloorPolicy = {
+      tokenCssNames: ['--font-root-minimum', '--font-root-maximum'],
+      resolvedTokens: {},
+      resolvedCssTokens: { '--font-root-minimum': '8px', '--font-root-maximum': '20px' },
+    }
+    expectOne(
+      '.root { font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum)); }',
+      'typography/font-size-below-floor',
+      'font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum))',
+      { path: 'src/fixture.css', policy: subFloorPolicy },
+    )
   })
 })
 

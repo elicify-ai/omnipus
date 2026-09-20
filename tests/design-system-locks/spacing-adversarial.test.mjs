@@ -1872,3 +1872,69 @@ describe('FIX-P1 finding 2: a private component whose class-like prop is always 
     assert.ok(syntaxes(result, 'spacing/off-scale').includes('p-[7px]'))
   })
 })
+
+// C1 Gap 1 near-miss coverage: the runtime depth-multiplier carve-out
+// (Sidebar.tsx/SearchModal.tsx/KnowledgeOutline.tsx/FileTreeView.tsx --
+// positive fixtures live in spacing.test.mjs) is narrow by construction --
+// only "registered token(s) combined additively with (unregistered var *
+// registered token)" reclassifies to spacing/extension-boundary. Every shape
+// below is one detail away from that narrow pattern and MUST still be
+// blocked (never spacing/extension-boundary), proving the rule was not
+// quietly widened to swallow arbitrary literals or arbitrary var() misuse.
+describe('D10 does not widen the runtime depth-multiplier carve-out beyond its narrow shape', () => {
+  it('still blocks a raw pixel literal riding alongside a legitimate depth multiplier (never a registered token, so never trusted)', () => {
+    expectBlocked(
+      'src/styles/adversarial.css',
+      '.x { padding-left: calc(18px + var(--row-depth) * var(--space-3)) }',
+      'raw pixel dimensional term next to a depth multiplier',
+    )
+    const result = findings('src/styles/adversarial.css', '.x { padding-left: calc(18px + var(--row-depth) * var(--space-3)) }')
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary'), [])
+  })
+
+  it('still blocks an unregistered var() used additively (not as a multiplier) -- an unregistered dimensional token stays a finding', () => {
+    expectBlocked(
+      'src/styles/adversarial.css',
+      '.x { padding-left: calc(var(--space-3) + var(--not-a-registered-token)) }',
+      'unregistered var used as a dimensional addend, not a multiplier',
+    )
+    const result = findings('src/styles/adversarial.css', '.x { padding-left: calc(var(--space-3) + var(--not-a-registered-token)) }')
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary'), [])
+  })
+
+  it('still blocks two different runtime multipliers summed together', () => {
+    const source = '.x { padding-left: calc(var(--row-depth) * var(--space-3) + var(--col-depth) * var(--space-3)) }'
+    expectBlocked('src/styles/adversarial.css', source, 'two distinct runtime multipliers combined additively')
+    assert.deepEqual(syntaxes(findings('src/styles/adversarial.css', source), 'spacing/extension-boundary'), [])
+  })
+
+  it('still blocks a chained double multiplication of the runtime depth var', () => {
+    const source = '.x { padding-left: calc(var(--row-depth) * var(--space-3) * var(--space-2)) }'
+    expectBlocked('src/styles/adversarial.css', source, 'a runtime multiplier multiplied a second time')
+    assert.deepEqual(syntaxes(findings('src/styles/adversarial.css', source), 'spacing/extension-boundary'), [])
+  })
+
+  it('still blocks dividing a runtime multiplier expression', () => {
+    const source = '.x { padding-left: calc(var(--row-depth) * var(--space-3) / 2) }'
+    expectBlocked('src/styles/adversarial.css', source, 'a runtime multiplier expression divided by a literal')
+    assert.deepEqual(syntaxes(findings('src/styles/adversarial.css', source), 'spacing/extension-boundary'), [])
+  })
+
+  it('still blocks subtracting a runtime multiplier expression from a registered token', () => {
+    const source = '.x { padding-left: calc(var(--space-3) - var(--row-depth) * var(--space-3)) }'
+    expectBlocked('src/styles/adversarial.css', source, 'a runtime multiplier subtracted instead of added')
+    assert.deepEqual(syntaxes(findings('src/styles/adversarial.css', source), 'spacing/extension-boundary'), [])
+  })
+
+  it('still blocks two unregistered vars multiplied together (neither operand is a trusted registered-token px value)', () => {
+    const source = '.x { padding-left: calc(var(--row-depth) * var(--also-unregistered)) }'
+    expectBlocked('src/styles/adversarial.css', source, 'two unregistered vars multiplied together')
+    assert.deepEqual(syntaxes(findings('src/styles/adversarial.css', source), 'spacing/extension-boundary'), [])
+  })
+
+  it('still blocks a FileTreeView-style template interpolation that is not wrapped in calc() (fused unit suffix breaks the placeholder boundary)', () => {
+    const source = "export const X = ({ entry }) => <div style={{ paddingLeft: `${entry.indent}px` }} />"
+    expectBlocked('src/components/Adversarial.tsx', source, 'raw interpolated dimension, not a calc() term')
+    assert.deepEqual(syntaxes(findings('src/components/Adversarial.tsx', source), 'spacing/extension-boundary'), [])
+  })
+})

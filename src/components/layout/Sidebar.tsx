@@ -968,7 +968,7 @@ function SidebarSessionRow({
             collapseLabel={`Collapse ${title} delegated sessions`}
           />
         ) : (
-          <span className="w-[18px] shrink-0" aria-hidden="true" />
+          <span className="w-[var(--space-3)] shrink-0" aria-hidden="true" />
         )}
         <button tabIndex={0}
           type="button"
@@ -1000,7 +1000,7 @@ function SidebarSessionRow({
       {childrenEmpty && (
         <p
           className="py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70"
-          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + 18px)' } as import('react').CSSProperties}
+          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))' } as import('react').CSSProperties}
         >
           No delegated sessions found
         </p>
@@ -1015,7 +1015,7 @@ function SidebarSessionRow({
           type="button"
           onClick={onLoadMore}
           disabled={isLoading}
-          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + 18px)' } as import('react').CSSProperties}
+          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))' } as import('react').CSSProperties}
           className="flex items-center gap-[var(--space-1)] py-[var(--space-1)] pr-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
         >
           {isLoading ? 'Loading…' : 'Load more'}

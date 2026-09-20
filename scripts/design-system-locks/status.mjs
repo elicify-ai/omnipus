@@ -71,6 +71,15 @@ const GENERATED_TOKEN_MODULE_PATHS = new Set([
 ])
 const CASE_OR_TRIM_METHODS = new Set(['toUpperCase', 'toLowerCase', 'trim', 'trimStart', 'trimEnd'])
 
+// C1 Gap 2 (STATUS_BADGE.<status> read through cn(), TaskDetailPanel.tsx):
+// this project's one real transparent class-list joiner, mirrored here
+// exactly like STATUS_CONTRACT_MODULE_PATH/EXPORT_NAME above -- verified by
+// IMPORT (module path + exported name), never trusted by the bare local
+// identifier text alone, so a same-named but unrelated local `cn` cannot
+// satisfy it. See resolvesToClassJoinerExport / classJoinerCallOutcome.
+const CLASS_JOINER_MODULE_PATH = 'src/lib/utils.ts'
+const CLASS_JOINER_EXPORT_NAMES = new Set(['cn'])
+
 export function scan({ path = '', source = '', policy, modules } = {}) {
   const filePath = String(path).replaceAll('\\', '/')
   const text = typeof source === 'string' ? source : String(source ?? '')
@@ -552,6 +561,67 @@ function resolvesToStatusContractExport(identifier, sf, env) {
   return false
 }
 
+// Same identity-by-import shape as resolvesToStatusContractExport, for the
+// one real class-list joiner (CLASS_JOINER_MODULE_PATH/EXPORT_NAMES) — never
+// trusted by the bare name `cn` alone.
+function resolvesToClassJoinerExport(identifier, sf, env) {
+  for (const statement of sf.statements) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+    const clause = statement.importClause
+    const binding = clause?.namedBindings
+    if (!binding || !ts.isNamedImports(binding)) continue
+    for (const element of binding.elements) {
+      if (element.name.text !== identifier.text) continue
+      const exportedName = element.propertyName?.text ?? element.name.text
+      if (!CLASS_JOINER_EXPORT_NAMES.has(exportedName)) return false
+      return modulePath(env.ctx.path, statement.moduleSpecifier.text, env.ctx.modules) === CLASS_JOINER_MODULE_PATH
+    }
+  }
+  return false
+}
+
+// C1 Gap 2: a transparent class-list joiner call (`cn(...)`, identity-
+// verified above) is not itself a colour value — its own function body
+// (twMerge(clsx(...))) is opaque to this scanner and was never provable, so
+// the pre-existing generic CallExpression branch below (which tries to
+// trace what a called function's body RETURNS) always failed it, regardless
+// of what was actually passed in. The governed colour information lives in
+// cn()'s own ARGUMENTS at the call site, not in cn's return value — this
+// recurses paintOutcomes into each argument instead, which is what lets the
+// existing PropertyAccessExpression branch above (already fully capable of
+// resolving `STATUS_BADGE.blocked` as a governed imported record member —
+// see its own comment) actually get reached for the first time. A plain
+// string-literal argument with no colour-looking utility at all (ordinary
+// structural classes like "h-8 rounded-md") contributes nothing — D4 status-
+// colour governance only cares about the colour-bearing argument(s); an
+// argument this scanner cannot structurally resolve at all (a spread, a
+// ternary, an unresolved call) fails closed as 'unsupported', matching this
+// file's "missing graph coverage is a finding, not success" posture
+// everywhere else.
+function classJoinerCallOutcome(call, statusKey, env, seen) {
+  const outcomes = []
+  for (const arg of call.arguments) {
+    if (ts.isSpreadElement(arg)) {
+      outcomes.push('unsupported')
+      continue
+    }
+    const core = unwrap(arg)
+    if (!core) {
+      outcomes.push('unsupported')
+      continue
+    }
+    if (ts.isStringLiteral(core) || ts.isNoSubstitutionTemplateLiteral(core)) {
+      const colors = extractColors(core.text)
+      if (!colors.length) continue
+      outcomes.push(classifyOutcome(statusKey, colors, env.ctx.maps))
+      continue
+    }
+    const nested = paintOutcomes(core, statusKey, env, null, seen)
+    outcomes.push(...(nested ?? ['unsupported']))
+  }
+  return outcomes.length ? outcomes : null
+}
+
 // Purely structural cache of STATUS_CONTRACT_MODULE_PATH's OWN top-level
 // declarations/imports (exported or not — this file's ordinary moduleRecord
 // only tracks EXPORTED symbols, but `status()`/`generatedColor()` are
@@ -815,6 +885,10 @@ function paintOutcomes(node, statusKey, env, record = null, seen = new Set()) {
         const outcome = colors.length ? classifyOutcome(ownKey ?? statusKey, colors, env.ctx.maps) : 'unsupported'
         return [outcome === 'literal' ? null : outcome]
       })()
+  }
+  if (ts.isCallExpression(core) && ts.isIdentifier(core.expression)
+    && resolvesToClassJoinerExport(core.expression, record ? record.sf : env.sf, env)) {
+    return classJoinerCallOutcome(core, statusKey, env, seen)
   }
   if (ts.isCallExpression(core) && ts.isIdentifier(core.expression)) {
     const resolved = record ? { record, declaration: localDeclaration(core.expression, record) } : importedDeclaration(core.expression, env.sf, env)

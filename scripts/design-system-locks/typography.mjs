@@ -229,6 +229,20 @@ const FONT_SHORTHAND_PREFIX_KEYWORDS = new Set([
 const VAR_REFERENCE_PATTERN = /^var\(\s*(--[a-zA-Z0-9-]+)\s*(?:,[^)]*)?\)$/
 const BARE_CUSTOM_PROPERTY_PATTERN = /^--[a-zA-Z0-9-]+$/
 
+// Runtime, JS-written custom properties that are not, and will never be,
+// registered design tokens — §D1's root font-size control. The write site
+// (ProfileSection.tsx's accessibility font-size slider,
+// document.documentElement.style.setProperty('--user-font-size', …)) is a
+// founder-approved permanent category, mirrored here on the read side: it
+// contributes an unbounded interval (its numeric value is user-controlled,
+// not statically known) but must NOT be treated as an unregistered *token* —
+// it was never meant to be one. See evaluateExpression's clamp/min/max
+// handling and the RUNTIME_FONT_SIZE_PREFERENCE verdict status below, which
+// mirrors spacing.mjs::analyzeEnvironmentSpacing's safe-area env() carve-out:
+// still a blocking, centrally-reviewed extension-boundary finding, never a
+// silent pass.
+const RUNTIME_FONT_SIZE_PREFERENCE_VARS = new Set(['--user-font-size'])
+
 const DYNAMIC_UTILITY_MESSAGE = 'This dynamic class expression can resolve to a governed text-size or family utility the static lock cannot see. Make the utility static or route it through cn()/cva() with literal strings (fail-closed per the enforcement contract).'
 
 // ---------------------------------------------------------------------------
@@ -497,24 +511,38 @@ function clampIntervals(args) {
 // resolved to numbers by CSS name from the policy, so they contribute an
 // unknown interval; registration is tracked separately.
 function evaluateExpression(node, registeredTokens, resolvedTokenValues = new Map()) {
-  const state = { unregistered: [] }
+  // usedRuntimePreference/hasRawDimensionLiteral back the
+  // RUNTIME_FONT_SIZE_PREFERENCE_VARS carve-out below: a runtime preference
+  // var (currently only --user-font-size) never counts as an unregistered
+  // token, but the carve-out only fires when every OTHER leaf in the
+  // expression is itself a registered token — a raw dimension literal
+  // (`12px` typed directly in source, not reached by resolving a registered
+  // var's value) still forces the ordinary unregistered/unsupported path, so
+  // `clamp(12px, var(--user-font-size), 20px)` stays a finding exactly as it
+  // did before this carve-out existed.
+  const state = { unregistered: [], usedRuntimePreference: false, hasRawDimensionLiteral: false }
 
-  function evaluate(current) {
+  function evaluate(current, viaResolvedVar = false) {
     switch (current.type) {
       case 'dimension':
+        if (!viaResolvedVar) state.hasRawDimensionLiteral = true
         return dimensionInterval(current.value, current.unit)
       case 'varRef':
+        if (RUNTIME_FONT_SIZE_PREFERENCE_VARS.has(current.name)) {
+          state.usedRuntimePreference = true
+          return { lo: null, hi: null }
+        }
         if (!registeredTokens.has(current.name)) state.unregistered.push(current.name)
         if (resolvedTokenValues.has(current.name)) {
           const resolved = parseExpressionTokens(tokenizeExpression(String(resolvedTokenValues.get(current.name))))
-          return evaluate(resolved)
+          return evaluate(resolved, true)
         }
         return { lo: null, hi: null }
       case 'negation':
-        return multiplyIntervals({ lo: -1, hi: -1 }, evaluate(current.operand))
+        return multiplyIntervals({ lo: -1, hi: -1 }, evaluate(current.operand, viaResolvedVar))
       case 'binary': {
-        const left = evaluate(current.left)
-        const right = evaluate(current.right)
+        const left = evaluate(current.left, viaResolvedVar)
+        const right = evaluate(current.right, viaResolvedVar)
         if (current.operator === '+') return addIntervals(left, right)
         if (current.operator === '-') return subtractIntervals(left, right)
         if (current.operator === '*') return multiplyIntervals(left, right)
@@ -523,13 +551,13 @@ function evaluateExpression(node, registeredTokens, resolvedTokenValues = new Ma
       case 'function': {
         if (current.name === 'calc') {
           if (current.args.length !== 1) throw new Error('calc() takes one argument')
-          return evaluate(current.args[0])
+          return evaluate(current.args[0], viaResolvedVar)
         }
-        if (current.name === 'min') return minIntervals(current.args.map(evaluate))
-        if (current.name === 'max') return maxIntervals(current.args.map(evaluate))
+        if (current.name === 'min') return minIntervals(current.args.map((arg) => evaluate(arg, viaResolvedVar)))
+        if (current.name === 'max') return maxIntervals(current.args.map((arg) => evaluate(arg, viaResolvedVar)))
         if (current.name === 'clamp') {
           if (current.args.length !== 3) throw new Error('clamp() takes three arguments')
-          return clampIntervals(current.args.map(evaluate))
+          return clampIntervals(current.args.map((arg) => evaluate(arg, viaResolvedVar)))
         }
         throw new Error(`unsupported function ${current.name}()`)
       }
@@ -541,6 +569,14 @@ function evaluateExpression(node, registeredTokens, resolvedTokenValues = new Ma
   try {
     const interval = evaluate(node)
     if (state.unregistered.length > 0) return { status: 'unregistered' }
+    if (interval.lo !== null && interval.lo < FLOOR_PX) return { status: 'below-floor', lowerBound: interval.lo }
+    if (state.usedRuntimePreference) {
+      // Only every OTHER leaf being a registered token earns the carve-out;
+      // a raw literal bound (clamp(12px, var(--user-font-size), 20px)) is
+      // not "fully tokenized" and stays blocking debt, same as before.
+      if (state.hasRawDimensionLiteral) return { status: 'unregistered' }
+      return { status: 'runtime-preference-boundary', lowerBound: interval.lo ?? undefined }
+    }
     if (interval.lo === null) {
       // A bare registered var is trusted to the token layer plus the browser
       // harness; a registered var inside arithmetic is not (calc(var(--t) - 4px)
@@ -549,7 +585,7 @@ function evaluateExpression(node, registeredTokens, resolvedTokenValues = new Ma
       if (isBareRegisteredVar) return { status: 'ok' }
       return { status: 'unsupported' }
     }
-    return { status: interval.lo < FLOOR_PX ? 'below-floor' : 'ok', lowerBound: interval.lo }
+    return { status: 'ok', lowerBound: interval.lo }
   } catch {
     return { status: 'unsupported' }
   }
@@ -2568,6 +2604,15 @@ function createStyleVerdictEmitter({ report }) {
       })
       return
     }
+    if (status === 'runtime-preference-boundary') {
+      report({
+        ruleId: 'typography/extension-boundary',
+        syntax: `${label}: ${printed}`,
+        message: `${label}: ${printed} resolves the runtime user font-size preference (--user-font-size, §D1) against otherwise fully registered floor/ceiling tokens; this is a centrally-reviewed extension boundary, not an unregistered token, and stays blocking until exact central review.`,
+        ...at,
+      })
+      return
+    }
     report({
       ruleId: 'typography/unsupported-font-size',
       syntax: `${label}: ${printed}`,
@@ -2711,6 +2756,12 @@ function sizeVerdictFields(status, label, printed) {
     return {
       ruleId: 'typography/unregistered-font-size-token',
       message: `${label}: ${printed} references a custom property that is not a registered typography token (§D9).`,
+    }
+  }
+  if (status === 'runtime-preference-boundary') {
+    return {
+      ruleId: 'typography/extension-boundary',
+      message: `${label}: ${printed} resolves the runtime user font-size preference (--user-font-size, §D1) against otherwise fully registered floor/ceiling tokens; this is a centrally-reviewed extension boundary, not an unregistered token, and stays blocking until exact central review.`,
     }
   }
   return {

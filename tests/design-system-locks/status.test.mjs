@@ -732,3 +732,134 @@ describe('FIX-CONTRACT: status-contract governed-record capability', () => {
     assert.ok(findings.length > 0, 'a non-colour member must never resolve as governed')
   })
 })
+
+// ── C1 Gap 2 — governed STATUS_BADGE map read through cn() ──────────────────
+//
+// TaskDetailPanel.tsx:767/:775 reproduction: `cn(...)`'s own function body
+// (twMerge(clsx(inputs))) is opaque to this scanner, so the pre-existing
+// generic CallExpression branch (which tries to trace what a called
+// function's body RETURNS) always failed any `cn(...)` call regardless of
+// its arguments — never even reaching the ALREADY-CORRECT
+// PropertyAccessExpression branch that resolves a governed imported record
+// member read (the same mechanism statusContractResolvedColorOutcome above
+// documents). classJoinerCallOutcome/resolvesToClassJoinerExport fix this by
+// recursing into cn()'s own arguments instead of its return value. Oracle:
+// docs/internal/design/design-system-definition.md §D4 (registered per-
+// status colour tokens) plus src/components/workspaces/taskStatusConfig.ts's
+// real STATUS_BADGE shape (governed status->utility-class map).
+describe('C1 Gap 2: governed STATUS_BADGE map read through cn()', () => {
+  // Mirrors src/lib/utils.ts's real shape closely enough to reproduce the
+  // bug: cn()'s own body composes two imported helpers this scanner cannot
+  // see into (clsx/tailwind-merge are not part of `modules`), so the fix
+  // must come from reading cn()'s ARGUMENTS, never its traced return value.
+  const utilsModule = `
+    import { clsx } from 'clsx'
+    import { twMerge } from 'tailwind-merge'
+    export function cn(...inputs) {
+      return twMerge(clsx(inputs))
+    }
+  `
+  const taskStatusConfigModule = `
+    export const STATUS_BADGE = {
+      blocked: 'text-[color:var(--color-status-blocked)] bg-[var(--color-status-blocked)]/10',
+      in_progress: 'text-[color:var(--color-status-in-progress)] bg-[var(--color-status-in-progress)]/10',
+    }
+  `
+  const badgeModules = {
+    'src/lib/utils.ts': utilsModule,
+    'src/components/workspaces/taskStatusConfig.ts': taskStatusConfigModule,
+  }
+  // TaskDetailPanel.tsx's real Badge className also carries non-colour
+  // utility var() references (--type-utility-xs-size, --space-2) that
+  // extractColors's VAR_RE matches on TEXT alone, regardless of what kind of
+  // token it is -- classifyOne then requires each captured var() to be a
+  // REGISTERED token (or D4-status-owned) or it counts as its own
+  // unsupported finding. The module-level POLICY above is a status-only
+  // fixture that never registered those two, so the exact-shape
+  // reproduction below needs its own policy that does, matching how the
+  // real production token registry (299 registered tokens) already covers
+  // them — this is fixture completeness, not a scanner behaviour change.
+  const BADGE_POLICY = {
+    ...POLICY,
+    tokenCssNames: [...POLICY.tokenCssNames, '--type-utility-xs-size', '--space-2'],
+  }
+
+  it('permitted: the exact TaskDetailPanel.tsx shape -- STATUS_BADGE.blocked read through cn() inside a status-keyed ternary -- reports clean', () => {
+    const source = `
+      import { cn } from '@/lib/utils'
+      import { STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+      export function Panel({ task }) {
+        return task.status === 'blocked' ? (
+          <Badge className={cn('h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center', STATUS_BADGE.blocked)}>
+            Blocked (dependency unmet)
+          </Badge>
+        ) : null
+      }
+    `
+    const modules = { ...badgeModules, 'src/fixture.tsx': source }
+    assert.deepEqual(run(source, { path: 'src/fixture.tsx', modules, policy: BADGE_POLICY }), [])
+  })
+
+  it('permitted: the same shape keyed by an explicit data-status attribute instead of a ternary condition reports clean', () => {
+    const source = `
+      import { cn } from '@/lib/utils'
+      import { STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+      export function Chip() {
+        return <Badge data-status="in_progress" className={cn('h-8 rounded-md', STATUS_BADGE.in_progress)}>In Progress</Badge>
+      }
+    `
+    const modules = { ...badgeModules, 'src/fixture.tsx': source }
+    assert.deepEqual(run(source, { path: 'src/fixture.tsx', modules }), [])
+  })
+
+  it('forbidden: a member read of some OTHER, non-governed object through the same cn() call must still report (never trusted by variable name alone)', () => {
+    const source = `
+      import { cn } from '@/lib/utils'
+      const STATUS_BADGE = { blocked: 'text-[color:var(--color-status-blocked)]' }
+      export function Panel({ task }) {
+        return task.status === 'blocked' ? (
+          <Badge className={cn('h-8 rounded-md', STATUS_BADGE.blocked)}>Blocked</Badge>
+        ) : null
+      }
+    `
+    const modules = { ...badgeModules, 'src/fixture.tsx': source }
+    const findings = run(source, { path: 'src/fixture.tsx', modules })
+    assert.ok(findings.length > 0, 'a same-named local object (never imported from taskStatusConfig) must never resolve as governed')
+  })
+
+  it('forbidden: a wrong colour on the governed STATUS_BADGE entry reads as a mismatch, not silently clean', () => {
+    const wrongTaskStatusConfigModule = `
+      export const STATUS_BADGE = {
+        blocked: 'text-[color:var(--color-status-in-progress)] bg-[var(--color-status-in-progress)]/10',
+      }
+    `
+    const source = `
+      import { cn } from '@/lib/utils'
+      import { STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+      export function Panel({ task }) {
+        return task.status === 'blocked' ? (
+          <Badge className={cn('h-8 rounded-md', STATUS_BADGE.blocked)}>Blocked</Badge>
+        ) : null
+      }
+    `
+    const modules = { 'src/lib/utils.ts': utilsModule, 'src/components/workspaces/taskStatusConfig.ts': wrongTaskStatusConfigModule, 'src/fixture.tsx': source }
+    const findings = run(source, { path: 'src/fixture.tsx', modules })
+    assert.ok(findings.some((finding) => finding.ruleId === RULE.mismatch), 'a status wired to the wrong governed colour must still report a mismatch')
+  })
+
+  it('forbidden: a spread argument into cn() fails closed as unsupported instead of silently passing', () => {
+    const source = `
+      import { cn } from '@/lib/utils'
+      import { STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+      const extra = ['h-8']
+      export function Panel({ task }) {
+        return task.status === 'blocked' ? (
+          <Badge className={cn(...extra, STATUS_BADGE.blocked)}>Blocked</Badge>
+        ) : null
+      }
+    `
+    const modules = { ...badgeModules, 'src/fixture.tsx': source }
+    const findings = run(source, { path: 'src/fixture.tsx', modules })
+    assert.ok(findings.some((finding) => finding.ruleId === RULE.unsupported), 'an unresolvable spread argument must fail closed')
+  })
+})

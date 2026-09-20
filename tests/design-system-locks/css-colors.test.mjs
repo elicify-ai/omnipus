@@ -546,6 +546,73 @@ describe('at-rule condition text is scanned for colors', () => {
   })
 })
 
+describe('CSS system color keywords are permitted only inside @media (forced-colors: active)', () => {
+  it('permits the exact library.css shape: system colors on custom properties and outline-color inside forced-colors: active', () => {
+    const source = [
+      '@media (forced-colors: active) {',
+      '  :root {',
+      '    --color-primary: Canvas;',
+      '    --color-secondary: CanvasText;',
+      '  }',
+      '  :focus-visible:not([data-no-focus-ring]) {',
+      '    outline-color: Highlight !important;',
+      '  }',
+      '}',
+    ].join('\n')
+    assert.deepEqual(run(source), [], JSON.stringify(run(source)))
+  })
+
+  it('permits a system color combined with a media type (screen and (forced-colors: active))', () => {
+    assert.deepEqual(run('@media screen and (forced-colors: active) { a { background: Canvas } }'), [])
+  })
+
+  it('permits a system color when forced-colors: active is a disjunct', () => {
+    assert.deepEqual(run('@media (forced-colors: active), (min-width: 1px) { a { background: Highlight } }'), [])
+  })
+
+  it('permits a system color in an @supports condition nested inside forced-colors: active', () => {
+    assert.deepEqual(
+      run('@media (forced-colors: active) { @supports (color: Highlight) { a { color: var(--color-primary) } } }'),
+      [],
+    )
+  })
+
+  it('ADVERSARIAL: still reports the same system color keyword bare, with no forced-colors block at all', () => {
+    const findings = run('a { background: Canvas }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertRawColor(findings[0], 'canvas')
+  })
+
+  it('ADVERSARIAL: still reports a system color keyword inside @media (forced-colors: none)', () => {
+    const findings = run('@media (forced-colors: none) { a { background: Canvas } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertRawColor(findings[0], 'canvas')
+  })
+
+  it('ADVERSARIAL: still reports a system color keyword inside @media not (forced-colors: active)', () => {
+    const findings = run('@media not (forced-colors: active) { a { background: Highlight } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertRawColor(findings[0], 'highlight')
+  })
+
+  it('ADVERSARIAL: still reports a system color keyword inside an unrelated @media condition', () => {
+    const findings = run('@media (prefers-contrast: more) { a { background: Canvas } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertRawColor(findings[0], 'canvas')
+  })
+
+  it('ADVERSARIAL: does not extend the carve-out to non-system named colors inside forced-colors: active', () => {
+    const findings = run('@media (forced-colors: active) { a { background: red } }')
+    assert.equal(findings.length, 1, JSON.stringify(findings))
+    assertRawColor(findings[0], 'red')
+  })
+
+  it('ADVERSARIAL: does not extend the carve-out to hex/function colors inside forced-colors: active', () => {
+    const findings = run('@media (forced-colors: active) { a { background: #ffffff; color: rgb(0 0 0) } }')
+    assert.deepEqual(syntaxes(findings), ['#ffffff', 'rgb(0 0 0)'])
+  })
+})
+
 describe('unsupported syntax fails closed', () => {
   it('reports a five-digit hex as unsupported, not silently clean', () => {
     const findings = run('a { color: #fffff }')

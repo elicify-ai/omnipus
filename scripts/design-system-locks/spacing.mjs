@@ -217,15 +217,42 @@ function createContext(filePath, policy, modules) {
     path: filePath,
     tokenCssNames: names,
     scale: new Set(CONSTITUTIONAL_SCALE),
-    tokenPx: tokenPxFromPolicy(resolved),
+    tokenPx: tokenPxFromPolicy(policy, resolved),
     modules,
     moduleCache: new Map(),
     findings: [],
   }
 }
 
-function tokenPxFromPolicy(resolved) {
+// Contract (design-system/enforcement/contract.json, "policy.resolvedCssTokens"):
+// "Do not derive CSS names from token IDs." resolvedCssTokens is the exact,
+// contract-mandated CSS-custom-property-name to resolved-value map policy.mjs
+// always supplies in production -- preferred whole, never merged with the id-
+// derived fallback, since the contract requires it to cover every
+// tokenCssNames entry exactly when present. The id-derived path
+// (cssNameFromTokenId) below is kept ONLY for isolated test fixtures that
+// still hand this scanner a bare `resolvedTokens` (id-keyed) policy shape
+// with no resolvedCssTokens at all (contract: "Optional for fixture
+// compatibility") -- e.g. this file's own "policy fallback" describe block.
+// It is fundamentally unable to recover every registered token correctly: at
+// least two D10 scale ids in foundations.json are named after their pixel
+// VALUE rather than their scale index (space.scale.2px -> --space-0-5,
+// space.scale.12px -> --space-2-5), which the id-only regex cannot invert.
+// Fixing that in the fallback itself would require a real id->css lookup
+// table this file does not have; preferring resolvedCssTokens is the actual
+// fix; the fallback stays best-effort for its narrower legacy fixture role.
+function tokenPxFromPolicy(policy, resolved) {
+  const cssTokens = policy && typeof policy === 'object' && policy.resolvedCssTokens && typeof policy.resolvedCssTokens === 'object'
+    ? policy.resolvedCssTokens
+    : null
   const map = new Map()
+  if (cssTokens) {
+    for (const [css, value] of Object.entries(cssTokens)) {
+      const px = pixelTokenValue(value)
+      if (px !== null) map.set(css, px)
+    }
+    return map
+  }
   for (const [id, value] of Object.entries(resolved)) {
     const css = cssNameFromTokenId(id)
     const px = pixelTokenValue(value)
@@ -2218,7 +2245,45 @@ function analyzeStyleValue(propName, valueExpr, ctx, loc) {
     analyzeSpacingValue(valueExpr.text, ctx, canonicalDecl(propName, valueExpr.text), loc, { unitlessIsPx: false })
     return
   }
+  if (ts.isTemplateExpression(valueExpr) && analyzeTemplateSpacingValue(propName, valueExpr, ctx, loc)) return
   pushFinding(ctx, RULE.unsupported, `${propName}: {expr}`, 'Unsupported spacing expression; dynamic spacing values cannot be verified against the D10 scale.', loc)
+}
+
+// FileTreeView.tsx-style shape: `` `calc(var(--space-2-5) * ${entry.indent})` ``
+// -- a JS template literal, not a CSS var() reference, so the ordinary
+// runtime-multiplier proof (evalNamedCalcFn/combineCalc, C1 Gap 1) never
+// sees it; this rebuilds the SAME calc-string pipeline for it structurally.
+// Every `${...}` substitution is replaced by a synthetic, guaranteed-
+// unregistered `var(--__rt-multiplier-N__)` placeholder -- syntactically
+// identical to an unregistered runtime depth var, so the existing
+// evalNamedCalcFn/combineCalc multiplier proof classifies it exactly the
+// same way, with NO duplicated arithmetic logic. The substitution is only
+// trusted when every placeholder sits in a genuine value position (its
+// immediate neighbours are not identifier/unit characters) -- a fused shape
+// like `` `${n}px` `` (a raw interpolated dimension, not a calc() term) fails
+// this check and falls through to the caller's existing generic "dynamic
+// style value" unsupported finding. Returns true only when it produced a
+// finding itself (any classification outcome), so the caller never
+// double-reports.
+function analyzeTemplateSpacingValue(propName, expr, ctx, loc) {
+  let text = expr.head.text
+  for (const [index, span] of expr.templateSpans.entries()) {
+    const boundaryBefore = text.length === 0 || !/[\w-]$/.test(text)
+    const literal = span.literal.text
+    const boundaryAfter = literal.length === 0 || !/^[\w-]/.test(literal)
+    if (!boundaryBefore || !boundaryAfter) return false
+    text += `var(--__rt-multiplier-${index}__)`
+    text += literal
+  }
+  const before = ctx.findings.length
+  analyzeSpacingValue(text, ctx, canonicalPropTemplateSyntax(propName, expr), loc, { unitlessIsPx: false })
+  return ctx.findings.length > before
+}
+
+function canonicalPropTemplateSyntax(propName, expr) {
+  let text = expr.head.text
+  for (const span of expr.templateSpans) text += `\${...}${span.literal.text}`
+  return `${propName}: \`${text}\``
 }
 
 // Item 6: a locally-declared, never-escaping style accumulator --
@@ -2560,6 +2625,27 @@ function analyzeVar(args, ctx, syntax, loc) {
   if (parts[1]) analyzeSpacingTerm(parts[1], ctx, syntax, loc, { unitlessIsPx: false })
 }
 
+// C1 Gap 1 (runtime tree-indent depth multiplied by registered spacing
+// tokens, e.g. Sidebar.tsx/SearchModal.tsx/KnowledgeOutline.tsx's
+// `calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))`):
+// a calc() whose only unregistered var() leaf is used SOLELY as a `*`
+// multiplier directly against a registered spacing token, and whose every
+// other term is itself a registered token, is a legitimate runtime scaling
+// of the D10 scale by an integer row-depth count -- registrable and
+// centrally reviewed, not an unresolvable parser failure. See
+// evalNamedCalcFn/combineCalc for the 'runtime-multiplier' kind that proves
+// this narrow shape structurally (isTrustedTokenPx gates every combination).
+//
+// Decision on the `+ 18px` alignment offset present at two Sidebar.tsx call
+// sites: a raw pixel literal is NEVER a registered token, so it can never be
+// isTrustedTokenPx, so combining it (by `+`) with the runtime-multiplier
+// chain falls through to 'unsupported' in combineCalc, same as before this
+// fix. This is deliberate, not a gap: D10 requires every dimensional term to
+// be a registered, centrally-reviewed token; an un-reviewed magic-number
+// pixel offset riding alongside the multiplier would be exactly the kind of
+// debt this lock exists to catch, and widening the carve-out to swallow it
+// would violate the "never quietly widen a rule" instruction. Those two
+// call sites stay `spacing/unsupported` findings after this fix.
 function analyzeCalc(args, ctx, syntax, loc) {
   const result = evaluateCalcExpr(args, ctx)
   if (result.kind === 'invalid-var') {
@@ -2572,6 +2658,10 @@ function analyzeCalc(args, ctx, syntax, loc) {
     return
   }
   if (result.kind === 'number' && result.value === 0) return
+  if (result.kind === 'runtime-multiplier') {
+    pushFinding(ctx, RULE.extensionBoundary, syntax, `Spacing extension boundary; runtime depth multiplier ${result.name} is scaled against a validated closed-scale token and requires exact central review.`, loc)
+    return
+  }
   pushFinding(ctx, RULE.unsupported, syntax, 'Unsupported spacing expression; calc() result is not a closed D10 pixel length.', loc)
 }
 
@@ -2590,14 +2680,23 @@ function skipCalcWs(parser) {
 
 function parseCalcAdd(parser) {
   let left = parseCalcMul(parser)
-  if (left.kind === 'unsupported' || left.kind === 'invalid-var') return left
+  // Only a hard parse failure ('unsupported') short-circuits here without
+  // even checking for an operator. An 'invalid-var' leaf is NOT bailed out
+  // pre-emptively any more (Sidebar-depth-multiplier fix, C1) -- it is left
+  // to flow into combineCalc below, which recognizes the one narrow
+  // "registered-token +/- (runtime-var * registered-token)" shape as
+  // 'runtime-multiplier' and otherwise reproduces the exact same invalid-var
+  // short-circuit this pre-check used to perform (see combineCalc's own
+  // `if (left.kind === 'invalid-var') return left` / right-hand mirror), so
+  // every non-multiplier invalid-var shape classifies identically to before.
+  if (left.kind === 'unsupported') return left
   for (;;) {
     skipCalcWs(parser)
     const op = parser.s[parser.i]
     if (op !== '+' && op !== '-') break
     parser.i += 1
     const right = parseCalcMul(parser)
-    if (right.kind === 'unsupported' || right.kind === 'invalid-var') return right
+    if (right.kind === 'unsupported') return right
     left = combineCalc(left, right, op)
     if (left.kind === 'unsupported' || left.kind === 'invalid-var') return left
   }
@@ -2606,14 +2705,17 @@ function parseCalcAdd(parser) {
 
 function parseCalcMul(parser) {
   let left = parseCalcUnary(parser)
-  if (left.kind === 'unsupported' || left.kind === 'invalid-var') return left
+  // See parseCalcAdd's comment: only 'unsupported' bails before the operator
+  // check; 'invalid-var' continues so a directly-following `*`/`/` gets the
+  // chance to combine it into a runtime-multiplier via combineCalc.
+  if (left.kind === 'unsupported') return left
   for (;;) {
     skipCalcWs(parser)
     const op = parser.s[parser.i]
     if (op !== '*' && op !== '/') break
     parser.i += 1
     const right = parseCalcUnary(parser)
-    if (right.kind === 'unsupported' || right.kind === 'invalid-var') return right
+    if (right.kind === 'unsupported') return right
     left = combineCalc(left, right, op)
     if (left.kind === 'unsupported' || left.kind === 'invalid-var') return left
   }
@@ -2656,6 +2758,12 @@ function parseCalcPrimary(parser) {
   if (dim.number === 0) return { kind: 'px', value: 0 }
   if (!dim.unit) return { kind: 'number', value: dim.number }
   if (Object.hasOwn(ABSOLUTE_UNIT_TO_PX, dim.unit)) {
+    // tokenPx is deliberately absent (untrusted): a literal dimension typed
+    // directly in source, never a registered token, so it must never combine
+    // into a runtime-multiplier chain (see combineCalc's isTrustedTokenPx
+    // gate) -- a raw `+ 18px` alongside a depth multiplier stays a finding,
+    // not a silent extension-boundary pass (C1 Gap 1 decision, see
+    // analyzeCalc's doc comment above for the full reasoning).
     return { kind: 'px', value: dim.number * ABSOLUTE_UNIT_TO_PX[dim.unit] }
   }
   return { kind: 'unsupported' }
@@ -2704,25 +2812,62 @@ function evalNamedCalcFn(name, args, ctx) {
   if (!ctx.tokenCssNames.has(token)) return { kind: 'invalid-var', name: token }
   if (!isSpacingTokenName(token)) return { kind: 'unsupported' }
   if (!ctx.tokenPx.has(token)) return { kind: 'unsupported' }
-  return { kind: 'px', value: ctx.tokenPx.get(token) }
+  // tokenPx: true marks this px value as TRUSTED -- traced directly to a
+  // registered D10 token, never a raw literal or an unvalidated arithmetic
+  // combination -- the exact provenance combineCalc's isTrustedTokenPx gate
+  // requires before it will treat an adjacent unregistered var() as a
+  // legitimate runtime multiplier rather than ordinary invalid-var debt.
+  return { kind: 'px', value: ctx.tokenPx.get(token), tokenPx: true }
+}
+
+function isTrustedTokenPx(value) {
+  return value.kind === 'px' && value.tokenPx === true
+}
+
+function isRuntimeMultiplier(value) {
+  return value.kind === 'runtime-multiplier'
 }
 
 function combineCalc(left, right, op) {
+  // Runtime-multiplier detection (C1 Gap 1): narrow by construction --
+  // `*` only turns an unregistered var() into 'runtime-multiplier' when
+  // multiplied DIRECTLY against a trusted (registered-token) px value, and
+  // `+`/`-` only ever propagate an ALREADY-recognized 'runtime-multiplier'
+  // when combined with another trusted token px. Any other shape touching
+  // either kind (double multiply, division, subtracting a multiplier,
+  // combining with a raw literal or a second unregistered var) falls through
+  // to the preserved invalid-var/unsupported handling below, unchanged from
+  // before this feature existed.
+  if (op === '*') {
+    if (left.kind === 'invalid-var' && isTrustedTokenPx(right)) return { kind: 'runtime-multiplier', name: left.name }
+    if (right.kind === 'invalid-var' && isTrustedTokenPx(left)) return { kind: 'runtime-multiplier', name: right.name }
+  } else if (op === '+') {
+    if (isRuntimeMultiplier(left) && isTrustedTokenPx(right)) return { kind: 'runtime-multiplier', name: left.name }
+    if (isTrustedTokenPx(left) && isRuntimeMultiplier(right)) return { kind: 'runtime-multiplier', name: right.name }
+  }
+  // Pre-existing invalid-var short-circuit, reproduced here (moved out of
+  // parseCalcAdd/parseCalcMul's pre-operator checks so the multiplier
+  // detection above gets first refusal) -- an unregistered var() used in any
+  // shape OTHER than the narrow multiplier case still propagates exactly as
+  // it always did.
+  if (left.kind === 'invalid-var') return left
+  if (right.kind === 'invalid-var') return right
+  if (left.kind === 'unsupported' || right.kind === 'unsupported') return { kind: 'unsupported' }
   if (op === '+' || op === '-') {
     const sign = op === '-' ? -1 : 1
-    if (left.kind === 'px' && right.kind === 'px') return { kind: 'px', value: left.value + sign * right.value }
+    if (left.kind === 'px' && right.kind === 'px') return { kind: 'px', value: left.value + sign * right.value, tokenPx: Boolean(left.tokenPx && right.tokenPx) }
     if (left.kind === 'number' && right.kind === 'number') return { kind: 'number', value: left.value + sign * right.value }
     return { kind: 'unsupported' }
   }
   if (op === '*') {
-    if (left.kind === 'px' && right.kind === 'number') return { kind: 'px', value: left.value * right.value }
-    if (left.kind === 'number' && right.kind === 'px') return { kind: 'px', value: left.value * right.value }
+    if (left.kind === 'px' && right.kind === 'number') return { kind: 'px', value: left.value * right.value, tokenPx: left.tokenPx }
+    if (left.kind === 'number' && right.kind === 'px') return { kind: 'px', value: left.value * right.value, tokenPx: right.tokenPx }
     if (left.kind === 'number' && right.kind === 'number') return { kind: 'number', value: left.value * right.value }
     return { kind: 'unsupported' }
   }
   if (op === '/') {
     if (!right.value) return { kind: 'unsupported' }
-    if (left.kind === 'px' && right.kind === 'number') return { kind: 'px', value: left.value / right.value }
+    if (left.kind === 'px' && right.kind === 'number') return { kind: 'px', value: left.value / right.value, tokenPx: left.tokenPx }
     if (left.kind === 'px' && right.kind === 'px') return { kind: 'number', value: left.value / right.value }
     if (left.kind === 'number' && right.kind === 'number') return { kind: 'number', value: left.value / right.value }
     return { kind: 'unsupported' }
