@@ -13,16 +13,28 @@
 //                                      including spreads and dynamically-valued role/type that
 //                                      cannot be statically excluded
 //   controls/radix-import            — @radix-ui/* imports, re-exports, type-only imports,
-//                                      dynamic import(), require() and import-equals
+//                                      dynamic import(), require() and import-equals. Exempt
+//                                      only for the file that IS the catalog-registered
+//                                      "primitive" wrapper for that boundary — see below.
 //   controls/shadcn-low-level-import — ui-kit imports of names outside the registered public
 //                                      boundary (design-system/catalog.json publicExports and
 //                                      publicTypes); namespaces and whole-module reach are
 //                                      never the curated surface
 //   controls/parse-error             — fail-closed: parse failures are explicit findings
 //
-// All findings are raw: this scanner never exempts directories or files. The approved
-// registered boundary for ui-kit imports is the catalog's exact export lists, not a
-// broad allowance of src/components/ui (domain widgets live there too and stay reported).
+// All findings are raw: this scanner never exempts directories or files by path alone. The
+// one deliberate exception is controls/radix-import inside a file the catalog itself
+// classifies "primitive" (design-system/catalog.json): that classification means the file's
+// whole registered job is wrapping the underlying Radix (or Radix-adjacent, e.g.
+// @radix-ui/react-slot) package, so its own Radix import(s) are the intended architecture,
+// not a violation — the rule exists to stop SCREENS reaching past our components, not to
+// stop our components existing (see isPrimitiveWrapperFile below). Every other classification
+// (composite, domain, foundations, application) still reports: those modules are meant to be
+// built from primitives, not to reach into Radix directly, so being catalogued does not bless
+// them, and an uncatalogued file in src/components/ui/ is never blessed at all. The approved
+// registered boundary for ui-kit CONSUMERS (controls/shadcn-low-level-import) remains the
+// catalog's exact export lists, not a broad allowance of src/components/ui (domain widgets
+// live there too and stay reported).
 //
 // Attribute case policy: the HTML input `type` attribute is ASCII case-insensitive
 // (so type="CHECKBOX" is a checkbox), while ARIA role tokens are case-sensitive
@@ -915,6 +927,7 @@ function handleModuleDeclaration(context, node) {
   const resolved = resolveSpecifier(specifier, context.filePath)
   if (isImport) registerImportedNames(context, parts, resolved, specifier)
   if (specifier.startsWith('@radix-ui/')) {
+    if (isPrimitiveWrapperFile(context)) return
     context.findings.push(
       makeFinding(RULES.RADIX_IMPORT, context.filePath, renderDeclaration(parts, specifier), `Low-level Radix import "${specifier}"; consume the registered wrapper primitive instead, or register an exact exception for an approved implementation path (design-system-definition.md D5).`, ...positionOf(node))
     )
@@ -942,6 +955,7 @@ function handleImportEqualsDeclaration(context, node) {
 function reportWholeModuleReach(context, node, specifier, renderSyntax) {
   if (!specifier) return
   if (specifier.startsWith('@radix-ui/')) {
+    if (isPrimitiveWrapperFile(context)) return
     context.findings.push(
       makeFinding(RULES.RADIX_IMPORT, context.filePath, renderSyntax(specifier), `Low-level Radix dependency "${specifier}" introduced via dynamic module reach; consume the registered wrapper primitive instead, or register an exact exception for an approved implementation path (design-system-definition.md D5).`, ...positionOf(node))
     )
@@ -1105,6 +1119,29 @@ function normalizeRepositoryPath(value) {
 
 function stripExtension(value) {
   return value.replace(EXTENSION_PATTERN, '')
+}
+
+// controls/radix-import exemption: true only when the scanned file is itself a
+// design-system/catalog.json entry classified "primitive" — the registered
+// sanctioned-wrapper boundary (see the doc comment at the top of this file).
+// No catalog supplied (older/partial callers, or fixtures that never exercise
+// a ui-kit import) is not proof of primitive-hood, so it fails closed to
+// "not exempt" rather than throwing: the finding still reports, exactly as it
+// did before this exemption existed. This mirrors the fail-closed posture
+// used everywhere else in this scanner (parse errors, unresolved checkbox
+// shapes, escaped confirm captures).
+function isPrimitiveWrapperFile(context) {
+  if (!context.catalog || !Array.isArray(context.catalog.entries)) return false
+  context.primitiveWrapperSources ??= loadPrimitiveWrapperSources(context.catalog)
+  return context.primitiveWrapperSources.has(stripExtension(context.filePath))
+}
+
+function loadPrimitiveWrapperSources(catalog) {
+  return new Set(
+    catalog.entries
+      .filter((entry) => entry.classification === 'primitive')
+      .map((entry) => stripExtension(entry.source)),
+  )
 }
 
 function lookupUiEntry(context, resolvedSource) {

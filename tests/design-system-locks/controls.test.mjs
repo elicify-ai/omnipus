@@ -1030,3 +1030,129 @@ test('FIX-P4: an `as`-cast confirm alias initializer is not double-counted', () 
   const source = "const c = window.confirm as any\nexport const ask = () => c('Delete?')"
   assert.deepEqual(syntaxes(source, 'controls/global-confirm'), ['confirm(...)'])
 })
+
+// ---------------------------------------------------------------------------
+// RADIX-SCOPE lane decision (dist/design-system-baseline/cli-lanes/c1-prep/M5/
+// mapping.md "Group (b)-1"; docs/internal/design/evidence/c1-execution-record.md
+// "Findings that change later batches"): all 15 controls/radix-import ledger
+// items live inside src/components/ui/, the sanctioned shadcn-style wrapper
+// layer where importing Radix IS the intended architecture — the rule exists
+// to stop SCREENS reaching past our components, not to stop our components
+// existing. Chosen fix: option (a) — the rule does not fire for a Radix
+// import from INSIDE the sanctioned wrapper layer, gated on the catalog
+// (design-system/catalog.json), never on a bare path prefix, so an
+// uncatalogued file under src/components/ui/ is never silently blessed.
+//
+// The catalog gate is classification, not mere membership: only an entry
+// classified "primitive" is exempt. Evidence for this (not assumption): all
+// 15 real ledger files are catalog-classified "primitive"; button.tsx wraps
+// @radix-ui/react-slot (not "react-button"), and alert-dialog.tsx / sheet.tsx
+// both wrap @radix-ui/react-dialog (not their own file-stem package) — so a
+// same-name/package heuristic would misclassify three of the fifteen real
+// files as violations. "primitive" classification is the catalog's own
+// declaration that this file's whole registered job is being the thin Radix
+// wrapper; composite/domain/foundations/application-classified entries are
+// meant to be built FROM primitives, never to reach Radix directly, so one of
+// those importing Radix is exactly "a wrapper importing something that is not
+// its own underlying library" and must keep reporting even though it is
+// catalogued. Expected values below derive from that decision, the real
+// catalog.json entries, and the real ledger file list captured in mapping.md
+// — never from controls.mjs's implementation.
+
+const RADIX_SCOPE_PRIMITIVE_CATALOG = {
+  version: 1,
+  entries: [
+    { source: 'src/components/ui/example-primitive.tsx', classification: 'primitive', exports: ['ExampleRoot'], publicExports: ['ExampleRoot'], publicTypes: [] },
+    { source: 'src/components/ui/example-composite.tsx', classification: 'composite', exports: ['ExampleComposite'], publicExports: ['ExampleComposite'], publicTypes: [] },
+  ],
+}
+
+test('RADIX-SCOPE: a catalog-classified "primitive" wrapper importing Radix is clean', () => {
+  const source = "import * as ExamplePrimitive from '@radix-ui/react-example'\nexport const ExampleRoot = ExamplePrimitive.Root"
+  const findings = scan({ path: 'src/components/ui/example-primitive.tsx', source, policy: {}, catalog: RADIX_SCOPE_PRIMITIVE_CATALOG })
+  assert.deepEqual(findings.filter((finding) => finding.ruleId === 'controls/radix-import'), [])
+})
+
+test('RADIX-SCOPE: a screen (non-ui, non-catalogued path) importing Radix still reports even with a catalog present', () => {
+  const source = "import * as ExamplePrimitive from '@radix-ui/react-example'\nexport const ExampleRoot = ExamplePrimitive.Root"
+  const findings = scan({ path: 'src/features/screen.tsx', source, policy: {}, catalog: RADIX_SCOPE_PRIMITIVE_CATALOG })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/radix-import'])
+})
+
+test('RADIX-SCOPE: an uncatalogued file inside src/components/ui/ still reports', () => {
+  const source = "import * as Mystery from '@radix-ui/react-mystery'\nexport const X = Mystery.Root"
+  const findings = scan({ path: 'src/components/ui/mystery.tsx', source, policy: {}, catalog: RADIX_SCOPE_PRIMITIVE_CATALOG })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/radix-import'])
+})
+
+test('RADIX-SCOPE: a catalogued wrapper that is not classified "primitive" is not its own underlying library and still reports', () => {
+  const source = "import * as ExampleComposite from '@radix-ui/react-composite-thing'\nexport const X = ExampleComposite.Root"
+  const findings = scan({ path: 'src/components/ui/example-composite.tsx', source, policy: {}, catalog: RADIX_SCOPE_PRIMITIVE_CATALOG })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/radix-import'])
+})
+
+test('RADIX-SCOPE: the exemption covers dynamic import()/require()/import-equals from a primitive wrapper too', () => {
+  const dynamicImport = "export const load = () => import('@radix-ui/react-example')"
+  assert.deepEqual(
+    scan({ path: 'src/components/ui/example-primitive.tsx', source: dynamicImport, policy: {}, catalog: RADIX_SCOPE_PRIMITIVE_CATALOG }),
+    [],
+  )
+  const requireCall = "export const load = () => require('@radix-ui/react-example')"
+  assert.deepEqual(
+    scan({ path: 'src/components/ui/example-primitive.tsx', source: requireCall, policy: {}, catalog: RADIX_SCOPE_PRIMITIVE_CATALOG }),
+    [],
+  )
+  // The same dynamic reach from a non-primitive catalogued file still reports.
+  assert.deepEqual(
+    scan({ path: 'src/components/ui/example-composite.tsx', source: dynamicImport, policy: {}, catalog: RADIX_SCOPE_PRIMITIVE_CATALOG }).map((finding) => finding.ruleId),
+    ['controls/radix-import'],
+  )
+})
+
+test('RADIX-SCOPE: no catalog supplied fails closed to "not exempt", never silently blessed', () => {
+  const source = "import * as ExamplePrimitive from '@radix-ui/react-example'\nexport const ExampleRoot = ExamplePrimitive.Root"
+  const findings = scan({ path: 'src/components/ui/example-primitive.tsx', source, policy: {} })
+  assert.deepEqual(findings.map((finding) => finding.ruleId), ['controls/radix-import'])
+})
+
+// Real-repo evidence: every one of the 15 files mapping.md identified as the
+// controls/radix-import ledger debt, scanned with its own real source text
+// and the real installed catalog, now produces zero controls/radix-import
+// findings — the exact 15 fingerprints the lead must drop from the ledger.
+// alert-dialog.tsx and sheet.tsx (which import @radix-ui/react-dialog, not a
+// same-named package) and button.tsx (which imports @radix-ui/react-slot) are
+// deliberately included: they are the real files that would break under a
+// same-name-only heuristic, proving the classification gate instead.
+const REAL_RADIX_WRAPPER_FILES = [
+  'src/components/ui/accordion.tsx',
+  'src/components/ui/alert-dialog.tsx',
+  'src/components/ui/button.tsx',
+  'src/components/ui/checkbox.tsx',
+  'src/components/ui/dialog.tsx',
+  'src/components/ui/dropdown-menu.tsx',
+  'src/components/ui/label.tsx',
+  'src/components/ui/popover.tsx',
+  'src/components/ui/progress.tsx',
+  'src/components/ui/select.tsx',
+  'src/components/ui/separator.tsx',
+  'src/components/ui/sheet.tsx',
+  'src/components/ui/slider.tsx',
+  'src/components/ui/switch.tsx',
+  'src/components/ui/tabs.tsx',
+]
+
+test('RADIX-SCOPE: all 15 real ledger radix-import files are clean under the real catalog', () => {
+  for (const path of REAL_RADIX_WRAPPER_FILES) {
+    const source = readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
+    const findings = scan({ path, source, policy: {}, catalog: CATALOG })
+    const radixFindings = findings.filter((finding) => finding.ruleId === 'controls/radix-import')
+    assert.deepEqual(radixFindings, [], `${path} should have zero controls/radix-import findings, got ${JSON.stringify(radixFindings)}`)
+  }
+})
+
+test('RADIX-SCOPE: a real ledger file scanned WITHOUT a catalog still reports (regression guard on the fail-closed default)', () => {
+  const path = 'src/components/ui/button.tsx'
+  const source = readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8')
+  const findings = scan({ path, source, policy: {} })
+  assert.ok(findings.some((finding) => finding.ruleId === 'controls/radix-import'), 'expected controls/radix-import to still fire with no catalog supplied')
+})
