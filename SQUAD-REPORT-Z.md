@@ -87,3 +87,54 @@ Reachable by a user/agent: external notices traverse `MessageBus.PublishOutbound
 - No live Telegram adapter or browser end-to-end session was exercised; delivery was verified at the real bus/event, gateway-frame, and SPA-store boundaries.
 - Legacy SSE does not consume the WebSocket structured tool-event path and remains outside this change. The supported SPA WebSocket and external messaging routes are covered.
 - The repository's dependency install reported existing audit findings; `package.json` and `package-lock.json` were unchanged.
+
+## ROUND 2 — release/v0.1.1 merge conflict resolution
+
+### Resolution
+
+Merged `origin/release/v0.1.1` into `squad/z-tool-errors` and resolved the single conflict in `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus2/.squads/z-tool-errors/pkg/agent/loop_run_turn_tools.go::agentLoopRunTurnToolsExecute.prepareDispatch` without taking either side wholesale.
+
+- Squad Z's `asyncToolCallbackGate` remains the only callback entry point, so immediate completions still wait for the async-start acknowledgement and every normal/abort release path remains intact.
+- Squad AA's captured `allowTopLevelToolFeedback` predicate is passed through the callback gate into `::agentLoopRunTurnToolsExecute.handleAsyncResult`.
+- Ordinary async `ForUser` publication requires AA's predicate. A separate exception permits only an error from a response-producing root system turn: `IsError && SuppressToolFeedback && SendResponse && depth == 0 && !IsTaskRun`.
+- The exception therefore cannot publish delegated-child, task-run, or verifier output. Successful system-turn output also remains suppressed.
+- System-turn external error notices retain the originating transcript session. Ordinary interactive-root async feedback keeps AA's pre-merge outbound shape with an empty `SessionID`.
+
+The fixes are semantically compatible; no behavior was dropped.
+
+### Combined green receipt
+
+Backend command (scoped to the complete union of `async_child_publication_test.go`, Squad Z's seven new tests, and the two unmodified #766 tests):
+
+```text
+exit=0
+--- PASS: TestDelegatedChild_GenericAsyncForUserDoesNotPublishOnParentRoute
+--- PASS: TestInteractiveRoot_GenericAsyncForUserStillPublishes
+--- PASS: TestDelegatedChild_ToolPreviewDoesNotPublishTopLevelOnExternalChannel
+--- PASS: TestInteractiveRoot_ToolPreviewStillPublishesOnExternalChannel
+--- PASS: TestInternalSessions_AsyncForUserDoesNotPublishTopLevel
+    --- PASS: TestInternalSessions_AsyncForUserDoesNotPublishTopLevel/task
+    --- PASS: TestInternalSessions_AsyncForUserDoesNotPublishTopLevel/verifier
+--- PASS: TestProcessSystemMessage_ExternalChannelPublishesAttributedToolError
+--- PASS: TestProcessSystemMessage_ExternalChannelPublishesAttributedAsyncToolError
+--- PASS: TestProcessSystemMessage_ExternalChannelSuppressesSuccessfulToolOutput
+--- PASS: TestProcessSystemMessage_ExternalChannelSuppressesSuccessfulAsyncToolOutput
+--- PASS: TestProcessSystemMessage_WebchatKeepsToolErrorStructured
+--- PASS: TestProcessSystemMessage_WebchatPublishesAttributedAsyncToolError
+--- PASS: TestProcessSystemMessage_ImmediateAsyncErrorSurvivesPostDispatchAbort
+--- PASS: TestProcessSystemMessage_SuppressesToolOutputButDeliversNarration
+--- PASS: TestProcessSystemMessage_SuppressesAsyncToolOutputButDeliversNarration
+PASS
+ok github.com/elicify-ai/omnipus/pkg/agent 12.283s
+```
+
+SPA command: `npx vitest run src/store/chat.async-tool-error.test.ts`
+
+```text
+exit=0
+Test Files  1 passed (1)
+Tests       1 passed (1)
+Duration    2.98s
+```
+
+The two route-discovery warnings printed by Vitest are unchanged and non-fatal. `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus2/.squads/z-tool-errors/pkg/agent/system_turn_tool_output_test.go` remains unmodified at blob `812d65d5a97e1bc31384b5b954760d6c2c4baeb5`.

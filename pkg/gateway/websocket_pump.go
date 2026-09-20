@@ -143,11 +143,14 @@ func sendConnGenFrame(wc *wsConn, frameType string, frame any) {
 // broadcastRaw fans one pre-marshaled frame out to every connected WS client
 // (single-user model — every connection is the one account, so no per-account
 // scoping). Best-effort: a connection whose send buffer is full drops the
-// frame (logged with the caller-supplied message/attrs, counted on
-// wc.droppedFrames) and must recover from the next reconnect snapshot.
+// frame and must recover from the next reconnect snapshot. Every drop is
+// counted on wc.droppedFrames; a non-empty caller-supplied message also logs
+// each drop, while an empty message suppresses per-connection logging. The
+// returned counts let lifecycle-specific callers report one aggregate fan-out
+// outcome instead.
 // Shared by broadcastAskUserCard and broadcastToolApprovalRequired, which
 // each keep their own frame construction and drop-log identity.
-func (h *WSHandler) broadcastRaw(raw []byte, dropLogMsg string, dropLogAttrs ...any) {
+func (h *WSHandler) broadcastRaw(raw []byte, dropLogMsg string, dropLogAttrs ...any) (fanoutCount, dropCount int) {
 	h.mu.Lock()
 	conns := make([]*wsConn, 0, len(h.sessions))
 	for _, wc := range h.sessions {
@@ -158,10 +161,14 @@ func (h *WSHandler) broadcastRaw(raw []byte, dropLogMsg string, dropLogAttrs ...
 		select {
 		case wc.sendCh <- raw:
 		default:
-			slog.Warn(dropLogMsg, dropLogAttrs...)
+			if dropLogMsg != "" {
+				slog.Warn(dropLogMsg, dropLogAttrs...)
+			}
 			wc.droppedFrames.Add(1)
+			dropCount++
 		}
 	}
+	return len(conns), dropCount
 }
 
 // sendConnGenFrame marshals a frame and enqueues it on wc's send channel.

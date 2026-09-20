@@ -1022,6 +1022,15 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 
 // prepareDispatch records dispatch metadata and prepares asynchronous result handling.
 func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
+	ts := ex.rx.rr.rq.ri.rf.rt.ts
+	// Temporary origin containment until the compiled per-turn publication
+	// policy replaces these distributed predicates. Automatic tool feedback is
+	// top-level only for root, non-task turns: delegated children inherit the
+	// parent route but must not publish standalone feedback there, while native
+	// task and verifier turns use internal webchat-labelled routes. depth and
+	// IsTaskRun are existing origin proxies, not new flags.
+	allowTopLevelToolFeedback := !ts.opts.SuppressToolFeedback && ts.depth == 0 && !ts.opts.IsTaskRun
+
 	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
 	if marshalErr != nil {
 		logger.WarnCF("agent", "failed to marshal tool args for preview", map[string]any{"tool": ex.toolName, "error": marshalErr.Error()})
@@ -1060,8 +1069,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// channels suppress feedback because the UI already renders tool calls
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
-		!ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
-		isMessagingChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
+		allowTopLevelToolFeedback &&
+		isMessagingChannel(ts.channel) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
 			ex.rx.rr.rq.ri.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
@@ -1085,7 +1094,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	asyncToolCallID := tc.ID
 	gate := &asyncToolCallbackGate{
 		handle: func(result *tools.ToolResult) {
-			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration)
+			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration, allowTopLevelToolFeedback)
 		},
 	}
 	ex.asyncCallbackGate = gate
@@ -1163,18 +1172,27 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 	toolName string,
 	toolCallID string,
 	toolIteration int,
+	allowTopLevelToolFeedback bool,
 ) {
-	// Send ForUser content directly to the user (immediate feedback),
-	// mirroring the synchronous tool execution path. This stays separate
-	// from AsyncNotifier, which owns the reactive continuation turn below.
-	userContent := asyncToolResultUserContent(
-		toolName,
-		ex.rx.rr.rq.ri.rf.rt.ts.channel,
-		ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback,
-		result,
-	)
-	if userContent != "" {
-		if result.IsError && ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
+	ts := ex.rx.rr.rq.ri.rf.rt.ts
+	// Ordinary async feedback follows the captured top-level origin gate.
+	// System-woken roots are the one error-only exception: SendResponse
+	// distinguishes them from internal task/verifier turns, while depth and
+	// IsTaskRun keep delegated children and task work contained.
+	allowSuppressedErrorFeedback := result.IsError &&
+		ts.opts.SuppressToolFeedback && ts.opts.SendResponse &&
+		ts.depth == 0 && !ts.opts.IsTaskRun
+	if allowTopLevelToolFeedback || allowSuppressedErrorFeedback {
+		// Send ForUser content directly to the user (immediate feedback),
+		// mirroring the synchronous tool execution path. This stays separate
+		// from AsyncNotifier, which owns the reactive continuation turn below.
+		userContent := asyncToolResultUserContent(
+			toolName,
+			ts.channel,
+			ts.opts.SuppressToolFeedback,
+			result,
+		)
+		if userContent != "" && result.IsError && ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
 			ex.rx.rr.rq.ri.rf.rt.ts.channel == "webchat" {
 			persistAsyncToolErrorNotice(ex.rx.rr.rq.ri.rf.rt.ts, toolCallID, userContent)
 			callbackSID, callbackProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
@@ -1197,13 +1215,17 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 					ProducingSessionID: callbackProducingSID,
 				},
 			)
-		} else {
+		} else if userContent != "" {
+			outboundSessionID := ""
+			if allowSuppressedErrorFeedback {
+				outboundSessionID = ts.transcriptSessionID
+			}
 			outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer outCancel()
 			if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
-				Channel:   ex.rx.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:    ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-				SessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
+				Channel:   ts.channel,
+				ChatID:    ts.chatID,
+				SessionID: outboundSessionID,
 				Content:   userContent,
 			}); pubErr != nil {
 				logger.WarnCF("agent", "Async tool ForUser content failed to publish",
