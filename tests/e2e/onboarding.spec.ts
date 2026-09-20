@@ -42,7 +42,7 @@ import { catalogRow, stubOnboarding } from './fixtures/onboarding-stubs'
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
 /** FR-029, verbatim — mirrors ONBOARDING_MODEL_LABEL in src/routes/onboarding.tsx. */
-const MODEL_LABEL = 'Model for your first agent'
+const MODEL_LABEL = 'Default model'
 
 /** An api-key company that exists in the fixture with exactly one variant. */
 const OPENAI = catalogRow('openai')
