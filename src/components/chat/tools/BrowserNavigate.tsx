@@ -184,7 +184,7 @@ export function BrowserNavigateBlock({
           bordered/backgrounded panel; each section keeps its own spacing
           via space-y-2 rather than individual borders/fills. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]">
           {/* Full URL breadcrumb */}
           <div>
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all">{url}</span>

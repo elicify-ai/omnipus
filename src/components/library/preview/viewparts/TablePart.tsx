@@ -286,7 +286,7 @@ export function TablePart({
   return (
     <div className="flex min-h-0 flex-col" data-testid="viewpart-table">
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-[13px]">
+        <table className="w-full border-collapse text-[length:var(--type-caption-size)]">
           <thead>
             <tr>
               {columns.map((property) => (
@@ -401,7 +401,7 @@ function FragmentRows({
             {s.unit !== undefined && ` · ${s.unit}`} · {s.count} {s.count === 1 ? 'row' : 'rows'}
           </td>
           <td className="whitespace-nowrap border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-right font-medium">
-            <span className="font-mono text-[13px] tabular-nums text-[var(--color-secondary)]">
+            <span className="font-mono text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-secondary)]">
               {formatNumberText(s.value)}
             </span>
           </td>

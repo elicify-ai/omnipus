@@ -250,7 +250,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
           {/* Latest per-criterion verdict (from judgeActivity, goal-scoped) */}
           {latestVerdict && (
             <div className="mt-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2)]">
-              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[length:var(--type-caption-size)] font-sans mb-[var(--space-1)]">
+              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[length:var(--type-caption-size)] font-body mb-[var(--space-1)]">
                 Latest verdict — {latestVerdict.met ? 'met' : 'not met'} (round {latestVerdict.round})
               </p>
               <ul className="space-y-[var(--space-0-5)]" data-testid="goal-pill-verdict-criteria">

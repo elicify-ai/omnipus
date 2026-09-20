@@ -109,7 +109,7 @@ function ActionButton({ action, variant }: ActionButtonProps) {
         <Check
           size={14}
           weight="bold"
-          className="text-[var(--color-success,#22c55e)]"
+          className="text-[var(--color-success)]"
           aria-hidden
         />
       ) : (

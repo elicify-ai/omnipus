@@ -1694,7 +1694,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
   margin: 0;
   vertical-align: top;
   font: calc(9px * var(--total-scale-factor)) sans-serif;
-  background: rgba(212, 175, 55, 0.12);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   border: 1.5px solid var(--color-accent);
   border-radius: 2px;
 }
@@ -1702,7 +1702,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 .omnipus-pdf-annotation-layer .textWidgetAnnotation :is(input, textarea):focus,
 .omnipus-pdf-annotation-layer .choiceWidgetAnnotation select:focus {
   outline: 2px solid var(--color-accent);
-  background: rgba(212, 175, 55, 0.2);
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 .omnipus-pdf-annotation-layer .textWidgetAnnotation :is(input, textarea)[disabled],
 .omnipus-pdf-annotation-layer .choiceWidgetAnnotation select[disabled] {
@@ -1931,7 +1931,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             className="max-w-lg rounded-md border border-[var(--color-error)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
           >
             <p className="font-medium">This PDF could not be displayed.</p>
-            <p className="mt-[var(--space-2)] text-[var(--color-muted)]">{error}</p>
+            <p className="mt-[var(--space-2)] text-[var(--color-error)]">{error}</p>
             <button
               type="button"
               tabIndex={0}

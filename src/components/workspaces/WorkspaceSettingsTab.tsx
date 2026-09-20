@@ -541,7 +541,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             <AlertDialogAction
               onClick={() => deleteMutation.mutate()}
               disabled={deleteMutation.isPending}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+              className="bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90"
             >
               {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
             </AlertDialogAction>

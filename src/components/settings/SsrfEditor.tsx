@@ -82,7 +82,7 @@ export function SsrfEditor({
             type="button"
             onClick={() => onPresetClick(idx)}
             className={[
-              'rounded border px-3 py-1 text-[length:var(--type-utility-xs-size)] transition-colors focus:outline-none cursor-pointer',
+              'rounded border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] transition-colors focus:outline-none cursor-pointer',
               activePreset === idx
                 ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                 : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50',

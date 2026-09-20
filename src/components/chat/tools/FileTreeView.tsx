@@ -120,13 +120,13 @@ function FileTreeBlock({
       {/* Tree panel — left-accent block, no bordered card. Entries keep their
           Folder/File icons and paddingLeft-based indentation unchanged. */}
       {expanded && !isRunning && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-0-5)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-0-5)]">
           {entries.length > 0 ? (
             entries.map((entry, i) => (
               <div
                 key={i}
                 className="flex items-center gap-[var(--space-1)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
-                style={{ '--file-tree-view-indent-depth-px': entry.indent * 12, paddingLeft: 'calc(var(--file-tree-view-indent-depth-px) * 1px)' } as import('react').CSSProperties}
+                style={{ paddingLeft: `calc(var(--space-2-5) * ${entry.indent})` }}
               >
                 {entry.isDir
                   ? <Folder size={11} weight="duotone" className="text-[var(--color-accent)] shrink-0" />

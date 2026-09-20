@@ -28,7 +28,7 @@ function StatCard({ label, value, hero = false, unit }: StatCardProps) {
       >
         {value}
         {unit && (
-          <span className={`font-sans font-[var(--font-weight-regular)]${hero ? ' text-[length:var(--type-body-compact-size)] ml-1 text-[var(--color-muted)]' : ' text-[length:var(--type-utility-xs-size)] ml-1 text-[var(--color-muted)]'}`}>
+          <span className={`font-body font-[var(--font-weight-regular)]${hero ? ' text-[length:var(--type-body-compact-size)] ml-1 text-[var(--color-muted)]' : ' text-[length:var(--type-utility-xs-size)] ml-1 text-[var(--color-muted)]'}`}>
             {unit}
           </span>
         )}
@@ -411,7 +411,7 @@ export function UsageScreen() {
         {/* Empty state */}
         {!isLoading && !statsError && isEmpty && (
           <div
-            className="flex flex-col items-center justify-center py-20 gap-[var(--space-3)] text-center"
+            className="flex flex-col items-center justify-center py-[80px] gap-[var(--space-3)] text-center"
             data-testid="usage-empty"
           >
             <ChatCircle size={48} className="text-[var(--color-border)]" aria-hidden="true" />

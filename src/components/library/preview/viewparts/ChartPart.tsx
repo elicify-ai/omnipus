@@ -145,10 +145,10 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
               data-testid="viewpart-chart-zero-line"
             />
           )}
-          <text x={PAD.left - 6} y={PAD.top + 4} textAnchor="end" fontSize="9" fill="var(--color-muted)">
+          <text x={PAD.left - 6} y={PAD.top + 4} textAnchor="end" fontSize="var(--font-size-floor)" fill="var(--color-muted)">
             {formatNumberText(String(domainMax))}
           </text>
-          <text x={PAD.left - 6} y={PAD.top + plotH + 4} textAnchor="end" fontSize="9" fill="var(--color-muted)">
+          <text x={PAD.left - 6} y={PAD.top + plotH + 4} textAnchor="end" fontSize="var(--font-size-floor)" fill="var(--color-muted)">
             {formatNumberText(String(domainMin))}
           </text>
           {zeroIsInterior && (
@@ -156,7 +156,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
               x={PAD.left - 6}
               y={yZero + 3}
               textAnchor="end"
-              fontSize="9"
+              fontSize="var(--font-size-floor)"
               fill="var(--color-muted)"
               data-testid="viewpart-chart-zero-label"
             >
@@ -179,7 +179,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
                 x={tick.x}
                 y={PAD.top + plotH + 12}
                 textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}
-                fontSize="9"
+                fontSize="var(--font-size-floor)"
                 fill="var(--color-muted)"
                 data-testid="viewpart-chart-x-label"
               >
@@ -193,7 +193,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
               x={PAD.left + plotW / 2}
               y={HEIGHT - 2}
               textAnchor="middle"
-              fontSize="9"
+              fontSize="var(--font-size-floor)"
               fill="var(--color-muted)"
               data-testid="viewpart-chart-x-title"
             >
@@ -205,7 +205,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
             <text
               transform={`translate(9 ${PAD.top + plotH / 2}) rotate(-90)`}
               textAnchor="middle"
-              fontSize="9"
+              fontSize="var(--font-size-floor)"
               fill="var(--color-muted)"
               data-testid="viewpart-chart-y-title"
             >

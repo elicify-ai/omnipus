@@ -2285,7 +2285,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     {agent?.context_window_effective !== undefined && (
                       <p
                         data-testid="agent-context-window-effective"
-                        className="pl-[11.75rem] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                        className="pl-[188px] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       >
                         Effective window: {formatWindowTokens(agent.context_window_effective)} tokens
                         {agent.context_window_source
@@ -2297,7 +2297,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       <p
                         data-testid="agent-context-window-clamped"
                         role="status"
-                        className="pl-[11.75rem] text-[length:var(--type-caption-size)] text-[var(--color-warning,#D4AF37)]"
+                        className="pl-[188px] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                       >
                         Override clamped to the model's limit
                         {agent.context_window_effective !== undefined

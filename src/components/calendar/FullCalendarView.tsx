@@ -180,7 +180,7 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
         color: CHIP_TEXT_COLOR,
         display: 'flex',
         alignItems: 'center',
-        gap: '3px',
+        gap: 'var(--space-1)',
         width: '100%',
         padding: 'var(--border-width-hairline) var(--space-1)',
         borderRadius: '4px',
@@ -261,7 +261,7 @@ function LoadingOverlay() {
         pointerEvents: 'none',
         zIndex: 10,
         background:
-          'linear-gradient(90deg, transparent 0%, rgba(212,175,55,0.06) 50%, transparent 100%)',
+          'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-accent) 6%, transparent) 50%, transparent 100%)',
         backgroundSize: '200% 100%',
         animation: 'fc-sovereign-shimmer 1.8s ease-in-out infinite',
       }}

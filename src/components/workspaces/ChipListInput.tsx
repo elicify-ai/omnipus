@@ -74,7 +74,7 @@ export interface ChipListInputProps {
 }
 
 /** Layout shared by every chip variant; appearance comes from `chipClassName`. */
-const CHIP_BASE_CLASS = 'inline-flex items-center gap-1 px-2 py-0.5 text-[length:var(--type-caption-size)]'
+const CHIP_BASE_CLASS = 'inline-flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)]'
 
 function classes(...parts: (string | undefined)[]): string {
   return parts.filter(Boolean).join(' ')

@@ -211,7 +211,7 @@ export function AppShell() {
             <div
               data-testid="dev-mode-banner"
               role="alert"
-              className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)] text-white text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
+              className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)] text-[var(--color-primary)] text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
             >
               <span>Development mode active — authentication bypass enabled</span>
             </div>

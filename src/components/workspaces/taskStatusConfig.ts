@@ -30,9 +30,9 @@ export const STATUS_OPTIONS: { value: Task['status']; label: string; color: stri
 
 export const STATUS_BADGE: Record<string, string> = {
   inbox:       'text-[var(--color-muted)] bg-white/5',
-  next:        'text-[color:var(--color-accent)] bg-[var(--color-accent)]/10',
-  in_progress: 'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
-  blocked:     'text-[color:var(--color-warning)] bg-[var(--color-warning)]/10',
+  next:        'text-[color:var(--color-status-next)] bg-[var(--color-status-next)]/10',
+  in_progress: 'text-[color:var(--color-status-in-progress)] bg-[var(--color-status-in-progress)]/10',
+  blocked:     'text-[color:var(--color-status-blocked)] bg-[var(--color-status-blocked)]/10',
   done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',
   failed:      'text-[color:var(--color-error)] bg-[var(--color-error)]/10',
   // TaskRun-only outcome (overlap guard) — the established design-system

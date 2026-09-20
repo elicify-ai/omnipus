@@ -28,7 +28,7 @@ import {
 /** A computed number: tabular figures, unit alongside. */
 export function UnitValue({ value, unit }: { value: string; unit?: string | undefined }) {
   return (
-    <span className="whitespace-nowrap font-mono text-[13px] tabular-nums text-[var(--color-secondary)]">
+    <span className="whitespace-nowrap font-mono text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-secondary)]">
       {formatNumberText(value)}
       {unit !== undefined && unit !== '' && (
         <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{unit}</span>

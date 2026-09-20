@@ -110,7 +110,7 @@ function ActivityRow({
               status text, matching SubagentBlock's own inline treatment. */}
           {item.status === 'interrupted' && interruptReason && (
             <span
-              className="font-sans"
+              className="font-body"
               title={`Interrupted: ${formatInterruptReason(interruptReason)}`}
             >
               {' '}({formatInterruptReason(interruptReason)})
@@ -126,7 +126,7 @@ function ActivityRow({
       </button>
 
       {canExpand && expanded && item.kind === 'judge' && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]" data-testid="judge-verdict-detail">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]" data-testid="judge-verdict-detail">
           {/* Per-criterion verdict list (ADR-049 D2/D4/US-13/SD-C11). `text`
               is the raw criterion_id — this global feed has no title lookup
               (see JudgeActivityItem's doc comment). */}
@@ -159,7 +159,7 @@ function ActivityRow({
       )}
 
       {canExpand && expanded && item.kind !== 'judge' && steps && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-1)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-1)]">
           {/* surface="panel" (Fix 2, user-approved 2026-07-16): this panel is
               the designated home for the background/noisy step detail the
               thread hides by default — its policy INVERTS to show
@@ -170,7 +170,7 @@ function ActivityRow({
             step.kind === 'tool' ? (
               <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} surface="panel" />
             ) : (
-              <p key={idx} className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-[var(--space-0-5)]">
+              <p key={idx} className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-body py-[var(--space-0-5)]">
                 {step.text}
               </p>
             ),
@@ -181,7 +181,7 @@ function ActivityRow({
               treatment (the thread card this replaces at idle/default). */}
           {finalResult && (
             <div className="mt-[var(--space-1)]">
-              <div className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
+              <div className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide font-body">
                 {statusDot('bg-[var(--color-success)]')}
                 Final result
               </div>
@@ -194,7 +194,7 @@ function ActivityRow({
       )}
 
       {show3pNotice && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No live step detail yet</p>
         </div>
       )}

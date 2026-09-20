@@ -31,18 +31,18 @@
   --fc-neutral-text-color: var(--color-muted);
 
   /* Today cell — subtle Forge-Gold tint (not blinding) */
-  --fc-today-bg-color: rgba(212, 175, 55, 0.07);
+  --fc-today-bg-color: color-mix(in srgb, var(--color-accent) 7%, transparent);
 
   /* Now indicator: Forge Gold, NOT FullCalendar's default red (spec M-2 / FR-017) */
   --fc-now-indicator-color: var(--color-accent);
 
   /* Selection / drag highlight */
-  --fc-highlight-color: rgba(212, 175, 55, 0.12);
+  --fc-highlight-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
 
   /* Event border removed — chip BG is the colour signal */
   --fc-event-border-color: transparent;
   --fc-event-bg-color: transparent;
-  --fc-event-text-color: #0a0a0b;
+  --fc-event-text-color: var(--color-primary);
 
   /* List view */
   --fc-list-event-hover-bg-color: var(--color-surface-3);
@@ -99,7 +99,7 @@
   font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 6px 4px;
+  padding: var(--space-2) var(--space-1);
   text-decoration: none;
 }
 
@@ -166,10 +166,10 @@
   justify-content: center;
   min-width: 24px;
   min-height: 24px;
-  padding: 0 6px;
+  padding: var(--space-0) var(--space-2);
   border-radius: 9999px;
   background-color: var(--color-accent);
-  color: #0a0a0b;
+  color: var(--color-primary);
   font-size: var(--type-utility-xs-size);
   font-weight: var(--font-weight-bold);
   font-family: var(--font-family-body);
@@ -201,7 +201,7 @@
 
 .fc .fc-daygrid-day:not(.fc-day-other):hover,
 .fc .fc-daygrid-day:not(.fc-day-other):focus-within {
-  background-color: rgba(212, 175, 55, 0.05);
+  background-color: color-mix(in srgb, var(--color-accent) 5%, transparent);
 }
 
 /* Faint "+" in the bottom-right corner of a hovered day cell */
@@ -310,7 +310,7 @@
 
 .fc-sovereign-now-marker-time {
   flex-shrink: 0;
-  margin-left: 6px;
+  margin-left: var(--space-2);
   padding: 0 4px;
   font-size: var(--type-caption-size);
   font-weight: var(--font-weight-semibold);
@@ -425,7 +425,7 @@
   background: var(--color-surface-2) !important;
   border: 1px solid var(--color-border) !important;
   border-radius: 6px !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+  box-shadow: var(--elevation-overlay) !important;
   z-index: 200;
 }
 
@@ -454,7 +454,7 @@
 }
 
 .fc .fc-popover-body {
-  padding: 6px 8px !important;
+  padding: var(--space-2) var(--space-2) !important;
   background: var(--color-surface-2) !important;
   border-radius: 0 0 6px 6px !important;
 }
@@ -490,7 +490,7 @@
 
 .fc .fc-event.fc-event-mirror {
   opacity: 0.6;
-  background: rgba(212, 175, 55, 0.25) !important;
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent) !important;
   border: 1px dashed var(--color-accent) !important;
 }
 

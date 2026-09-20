@@ -356,7 +356,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
             </div>
           ) : isError ? (
             <div className="flex flex-col items-center justify-center gap-[var(--space-2-5)] py-[var(--space-8)] text-center">
-              <p className="text-[length:var(--type-body-compact-size)] text-red-400">
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">
                 Failed to load audit log{error instanceof Error ? `: ${error.message}` : '.'}
               </p>
               <Button variant="outline" size="sm" onClick={handleRefresh}>

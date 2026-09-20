@@ -29,7 +29,7 @@ function UnitGrid({ crosstab, unit }: { crosstab: ViewResultCrosstab; unit: stri
     crosstab.cells.find((c) => c.row === row && c.column === column && c.unit === unit)
   return (
     <div className="overflow-x-auto" data-testid="viewpart-crosstab-grid">
-      <table className="w-full border-collapse text-[13px]">
+      <table className="w-full border-collapse text-[length:var(--type-caption-size)]">
         <thead>
           <tr>
             <th className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
@@ -57,7 +57,7 @@ function UnitGrid({ crosstab, unit }: { crosstab: ViewResultCrosstab; unit: stri
                 return (
                   <td
                     key={ck}
-                    className="whitespace-nowrap border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right font-mono text-[13px] tabular-nums"
+                    className="whitespace-nowrap border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right font-mono text-[length:var(--type-caption-size)] tabular-nums"
                   >
                     {cell === undefined ? (
                       <span className="text-[var(--color-muted)]">—</span>

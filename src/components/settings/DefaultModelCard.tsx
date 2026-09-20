@@ -141,7 +141,7 @@ export function DefaultModelCard({
               data-testid="default-model-loading"
             />
           ) : status === 'error' ? (
-            <p className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-red-400" data-testid="default-model-error">
+            <p className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]" data-testid="default-model-error">
               Could not load the default model. Please try again.
             </p>
           ) : defaultModel ? (

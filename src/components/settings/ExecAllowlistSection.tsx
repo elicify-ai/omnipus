@@ -105,7 +105,7 @@ export function ExecAllowlistSection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-[length:var(--type-body-compact-size)] text-red-400">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">
         Failed to load exec allowlist. Please try again.
       </p>
     )

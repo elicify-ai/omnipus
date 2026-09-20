@@ -102,8 +102,12 @@ function AgentSessionList({
 
   const renderRow = (row: SessionTreeFlatRow) => {
     const s = row.node.session
+    // No base offset at depth 0 (there is no row here to indent). The legacy
+    // per-level step was 14px, a 14px-root Tailwind value D10 maps to the
+    // nearest closed-scale step, 16px (--space-3) -- see
+    // docs/internal/design/evidence/c1-execution-record.md's tree-indent row.
     return (
-      <div className="flex items-center" style={row.depth > 0 ? { '--search-modal-indent-depth-px': row.depth * 14, paddingLeft: 'calc(var(--search-modal-indent-depth-px) * 1px)' } as import('react').CSSProperties : undefined}>
+      <div className="flex items-center" style={row.depth > 0 ? { '--search-modal-indent-depth': row.depth, paddingLeft: 'calc(var(--search-modal-indent-depth) * var(--space-3))' } as import('react').CSSProperties : undefined}>
         {row.hasChildren ? (
           <SessionExpandToggle
             expanded={row.isExpanded}

@@ -208,7 +208,7 @@ export function LibraryCodePreview({ workspaceId, entry, content, onSaved }: Lib
                 </p>
                 <pre
                   data-testid="library-code-plain"
-                  className="whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] font-mono text-[length:var(--type-caption-size)] leading-[1.65] text-[var(--color-secondary)]"
+                  className="whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] font-mono text-[length:var(--type-caption-size)] leading-[var(--font-line-height-body)] text-[var(--color-secondary)]"
                 >
                   {draft}
                 </pre>

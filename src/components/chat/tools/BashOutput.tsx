@@ -160,7 +160,7 @@ function BashOutputBlock({
           keeps its own identity (bg-[#0d1117]) but is no longer wrapped in
           an outer bordered frame. */}
       {expanded && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
           <div className="bg-[#0d1117] rounded-sm">
             {isRunning && !output ? (
               <div className="px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)]">

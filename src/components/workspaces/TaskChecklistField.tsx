@@ -124,14 +124,14 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
               {todo.status === 'completed' ? (
                 <CheckSquare size={13} className="shrink-0 text-[color:var(--color-success)]" />
               ) : todo.status === 'in_progress' ? (
-                <CircleHalf size={13} className="shrink-0 text-[color:var(--color-warning)]" />
+                <CircleHalf size={13} className="shrink-0 text-[color:var(--color-status-in-progress)]" />
               ) : (
                 <Square size={13} className="shrink-0 text-[var(--color-muted)]" />
               )}
               <span className={cn(
                 'flex-1 text-[var(--color-secondary)]',
                 todo.status === 'completed' ? 'line-through text-[var(--color-muted)]' : undefined,
-                todo.status === 'in_progress' ? 'text-[color:var(--color-warning)]' : undefined,
+                todo.status === 'in_progress' ? 'text-[color:var(--color-status-in-progress)]' : undefined,
               )}>
                 {todo.text}
               </span>

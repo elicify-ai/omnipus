@@ -148,26 +148,22 @@ describe('mapToCalendarEvents', () => {
   // ─── Test #9: status→{bg,icon} for all 6 statuses (DS-1/row 10, ADR-051 D5) ──
 
   it('#9 status→{bg,icon} table for all 6 task statuses', () => {
-    const cases: Array<{
-      status: Task['status']
-      expectedBg: string
-      expectedIcon: string
-    }> = [
-      { status: 'done', expectedBg: '#34D399', expectedIcon: 'CheckCircle' },
-      { status: 'in_progress', expectedBg: '#60A5FA', expectedIcon: 'CircleNotch' },
-      { status: 'blocked', expectedBg: '#FBBF24', expectedIcon: 'Prohibit' },
-      { status: 'failed', expectedBg: '#F87171', expectedIcon: 'XCircle' },
-      { status: 'inbox', expectedBg: '#94A3B8', expectedIcon: 'Circle' },
-      { status: 'next', expectedBg: '#94A3B8', expectedIcon: 'Circle' },
-    ]
+    // Expected colour/icon come from STATUS_STYLE — the canonical status→chip
+    // style map (FR-005), itself resolved through the governed status
+    // contract (src/design-system/status.ts). Asserting against STATUS_STYLE
+    // rather than a hardcoded hex tests the MAPPING (mapToCalendarEvents wires
+    // task.status to the canonical chip style), not a colour value the design
+    // system owns and can change deliberately (e.g. the in_progress
+    // blue→gold unification, or a future contrast fix).
+    const statuses: Task['status'][] = ['done', 'in_progress', 'blocked', 'failed', 'inbox', 'next']
 
-    for (const { status, expectedBg, expectedIcon } of cases) {
+    for (const status of statuses) {
       const task = makeTask({ status, due: '2026-06-20' })
       const events = mapToCalendarEvents([task])
       expect(events).toHaveLength(1)
       const ev = events[0]
-      expect(ev.backgroundColor, `bg for ${status}`).toBe(expectedBg)
-      expect(ev.extendedProps?.icon, `icon for ${status}`).toBe(expectedIcon)
+      expect(ev.backgroundColor, `bg for ${status}`).toBe(STATUS_STYLE[status].bg)
+      expect(ev.extendedProps?.icon, `icon for ${status}`).toBe(STATUS_STYLE[status].icon)
     }
   })
 

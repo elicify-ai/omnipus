@@ -168,7 +168,7 @@ export function GodModeControl() {
       <div
         data-testid="god-mode-control"
         className={[
-          'rounded-lg border px-4 py-3.5 transition-colors',
+          'rounded-lg border px-[var(--space-3)] py-[var(--space-3)] transition-colors',
           // Danger styling keys on `persisted`, NOT `enabled` — same signal the
           // switch itself binds to (see requestToggle) and the same one the
           // Security Health check uses server-side (rest.go's god-mode-armed

@@ -24,7 +24,7 @@ export function FiguresPart({ part }: { part: ViewResultPart }) {
               {aggregateLabel(t.op)} {t.property}
               {t.unit !== undefined && ` · ${t.unit}`}
             </span>
-            <span className="font-mono text-[1.15rem] tabular-nums text-[var(--color-secondary)]">
+            <span className="font-mono text-[length:var(--type-section-title-size)] tabular-nums text-[var(--color-secondary)]">
               {formatNumberText(t.value)}
               {t.unit !== undefined && (
                 <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{t.unit}</span>

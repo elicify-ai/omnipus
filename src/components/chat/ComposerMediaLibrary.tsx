@@ -244,7 +244,7 @@ export function LibraryAttachmentChips() {
               tabIndex={0}
               onClick={() => removeLibraryAttachment(a.id)}
               aria-label={`Remove ${a.filename}`}
-              className="flex items-center justify-center w-4 h-4 rounded-full text-[var(--color-muted)] hover:text-white hover:bg-[var(--color-error)] transition-colors"
+              className="flex items-center justify-center w-4 h-4 rounded-full text-[var(--color-muted)] hover:text-[var(--color-primary)] hover:bg-[var(--color-error)] transition-colors"
             >
               <X size={10} weight="bold" />
             </button>

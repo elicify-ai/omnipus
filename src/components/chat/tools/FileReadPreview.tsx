@@ -99,7 +99,7 @@ function FileReadBlock({
       {/* File content panel — left-accent block, no bordered card. The
           content pane keeps its dark code-block styling (bg-[#0d1117]). */}
       {expanded && !isRunning && content && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-[var(--space-1)]">{path}</div>
           <pre className="p-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[#0d1117]">
             {preview}

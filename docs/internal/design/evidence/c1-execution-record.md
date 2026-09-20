@@ -69,7 +69,27 @@ These are the remaining C1 items that a script refused rather than guessed. Each
 
 | Item | Finding | Resolved mapping |
 |---|---|---|
-| Tree indent custom properties | `spacing/invalid-var`, 4 sites (`Sidebar`, `FileTreeView`, `KnowledgeOutline`, `SearchModal`) | Each sets a pixel number in JS and multiplies by `1px`: `calc(var(--x-indent-depth-px) * 1px)`. The step is 14px and the base 12px -- the legacy 14px-root values D10 already maps to 16px and 12px. The fix is to set a unitless depth COUNT and multiply by tokens: `calc(var(--space-2-5) + var(--depth) * var(--space-4))`. That is the same normalisation already applied to `px-4`/`p-4` in 87 places, so it needs no new decision -- but it is a structural change to nested tree indentation in four files, and there is no visual baseline to catch a regression (issue #753), so it wants care rather than a bulk edit. |
+| Tree indent custom properties | `spacing/invalid-var`, 4 sites (`Sidebar`, `FileTreeView`, `KnowledgeOutline`, `SearchModal`) | Each sets a pixel number in JS and multiplies by `1px`: `calc(var(--x-indent-depth-px) * 1px)`. The step is 14px and the base 12px -- the legacy 14px-root values D10 already maps to 16px and 12px. The fix is to set a unitless depth COUNT and multiply by tokens (note `--space-3` is 16px; `--space-4` is 24px -- an earlier draft of this note named the wrong token, which would have made the step 50% larger than D10 specifies): `calc(var(--space-2-5) + var(--depth) * var(--space-3))`. That is the same normalisation already applied to `px-4`/`p-4` in 87 places, so it needs no new decision -- but it is a structural change to nested tree indentation in four files, and there is no visual baseline to catch a regression (issue #753), so it wants care rather than a bulk edit. |
+
+## Rulings taken during the lane sweep (2026-09-20)
+
+Taken by the lead under the founder's "get the rest done, add a visual check where in doubt" directive. Each states the evidence, not the preference.
+
+| Ruling | Decision | Evidence |
+|---|---|---|
+| Status contract (D-A) | Applied: next gold->blue, in_progress amber->gold, blocked amber->orange | Rendered both palettes as chips against the real built stylesheet: `in_progress` and `blocked` were the IDENTICAL yellow `#eab308`. Seven states, six colours. |
+| Cancelled colour (D-B) | Applied: orange -> amber | `globals.css` overrode the registered amber with `#F97316`, which is Blocked-orange. Confirmed by rendering, not by reading the token file -- the token file says amber; the cascade said otherwise. |
+| Agent `draft` badge (D-C) | Left unchanged | Agent lifecycle is a third status domain outside the seven-state contract; no registered token covers it. |
+| Dismissed question threads (D-D) | Left muted | An inert historical thread is not a live cancelled status. |
+| Root-font spacing (D-E) | Not a decision at all | D10 already rules it: "Spacing and control geometry use this scale in pixels so they do not jump when the user changes font size; rem is for type." |
+| 3px indents (D-G) | 4px | D10's "next grid multiple", the rule that gave 1.75->2 and 10.5->12. |
+| Chart label at 9px (D-H) | Raised to the 12px floor | The library lane read the component: six axis/tick labels in SVG `<text>`, `fontSize="var(--font-size-floor)"` resolves on presentation attributes there. |
+| Code-block line height | `--font-line-height-body` (1.6), NOT `--type-code-line-height` | The code token resolves to `--font-line-height-compact` (1.4). Rendered 1.65 / 1.4 / 1.6 side by side: 1.4 visibly crowds the block. Both code surfaces now agree. |
+| Text on an error fill | `text-[var(--color-primary)]`, the `Button` destructive convention -- NOT `text-white` | Measured contrast on `#EF4444`: near-black **5.26:1** (passes AA for normal text), white **3.76:1** (fails). The primitive component already ships the accessible one; the scattered `text-white` sites are the outliers. |
+| Arbitrary alpha on a brand colour | `color-mix(in srgb, var(--token) N%, transparent)` -- no new tokens | Probed the scanner directly: `color-mix` with a registered token produces ZERO findings, while `rgba(212,175,55,0.07)`, `rgb(0,0,0,0.5)` and `#FFFFFF` all fire. The alpha gap was never a missing-token problem. |
+| Shadows | Existing `--elevation-*` tokens | `--elevation-floating` is `0 4px 16px rgba(0,0,0,0.5)` -- byte-identical to the shadow reported as untokenisable. The lanes searched colour primitives and concluded "no shadow tokens exist"; they were looking in the wrong family. |
+
+**Two scanner false positives were fixed rather than worked around.** CSS system colour keywords (`Canvas`, `CanvasText`, `Highlight`) inside `@media (forced-colors: active)` were reported as raw colours -- tokenising them would break Windows High Contrast Mode. And a fully tokenised `clamp()` was reported as unregistered because the rule did not resolve `var()` inside it. Both fixes carry a fixture test that fails before and passes after, plus adversarial tests proving the rule still fires on the near-miss (a stray `Canvas` outside forced-colors; a `clamp()` with raw pixel bounds). The typography fix also closed a masking bug: a sub-floor bound combined with `--user-font-size` was being misreported as "unregistered" instead of the real below-floor defect. Lock suite: 1796 pass, 0 fail, 0 skipped.
 
 ## Deferred, tracked elsewhere
 

@@ -128,7 +128,7 @@ function GlobalToolPoliciesSection() {
 
   if (toolsError || policiesError) {
     return (
-      <p className="text-[length:var(--type-utility-xs-size)] text-red-400 py-[var(--space-3)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)] py-[var(--space-3)]">
         Failed to load tool policies. Check that the backend is running.
       </p>
     )
@@ -319,7 +319,7 @@ export function SecuritySection() {
   }
 
   if (configError) {
-    return <p className="text-[length:var(--type-body-compact-size)] text-red-400">Failed to load security settings. Please try again.</p>
+    return <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load security settings. Please try again.</p>
   }
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
@@ -634,7 +634,7 @@ export function SecuritySection() {
 
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
           {credentialsError && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-red-400">Failed to load credentials. Please try again.</div>
+            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load credentials. Please try again.</div>
           )}
           {!credentialsError && credentials.length === 0 && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] flex items-center gap-[var(--space-2)]">

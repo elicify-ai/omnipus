@@ -48,7 +48,7 @@ export function UntrustedOriginBadge({
       title={`Text originated from a ${label} — rendered as sanitized text; links are non-clickable.`}
       className={cn(
         'inline-flex items-center gap-[var(--space-0-5)] px-[var(--space-1)] py-[var(--border-width-hairline)] rounded text-[length:var(--type-caption-size)] font-mono uppercase tracking-wide',
-        'text-[var(--color-warning,#D4AF37)] bg-[var(--color-surface-2)] border border-[var(--color-warning,#D4AF37)]/40',
+        'text-[var(--color-warning)] bg-[var(--color-surface-2)] border border-[var(--color-warning)]/40',
         'shrink-0 select-none',
         className,
       )}

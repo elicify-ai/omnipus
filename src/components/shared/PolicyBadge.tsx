@@ -3,9 +3,9 @@ import { ShieldCheck, ShieldWarning, Prohibit } from '@phosphor-icons/react'
 export type ToolPolicy = 'allow' | 'ask' | 'deny'
 
 const POLICY_CONFIGS: Record<ToolPolicy, { icon: typeof ShieldCheck; label: string; color: string; activeColor: string }> = {
-  allow: { icon: ShieldCheck, label: 'Allow', color: 'text-[var(--color-muted)]', activeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' },
+  allow: { icon: ShieldCheck, label: 'Allow', color: 'text-[var(--color-muted)]', activeColor: 'bg-[var(--color-status-done)]/20 text-[var(--color-status-done)] border-[var(--color-status-done)]/40' },
   ask: { icon: ShieldWarning, label: 'Ask', color: 'text-[var(--color-muted)]', activeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/40' },
-  deny: { icon: Prohibit, label: 'Deny', color: 'text-[var(--color-muted)]', activeColor: 'bg-red-500/20 text-red-400 border-red-500/40' },
+  deny: { icon: Prohibit, label: 'Deny', color: 'text-[var(--color-muted)]', activeColor: 'bg-[var(--color-status-failed)]/20 text-[var(--color-status-failed)] border-[var(--color-status-failed)]/40' },
 }
 
 interface PolicyBadgeProps {

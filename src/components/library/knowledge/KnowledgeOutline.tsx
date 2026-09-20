@@ -75,11 +75,11 @@ export function knowledgeOutlineQueryKey(workspaceId: string, path: string) {
  */
 export const KNOWLEDGE_OUTLINE_MAX_INDENT_DEPTH = 4;
 
-/** Pixels per indent step. */
-const INDENT_STEP_PX = 12;
-
-/** Left padding of a depth-0 row. */
-const INDENT_BASE_PX = 8;
+// Indent step per nesting level is --space-2-5 (12px) and the depth-0 base
+// is --space-2 (8px) -- both already on the registered token scale exactly,
+// unlike Sidebar/SearchModal's legacy 14px-root value, so this file needs
+// only the unitless-count restructuring, not a D10 value change (see
+// docs/internal/design/evidence/c1-execution-record.md's tree-indent row).
 
 /**
  * Nesting depth for each heading, derived from the ladder of levels actually
@@ -262,7 +262,8 @@ export function KnowledgeOutline({
                       aria-current={isActive ? "true" : undefined}
                       onClick={() => onNavigate(heading)}
                       style={{
-                        '--knowledge-outline-indent-depth-px': INDENT_BASE_PX + clamped * INDENT_STEP_PX, paddingLeft: 'calc(var(--knowledge-outline-indent-depth-px) * 1px)',
+                        '--knowledge-outline-indent-depth': clamped,
+                        paddingLeft: 'calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))',
                       } as import('react').CSSProperties}
                       className={
                         "flex w-full items-baseline gap-2 py-1 pr-3 text-left text-[length:var(--type-utility-xs-size)] transition-colors " +

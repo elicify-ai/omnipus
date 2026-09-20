@@ -90,7 +90,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         'shadow-[0_2px_8px_rgba(0,0,0,0.35)] transition-colors',
         'focus-visible:border-[var(--color-accent)]',
         selected
-          ? 'border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent),0_4px_20px_rgba(212,175,55,0.25)]'
+          ? 'border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent),0_4px_20px_color-mix(in_srgb,var(--color-accent)_25%,transparent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/80',
       )}
       data-testid={`task-node-${task.id}`}
@@ -161,7 +161,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         </div>
 
         {/* Title — Outfit, two-line clamp. */}
-        <p className="font-headline text-[13px] font-semibold leading-snug text-[var(--color-secondary)] line-clamp-2">
+        <p className="font-headline text-[length:var(--type-caption-size)] font-semibold leading-snug text-[var(--color-secondary)] line-clamp-2">
           {task.title}
         </p>
 

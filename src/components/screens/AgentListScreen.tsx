@@ -238,7 +238,7 @@ function AgentsLibraryView({
                       workspaceFilter === 'all'
                         ? 'var(--color-accent)'
                         : 'var(--color-secondary)',
-                    fontWeight: workspaceFilter === 'all' ? 600 : 400,
+                    fontWeight: workspaceFilter === 'all' ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)',
                   }}
                 >
                   All agents
@@ -259,7 +259,7 @@ function AgentsLibraryView({
                         workspaceFilter === ws.id
                           ? 'var(--color-accent)'
                           : 'var(--color-secondary)',
-                      fontWeight: workspaceFilter === ws.id ? 600 : 400,
+                      fontWeight: workspaceFilter === ws.id ? 'var(--font-weight-semibold)' : 'var(--font-weight-regular)',
                     }}
                   >
                     <Users size={12} />

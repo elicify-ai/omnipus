@@ -260,7 +260,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                   setActive(i)
                 }}
                 className={
-                  'font-mono text-[11px] bg-transparent border-0 border-b-2 px-1.5 pb-1 cursor-pointer ' +
+                  'font-mono text-[length:var(--type-utility-xs-size)] bg-transparent border-0 border-b-2 px-[var(--space-2)] pb-[var(--space-1)] cursor-pointer ' +
                   (i === active
                     ? 'text-[var(--color-secondary)] border-[var(--color-accent)]'
                     : done
@@ -301,14 +301,14 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                 onClick={() => selectOption(q, o.label)}
                 data-testid="ask-user-option"
                 className={
-                  'flex gap-3 items-start text-left w-full bg-transparent border-0 rounded-md px-2 py-2 cursor-pointer ' +
+                  'flex gap-[var(--space-2-5)] items-start text-left w-full bg-transparent border-0 rounded-md px-[var(--space-2)] py-[var(--space-2)] cursor-pointer ' +
                   (selected ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-accent)]/10')
                 }
               >
                 <span
                   aria-hidden="true"
                   className={
-                    'mt-0.5 shrink-0 w-3 h-3 border ' +
+                    'mt-[var(--space-0-5)] shrink-0 w-3 h-3 border ' +
                     (q.multi_select ? 'rounded-sm ' : 'rounded-full ') +
                     (selected
                       ? 'border-[var(--color-accent)] bg-[var(--color-accent)]'
@@ -316,7 +316,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                   }
                 />
                 <span className="min-w-0">
-                  <span className="font-medium text-[13px] text-[var(--color-secondary)] flex items-center gap-[var(--space-2)] flex-wrap">
+                  <span className="font-medium text-[length:var(--type-caption-size)] text-[var(--color-secondary)] flex items-center gap-[var(--space-2)] flex-wrap">
                     {o.label}
                     {q.recommended === o.label && (
                       <span
@@ -350,7 +350,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               onChange={(e) => typeFreeText(q, e.target.value)}
               placeholder="Something else — type your own answer…"
               data-testid="ask-user-free-text"
-              className="w-full bg-transparent border-0 border-b border-dashed border-[var(--color-border)] focus:border-solid focus:border-[var(--color-accent)] outline-none py-[var(--space-1)] px-[var(--space-0-5)] text-[13px] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]"
+              className="w-full bg-transparent border-0 border-b border-dashed border-[var(--color-border)] focus:border-solid focus:border-[var(--color-accent)] outline-none py-[var(--space-1)] px-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]"
             />
           </div>
         </div>
@@ -373,7 +373,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           disabled={!allAnswered}
           onClick={submit}
           data-testid="ask-user-submit"
-          className="text-[13px] font-medium rounded-lg px-[var(--space-3)] py-[var(--space-1)] bg-[var(--color-accent)] text-[#1a1503] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer border-0"
+          className="text-[length:var(--type-caption-size)] font-medium rounded-lg px-[var(--space-3)] py-[var(--space-1)] bg-[var(--color-accent)] text-[#1a1503] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer border-0"
         >
           Answer
         </button>
@@ -381,7 +381,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           type="button"
           onClick={cancel}
           data-testid="ask-user-cancel"
-          className="text-[13px] bg-transparent border-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] cursor-pointer px-[var(--space-1)]"
+          className="text-[length:var(--type-caption-size)] bg-transparent border-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] cursor-pointer px-[var(--space-1)]"
         >
           Cancel
         </button>

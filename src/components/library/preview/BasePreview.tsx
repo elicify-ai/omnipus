@@ -696,7 +696,7 @@ export function BasePreview({
               onClick={() => setSelectedSlug(v.name)}
               data-testid={`base-view-tab-${v.name}`}
               title={v.unservable === true ? v.unservable_reason : undefined}
-              className={`-mb-px whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[13px] transition-colors ${
+              className={`-mb-[var(--border-width-hairline)] whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-caption-size)] transition-colors ${
                 active
                   ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
                   : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
@@ -731,7 +731,7 @@ export function BasePreview({
             onClick={() => setShowRaw((v) => !v)}
             data-testid="base-preview-source-toggle"
             title={showRaw ? 'Back to the views' : 'Open the base file as text'}
-            className={`-mb-px ml-auto flex shrink-0 items-center gap-[var(--space-1)] whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-caption-size)] transition-colors ${
+            className={`-mb-[var(--border-width-hairline)] ml-auto flex shrink-0 items-center gap-[var(--space-1)] whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-caption-size)] transition-colors ${
               showRaw
                 ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
                 : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'

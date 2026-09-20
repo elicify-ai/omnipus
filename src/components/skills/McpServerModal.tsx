@@ -463,7 +463,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   aria-pressed={mode === 'network'}
                   onClick={() => handleModeSelect('network')}
                   className={[
-                    'flex items-center gap-1.5 px-3 py-2 rounded-md border text-[length:var(--type-utility-xs-size)] font-medium flex-1 justify-center transition-colors',
+                    'flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-md border text-[length:var(--type-utility-xs-size)] font-medium flex-1 justify-center transition-colors',
                     mode === 'network'
                       ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                       : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -478,7 +478,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   aria-pressed={mode === 'local'}
                   onClick={() => handleModeSelect('local')}
                   className={[
-                    'flex items-center gap-1.5 px-3 py-2 rounded-md border text-[length:var(--type-utility-xs-size)] font-medium flex-1 justify-center transition-colors',
+                    'flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-md border text-[length:var(--type-utility-xs-size)] font-medium flex-1 justify-center transition-colors',
                     mode === 'local'
                       ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                       : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',

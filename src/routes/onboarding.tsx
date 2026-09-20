@@ -547,7 +547,7 @@ function OnboardingWizard() {
         className="fixed inset-0 pointer-events-none"
         style={{
           background:
-            'radial-gradient(ellipse 65% 55% at 50% 50%, rgba(212,175,55,0.055) 0%, transparent 68%)',
+            'radial-gradient(ellipse 65% 55% at 50% 50%, color-mix(in srgb, var(--color-accent) 5.5%, transparent) 0%, transparent 68%)',
         }}
       />
       {/* Top edge accent line */}
@@ -556,7 +556,7 @@ function OnboardingWizard() {
         className="fixed top-0 left-0 right-0 h-px pointer-events-none"
         style={{
           background:
-            'linear-gradient(90deg, transparent 0%, rgba(212,175,55,0.35) 50%, transparent 100%)',
+            'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-accent) 35%, transparent) 50%, transparent 100%)',
         }}
       />
 
@@ -770,7 +770,7 @@ function NameStep({
       >
         <div
           className="h-16 w-16 rounded-full flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
         >
           <User size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
         </div>
@@ -893,7 +893,7 @@ function PasswordStep({
       >
         <div
           className="h-16 w-16 rounded-full flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
         >
           <Key size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
         </div>
@@ -1181,7 +1181,7 @@ function ProviderStep({
         <div
           data-testid="onboarding-provider-summary"
           className="rounded-lg border p-[var(--space-2-5)] flex items-center justify-between gap-[var(--space-2)]"
-          style={{ borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }}
+          style={{ borderColor: 'var(--color-accent)', backgroundColor: 'color-mix(in srgb, var(--color-accent) 6%, transparent)' }}
         >
           <div className="flex items-center gap-[var(--space-2)] min-w-0">
             {entry && (
@@ -1461,7 +1461,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
           className="absolute rounded-full blur-3xl pointer-events-none"
           style={{
             inset: '-40%',
-            background: 'rgba(212,175,55,0.14)',
+            background: 'color-mix(in srgb, var(--color-accent) 14%, transparent)',
           }}
         />
         <img

@@ -270,7 +270,7 @@ function Abi4Banner({
   return (
     <div
       role="alert"
-      className="flex flex-col sm:flex-row sm:items-start gap-[var(--space-2)] rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+      className="flex flex-col sm:flex-row sm:items-start gap-[var(--space-2)] rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
     >
       <Warning size={14} className="mt-[var(--space-0-5)] shrink-0 text-yellow-400" weight="fill" />
       <p className="flex-1 text-[length:var(--type-utility-xs-size)] text-yellow-200 leading-relaxed">
@@ -934,7 +934,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
         )}
 
         {statusData.notes && statusData.notes.length > 0 && (
-          <div className="mt-[var(--space-2)] rounded-md border border-yellow-500/30 bg-yellow-500/5 p-[var(--space-2)] space-y-[var(--space-1)]">
+          <div className="mt-[var(--space-2)] rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 p-[var(--space-2)] space-y-[var(--space-1)]">
             {statusData.notes.map((note, i) => (
               <p key={i} className="text-[length:var(--type-caption-size)] text-yellow-400 leading-relaxed">
                 <span className="font-semibold">Note:</span> {note}
@@ -1012,8 +1012,8 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
               <div
                 className="flex items-start gap-[var(--space-2)] rounded-md border p-[var(--space-2)]"
                 style={{
-                  borderColor: 'rgba(234,179,8,0.35)',
-                  backgroundColor: 'rgba(234,179,8,0.08)',
+                  borderColor: 'color-mix(in srgb, var(--color-warning) 35%, transparent)',
+                  backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)',
                 }}
                 role="status"
               >
@@ -1297,7 +1297,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
               type="button"
               size="sm"
               onClick={handleWildcardConfirm}
-              style={{ background: 'var(--color-error)', color: '#fff' }}
+              style={{ background: 'var(--color-error)', color: 'var(--color-primary)' }}
             >
               Save anyway
             </Button>
@@ -1327,7 +1327,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
               type="button"
               size="sm"
               onClick={handleEnforceModalConfirm}
-              style={{ background: 'var(--color-error)', color: '#fff' }}
+              style={{ background: 'var(--color-error)', color: 'var(--color-primary)' }}
             >
               Save anyway
             </Button>

@@ -19,6 +19,7 @@ import type {
 } from '@fullcalendar/core'
 import type { DateClickArg } from '@fullcalendar/interaction'
 import type { Task } from '@/lib/api'
+import { statusContract } from '@/design-system/status'
 
 /** The 7-member task status union (reused from the wire contract). */
 export type TaskStatus = Task['status']
@@ -218,12 +219,12 @@ export interface ChipStyle {
 }
 
 export const STATUS_STYLE: Record<TaskStatus, ChipStyle> = {
-  done: { bg: '#34D399', icon: 'CheckCircle' },
-  in_progress: { bg: '#60A5FA', icon: 'CircleNotch' },
-  blocked: { bg: '#FBBF24', icon: 'Prohibit' },
-  failed: { bg: '#F87171', icon: 'XCircle' },
-  inbox: { bg: '#94A3B8', icon: 'Circle' },
-  next: { bg: '#94A3B8', icon: 'Circle' },
+  done: { bg: statusContract.done.resolvedColor, icon: 'CheckCircle' },
+  in_progress: { bg: statusContract.inProgress.resolvedColor, icon: 'CircleNotch' },
+  blocked: { bg: statusContract.blocked.resolvedColor, icon: 'Prohibit' },
+  failed: { bg: statusContract.failed.resolvedColor, icon: 'XCircle' },
+  inbox: { bg: statusContract.inbox.resolvedColor, icon: 'Circle' },
+  next: { bg: statusContract.next.resolvedColor, icon: 'Circle' },
 }
 
 /** Fallback style for an unknown/missing status. */

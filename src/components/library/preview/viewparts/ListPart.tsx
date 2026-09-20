@@ -37,7 +37,7 @@ function ListRow({
   const renderDetailValue = (v: string): ReactNode => (cellLinks ? <CellText value={v} resolver={cellLinks} /> : v)
   return (
     <li
-      className={`flex items-baseline gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[13px] last:border-b-0 ${
+      className={`flex items-baseline gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] last:border-b-0 ${
         onOpenPath ? 'cursor-pointer hover:bg-[var(--color-surface-2)]/40' : ''
       }`}
       data-testid="viewpart-list-row"

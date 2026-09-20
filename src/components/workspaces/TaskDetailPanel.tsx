@@ -764,7 +764,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       <Field label="Status">
         {isRunning ? (
           <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-            <Badge className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
+            <Badge className={cn('h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center', STATUS_BADGE.in_progress)}>
               In Progress
             </Badge>
             {/* "Last activity 5 s ago" (founder decision 2026-09-14). */}
@@ -772,7 +772,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </div>
         ) : task.status === 'blocked' ? (
           // blocked is backend-derived (unmet dependency) — show read-only, not selectable
-          <Badge className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
+          <Badge className={cn('h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center', STATUS_BADGE.blocked)}>
             Blocked (dependency unmet)
           </Badge>
         ) : task.status === 'done' ? (
@@ -956,7 +956,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <AlertDialogAction
               onClick={() => doStopLoop()}
               disabled={isStoppingLoop}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+              className="bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90"
             >
               {isStoppingLoop ? 'Stopping…' : 'Stop/Clear'}
             </AlertDialogAction>
@@ -1273,7 +1273,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <AlertDialogAction
               onClick={() => doDelete()}
               disabled={isDeleting}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
+              className="bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90"
             >
               {isDeleting ? 'Deleting…' : 'Delete'}
             </AlertDialogAction>

@@ -223,7 +223,7 @@ export function DataSection() {
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading backups...</div>
           )}
           {backupsError && (
-            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-red-400">Failed to load backups. Please try again.</div>
+            <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load backups. Please try again.</div>
           )}
           {!backupsLoading && !backupsError && backups.length === 0 && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No backups yet.</div>

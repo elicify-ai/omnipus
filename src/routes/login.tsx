@@ -123,7 +123,7 @@ function LoginScreen() {
         aria-hidden
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'radial-gradient(ellipse 65% 55% at 50% 50%, rgba(212,175,55,0.055) 0%, transparent 68%)',
+          background: 'radial-gradient(ellipse 65% 55% at 50% 50%, color-mix(in srgb, var(--color-accent) 5.5%, transparent) 0%, transparent 68%)',
         }}
       />
 
@@ -136,7 +136,7 @@ function LoginScreen() {
         <div
           aria-hidden
           className="absolute rounded-full blur-3xl pointer-events-none"
-          style={{ inset: '-40%', background: 'rgba(212,175,55,0.14)' }}
+          style={{ inset: '-40%', background: 'color-mix(in srgb, var(--color-accent) 14%, transparent)' }}
         />
         <img
           src={OmnipusAvatar}
@@ -166,8 +166,8 @@ function LoginScreen() {
             aria-live="polite"
             className="mb-[var(--space-4)] flex items-start gap-[var(--space-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
             style={{
-              backgroundColor: 'rgba(212,175,55,0.08)',
-              border: '1px solid rgba(212,175,55,0.25)',
+              backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--color-accent) 25%, transparent)',
               color: 'var(--color-secondary)',
             }}
           >

@@ -45,22 +45,22 @@ const SEVERITY_CONFIG = {
     Icon: XCircle,
     label: 'High',
     color: 'var(--color-error)',
-    borderColor: 'rgba(239,68,68,0.25)',
-    bgColor: 'rgba(239,68,68,0.06)',
+    borderColor: 'color-mix(in srgb, var(--color-error) 25%, transparent)',
+    bgColor: 'color-mix(in srgb, var(--color-error) 6%, transparent)',
   },
   medium: {
     Icon: Warning,
     label: 'Medium',
     color: 'var(--color-warning)',
-    borderColor: 'rgba(234,179,8,0.25)',
-    bgColor: 'rgba(234,179,8,0.06)',
+    borderColor: 'color-mix(in srgb, var(--color-warning) 25%, transparent)',
+    bgColor: 'color-mix(in srgb, var(--color-warning) 6%, transparent)',
   },
   low: {
     Icon: Info,
     label: 'Low',
     color: 'var(--color-info)',
-    borderColor: 'rgba(59,130,246,0.25)',
-    bgColor: 'rgba(59,130,246,0.06)',
+    borderColor: 'color-mix(in srgb, var(--color-info) 25%, transparent)',
+    bgColor: 'color-mix(in srgb, var(--color-info) 6%, transparent)',
   },
 } as const
 
@@ -159,8 +159,8 @@ export function DiagnosticsSection() {
         <div
           className="flex items-center gap-[var(--space-2)] p-[var(--space-3)] rounded-lg border"
           style={{
-            borderColor: 'rgba(239,68,68,0.25)',
-            backgroundColor: 'rgba(239,68,68,0.06)',
+            borderColor: 'color-mix(in srgb, var(--color-error) 25%, transparent)',
+            backgroundColor: 'color-mix(in srgb, var(--color-error) 6%, transparent)',
           }}
         >
           <XCircle size={16} weight="fill" style={{ color: 'var(--color-error)' }} />
@@ -259,8 +259,8 @@ export function DiagnosticsSection() {
               className="flex items-center gap-[var(--space-2)] p-[var(--space-3)] rounded-lg border"
               data-testid="all-clear-panel"
               style={{
-                borderColor: 'rgba(16,185,129,0.25)',
-                backgroundColor: 'rgba(16,185,129,0.06)',
+                borderColor: 'color-mix(in srgb, var(--color-success) 25%, transparent)',
+                backgroundColor: 'color-mix(in srgb, var(--color-success) 6%, transparent)',
               }}
             >
               <ShieldCheck size={16} weight="fill" style={{ color: 'var(--color-success)' }} />

@@ -1136,7 +1136,7 @@ export function ProvidersSection() {
       />
 
       {providersError ? (
-        <p className="text-[length:var(--type-body-compact-size)] text-red-400" data-testid="providers-error">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]" data-testid="providers-error">
           Failed to load providers. Please try again.
         </p>
       ) : isLoading ? (

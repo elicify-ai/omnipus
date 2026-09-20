@@ -83,7 +83,7 @@ const CommandItem = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <CommandPrimitive.Item
     ref={ref}
-    className={clsx("relative flex cursor-pointer select-none items-center rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] outline-none transition-colors data-[selected=true]:bg-[rgba(212,175,55,0.12)] data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50", className)}
+    className={clsx("relative flex cursor-pointer select-none items-center rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] outline-none transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50", className)}
     style={{ color: 'var(--color-secondary)' }}
     {...props}
   />

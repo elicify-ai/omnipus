@@ -75,7 +75,7 @@ export function ConfirmActionModal({
             disabled={isPending}
             className={
               destructive
-                ? 'bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90'
+                ? 'bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90'
                 : undefined
             }
           >

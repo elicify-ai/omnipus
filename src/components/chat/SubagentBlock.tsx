@@ -140,7 +140,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
           {/* W1-9: show interrupt reason as a muted inline label when available */}
           {span.status === 'interrupted' && terminal?.reason && (
             <span
-              className="font-sans"
+              className="font-body"
               title={`Interrupted: ${formatInterruptReason(terminal.reason)}`}
             >
               {' '}({formatInterruptReason(terminal.reason)})
@@ -169,7 +169,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
       {show3pRunningNotice && (
         <p
           data-testid="subagent-3p-running-notice"
-          className="pl-[var(--space-3)] pb-[var(--space-1)] -mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-sans italic"
+          className="pl-[var(--space-3)] pb-[var(--space-1)] -mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-body italic"
         >
           External agent — no live progress; results appear when it finishes.
         </p>
@@ -181,7 +181,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
       {expanded && (
         <div
           data-testid="subagent-expanded"
-          className="ml-[3px] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-1)]"
+          className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-1)]"
           style={{ maxHeight: '400px', overflowY: 'auto' }}
         >
           {span.steps.length === 0 && !hasFinalResult && (
@@ -199,7 +199,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
             }
             // kind === 'text' — reserved for future subagent-text streaming
             return (
-              <p key={idx} data-testid="subagent-live-step" className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-[var(--space-0-5)]">
+              <p key={idx} data-testid="subagent-live-step" className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-body py-[var(--space-0-5)]">
                 {step.text}
               </p>
             )
@@ -210,7 +210,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
               text-line design used everywhere else. */}
           {hasFinalResult && (
             <div className="mt-[var(--space-2)]">
-              <div className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
+              <div className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide font-body">
                 {statusDot('bg-[var(--color-success)]')}
                 Final result
               </div>

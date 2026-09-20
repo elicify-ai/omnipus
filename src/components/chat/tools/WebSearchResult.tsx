@@ -139,7 +139,7 @@ function WebSearchBlock({
           keeps its identity (numbered result list / raw preview) but the
           old divide-y row dividers are gone; spacing carries the separation. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           {hasStructured ? (
             <div className="space-y-[var(--space-2)]">
               {parsed.map((item) => (

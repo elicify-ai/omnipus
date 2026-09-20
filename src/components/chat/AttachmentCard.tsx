@@ -171,7 +171,7 @@ export function AttachmentCard({ filename, contentType, imageUrl, isImage, remov
 /** A small corner "×" remove control, styled for overlaying an AttachmentCard. */
 export function AttachmentRemoveX() {
   return (
-    <span className="flex items-center justify-center w-4 h-4 rounded-full bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-error)] hover:text-white transition-colors">
+    <span className="flex items-center justify-center w-4 h-4 rounded-full bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-error)] hover:text-[var(--color-primary)] transition-colors">
       <X size={10} weight="bold" />
     </span>
   )

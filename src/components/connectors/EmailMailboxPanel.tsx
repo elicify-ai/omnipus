@@ -793,12 +793,12 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
 
           {deleteError && (
             <div
-              className="flex items-start gap-[var(--space-2)] rounded-md border border-red-500/30 bg-red-500/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
               data-testid="mailbox-delete-error"
               role="alert"
             >
-              <Warning size={14} className="text-red-400 mt-[var(--space-0-5)] shrink-0" />
-              <p className="text-[length:var(--type-utility-xs-size)] text-red-400">{deleteError}</p>
+              <Warning size={14} className="text-[var(--color-text-error)] mt-[var(--space-0-5)] shrink-0" />
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-text-error)]">{deleteError}</p>
             </div>
           )}
 
@@ -812,7 +812,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
             <AlertDialogAction
               disabled={deleting}
               onClick={() => doDelete()}
-              className="bg-red-600 hover:bg-red-700 text-white"
+              variant="destructive"
               data-testid="mailbox-delete-confirm-btn"
             >
               {deleting ? 'Removing…' : 'Remove'}

@@ -82,7 +82,7 @@ export function GoalSetupFailureLine({ toolName, result, error }: GoalSetupFailu
       {detail && (
         <pre
           data-testid="goal-setup-failure-line-detail"
-          className="ml-[3px] mt-[var(--space-1)] max-h-48 overflow-auto whitespace-pre-wrap break-all border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+          className="ml-[var(--space-1)] mt-[var(--space-1)] max-h-48 overflow-auto whitespace-pre-wrap break-all border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
         >
           {detail}
         </pre>

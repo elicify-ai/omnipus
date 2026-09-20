@@ -66,7 +66,7 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
         rows={6}
         data-testid="shell-deny-patterns-textarea"
         className={[
-          'w-full rounded-md border bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)] font-mono',
+          'w-full rounded-md border bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono',
           'text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]',
           'resize-y focus:outline-none',
           'transition-colors',

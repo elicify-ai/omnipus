@@ -169,7 +169,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           stands in for the old bordered panel, aligned under the status-dot
           column instead of boxing the whole row. */}
       {expanded && !isRunning && (
-        <div className="ml-[3px] space-y-[var(--space-2)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
+        <div className="ml-[var(--space-1)] space-y-[var(--space-2)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div>
             <div className="text-[var(--color-muted)] mb-[var(--space-1)]">Tool</div>
             <code className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] break-all">

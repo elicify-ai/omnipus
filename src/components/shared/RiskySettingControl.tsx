@@ -178,7 +178,7 @@ export function RiskySettingControl<T extends string>({
                 {opt.label}
                 {isSafe && (
                   <span
-                    className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                    className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-[var(--color-success)]/20 text-[var(--color-success)] border border-[var(--color-success)]/40"
                     data-testid="recommended-pill"
                   >
                     Recommended

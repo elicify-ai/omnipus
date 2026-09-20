@@ -230,9 +230,14 @@ export function ShikiCodeBlock({ language, code }: { language: string | undefine
       addDefaultStyles={false}
       className="!bg-[var(--color-surface-2)] !rounded-b-md overflow-x-auto block w-full"
       style={{
-        padding: '0.75rem 1rem',
+        padding: 'var(--space-2-5) var(--space-3)',
         fontSize: 'var(--type-code-size)',
-        lineHeight: '1.65',
+        // --font-line-height-body (1.6), not --type-code-line-height: the code
+        // token resolves to --font-line-height-compact (1.4), which visibly
+        // crowds a code block against the 1.65 this replaced. Checked by
+        // rendering all three side by side. LibraryCodePreview made the same
+        // call for the same reason, so both code surfaces now agree.
+        lineHeight: 'var(--font-line-height-body)',
         fontFamily: 'var(--type-code-family)',
         margin: 0,
       }}

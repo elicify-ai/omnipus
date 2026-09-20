@@ -103,7 +103,7 @@ function RefusalState({ refusal }: { refusal: NonNullable<ViewResult['refusal']>
       data-testid="view-refusal"
     >
       <Prohibit size={24} className="text-[var(--color-warning)]" />
-      <p className="text-[13px] font-medium text-[var(--color-secondary)]">This view can’t answer.</p>
+      <p className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]">This view can’t answer.</p>
       <p className="max-w-md text-[length:var(--type-caption-size)] leading-relaxed text-[var(--color-muted)]">{refusal.reason}</p>
       {refusal.remedy !== '' && (
         <p className="max-w-md text-[length:var(--type-caption-size)] leading-relaxed text-[var(--color-muted)]" data-testid="view-refusal-remedy">
@@ -126,7 +126,7 @@ function RefusalState({ refusal }: { refusal: NonNullable<ViewResult['refusal']>
 function EmptyState({ result }: { result: ViewResult }) {
   return (
     <div className="flex flex-col gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-5)]" data-testid="view-empty">
-      <p className="text-[13px] text-[var(--color-secondary)]">
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
         {result.complete ? 'Nothing matches this view.' : 'Nothing to show yet.'}
       </p>
       <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">

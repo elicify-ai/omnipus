@@ -210,7 +210,7 @@ export function IntegrationsSection() {
       </div>
 
       {isError && (
-        <p className="text-[length:var(--type-body-compact-size)] text-red-400">Failed to load integrations. Please try again.</p>
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load integrations. Please try again.</p>
       )}
 
       {isLoading ? (

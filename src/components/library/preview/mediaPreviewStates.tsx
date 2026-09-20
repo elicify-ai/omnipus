@@ -36,7 +36,7 @@ import type { LibraryPreviewVariant } from './libraryPreviewVariant'
 export function mediaPreviewContainerClass(variant: LibraryPreviewVariant): string {
   return variant === 'inline'
     ? 'flex items-center justify-center'
-    : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4'
+    : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]'
 }
 
 /** Shown in place of a player whose source the browser refused. Names the

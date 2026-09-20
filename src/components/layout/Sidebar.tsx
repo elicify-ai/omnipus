@@ -748,7 +748,7 @@ export function Sidebar() {
             {unreadCount > 0 && (
               <span
                 data-testid="sidebar-notification-badge"
-                className="flex h-4 min-w-4 items-center justify-center rounded-full px-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium leading-none bg-[var(--color-error)] text-white"
+                className="flex h-4 min-w-4 items-center justify-center rounded-full px-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium leading-none bg-[var(--color-error)] text-[var(--color-primary)]"
               >
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
@@ -772,7 +772,7 @@ export function Sidebar() {
             <Tray size={14} />
             Notifications
             {unreadCount > 0 && (
-              <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full px-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium leading-none bg-[var(--color-error)] text-white">
+              <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full px-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium leading-none bg-[var(--color-error)] text-[var(--color-primary)]">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
@@ -951,10 +951,13 @@ function SidebarSessionRow({
   const { node, depth, hasChildren, isExpanded, childrenEmpty } = row
   const session = node.session
   const title = session.title || 'Untitled'
-  const indent = depth > 0 ? 12 + depth * 14 : 12
+  // Base 12px is --space-2-5 (already on the registered token scale). The
+  // legacy per-level step was 14px, a 14px-root Tailwind value D10 maps to
+  // the nearest closed-scale step, 16px (--space-3) -- see
+  // docs/internal/design/evidence/c1-execution-record.md's tree-indent row.
   return (
     <>
-      <div className="flex items-center pr-[var(--space-3)]" style={{ '--sidebar-indent-depth-px': indent, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}>
+      <div className="flex items-center pr-[var(--space-3)]" style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))' } as import('react').CSSProperties}>
         {hasChildren ? (
           <SessionExpandToggle
             expanded={isExpanded}
@@ -997,7 +1000,7 @@ function SidebarSessionRow({
       {childrenEmpty && (
         <p
           className="py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70"
-          style={{ '--sidebar-indent-depth-px': indent + 18, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}
+          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + 18px)' } as import('react').CSSProperties}
         >
           No delegated sessions found
         </p>
@@ -1012,7 +1015,7 @@ function SidebarSessionRow({
           type="button"
           onClick={onLoadMore}
           disabled={isLoading}
-          style={{ '--sidebar-indent-depth-px': indent + 18, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}
+          style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + 18px)' } as import('react').CSSProperties}
           className="flex items-center gap-[var(--space-1)] py-[var(--space-1)] pr-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
         >
           {isLoading ? 'Loading…' : 'Load more'}

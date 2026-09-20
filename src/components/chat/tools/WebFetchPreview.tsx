@@ -134,7 +134,7 @@ function WebFetchBlock({
           preview keeps its identity (plain text preview), just without a
           bordered/backgrounded breadcrumb row. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-[var(--space-1)]">{url}</div>
           <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
             {preview}

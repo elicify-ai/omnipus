@@ -127,10 +127,10 @@ export function PromptGuardSection(): React.ReactElement {
                   if (selected !== lvl.value) handleChange(lvl.value)
                 }}
                 className={[
-                  'w-full text-left rounded-md border p-3 transition-colors disabled:opacity-60 disabled:cursor-not-allowed',
+                  'w-full text-left rounded-md border p-[var(--space-2-5)] transition-colors disabled:opacity-60 disabled:cursor-not-allowed',
                   isActive
                     ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/8'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border-hover)]',
+                    : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border)]/80',
                 ].join(' ')}
               >
                 <div className="flex items-center gap-[var(--space-2)]">

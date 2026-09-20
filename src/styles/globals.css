@@ -28,7 +28,10 @@
   --color-error: var(--primitive-color-red);
   --color-warning: var(--primitive-color-amber);
   --color-info: var(--primitive-color-blue);
-  --color-cancelled: #F97316;
+  /* Was #F97316, which is Blocked-orange, not Cancelled. The registered
+     cancelled colour is amber; the orange here silently made every
+     cancelled chip read as blocked. Corrected to the registered token. */
+  --color-cancelled: var(--primitive-color-amber);
   --color-accent-hover: var(--primitive-color-gold-hover);
   --color-error-hover: var(--primitive-color-red-hover);
 
@@ -144,7 +147,7 @@ html {
   /* FR-108: root font-size driven by user preference (12–20px, clamped).
      When --user-font-size is unset the fallback is 14px (product default).
      This rescales the entire rem scale — Tailwind v4 spacing/sizing/text. */
-  font-size: clamp(12px, var(--user-font-size, 14px), 20px);
+  font-size: clamp(var(--font-root-minimum), var(--user-font-size, var(--font-root-default)), var(--font-root-maximum));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* iOS/Safari scroll fix: lock the document to the viewport so the
@@ -180,8 +183,8 @@ html {
   outline-color: var(--color-accent) !important;
   outline-offset: 2px;
   /* No shadows on focus — neutralise Tailwind ring utilities (scoped). */
-  --tw-ring-shadow: 0 0 #0000 !important;
-  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 transparent !important;
+  --tw-ring-offset-shadow: 0 0 transparent !important;
 }
 /* Opt-out for composite widgets whose focus is shown by a parent surface
    (e.g. the chat textarea inside the composer card). */
@@ -271,5 +274,5 @@ body {
 /* Top bar — clear the top notch (max() keeps the existing py-3 when
    there is no notch). */
 [data-app-shell] > div > header {
-  padding-top: max(0.75rem, env(safe-area-inset-top,var(--space-0)));
+  padding-top: max(var(--space-2-5), env(safe-area-inset-top,var(--space-0)));
 }
