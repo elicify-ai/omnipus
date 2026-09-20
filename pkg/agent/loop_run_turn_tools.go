@@ -983,6 +983,15 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 
 // prepareDispatch records dispatch metadata and prepares asynchronous result handling.
 func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
+	ts := ex.rx.rr.rq.ri.rf.rt.ts
+	// Temporary origin containment until the compiled per-turn publication
+	// policy replaces these distributed predicates. Automatic tool feedback is
+	// top-level only for root, non-task turns: delegated children inherit the
+	// parent route but must not publish standalone feedback there, while native
+	// task and verifier turns use internal webchat-labelled routes. depth and
+	// IsTaskRun are existing origin proxies, not new flags.
+	allowTopLevelToolFeedback := !ts.opts.SuppressToolFeedback && ts.depth == 0 && !ts.opts.IsTaskRun
+
 	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
 	if marshalErr != nil {
 		logger.WarnCF("agent", "failed to marshal tool args for preview", map[string]any{"tool": ex.toolName, "error": marshalErr.Error()})
@@ -1021,8 +1030,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// channels suppress feedback because the UI already renders tool calls
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
-		!ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
-		isMessagingChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
+		allowTopLevelToolFeedback &&
+		isMessagingChannel(ts.channel) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
 			ex.rx.rr.rq.ri.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
@@ -1044,24 +1053,24 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	toolIteration := ex.rx.rr.rq.ri.rf.rt.iteration
 	asyncToolName := ex.toolName
 	ex.asyncCallback = func(_ context.Context, result *tools.ToolResult) {
-		// Send ForUser content directly to the user (immediate feedback),
-		// mirroring the synchronous tool execution path. This stays a
+		// Publish async ForUser content as immediate feedback when the captured
+		// turn-origin predicate permits top-level tool feedback. This stays a
 		// separate concern from AsyncNotifier (FR-N2, async-notifier-spec.md)
-		// — it happens regardless of whether ContentForLLM() also triggers
-		// a new turn below.
-		if !result.Silent && result.ForUser != "" && !ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback {
+		// and intentionally does not depend on SendResponse because completion
+		// can happen after the initiating turn returns.
+		if !result.Silent && result.ForUser != "" && allowTopLevelToolFeedback {
 			outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer outCancel()
 			// M1: capture and log publish errors instead of silently discarding them.
 			if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
-				Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
+				Channel: ts.channel,
+				ChatID:  ts.chatID,
 				Content: result.ForUser,
 			}); pubErr != nil {
 				logger.WarnCF("agent", "Async tool ForUser content failed to publish",
 					map[string]any{
 						"tool":    asyncToolName,
-						"channel": ex.rx.rr.rq.ri.rf.rt.ts.channel,
+						"channel": ts.channel,
 						"error":   pubErr.Error(),
 					})
 			}
