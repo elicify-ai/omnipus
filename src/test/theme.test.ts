@@ -6,6 +6,23 @@ import { resolve } from 'path'
 const cssPath = resolve(process.cwd(), 'src/styles/globals.css')
 const cssContent = readFileSync(cssPath, 'utf-8')
 
+// globals.css states each brand colour as a reference to the registered
+// primitive token rather than a literal hex, so the brand value has to be
+// resolved through that one level of indirection before it can be compared.
+const tokensContent = readFileSync(resolve(process.cwd(), 'src/styles/tokens.generated.css'), 'utf-8')
+
+function declaredValue(css: string, name: string): string | null {
+  const match = css.match(new RegExp(`${name}\\s*:\\s*([^;]+);`))
+  return match ? match[1].trim() : null
+}
+
+function resolveColor(name: string): string | null {
+  const declared = declaredValue(cssContent, name)
+  if (declared === null) return null
+  const reference = declared.match(/^var\(\s*(--[A-Za-z0-9-]+)\s*\)$/)
+  return reference ? declaredValue(tokensContent, reference[1]) : declared
+}
+
 // test_brand_colors_defined
 // Traces to: wave0-brand-design-spec.md Scenario: Brand color tokens are available (US-1 AC1, FR-001)
 describe('Brand Color Tokens — globals.css @theme', () => {
@@ -25,10 +42,10 @@ describe('Brand Color Tokens — globals.css @theme', () => {
   it.each(colorTokens)(
     'CSS token $name ($label) resolves to $hex',
     ({ name, hex }) => {
-      // Verify the CSS file defines the variable with the correct value.
-      // We check the @theme block contains the variable and hex value.
+      // Verify the variable is declared AND that the value it resolves to is
+      // the brand hex — not merely that both strings appear in the file.
       expect(cssContent).toContain(name)
-      expect(cssContent.toLowerCase()).toContain(hex.toLowerCase())
+      expect(resolveColor(name)?.toLowerCase()).toBe(hex.toLowerCase())
     }
   )
 

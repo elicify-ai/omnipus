@@ -21,32 +21,32 @@
 /* ------------------------------------------------------------------ */
 @theme {
   /* Colors */
-  --color-primary: #0a0a0b;
-  --color-secondary: #e2e8f0;
-  --color-accent: #d4af37;
-  --color-success: #10b981;
-  --color-error: #ef4444;
-  --color-warning: #EAB308;
-  --color-info: #3B82F6;
+  --color-primary: var(--primitive-color-surface-0);
+  --color-secondary: var(--primitive-color-silver);
+  --color-accent: var(--primitive-color-gold);
+  --color-success: var(--primitive-color-green);
+  --color-error: var(--primitive-color-red);
+  --color-warning: var(--primitive-color-amber);
+  --color-info: var(--primitive-color-blue);
   --color-cancelled: #F97316;
-  --color-accent-hover: #c49e2f;
-  --color-error-hover: #dc2626;
+  --color-accent-hover: var(--primitive-color-gold-hover);
+  --color-error-hover: var(--primitive-color-red-hover);
 
   /* Library icon system (icon-consistency pass, 2026-09-07): MountFolderIcon's
      colour. Liquid-Silver pewter — distinct from --color-info (used for the
      mount BADGE/target text in LibraryEntryRow) so the icon reads as its own
      kind rather than borrowing an unrelated semantic-info blue. */
-  --color-mount: #8ea3bd;
+  --color-mount: var(--primitive-color-mount);
 
   /* Surface elevations (dark-first).
      surface-2 was darkened #1a1a1e → #141416 (operator request, composer
      redesign follow-up): raised panels should sit closer to the black
      shell — less contrast, flatter look. Applies everywhere the token is
      used (composer card, chips, panel fills, hover tints). */
-  --color-surface-0: #0a0a0b;
-  --color-surface-1: #111113;
-  --color-surface-2: #141416;
-  --color-surface-3: #222228;
+  --color-surface-0: var(--primitive-color-surface-0);
+  --color-surface-1: var(--primitive-color-surface-1);
+  --color-surface-2: var(--primitive-color-surface-2);
+  --color-surface-3: var(--primitive-color-surface-3);
 
   /* Muted text / borders.
      W6-C4 / C1 (WCAG 1.4.3 AA contrast, normal text):
@@ -55,8 +55,8 @@
      strings across the /agents surface. `#9ca3af` (Tailwind gray-400)
      measures ~7.5:1 against #111113 — comfortably AA and AAA for normal
      text. Brand-guidelines Tier-2/3 muted text now uses this token. */
-  --color-muted: #9ca3af;
-  --color-border: #2d3748;
+  --color-muted: var(--primitive-color-grey);
+  --color-border: var(--primitive-color-border);
 
   /* Typography */
   --font-headline: 'Outfit', system-ui, -apple-system, sans-serif;

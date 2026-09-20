@@ -191,7 +191,7 @@ export function DevicesSection() {
                   <Fingerprint size={10} />
                   {req.fingerprint.slice(0, 12)}…
                 </span>
-                <span>Code: <span className="font-mono font-semibold" style={{ color: 'var(--forge-gold)' }}>{req.pairing_code}</span></span>
+                <span>Code: <span className="font-mono font-semibold" style={{ color: 'var(--color-accent)' }}>{req.pairing_code}</span></span>
               </div>
             </div>
           ))}

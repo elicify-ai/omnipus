@@ -262,7 +262,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                 className={
                   'font-mono text-[11px] bg-transparent border-0 border-b-2 px-1.5 pb-1 cursor-pointer ' +
                   (i === active
-                    ? 'text-[var(--color-primary-fg,var(--color-secondary))] border-[var(--color-accent)]'
+                    ? 'text-[var(--color-secondary)] border-[var(--color-accent)]'
                     : done
                       ? 'text-[color:var(--color-success)] border-transparent'
                       : 'text-[var(--color-muted)] border-transparent hover:text-[var(--color-secondary)]')

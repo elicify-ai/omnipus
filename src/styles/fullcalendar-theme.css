@@ -305,7 +305,7 @@
   justify-content: flex-end;
   width: 100%;
   height: 2px;
-  background-color: var(--fc-now-indicator-color);
+  background-color: var(--color-accent);
 }
 
 .fc-sovereign-now-marker-time {
@@ -315,7 +315,7 @@
   font-size: var(--type-caption-size);
   font-weight: var(--font-weight-semibold);
   line-height: 1;
-  color: var(--fc-now-indicator-color);
+  color: var(--color-accent);
   background: var(--color-surface-0);
   white-space: nowrap;
 }
@@ -397,7 +397,7 @@
 }
 
 .fc .fc-list-event:hover td {
-  background: var(--fc-list-event-hover-bg-color);
+  background: var(--color-surface-3);
   cursor: pointer;
 }
 
@@ -472,7 +472,7 @@
 }
 
 .fc .fc-daygrid-more-link:hover {
-  color: var(--color-accent-hover, #c49e2f) !important;
+  color: var(--color-accent-hover) !important;
 }
 
 /* ------------------------------------------------------------------ */
