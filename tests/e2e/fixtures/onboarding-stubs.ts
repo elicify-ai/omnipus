@@ -11,7 +11,7 @@
  * model out from under `providers.spec.ts`. So the wizard's four inputs are
  * stubbed at the network edge and nothing on the gateway is mutated:
  *
- *   GET  /api/v1/state                    → onboarding_complete: false
+ *   GET  /api/v1/state                    → onboarding_complete: false + identity
  *   GET  /api/v1/providers/catalog        → the 190-entry fixture
  *   POST /api/v1/onboarding/probe-provider→ success, echoing `probed_model`
  *   POST /api/v1/onboarding/complete      → a valid LoginResponse, body captured
@@ -86,7 +86,21 @@ export async function stubOnboarding(
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ onboarding_complete: false }),
+      // ADR-0010 (WP1): `identity` is REQUIRED on the generated AppState
+      // (contracts/components/schemas/AppState.yaml). The SPA's zod edge
+      // (`src/lib/api/auth.ts::AppStateSchema`) parses every /state body
+      // through it — a missing `identity` throws inside fetchAppState, TanStack
+      // Query marks the app-state query as errored, and any future assertion
+      // that reads a parsed field of `identity` collapses silently to a default.
+      // We model the unauthenticated onboarding state: local-mode, core
+      // edition, signed_out. `signed_in: false` is what the wizard's
+      // beforeLoad guard actually sees in a fresh install — the operator has
+      // not completed onboarding yet — so this matches the real wire shape
+      // the gateway would return.
+      body: JSON.stringify({
+        onboarding_complete: false,
+        identity: { mode: 'local', edition: 'core', signed_in: false },
+      }),
     })
   })
 

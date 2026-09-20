@@ -169,11 +169,17 @@ test('the picker reads the catalog from the GET, and serves at most one 200 per 
   })
 
   await page.goto(`${BASE_URL}/#/onboarding`)
-  await expect(page.getByText('Step 1 of 3').first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('Step 1 of 4').first()).toBeVisible({ timeout: 15_000 })
   await page.locator('#admin-username').fill('catalog-probe-admin')
   await page.getByRole('button', { name: /^continue$/i }).click()
   await page.locator('#admin-password').fill('catalog-passw0rd!')
   await page.locator('#admin-password-confirm').fill('catalog-passw0rd!')
+  await page.getByRole('button', { name: /^continue$/i }).click()
+  // WP5 / ADR-0010 — the personal-preferences step (3 of 4) sits between
+  // the admin-account steps and the picker. #pref-name is the only required
+  // field; tone and detail have shipped defaults.
+  await expect(page.getByText('Step 3 of 4').first()).toBeVisible()
+  await page.locator('#pref-name').fill('catalog-probe-admin')
   await page.getByRole('button', { name: /^continue$/i }).click()
 
   // The picker rendered from whatever the gateway served — Popular tiles exist,
@@ -212,7 +218,7 @@ test('the picker reads the catalog from the GET, and serves at most one 200 per 
   await page.evaluate(() => {
     window.location.hash = '#/onboarding'
   })
-  await expect(page.getByText('Step 1 of 3').first()).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText('Step 1 of 4').first()).toBeVisible({ timeout: 15_000 })
 
   const byEtag = new Map<string, number>()
   for (const r of catalogResponses) {
