@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/askuser"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -161,4 +162,49 @@ func TestAskUserResumeDispatcher_OriginHeuristic(t *testing.T) {
 	assert.True(t, resumeIsUserInitiated(humanSet))
 	assert.False(t, resumeIsUserInitiated(autoSet))
 	assert.True(t, resumeIsUserInitiated(cancelledSet))
+}
+
+// TestAskUserResumeDispatcher_PublishesToBus is the SQUAD-R reproduction at
+// the publish-path seam: it wires the PRODUCTION askUserResumeDispatcher to
+// a REAL bus.MessageBus and verifies that a human-submitted answer lands on
+// the bus with the exact §0.2 correlated user-role message shape, the
+// channel/chatID/sessionID that the turn machinery needs to route the
+// resume, and the origin signal (UserInitiated) the turn options expect.
+// The brief's primary suspect is the live-resolve branch ending here at
+// Submit → dispatchResume; this test pinpoints whether the publish itself
+// drops or fails on the current release/v0.1.1 head.
+func TestAskUserResumeDispatcher_PublishesToBus(t *testing.T) {
+	mb := bus.NewMessageBus()
+	t.Cleanup(mb.Close)
+	disp := &askUserResumeDispatcher{msgBus: mb}
+
+	// Park a set, then submit a human answer — the answer carries one
+	// non-auto answer so resumeIsUserInitiated returns true.
+	set := askSetFixture()
+	set.Owner = "daniel"
+	set.Answers = []askuser.Answer{
+		{Header: "Scope", QuestionText: "Which emails?", Selected: []string{"Only unanswered"}},
+		{Header: "Deploy", QuestionText: "Deploy where?", Selected: []string{"Staging", "Prod"}},
+	}
+
+	wantText, err := askuser.ResumeMessage(set)
+	require.NoError(t, err)
+
+	err = disp.DispatchResume(set, wantText)
+	require.NoError(t, err, "DispatchResume must not error with a wired bus")
+
+	select {
+	case got := <-mb.InboundChan():
+		assert.Equal(t, "webchat", got.Channel, "resume must carry the SPA channel so resolveMessageRoute keys on webchat")
+		assert.Equal(t, "chat-1", got.ChatID, "resume must carry the original chatID so resolveSessionConns reaches it")
+		assert.Equal(t, "session_owner_1", got.SessionID, "resume must carry the transcript session id so per-session worker scope matches")
+		assert.Equal(t, "daniel", got.GatewayUserID, "resume must carry the owner so audit User stamps")
+		assert.True(t, got.UserInitiated, "human-submitted answer is a user-initiated turn by the field's own definition")
+		assert.Equal(t, "webchat_user", got.Sender.CanonicalID)
+		require.NotNil(t, got.Metadata)
+		assert.Equal(t, "mia", got.Metadata["agent_id"], "resume must carry the parking agent so route resolution picks the same agent")
+		assert.Equal(t, wantText, got.Content, "resume content must be the §0.2 correlated user-role message verbatim")
+	default:
+		t.Fatal("resume message never landed on the bus — the live-resolve branch drops the answer before the loop can pick it up")
+	}
 }
