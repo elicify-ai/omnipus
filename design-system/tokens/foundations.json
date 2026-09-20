@@ -667,6 +667,14 @@
       "description": "Zero spacing."
     },
     {
+      "id": "space.scale.0-5",
+      "css": "--space-0-5",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "2px",
+      "description": "Quarter-grid spacing step (hairline gaps)."
+    },
+    {
       "id": "space.scale.1",
       "css": "--space-1",
       "layer": "primitive",
@@ -681,6 +689,14 @@
       "kind": "dimension",
       "value": "8px",
       "description": "Base spacing step."
+    },
+    {
+      "id": "space.scale.2-5",
+      "css": "--space-2-5",
+      "layer": "primitive",
+      "kind": "dimension",
+      "value": "12px",
+      "description": "Three-quarter-grid spacing step."
     },
     {
       "id": "space.scale.3",

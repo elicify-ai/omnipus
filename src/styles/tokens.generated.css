@@ -176,8 +176,10 @@
   --radius-none: 0px;
   --radius-small: 0.25rem;
   --space-0: 0px;
+  --space-0-5: 2px;
   --space-1: 4px;
   --space-2: 8px;
+  --space-2-5: 12px;
   --space-3: 16px;
   --space-4: 24px;
   --space-5: 32px;
