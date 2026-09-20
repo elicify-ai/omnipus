@@ -203,7 +203,7 @@ func newChatTargetAskUserLoop(
 	// missing entries). The per-agent tighten/override below will narrow
 	// the actual tool surface the agent sees.
 	cfg.Sandbox.ToolPolicies = map[string]string{
-		"bash":                "allow", // baseline; tighten below
+		"bash":                        "allow", // baseline; tighten below
 		tools.AskUserQuestionToolName: "allow",
 	}
 
@@ -334,13 +334,13 @@ func TestAskUserResume_ThroughBus_ChatTargetAgent(t *testing.T) {
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pubCancel()
 	require.NoError(t, msgBus.PublishInbound(pubCtx, bus.InboundMessage{
-		Channel:    "webchat",
-		ChatID:     "chat-1",
-		SessionID:  sid,
-		Content:    "Help me pick a single-player tetris game.",
-		Sender:     bus.SenderInfo{CanonicalID: "webchat_user"},
+		Channel:       "webchat",
+		ChatID:        "chat-1",
+		SessionID:     sid,
+		Content:       "Help me pick a single-player tetris game.",
+		Sender:        bus.SenderInfo{CanonicalID: "webchat_user"},
 		GatewayUserID: "daniel",
-		Metadata:   map[string]string{"agent_id": "mia"},
+		Metadata:      map[string]string{"agent_id": "mia"},
 	}))
 
 	// (a) The AskUserQuestion turn parked — first LLM call returned
