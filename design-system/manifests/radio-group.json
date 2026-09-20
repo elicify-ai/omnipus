@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "component": "RadioGroup",
+  "exports": [
+    "RadioGroup",
+    "RadioGroupItem"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/radio-group.tsx",
+  "documentation": "docs/internal/design/components/radio-group.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "horizontal",
+    "vertical"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "unchecked",
+    "checked",
+    "disabled",
+    "focus-visible"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/radio-group.stories.tsx",
+      "exports": [
+        "Default",
+        "Disabled",
+        "ArrowKeyNavigation",
+        "NarrowViewport"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "radio-group-unit",
+      "kind": "unit",
+      "file": "src/components/ui/radio-group.test.tsx",
+      "test": "RadioGroup — base contract renders a labelled role=\"radiogroup\" with role=\"radio\" children and correct aria-checked",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/radio-group.stories.tsx",
+      "test": "ArrowKeyNavigation",
+      "story": "ArrowKeyNavigation",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-disabled-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/radio-group.stories.tsx",
+      "test": "Disabled",
+      "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "radio-group-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "RadioGroup [check:radio-group-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

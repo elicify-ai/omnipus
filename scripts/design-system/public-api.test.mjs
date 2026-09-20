@@ -89,7 +89,8 @@ test('public library dependency graph cannot reach application state or domain c
   const controls = new Set([
     'accordion', 'alert-dialog', 'avatar', 'badge', 'button', 'calendar', 'card', 'checkbox',
     'command', 'date-picker', 'date-time-picker', 'dialog', 'dropdown-menu',
-    'input', 'label', 'popover', 'progress', 'select', 'separator', 'sheet',
+    'input', 'label', 'popover', 'progress', 'radio-group', 'segmented-control',
+    'select', 'separator', 'sheet',
     'slider', 'smart-select', 'switch', 'table', 'tabs', 'textarea',
     'icon-button', 'field', 'confirm-dialog', 'skeleton', 'collection-state',
     'job-status', 'empty-state', 'error-state', 'query-error-state',

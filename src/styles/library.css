@@ -45,6 +45,8 @@
 @source "../components/ui/empty-state.tsx";
 @source "../components/ui/error-state.tsx";
 @source "../components/ui/query-error-state.tsx";
+@source "../components/ui/radio-group.tsx";
+@source "../components/ui/segmented-control.tsx";
 
 @theme inline {
   --font-headline: var(--type-page-title-family);

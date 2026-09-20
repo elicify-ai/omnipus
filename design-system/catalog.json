@@ -527,6 +527,24 @@
       ]
     },
     {
+      "source": "src/components/ui/radio-group.tsx",
+      "classification": "composite",
+      "exports": [
+        "RadioGroup",
+        "RadioGroupItem",
+        "RadioGroupProps",
+        "RadioGroupItemProps"
+      ],
+      "publicExports": [
+        "RadioGroup",
+        "RadioGroupItem"
+      ],
+      "publicTypes": [
+        "RadioGroupProps",
+        "RadioGroupItemProps"
+      ]
+    },
+    {
       "source": "src/components/ui/RestartConfirmDialog.tsx",
       "classification": "domain",
       "exports": [
@@ -534,6 +552,24 @@
       ],
       "publicExports": [],
       "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/segmented-control.tsx",
+      "classification": "composite",
+      "exports": [
+        "SegmentedControl",
+        "SegmentedControlItem",
+        "SegmentedControlProps",
+        "SegmentedControlItemProps"
+      ],
+      "publicExports": [
+        "SegmentedControl",
+        "SegmentedControlItem"
+      ],
+      "publicTypes": [
+        "SegmentedControlProps",
+        "SegmentedControlItemProps"
+      ]
     },
     {
       "source": "src/components/ui/select.tsx",

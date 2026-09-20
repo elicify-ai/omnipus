@@ -110,7 +110,12 @@ const SegmentedControlItem = React.forwardRef<HTMLButtonElement, SegmentedContro
           if (!event.defaultPrevented) ctx.onValueChange(value)
         }}
         className={cn(
-          'h-7 min-w-0 rounded px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium',
+          // On a coarse pointer the segment carries the touch minimum in its own
+          // box. The shared [data-ds-action] hit region would otherwise grow a
+          // narrow segment sideways past its neighbour's gap, and the later
+          // sibling wins the overlap — a tap near the boundary selects the wrong
+          // segment. Desktop rendering is untouched.
+          'h-7 min-w-0 rounded px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium pointer-coarse:h-[var(--target-touch-minimum)] pointer-coarse:min-w-[var(--target-touch-minimum)]',
           pressed
             ? 'bg-[var(--color-surface-3)] text-[var(--color-accent)] shadow-sm hover:bg-[var(--color-surface-3)] hover:text-[var(--color-accent)]'
             : 'bg-transparent text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]',
