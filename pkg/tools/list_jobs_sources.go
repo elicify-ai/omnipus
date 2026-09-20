@@ -116,6 +116,25 @@ type JobLabelResolver interface {
 	ResolvableLabels(ids []string) map[string]string
 }
 
+// JobSessionActivityRef carries the lifecycle identity that session metadata
+// must match before its timestamp can be used for a roster row.
+type JobSessionActivityRef struct {
+	SessionID   string
+	AgentID     string
+	WorkspaceID string
+}
+
+// JobSessionActivityReader reports each delegated session's composed recency
+// timestamp. Transcript appends advance that timestamp while work runs, though
+// other session metadata writes can advance it too. The batch shape lets an
+// implementation choose the cheapest available lookup strategy. Returned keys
+// must be a subset of the requested session IDs and values must be non-zero. A
+// missing requested ID means its recency is unavailable; collectSubagentRows
+// reports that count.
+type JobSessionActivityReader interface {
+	LastActivityBySessionID(refs []JobSessionActivityRef) map[string]time.Time
+}
+
 // JobCapSnapshotSource is FR-029's lock-free, read-only cap accessor on the
 // plan engine.
 //
@@ -140,9 +159,9 @@ type collectResult struct {
 	scanTruncated bool
 	scanned       int
 	present       int
-	// err is a STORE-level failure. It becomes an explicit per-kind error
-	// entry in the response — never a silently short list, because a short
-	// list that looks complete is the worst possible output.
+	// err is a read failure for this kind. It becomes an explicit per-kind
+	// error entry in the response. A collector may still return fallback rows;
+	// the note prevents those rows from looking fully current.
 	err error
 }
 
@@ -387,6 +406,7 @@ func collectSubagentRows(
 	namer JobAgentNamer,
 	resolver JobSessionResolver,
 	labelResolver JobLabelResolver,
+	activityReader JobSessionActivityReader,
 ) collectResult {
 	filter := session.LifecycleFilter{WorkspaceID: workspaceID, ParentAgentID: principal}
 	records, skipped, err := listLifecycleLeniently(store, filter)
@@ -439,6 +459,43 @@ func collectSubagentRows(
 			filterLabel: displayLabel,
 		})
 		ids = append(ids, rec.SessionID)
+	}
+
+	// Lifecycle UpdatedAt advances only when a lifecycle record is persisted.
+	// A child can write transcript entries for minutes without another lifecycle
+	// write, so use the later composed session stamp when one is available.
+	if activityReader != nil {
+		nonterminalRefs := make([]JobSessionActivityRef, 0, len(rows))
+		for i := range rows {
+			if !terminalStatus(rows[i].Status) {
+				nonterminalRefs = append(nonterminalRefs, JobSessionActivityRef{
+					SessionID:   rows[i].ID,
+					AgentID:     kept[i].AgentID,
+					WorkspaceID: kept[i].WorkspaceID,
+				})
+			}
+		}
+		activity := activityReader.LastActivityBySessionID(nonterminalRefs)
+		unavailable := 0
+		for i := range rows {
+			if terminalStatus(rows[i].Status) {
+				continue
+			}
+			at := activity[rows[i].ID]
+			if at.IsZero() {
+				unavailable++
+				continue
+			}
+			if at.After(kept[i].UpdatedAt) {
+				rows[i].LastActivityAt = rfc3339UTC(at)
+			}
+		}
+		if unavailable > 0 {
+			res.err = fmt.Errorf(
+				"session activity unavailable for %d nonterminal job(s); last_activity_at uses lifecycle state time",
+				unavailable,
+			)
+		}
 	}
 
 	// Exactly ONE resolver call for the whole batch, never one per row —

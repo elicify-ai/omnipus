@@ -60,6 +60,10 @@ type ListJobsTool struct {
 	// agent-display-name Label — never an error, and byte-identical to this
 	// fix's own pre-existing behavior. See JobLabelResolver's doc comment.
 	getLabelResolver func() JobLabelResolver
+	// getActivityReader resolves composed session recency for delegated rows.
+	// Transcript appends advance it while the child works; lifecycle UpdatedAt
+	// does not advance until another lifecycle record is persisted.
+	getActivityReader func() JobSessionActivityReader
 	// getCapSource reads the plan engine's published cap snapshot. Nil means
 	// no engine is wired and the cap fields are omitted as a pair.
 	getCapSource func() JobCapSnapshotSource
@@ -177,6 +181,13 @@ func (t *ListJobsTool) SetSessionResolver(get func() JobSessionResolver) { t.get
 // existed — never an error, never a behavior change for a caller that never
 // wires this.
 func (t *ListJobsTool) SetLabelResolver(get func() JobLabelResolver) { t.getLabelResolver = get }
+
+// SetSessionActivityReader installs the read seam for delegated-session
+// recency. A nil accessor or nil resolved reader preserves the lifecycle-only
+// fallback.
+func (t *ListJobsTool) SetSessionActivityReader(get func() JobSessionActivityReader) {
+	t.getActivityReader = get
+}
 
 // SetCapSnapshotSource installs the plan engine's lock-free cap accessor.
 func (t *ListJobsTool) SetCapSnapshotSource(get func() JobCapSnapshotSource) { t.getCapSource = get }
@@ -485,7 +496,11 @@ func (t *ListJobsTool) collectKind(kind, principal, workspaceID string, red reda
 		if t.getLabelResolver != nil {
 			labelResolver = t.getLabelResolver()
 		}
-		return collectSubagentRows(t.lifecycles, principal, workspaceID, red, ceiling, namer, resolver, labelResolver)
+		var activityReader JobSessionActivityReader
+		if t.getActivityReader != nil {
+			activityReader = t.getActivityReader()
+		}
+		return collectSubagentRows(t.lifecycles, principal, workspaceID, red, ceiling, namer, resolver, labelResolver, activityReader)
 	default:
 		return collectResult{err: fmt.Errorf("%s: unknown kind", kind)}
 	}
@@ -648,14 +663,13 @@ func newNotesAccumulator() *notesAccumulator {
 	}
 }
 
-// record folds one kind's collection outcome into the counters, and emits the
-// operator-facing Warn a degrading install needs — so an operator learns about
-// corruption without waiting for a caller to report it.
+// record folds one kind's collection outcome into the counters and emits the
+// operator-facing warning needed for partial or failed reads, without waiting
+// for a caller to report the degradation.
 func (a *notesAccumulator) record(kind string, res collectResult) {
 	if res.err != nil {
 		a.errors = append(a.errors, kindError{Kind: kind, Message: res.err.Error()})
-		slog.Warn("list_jobs: store read failed", "kind", kind, "error", res.err)
-		return
+		slog.Warn("list_jobs: kind read degraded", "kind", kind, "error", res.err)
 	}
 	if res.unreadable > 0 {
 		a.unreadable[kind] = res.unreadable
