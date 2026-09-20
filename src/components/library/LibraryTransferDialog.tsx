@@ -154,8 +154,8 @@ export function LibraryTransferDialog({
             {verb} "{entry.name}"
           </DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2-5)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
             <Label htmlFor="library-transfer-workspace">Destination workspace</Label>
             <Select value={destWorkspaceId} onValueChange={setDestWorkspaceId}>
               <SelectTrigger id="library-transfer-workspace" data-testid="library-transfer-workspace">
@@ -176,7 +176,7 @@ export function LibraryTransferDialog({
               </SelectContent>
             </Select>
           </div>
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-[var(--space-2)]">
             <Label htmlFor="library-transfer-path">Destination path</Label>
             <Input
               id="library-transfer-path"
@@ -215,10 +215,10 @@ export function LibraryTransferDialog({
               only needs the first half said. */}
           {destWorkspaceId !== sourceWorkspaceId && (
             <p
-              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
+              className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-transfer-workspace-warning"
             >
-              <Warning size={16} className="mt-0.5 shrink-0" />
+              <Warning size={16} className="mt-[var(--space-0-5)] shrink-0" />
               <span>
                 {mode === 'move'
                   ? `This ${entry.is_dir ? 'folder' : 'file'} will leave this workspace. Agents here will no longer see it, and links to it from notes in this workspace will stop resolving.`
@@ -228,10 +228,10 @@ export function LibraryTransferDialog({
           )}
           {destMount && (
             <p
-              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
+              className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-transfer-mount-warning"
             >
-              <Warning size={16} className="mt-0.5 shrink-0" />
+              <Warning size={16} className="mt-[var(--space-0-5)] shrink-0" />
               <span>
                 This destination is inside a mounted folder. {verb === 'Move' ? 'Moving' : 'Copying'}{' '}
                 writes to{' '}

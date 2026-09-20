@@ -70,12 +70,12 @@ export function SsrfEditor({
   }
 
   return (
-    <div className="space-y-2 border-t border-[var(--color-border)] pt-3">
+    <div className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]">
       <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
         SSRF internal-network policy
       </p>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-[var(--space-2)]">
         {SSRF_PRESETS.map((preset, idx) => (
           <button tabIndex={0}
             key={preset.label}
@@ -97,7 +97,7 @@ export function SsrfEditor({
       <button tabIndex={0}
         type="button"
         onClick={onAdvancedToggle}
-        className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
+        className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
         aria-expanded={advancedOpen}
       >
         {advancedOpen ? <CaretUp size={10} /> : <CaretDown size={10} />}
@@ -105,15 +105,15 @@ export function SsrfEditor({
       </button>
 
       {advancedOpen && (
-        <div className="space-y-1 pl-3 border-l border-[var(--color-border)]">
+        <div className="space-y-[var(--space-1)] pl-[var(--space-2-5)] border-l border-[var(--color-border)]">
           {list.length === 0 && (
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">Empty — all internal traffic blocked.</p>
           )}
           {list.map((entry, i) => {
             const entryErrorId = advancedErrors[i] ? `ssrf-entry-error-${i}` : undefined
             return (
-              <div key={i} className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1">
+              <div key={i} className="flex flex-col gap-[var(--space-0-5)]">
+                <div className="flex items-center gap-[var(--space-2)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)]">
                   <span className="flex-1 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] break-all">
                     {entry}
                   </span>
@@ -129,14 +129,14 @@ export function SsrfEditor({
                   </button>
                 </div>
                 {entryErrorId && (
-                  <p id={entryErrorId} className="text-[length:var(--type-caption-size)] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
+                  <p id={entryErrorId} className="text-[length:var(--type-caption-size)] text-[var(--color-error)] pl-[var(--space-2)]">{advancedErrors[i]}</p>
                 )}
               </div>
             )
           })}
 
-          <div className="space-y-1 pt-1">
-            <div className="flex items-center gap-2">
+          <div className="space-y-[var(--space-1)] pt-[var(--space-1)]">
+            <div className="flex items-center gap-[var(--space-2)]">
               <Input
                 ref={newEntryInputRef}
                 value={newSsrfEntry}
@@ -154,7 +154,7 @@ export function SsrfEditor({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)] shrink-0"
+                className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shrink-0"
                 onClick={onAddSsrfEntry}
                 aria-label="Add SSRF entry"
               >

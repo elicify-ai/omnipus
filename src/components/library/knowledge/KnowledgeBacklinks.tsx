@@ -262,7 +262,7 @@ export function KnowledgeBacklinks({
             // Indeterminate. No bar, no ratio — there is no denominator here.
             <p
               data-testid="knowledge-backlinks-loading"
-              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               Looking for notes that link here…
             </p>
@@ -282,11 +282,11 @@ export function KnowledgeBacklinks({
           {query.data?.truncated && (
             <p
               data-testid="knowledge-backlinks-truncated"
-              className="flex items-start gap-2 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+              className="flex items-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
             >
               <WarningCircle
                 size={14}
-                className="mt-px shrink-0"
+                className="mt-[var(--border-width-hairline)] shrink-0"
                 aria-hidden="true"
               />
               <span>
@@ -305,14 +305,14 @@ export function KnowledgeBacklinks({
           {query.isSuccess && edges.length === 0 && (
             <p
               data-testid="knowledge-backlinks-empty"
-              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               No other note links to this one.
             </p>
           )}
 
           {edges.length > 0 && (
-            <ul className="flex flex-col py-1">
+            <ul className="flex flex-col py-[var(--space-1)]">
               {edges.map((edge, i) => {
                 const source = nodeByPath.get(edge.from_path);
                 // A node the response never vouched for is treated exactly like
@@ -370,7 +370,7 @@ export function KnowledgeBacklinks({
                     {edge.ambiguous && (
                       <span
                         data-testid="knowledge-backlink-ambiguous"
-                        className="mt-1 block text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+                        className="mt-[var(--space-1)] block text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                       >
                         Ambiguous link
                         {edge.link_text !== undefined && edge.link_text !== ""
@@ -387,7 +387,7 @@ export function KnowledgeBacklinks({
                     {unresolved && (
                       <span
                         data-testid="knowledge-backlink-unresolved"
-                        className="mt-1 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+                        className="mt-[var(--space-1)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                       >
                         <LinkBreak size={12} aria-hidden="true" />
                         Unresolved — this note is not on disk, so it cannot be
@@ -453,7 +453,7 @@ export function KnowledgeBacklinks({
           {skipped.length > 0 && (
             <div
               data-testid="knowledge-backlinks-skipped"
-              className="border-t border-[var(--color-border)] px-3 py-2"
+              className="border-t border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)]"
             >
               <p className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
                 {skipped.length === 1
@@ -461,7 +461,7 @@ export function KnowledgeBacklinks({
                   : `${skipped.length} paths were skipped`}{" "}
                 while walking this collection:
               </p>
-              <ul className="mt-1 flex flex-col gap-1">
+              <ul className="mt-[var(--space-1)] flex flex-col gap-[var(--space-1)]">
                 {skipped.map((skip, i) => (
                   <li
                     key={`${skip.path}-${i}`}

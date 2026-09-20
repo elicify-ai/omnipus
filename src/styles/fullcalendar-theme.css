@@ -137,7 +137,7 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  padding: 2px 4px;
+  padding: var(--space-0-5) var(--space-1);
   min-height: 28px;
 }
 
@@ -235,7 +235,7 @@
 }
 
 .fc .fc-daygrid-event {
-  margin: 1px 2px;
+  margin: var(--border-width-hairline) var(--space-0-5);
   border-radius: 4px;
 }
 
@@ -461,7 +461,7 @@
 
 /* Events inside the popover use the same chip renderer */
 .fc .fc-popover-body .fc-daygrid-event {
-  margin: 2px 0;
+  margin: var(--space-0-5) var(--space-0);
 }
 
 /* "more" link that opens the popover */
@@ -545,7 +545,7 @@
   .fc .fc-col-header-cell-cushion {
     font-size: var(--type-caption-size);
     letter-spacing: var(--font-letter-spacing-normal);
-    padding: 4px 2px;
+    padding: var(--space-1) var(--space-0-5);
   }
 
   .fc .fc-daygrid-day-number,

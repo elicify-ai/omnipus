@@ -68,7 +68,7 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
 
   return (
     <div
-      className="mt-2 flex items-center gap-1.5"
+      className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]"
       aria-label={`${countLabel} sub-agent${countLabel !== 1 ? 's' : ''} ${isAnyLive ? 'running' : 'delegated'}`}
     >
       {/* Chevron indicator + count */}
@@ -80,7 +80,7 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
       </span>
 
       {/* Avatar row — capped at 5 to avoid overflow */}
-      <span className="flex items-center gap-0.5" role="list" aria-label="Sub-agent avatars">
+      <span className="flex items-center gap-[var(--space-0-5)]" role="list" aria-label="Sub-agent avatars">
         {rollup.slice(0, 5).map((item) => (
           <span key={item.agent_id} role="listitem">
             <RollupAvatar item={item} agent={agentById(agents, item.agent_id)} />
@@ -88,7 +88,7 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
         ))}
         {rollup.length > 5 && (
           <span
-            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] ml-0.5"
+            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] ml-[var(--space-0-5)]"
             aria-label={`and ${rollup.length - 5} more`}
           >
             +{rollup.length - 5}

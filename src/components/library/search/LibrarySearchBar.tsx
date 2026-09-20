@@ -209,7 +209,7 @@ function countBadge(n: number, more = false) {
   return (
     <Badge
       variant="secondary"
-      className="ml-1.5 px-1.5 py-0 text-[length:var(--type-caption-size)] leading-4"
+      className="ml-[var(--space-1)] px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4"
     >
       {n}
       {more ? '+' : ''}
@@ -254,13 +254,13 @@ function CoverageChips({ coverage }: { coverage: { term: string; found: boolean 
   if (coverage.length === 0) return null
   const foundCount = coverage.filter((c) => c.found).length
   return (
-    <span data-testid="vault-search-coverage" className="flex flex-wrap items-center gap-1">
+    <span data-testid="vault-search-coverage" className="flex flex-wrap items-center gap-[var(--space-1)]">
       {coverage.map((c) => (
         <span
           key={c.term}
           data-testid={c.found ? 'vault-search-coverage-hit' : 'vault-search-coverage-miss'}
           className={cn(
-            'rounded-sm px-1 py-0 text-[length:var(--type-caption-size)] leading-4',
+            'rounded-sm px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4',
             c.found
               ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
               : 'text-[var(--color-muted)] line-through opacity-60',
@@ -285,9 +285,9 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
         tabIndex={0}
         onClick={onOpen}
         data-testid="vault-search-note-hit"
-        className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <FileText size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {highlightQuery(hit.title || hit.path, query)}
         </span>
@@ -324,9 +324,9 @@ function AttachmentRow({ hit, onOpen }: { hit: VaultSearchAttachmentHit; onOpen:
         tabIndex={0}
         onClick={onOpen}
         data-testid="vault-search-attachment-hit"
-        className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <Paperclip size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {hit.name}
         </span>
@@ -384,13 +384,13 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
         tabIndex={0}
         onClick={onOpen}
         data-testid="vault-search-record-hit"
-        className="flex w-full flex-col items-start gap-1 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="flex w-full flex-col items-start gap-[var(--space-1)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <IdentificationCard size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {hit.title || hit.path}
           {hit.record_type !== undefined && (
-            <Badge variant="outline" className="px-1.5 py-0 text-[length:var(--type-caption-size)] leading-4">
+            <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
               {hit.record_type}
             </Badge>
           )}
@@ -400,7 +400,7 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
         </span>
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.path}</span>
         {hit.cells.length > 0 && (
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
+          <span className="flex flex-wrap items-center gap-x-[var(--space-2-5)] gap-y-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
             {shownCells.map((cell) => (
               <span key={cell.property}>
                 <span className="text-[var(--color-muted)]/70">{cell.property}:</span>{' '}
@@ -417,7 +417,7 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
           data-testid="vault-search-record-cells-more"
-          className="self-start rounded px-2 pb-1 text-[length:var(--type-caption-size)] leading-4 text-[var(--color-muted)] underline-offset-2 hover:underline"
+          className="self-start rounded px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] leading-4 text-[var(--color-muted)] underline-offset-2 hover:underline"
         >
           {expanded ? 'Show fewer properties' : `+${withheldCount} more ${withheldCount === 1 ? 'property' : 'properties'}`}
         </button>
@@ -434,17 +434,17 @@ function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void 
         tabIndex={0}
         onClick={onOpen}
         data-testid="vault-search-view-hit"
-        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="flex w-full items-center gap-[var(--space-1)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
       >
         <SquaresFour size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
         <span className="flex-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{hit.label}</span>
         {hit.type !== undefined && (
-          <Badge variant="outline" className="px-1.5 py-0 text-[length:var(--type-caption-size)] leading-4">
+          <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
             {hit.type}
           </Badge>
         )}
         {hit.kind !== undefined && (
-          <Badge variant="muted" className="px-1.5 py-0 text-[length:var(--type-caption-size)] leading-4">
+          <Badge variant="muted" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
             {hit.kind}
           </Badge>
         )}
@@ -525,11 +525,11 @@ function FileHitRow({
         aria-disabled={!interactive || undefined}
         data-testid={isContent ? 'file-search-content-hit' : 'file-search-name-hit'}
         className={cn(
-          'flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors',
+          'flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
           interactive ? 'hover:bg-[var(--color-surface-2)]' : 'cursor-default opacity-70',
         )}
       >
-        <span className="flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           {isDir ? (
             <FolderSimple size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           ) : isContent ? (
@@ -545,7 +545,7 @@ function FileHitRow({
             <Badge
               variant="secondary"
               data-testid="file-search-match-count"
-              className="px-1.5 py-0 text-[length:var(--type-caption-size)] leading-4"
+              className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4"
             >
               {matchCount} matches
             </Badge>
@@ -607,7 +607,7 @@ function FileSearchStatsFooter({ stats }: { stats: FileSearchResponse['stats'] }
   }
   if (parts.length === 0) return null
   return (
-    <p data-testid="library-search-files-stats" className="px-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
+    <p data-testid="library-search-files-stats" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
       {parts.join(' · ')}.
     </p>
   )
@@ -840,7 +840,7 @@ export function LibrarySearchBar({
   const hasCompleteStatement = response?.complete === true && response.statement !== undefined
 
   return (
-    <div data-testid="library-search-bar" className={cn('flex flex-col gap-2', className)}>
+    <div data-testid="library-search-bar" className={cn('flex flex-col gap-[var(--space-2)]', className)}>
       <div className="relative">
         <MagnifyingGlass
           size={14}
@@ -859,7 +859,7 @@ export function LibrarySearchBar({
           placeholder={placeholder}
           aria-label={ariaLabel}
           data-testid="library-search-input"
-          className="pl-8 pr-8"
+          className="pl-[var(--space-5)] pr-[var(--space-5)]"
         />
         {text !== '' && (
           <button
@@ -868,7 +868,7 @@ export function LibrarySearchBar({
             onClick={() => setText('')}
             aria-label="Clear search"
             data-testid="library-search-clear"
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-[var(--space-0-5)] text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
           >
             <X size={14} aria-hidden="true" />
           </button>
@@ -885,7 +885,7 @@ export function LibrarySearchBar({
       {(!isActive || disabled) && children}
 
       {isActive && !disabled && (
-        <div data-testid="library-search-active" className="flex flex-col gap-2">
+        <div data-testid="library-search-active" className="flex flex-col gap-[var(--space-2)]">
           {error && (
             <LibraryErrorBanner message={error.message || 'Search failed.'} testId="library-search-error" />
           )}
@@ -896,7 +896,7 @@ export function LibrarySearchBar({
               outside one it matches file and folder names, not note
               contents, and says which folder. */}
           {!error && (isVaultMode || isFilesMode) && (
-            <p data-testid="library-search-mode" className="px-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-mode" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
               {isVaultMode
                 ? isInsideCollection
                   ? `Searching the whole knowledge base${collectionDisplayName ? ` “${collectionDisplayName}”` : ''} — this folder is inside it.`
@@ -914,7 +914,7 @@ export function LibrarySearchBar({
               stated beside the counts so the note count is never read as
               covering them. */}
           {!error && isVaultMode && response && counts.all > 0 && (
-            <p data-testid="library-search-results-summary" className="px-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-results-summary" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
               {(() => {
                 const kinds = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => counts[k] > 0)
                 const phrases = kinds.map((k) =>
@@ -953,7 +953,7 @@ export function LibrarySearchBar({
             </Tabs>
           )}
 
-          <div role="status" aria-live="polite" className="flex flex-col gap-1 empty:hidden">
+          <div role="status" aria-live="polite" className="flex flex-col gap-[var(--space-1)] empty:hidden">
             {isBusy && (
               <p data-testid="library-search-busy" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Searching…
@@ -965,9 +965,9 @@ export function LibrarySearchBar({
             <div
               role="status"
               data-testid="library-search-not-ready"
-              className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
             >
-              <Warning size={14} weight="fill" aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
+              <Warning size={14} weight="fill" aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]" />
               <div className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
                 <p data-testid="library-search-statement">{bannerStatement}</p>
                 {/* US-1 AS-2 honesty port (FR-036): a ratio is stated only
@@ -1010,9 +1010,9 @@ export function LibrarySearchBar({
             <div
               role="status"
               data-testid="library-search-clamped"
-              className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
             >
-              <Warning size={14} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
+              <Warning size={14} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-muted)]" />
               <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
                 {clamp.requested === undefined
                   ? 'Result count clamped to the server’s maximum.'
@@ -1032,15 +1032,15 @@ export function LibrarySearchBar({
           )}
 
           {!error && isVaultMode && response && counts.all > 0 && (
-            <div data-testid="library-search-results" className="flex flex-col gap-3 overflow-y-auto">
+            <div data-testid="library-search-results" className="flex flex-col gap-[var(--space-2-5)] overflow-y-auto">
               {(filter === 'all' || filter === 'notes') && response.notes.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Notes
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {response.notes.map((hit) => (
                       <NoteRow key={hit.path} hit={hit} query={text.trim()} onOpen={() => openNote(hit.path)} />
                     ))}
@@ -1051,11 +1051,11 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'records') && response.records.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Records
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {response.records.map((hit) => (
                       <RecordRow key={hit.path} hit={hit} query={text.trim()} onOpen={() => openNote(hit.path)} />
                     ))}
@@ -1066,11 +1066,11 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'views') && response.views.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Views
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {response.views.map((hit) => (
                       <ViewRow
                         key={hit.view}
@@ -1085,11 +1085,11 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'attachments') && (response.attachments?.length ?? 0) > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Attachments
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {(response.attachments ?? []).map((hit) => (
                       <AttachmentRow key={hit.path} hit={hit} onOpen={() => openNote(hit.path)} />
                     ))}
@@ -1101,7 +1101,7 @@ export function LibrarySearchBar({
                   other kinds still have hits (counts.all > 0) — say so rather
                   than rendering a silently empty panel. */}
               {filter !== 'all' && counts[filter] === 0 && (
-                <p data-testid="library-search-filter-empty" className="px-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                <p data-testid="library-search-filter-empty" className="px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   No {filter} match “{text.trim()}”.
                 </p>
               )}
@@ -1120,13 +1120,13 @@ export function LibrarySearchBar({
                 <div
                   role="status"
                   data-testid="library-search-truncated"
-                  className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2"
+                  className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
                 >
                   <Warning
                     size={14}
                     weight="fill"
                     aria-hidden="true"
-                    className="mt-0.5 shrink-0 text-[var(--color-warning)]"
+                    className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]"
                   />
                   <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
                     {/* Finding F-J: the schema states truncated_reason
@@ -1172,7 +1172,7 @@ export function LibrarySearchBar({
               )}
 
               {filesResponse.hits.length === 0 && (
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-[var(--space-1)]">
                   {/* Finding S4: `text` is the LIVE keystroke value; during
                       the debounce window it can already name a query that
                       has not run yet, while `filesResponse` (and this empty
@@ -1197,7 +1197,7 @@ export function LibrarySearchBar({
 
               {filesResponse.hits.length > 0 && (
                 <>
-                  <ul data-testid="library-search-results" className="flex flex-col gap-1 overflow-y-auto">
+                  <ul data-testid="library-search-results" className="flex flex-col gap-[var(--space-1)] overflow-y-auto">
                     {filesResponse.hits.map((hit, i) => (
                       <FileHitRow
                         key={`${hit.path}:${hit.line ?? 0}:${i}`}
@@ -1266,7 +1266,7 @@ export function LibrarySearchBar({
             </DialogDescription>
           </DialogHeader>
           {viewResultQuery.isPending && (
-            <div role="status" className="flex items-center gap-2 py-6 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+            <div role="status" className="flex items-center gap-[var(--space-2)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               <CircleNotch size={16} aria-hidden="true" className="animate-spin" />
               Loading view…
             </div>

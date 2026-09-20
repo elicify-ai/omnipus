@@ -350,7 +350,7 @@ export function ProviderPicker({
   const showList = model.expanded && status === 'ready'
 
   return (
-    <div data-testid={testId} className="flex flex-col gap-3">
+    <div data-testid={testId} className="flex flex-col gap-[var(--space-2-5)]">
       {/*
        * The capture-phase handler below owns Home/End/Arrow/Enter for the
        * picker's OWN rows (FR-026, MAJ-013 — see the file header). It must
@@ -379,7 +379,7 @@ export function ProviderPicker({
         role="group"
         aria-label="Popular providers"
         data-testid="picker-popular"
-        className="grid grid-cols-4 gap-2"
+        className="grid grid-cols-4 gap-[var(--space-2)]"
       >
         {model.popular.map((row) => {
           const key = refKey({ kind: 'popular', key: row.company })
@@ -392,7 +392,7 @@ export function ProviderPicker({
               tabIndex={-1}
               aria-disabled={row.disabled || undefined}
               onClick={() => select({ kind: 'popular', key: row.company })}
-              className="flex min-h-[44px] items-center justify-center rounded-md border px-3 py-2 text-[length:var(--type-body-compact-size)]"
+              className="flex min-h-[44px] items-center justify-center rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
             >
               {row.company}
@@ -405,7 +405,7 @@ export function ProviderPicker({
         shouldFilter={PICKER_CMDK_SHOULD_FILTER}
         label="Providers"
         data-testid="picker-command"
-        className="gap-2"
+        className="gap-[var(--space-2)]"
       >
         {/* ── Recent (FR-022: between the Popular band and the search field) ── */}
         {model.recent.length > 0 && (
@@ -417,7 +417,7 @@ export function ProviderPicker({
           <div data-testid="picker-recent" className="flex flex-col">
             <span
               id={`${testId}-recent-label`}
-              className="px-2 py-1 text-[length:var(--type-utility-xs-size)] uppercase"
+              className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] uppercase"
               style={{ color: 'var(--color-muted)' }}
             >
               Recent
@@ -434,7 +434,7 @@ export function ProviderPicker({
                     ref={(el) => registerRow(key, el)}
                     data-testid={`picker-recent-${recent.provider.id}`}
                     onClick={() => select({ kind: 'recent', key: recent.provider.id })}
-                    className="flex min-h-[32px] cursor-pointer items-center rounded px-2 py-1 text-[length:var(--type-body-compact-size)]"
+                    className="flex min-h-[32px] cursor-pointer items-center rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
                     style={{ color: 'var(--color-secondary)' }}
                   >
                     {recent.label}
@@ -464,14 +464,14 @@ export function ProviderPicker({
           aria-expanded={model.expanded}
           aria-controls={listId}
           onClick={() => setExpandedByOperator((v) => !v)}
-          className="flex min-h-[32px] items-center justify-between rounded px-2 text-[length:var(--type-body-compact-size)]"
+          className="flex min-h-[32px] items-center justify-between rounded px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ color: 'var(--color-secondary)' }}
         >
           All providers ({model.allProvidersCount})
         </button>
 
         {status === 'loading' && (
-          <div data-testid="picker-catalog-loading" className="flex items-center gap-2 px-2 py-3 text-[length:var(--type-body-compact-size)]">
+          <div data-testid="picker-catalog-loading" className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]">
             <CircleNotch size={14} className="animate-spin" aria-hidden="true" />
             Loading providers…
           </div>
@@ -484,7 +484,7 @@ export function ProviderPicker({
             role="alert"
             aria-live="assertive"
             data-testid="picker-catalog-error"
-            className="flex items-center gap-2 rounded border px-2 py-3 text-[length:var(--type-body-compact-size)]"
+            className="flex items-center gap-[var(--space-2)] rounded border px-[var(--space-2)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
             style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
           >
             <WarningCircle size={14} weight="fill" aria-hidden="true" />
@@ -494,7 +494,7 @@ export function ProviderPicker({
               data-testid="picker-catalog-retry"
               tabIndex={0}
               onClick={() => onRetry?.()}
-              className="ml-auto flex min-h-[24px] items-center gap-1 rounded border px-2"
+              className="ml-auto flex min-h-[24px] items-center gap-[var(--space-1)] rounded border px-[var(--space-2)]"
               style={{ borderColor: 'var(--color-border)' }}
             >
               <ArrowClockwise size={12} aria-hidden="true" />
@@ -541,7 +541,7 @@ export function ProviderPicker({
                         transform: `translateY(${item.start}px)`,
                         color: 'var(--color-muted)',
                       }}
-                      className="flex items-center px-2 text-[length:var(--type-utility-xs-size)] uppercase"
+                      className="flex items-center px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] uppercase"
                     >
                       {entry.letter}
                     </div>
@@ -571,7 +571,7 @@ export function ProviderPicker({
                       transform: `translateY(${item.start}px)`,
                       color: 'var(--color-secondary)',
                     }}
-                    className="flex cursor-pointer items-center gap-2 px-2 text-[length:var(--type-body-compact-size)]"
+                    className="flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                   >
                     {row.disabled && <Prohibit size={14} aria-hidden="true" />}
                     <span>{row.company}</span>
@@ -589,7 +589,7 @@ export function ProviderPicker({
         </div>
 
         {model.expanded && !model.hasMatches && model.emptyMessage && (
-          <div data-testid="picker-empty" className="px-2 py-3 text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
+          <div data-testid="picker-empty" className="px-[var(--space-2)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
             {model.emptyMessage}
           </div>
         )}
@@ -604,7 +604,7 @@ export function ProviderPicker({
             data-testid="picker-custom-endpoint"
             aria-selected={activeKey === `custom:${CUSTOM_ENDPOINT_ROW_ID}`}
             onClick={() => select({ kind: 'custom', key: CUSTOM_ENDPOINT_ROW_ID })}
-            className="flex min-h-[32px] cursor-pointer items-center gap-2 rounded px-2 py-1 text-[length:var(--type-body-compact-size)]"
+            className="flex min-h-[32px] cursor-pointer items-center gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
             style={{ color: 'var(--color-secondary)' }}
           >
             <Plus size={14} aria-hidden="true" />

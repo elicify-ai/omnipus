@@ -110,10 +110,10 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
       <div
         data-testid={testId}
         data-preview-status="loading"
-        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         aria-busy="true"
       >
-        <p className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <Spinner size={11} className="animate-spin" />
           Computing the real command line…
         </p>
@@ -136,7 +136,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
       <div
         data-testid={testId}
         data-preview-status="error"
-        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
       >
         <p
           className={`text-[length:var(--type-caption-size)] leading-snug ${
@@ -167,15 +167,15 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         data-preview-status="ready"
         role="group"
         aria-label="The real command Omnipus will run"
-        className="space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2.5"
+        className="space-y-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
       >
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-[var(--space-2)]">
           <p className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]">Command Omnipus will run</p>
           <button tabIndex={0}
             type="button"
             onClick={() => copyCommand(result.command_line)}
             data-testid={testId ? `${testId}-copy` : undefined}
-            className="flex shrink-0 items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+            className="flex shrink-0 items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)]"
           >
             <Copy size={11} />
             Copy
@@ -184,7 +184,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
 
         <code
           data-testid={testId ? `${testId}-command-line` : undefined}
-          className="block whitespace-pre-wrap break-all rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-3 py-2 font-mono text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
+          className="block whitespace-pre-wrap break-all rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-[var(--space-2-5)] py-[var(--space-2)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
         >
           {result.command_line}
         </code>
@@ -199,9 +199,9 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         {result.model_dropped_reason && (
           <p
             data-testid={testId ? `${testId}-model-dropped-reason` : undefined}
-            className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
+            className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
           >
-            <WarningCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
+            <WarningCircle size={11} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
             <span>
               <span className="font-medium">--model omitted:</span> {result.model_dropped_reason}
             </span>
@@ -209,13 +209,13 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         )}
 
         {result.dropped_args.length > 0 && (
-          <div data-testid={testId ? `${testId}-dropped-args` : undefined} className="space-y-1">
+          <div data-testid={testId ? `${testId}-dropped-args` : undefined} className="space-y-[var(--space-1)]">
             {result.dropped_args.map((dropped, i) => (
               <p
                 key={`${dropped.flag}-${i}`}
-                className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
+                className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
               >
-                <WarningCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
+                <WarningCircle size={11} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
                 <span>
                   <code className="font-mono">{dropped.flag}</code> was dropped from the CLI arguments —{' '}
                   {dropped.reason}
@@ -306,10 +306,10 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
   return (
     <div
       data-testid={smokeTestId}
-      className="space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2.5"
+      className="space-y-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
     >
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0 space-y-0.5">
+      <div className="flex items-center justify-between gap-[var(--space-2-5)]">
+        <div className="min-w-0 space-y-[var(--space-0-5)]">
           <p className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]">Send a test message</p>
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
             Runs a real request through this CLI (spends a small amount of usage).
@@ -320,7 +320,7 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
           onClick={handleClick}
           disabled={isPending}
           data-testid={smokeTestId ? `${smokeTestId}-button` : undefined}
-          className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex shrink-0 items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isPending ? <Spinner size={12} className="animate-spin" /> : <PaperPlaneTilt size={12} />}
           {isPending ? 'Running…' : 'Send a test message'}
@@ -341,9 +341,9 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
       {status.kind === 'error' && (
         <p
           data-testid={smokeTestId ? `${smokeTestId}-error` : undefined}
-          className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug"
+          className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug"
         >
-          <XCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
+          <XCircle size={11} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
           <span>{status.message}</span>
         </p>
       )}
@@ -379,12 +379,12 @@ function WorkspaceProvenanceNote({ usedAgentWorkspace, testId }: { usedAgentWork
 function SmokeTestResult({ result, testId }: { result: ExecutorSmokeTestResponse; testId?: string }) {
   if (!result.ok) {
     return (
-      <div data-testid={testId ? `${testId}-failure` : undefined} className="space-y-1.5">
+      <div data-testid={testId ? `${testId}-failure` : undefined} className="space-y-[var(--space-1)]">
         <p
           data-testid={testId ? `${testId}-error` : undefined}
-          className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug"
+          className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug"
         >
-          <XCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
+          <XCircle size={11} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
           <span>{result.error || 'The test run did not succeed.'}</span>
         </p>
         <WorkspaceProvenanceNote
@@ -396,14 +396,14 @@ function SmokeTestResult({ result, testId }: { result: ExecutorSmokeTestResponse
   }
 
   return (
-    <div data-testid={testId ? `${testId}-success` : undefined} className="space-y-1.5">
-      <p className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-emerald-400">
+    <div data-testid={testId ? `${testId}-success` : undefined} className="space-y-[var(--space-1)]">
+      <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-emerald-400">
         <CheckCircle size={11} weight="fill" />
         Responded in {formatSmokeTestDuration(result.duration_ms)}
       </p>
       <p
         data-testid={testId ? `${testId}-response-text` : undefined}
-        className="rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-3 py-2 font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-words"
+        className="rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-[var(--space-2-5)] py-[var(--space-2)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-words"
       >
         {result.response_text}
       </p>

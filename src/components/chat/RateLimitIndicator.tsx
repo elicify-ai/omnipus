@@ -56,7 +56,7 @@ export function RateLimitIndicator({
   return (
     <div
       className={cn(
-        'flex items-start gap-2.5 px-3 py-2.5 rounded-lg border text-[length:var(--type-utility-xs-size)]',
+        'flex items-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border text-[length:var(--type-utility-xs-size)]',
         canRetry
           ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400'
           : 'border-amber-500/30 bg-amber-500/5 text-amber-400',
@@ -65,9 +65,9 @@ export function RateLimitIndicator({
       aria-live="polite"
     >
       {canRetry ? (
-        <Clock size={13} className="mt-0.5 shrink-0 text-emerald-400" />
+        <Clock size={13} className="mt-[var(--space-0-5)] shrink-0 text-emerald-400" />
       ) : (
-        <Warning size={13} className="mt-0.5 shrink-0 text-amber-400" weight="fill" />
+        <Warning size={13} className="mt-[var(--space-0-5)] shrink-0 text-amber-400" weight="fill" />
       )}
 
       <div className="flex-1 min-w-0">
@@ -76,7 +76,7 @@ export function RateLimitIndicator({
         ) : (
           <>
             <span className="font-medium">{label}</span>
-            <span className="mx-1.5 text-[var(--color-muted)]">—</span>
+            <span className="mx-[var(--space-1)] text-[var(--color-muted)]">—</span>
             <span>
               Retry in{' '}
               <span className="font-mono font-semibold">{formatSeconds(remaining)}</span>
@@ -88,7 +88,7 @@ export function RateLimitIndicator({
       <button tabIndex={0}
         type="button"
         onClick={onDismiss}
-        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-0.5"
+        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-[var(--space-0-5)]"
         aria-label="Dismiss rate limit notice"
       >
         <X size={12} />

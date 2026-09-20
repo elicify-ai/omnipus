@@ -188,7 +188,7 @@ export function LibrarySignaturePad({
           onPointerCancel={endStroke}
         />
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-[var(--space-2-5)]">
           <Label htmlFor="library-pdf-signature-page" className="shrink-0 text-[length:var(--type-utility-xs-size)]">
             Place on page
           </Label>

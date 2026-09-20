@@ -119,7 +119,7 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
   const buttonDisabled = disabled || !workspaceId
 
   const resolvedClassName = cn(
-                      'w-full flex items-center gap-3 rounded-md px-2.5 py-2 text-left',
+                      'w-full flex items-center gap-[var(--space-2-5)] rounded-md px-[var(--space-2)] py-[var(--space-2)] text-left',
                       'hover:bg-[var(--color-surface-2)] transition-colors disabled:opacity-60',
                     )
   return (
@@ -132,7 +132,7 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
         aria-label="Attach a file from the workspace library"
         title={workspaceId ? 'Attach from library' : 'No active workspace'}
         className={cn(
-          'shrink-0 h-7 w-7 mb-1.5 rounded-full flex items-center justify-center',
+          'shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center',
           'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)]',
           'transition-colors disabled:opacity-40 disabled:cursor-not-allowed',
         )}
@@ -150,24 +150,24 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
             </DialogDescription>
           </DialogHeader>
 
-          <div className="max-h-[50dvh] overflow-y-auto -mx-1 px-1">
+          <div className="max-h-[50dvh] overflow-y-auto -mx-[var(--space-1)] px-[var(--space-1)]">
             {isLoading && (
-              <div className="flex items-center justify-center gap-2 py-8 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+              <div className="flex items-center justify-center gap-[var(--space-2)] py-[var(--space-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
                 <SpinnerGap size={16} className="animate-spin" /> Loading library…
               </div>
             )}
             {isError && (
-              <div className="flex flex-col items-center justify-center gap-2 py-8 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+              <div className="flex flex-col items-center justify-center gap-[var(--space-2)] py-[var(--space-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
                 <WarningCircle size={20} className="text-[var(--color-error)]" />
                 Couldn’t load the library.
               </div>
             )}
             {!isLoading && !isError && entries.length === 0 && (
-              <div className="py-8 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+              <div className="py-[var(--space-5)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
                 No files in this workspace yet. Upload one in chat first.
               </div>
             )}
-            <ul className="flex flex-col gap-1" role="list">
+            <ul className="flex flex-col gap-[var(--space-1)]" role="list">
               {entries.map((entry) => (
                 <li key={entry.id}>
                   <button
@@ -221,13 +221,13 @@ export function LibraryAttachmentChips() {
   const attachments = useLibraryAttachments()
   if (attachments.length === 0) return null
   return (
-    <div className="flex flex-wrap gap-1.5 px-1" data-testid="library-attachment-chips">
+    <div className="flex flex-wrap gap-[var(--space-1)] px-[var(--space-1)]" data-testid="library-attachment-chips">
       {attachments.map((a) => {
         const { Icon, color } = fileTypeMeta(a.filename, a.contentType)
         return (
           <div
             key={a.id}
-            className="relative shrink-0 flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]"
+            className="relative shrink-0 flex items-center gap-[var(--space-2)] pl-[var(--space-1)] pr-[var(--space-2)] py-[var(--space-1)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]"
             title={a.filename}
             data-testid={`library-chip-${a.mediaId}`}
           >

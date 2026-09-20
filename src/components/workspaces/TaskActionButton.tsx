@@ -171,7 +171,7 @@ export function TaskActionButton({ task, className }: TaskActionButtonProps) {
         onClick={() => setConfirmOpen(true)}
         disabled={pending}
         className={cn(
-          'inline-flex items-center justify-center rounded p-1 transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px] disabled:opacity-50',
+          'inline-flex items-center justify-center rounded p-[var(--space-1)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px] disabled:opacity-50',
           action === 'stop'
             ? 'text-[var(--color-muted)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]'
             : 'text-[var(--color-muted)] hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)]',

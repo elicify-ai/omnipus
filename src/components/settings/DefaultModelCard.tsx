@@ -126,10 +126,10 @@ export function DefaultModelCard({
 
   return (
     <div
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3"
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-2-5)]"
       data-testid="default-model-card"
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-[var(--space-2-5)]">
         <div className="min-w-0">
           <p className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             Default model
@@ -137,15 +137,15 @@ export function DefaultModelCard({
 
           {status === 'loading' ? (
             <div
-              className="mt-1.5 h-4 w-40 animate-pulse rounded bg-[var(--color-surface-2)]"
+              className="mt-[var(--space-1)] h-4 w-40 animate-pulse rounded bg-[var(--color-surface-2)]"
               data-testid="default-model-loading"
             />
           ) : status === 'error' ? (
-            <p className="mt-1 text-[length:var(--type-body-compact-size)] text-red-400" data-testid="default-model-error">
+            <p className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-red-400" data-testid="default-model-error">
               Could not load the default model. Please try again.
             </p>
           ) : defaultModel ? (
-            <p className="mt-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+            <p className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
               <span data-testid="default-model-provider">{providerLabel}</span>
               {' · '}
               <span className="font-mono text-[length:var(--type-utility-xs-size)]" data-testid="default-model-model">
@@ -153,13 +153,13 @@ export function DefaultModelCard({
               </span>
             </p>
           ) : (
-            <p className="mt-1 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="default-model-unset">
+            <p className="mt-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="default-model-unset">
               No default model yet — pick one so new agents have somewhere to run.
             </p>
           )}
 
           {status !== 'loading' && defaultModel && (
-            <p className="mt-0.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+            <p className="mt-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {windowUnknown ? (
                 <>
                   <span data-testid="default-model-window">{NO_CONTEXT_LENGTH_COPY}</span>{' '}
@@ -187,7 +187,7 @@ export function DefaultModelCard({
         <Button
           size="sm"
           variant="outline"
-          className="h-7 shrink-0 px-3 text-[length:var(--type-utility-xs-size)]"
+          className="h-7 shrink-0 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
           onClick={() => setOpen(!open)}
           disabled={isSaving}
           data-testid="default-model-change-btn"
@@ -197,7 +197,7 @@ export function DefaultModelCard({
       </div>
 
       {open && (
-        <div className="mt-3" data-testid="default-model-selector-wrap">
+        <div className="mt-[var(--space-2-5)]" data-testid="default-model-selector-wrap">
           <ModelSelector
             models={[]}
             value={defaultModel?.model ?? ''}

@@ -367,7 +367,7 @@ function ToolApprovalCard({
         // no special-casing needed here beyond letting the default close fire.
       >
         {/* Header */}
-        <DialogHeader className="flex flex-row items-center gap-3 space-y-0 px-5 py-4 border-b border-[var(--color-border)] text-left">
+        <DialogHeader className="flex flex-row items-center gap-[var(--space-2-5)] space-y-0 px-[var(--space-3)] py-[var(--space-3)] border-b border-[var(--color-border)] text-left">
           <Shield
             size={20}
             weight="bold"
@@ -395,7 +395,7 @@ function ToolApprovalCard({
             </DialogDescription>
           </div>
           {queueLength > 1 && (
-            <span className="shrink-0 text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] text-[var(--color-muted)] px-2 py-0.5 rounded-full">
+            <span className="shrink-0 text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-0-5)] rounded-full">
               +{queueLength - 1} more
             </span>
           )}
@@ -405,9 +405,9 @@ function ToolApprovalCard({
             (e.g. request_mount), or the generic Tool line + optional
             'additive' preview (e.g. bash) + raw Arguments JSON fallback. */}
         {isReconnectStub ? (
-          <div className="px-5 py-4 space-y-2">
-            <div className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
-              <WarningCircle size={16} weight="bold" className="shrink-0 mt-0.5" aria-hidden="true" />
+          <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2)]">
+            <div className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]">
+              <WarningCircle size={16} weight="bold" className="shrink-0 mt-[var(--space-0-5)]" aria-hidden="true" />
               <p>
                 This page reconnected after {humanizeToolName(toolName)} was already waiting on a
                 decision, and the original request details did not come back with it.
@@ -420,9 +420,9 @@ function ToolApprovalCard({
         ) : replaceEntry ? (
           <replaceEntry.Body {...previewCtx} />
         ) : (
-          <div className="px-5 py-4 space-y-3">
+          <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)]">
             <div>
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-1">Tool</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Tool</p>
               <p className="font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-accent)] font-semibold">
                 {humanizeToolName(toolName)}
               </p>
@@ -432,8 +432,8 @@ function ToolApprovalCard({
 
             {args && Object.keys(args).length > 0 && (
               <div>
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-1">Arguments</p>
-                <pre className="text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-3 py-2 overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Arguments</p>
+                <pre className="text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
                   {argsJson}
                 </pre>
               </div>
@@ -442,15 +442,15 @@ function ToolApprovalCard({
         )}
 
         {/* Countdown */}
-        <div className="px-5 pb-3">
+        <div className="px-[var(--space-3)] pb-[var(--space-2-5)]">
           {hasExpired ? (
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex items-center gap-1">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex items-center gap-[var(--space-1)]">
               <XCircle size={13} weight="fill" aria-hidden="true" />
               Approval expired unanswered — the agent is told nobody answered (a timeout, not a denial by you).
             </p>
           ) : (
             <>
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between mb-[var(--space-1)]">
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Expires in</p>
                 <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">
                   {formatCountdown(remainingMs)}
@@ -474,7 +474,7 @@ function ToolApprovalCard({
             action. flex-wrap keeps all four usable at phone widths (<768px)
             without any button clipping. */}
         {!hasExpired && (
-          <div className="flex flex-wrap gap-2 px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
+          <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             {isReconnectStub ? (
               // Only the safe action is offered. A reconnect stub has no
               // arguments: Always Allow would record a grant for {}, which
@@ -546,7 +546,7 @@ function ToolApprovalCard({
         )}
 
         {hasExpired && (
-          <div className="px-5 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
+          <div className="px-[var(--space-3)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-2)]">
             <Button
               size="sm"
               variant="ghost"

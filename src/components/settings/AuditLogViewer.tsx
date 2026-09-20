@@ -87,11 +87,11 @@ function hasNonEmpty(obj?: Record<string, unknown>): boolean {
 
 function JsonBlock({ label, value }: { label: string; value: Record<string, unknown> }) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-[var(--space-1)]">
       <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         {label}
       </p>
-      <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] overflow-auto max-h-32 whitespace-pre-wrap break-all">
+      <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)] text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] overflow-auto max-h-32 whitespace-pre-wrap break-all">
         {JSON.stringify(value, null, 2)}
       </pre>
     </div>
@@ -128,7 +128,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
     <>
       <TableRow>
         <TableCell className="whitespace-nowrap text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)]">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-[var(--space-1)]">
             {hasDetail ? (
               <button tabIndex={0}
                 type="button"
@@ -166,18 +166,18 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
       </TableRow>
       {expanded && hasDetail && (
         <TableRow id={detailId}>
-          <TableCell colSpan={6} className="bg-[var(--color-surface-1)]/60 p-3">
-            <div className="space-y-3 pl-4 border-l-2 border-[var(--color-border)]">
+          <TableCell colSpan={6} className="bg-[var(--color-surface-1)]/60 p-[var(--space-2-5)]">
+            <div className="space-y-[var(--space-2-5)] pl-[var(--space-3)] border-l-2 border-[var(--color-border)]">
               {entry.command && (
-                <div className="space-y-1">
+                <div className="space-y-[var(--space-1)]">
                   <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Command</p>
-                  <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] overflow-auto max-h-20 whitespace-pre-wrap break-all">
+                  <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)] text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] overflow-auto max-h-20 whitespace-pre-wrap break-all">
                     {entry.command}
                   </pre>
                 </div>
               )}
               {entry.policy_rule && (
-                <div className="space-y-1">
+                <div className="space-y-[var(--space-1)]">
                   <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Policy Rule</p>
                   <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{entry.policy_rule}</p>
                 </div>
@@ -186,13 +186,13 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
                   actor + resource + old_value/new_value, distinct from the
                   tool-call shape above. */}
               {entry.actor && (
-                <div className="space-y-1">
+                <div className="space-y-[var(--space-1)]">
                   <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Actor</p>
                   <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{entry.actor}</p>
                 </div>
               )}
               {entry.resource && (
-                <div className="space-y-1">
+                <div className="space-y-[var(--space-1)]">
                   <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Resource</p>
                   <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{entry.resource}</p>
                 </div>
@@ -302,19 +302,19 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col gap-0 p-0 overflow-hidden">
         {/* Header */}
-        <DialogHeader className="flex-none px-5 pt-5 pb-4 border-b border-[var(--color-border)]">
-          <div className="flex items-center gap-2">
+        <DialogHeader className="flex-none px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-3)] border-b border-[var(--color-border)]">
+          <div className="flex items-center gap-[var(--space-2)]">
             <ListBullets size={16} weight="bold" style={{ color: 'var(--color-accent)' }} />
             <DialogTitle className="font-headline text-base">Audit Log</DialogTitle>
             <ChainStatusBadge status={auditLog?.chain_status} brokenIndex={auditLog?.chain_broken_index ?? undefined} />
             {isFetching && !isLoading && (
-              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] ml-1">Refreshing...</span>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] ml-[var(--space-1)]">Refreshing...</span>
             )}
           </div>
         </DialogHeader>
 
         {/* Filter bar */}
-        <div className="flex-none flex items-center gap-2 px-5 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/40">
+        <div className="flex-none flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2-5)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)]/40">
           <Funnel size={13} style={{ color: 'var(--color-muted)' }} className="shrink-0" />
           <SmartSelect
             value={eventFilter}
@@ -333,7 +333,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 gap-1.5 text-[length:var(--type-utility-xs-size)] ml-auto"
+            className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] ml-auto"
             onClick={handleRefresh}
             disabled={isFetching}
           >
@@ -355,17 +355,17 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
               ))}
             </div>
           ) : isError ? (
-            <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
+            <div className="flex flex-col items-center justify-center gap-[var(--space-2-5)] py-[var(--space-8)] text-center">
               <p className="text-[length:var(--type-body-compact-size)] text-red-400">
                 Failed to load audit log{error instanceof Error ? `: ${error.message}` : '.'}
               </p>
               <Button variant="outline" size="sm" onClick={handleRefresh}>
-                <ArrowsClockwise size={12} className="mr-1.5" />
+                <ArrowsClockwise size={12} className="mr-[var(--space-1)]" />
                 Retry
               </Button>
             </div>
           ) : filtered.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+            <div className="flex flex-col items-center justify-center gap-[var(--space-2)] py-[var(--space-8)] text-center">
               <ListBullets size={28} weight="duotone" style={{ color: 'var(--color-muted)' }} />
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">No audit entries found</p>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
@@ -397,7 +397,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
 
         {/* Footer — entry count */}
         {!isLoading && !isError && entries.length > 0 && (
-          <div className="flex-none px-5 py-2.5 border-t border-[var(--color-border)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+          <div className="flex-none px-[var(--space-3)] py-[var(--space-2)] border-t border-[var(--color-border)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             Showing {filtered.length} of {entries.length} {entries.length === 1 ? 'entry' : 'entries'} — auto-refreshes every 30s
           </div>
         )}

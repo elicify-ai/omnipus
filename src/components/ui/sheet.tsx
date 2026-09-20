@@ -107,7 +107,7 @@ const SheetContent = React.forwardRef<
           // surface-0 (Deep Space Black): panels match the app background so the
           // shell reads as one flat dark surface; cards/inputs (surface-2/3) still
           // lift above it for contrast.
-          'fixed z-50 overflow-y-auto overscroll-contain bg-[var(--color-surface-0)] p-6 shadow-xl transition ease-in-out',
+          'fixed z-50 overflow-y-auto overscroll-contain bg-[var(--color-surface-0)] p-[var(--space-4)] shadow-xl transition ease-in-out',
           'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500 motion-reduce:animate-none motion-reduce:transition-none',
           sideVariants[side],
           // Default per-side width (e.g. left/right = sm:w-80). The widthClass
@@ -147,7 +147,7 @@ SheetContent.displayName = DialogPrimitive.Content.displayName
 const SheetHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      'flex flex-row items-center gap-2 text-left h-chrome-header min-h-chrome-header px-4 shrink-0',
+      'flex flex-row items-center gap-[var(--space-2)] text-left h-chrome-header min-h-chrome-header px-[var(--space-3)] shrink-0',
       className,
     )}
     {...props}
@@ -162,7 +162,7 @@ SheetHeader.displayName = 'SheetHeader'
 // row is `justify-end`, so the visual RIGHT-most (primary, last in DOM)
 // button still lands right-most, same as before this fix.
 const SheetFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col gap-2 max-sm:pointer-coarse:gap-6 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0', className)} {...props} />
+  <div className={cn('flex flex-col gap-[var(--space-2)] max-sm:pointer-coarse:gap-[var(--space-4)] sm:flex-row sm:justify-end sm:space-x-[var(--space-2)] sm:gap-0', className)} {...props} />
 )
 SheetFooter.displayName = 'SheetFooter'
 

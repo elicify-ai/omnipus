@@ -193,7 +193,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         aria-expanded={expanded}
         aria-label={`Goal: ${truncateCondition(frame.condition)}, state ${config.label}. Click to ${expanded ? 'collapse' : 'expand'}.`}
         className={cn(
-          'flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-utility-xs-size)] shadow-md transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer',
+          'flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shadow-md transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer',
           config.accentClass,
         )}
       >
@@ -216,7 +216,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         <p
           data-testid="goal-pill-subtitle"
           title={frame.latest_reason}
-          className="mt-0.5 max-w-[260px] truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+          className="mt-[var(--space-0-5)] max-w-[260px] truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
         >
           {frame.latest_reason}
         </p>
@@ -225,16 +225,16 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
       {expanded && (
         <div
           data-testid="goal-pill-expanded"
-          className="mt-1 w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 text-[length:var(--type-utility-xs-size)] shadow-lg"
+          className="mt-[var(--space-1)] w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] shadow-lg"
         >
           {/* Condition (full, not truncated) */}
-          <div className="flex items-start gap-2">
-            <Target size={12} weight="fill" className="mt-0.5 shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
+          <div className="flex items-start gap-[var(--space-2)]">
+            <Target size={12} weight="fill" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
             <div className="flex-1 min-w-0">
               <p className="text-[var(--color-secondary)] break-words" data-testid="goal-pill-condition">
                 {frame.condition}
               </p>
-              <p className="text-[var(--color-muted)] mt-1 tabular-nums" data-testid="goal-pill-round">
+              <p className="text-[var(--color-muted)] mt-[var(--space-1)] tabular-nums" data-testid="goal-pill-round">
                 round {frame.round}/{frame.max_rounds} · active loops {frame.active_loops}/{frame.cap}
               </p>
             </div>
@@ -242,24 +242,24 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
 
           {/* Latest judge reason */}
           {frame.latest_reason && (
-            <p className="text-[var(--color-muted)] mt-1.5 italic break-words" title={frame.latest_reason}>
+            <p className="text-[var(--color-muted)] mt-[var(--space-1)] italic break-words" title={frame.latest_reason}>
               {frame.latest_reason}
             </p>
           )}
 
           {/* Latest per-criterion verdict (from judgeActivity, goal-scoped) */}
           {latestVerdict && (
-            <div className="mt-2 border-t border-[var(--color-border)] pt-2">
-              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[length:var(--type-caption-size)] font-sans mb-1">
+            <div className="mt-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2)]">
+              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[length:var(--type-caption-size)] font-sans mb-[var(--space-1)]">
                 Latest verdict — {latestVerdict.met ? 'met' : 'not met'} (round {latestVerdict.round})
               </p>
-              <ul className="space-y-0.5" data-testid="goal-pill-verdict-criteria">
+              <ul className="space-y-[var(--space-0-5)]" data-testid="goal-pill-verdict-criteria">
                 {latestVerdict.per_criterion.map((c) => (
-                  <li key={c.criterion_id} className="flex items-start gap-1.5 text-[length:var(--type-caption-size)]">
+                  <li key={c.criterion_id} className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
                     {c.met ? (
-                      <CheckCircle size={11} className="mt-0.5 shrink-0 text-[color:var(--color-success)]" aria-hidden="true" />
+                      <CheckCircle size={11} className="mt-[var(--space-0-5)] shrink-0 text-[color:var(--color-success)]" aria-hidden="true" />
                     ) : (
-                      <XCircle size={11} className="mt-0.5 shrink-0 text-[color:var(--color-error)]" aria-hidden="true" />
+                      <XCircle size={11} className="mt-[var(--space-0-5)] shrink-0 text-[color:var(--color-error)]" aria-hidden="true" />
                     )}
                     <span className="text-[var(--color-secondary)] break-words">{c.reason}</span>
                   </li>
@@ -385,7 +385,7 @@ export function GoalPillTray() {
       data-testid="goal-pill-tray"
       role="status"
       aria-live="polite"
-      className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] right-4 z-20 flex flex-col items-end gap-1.5"
+      className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] right-4 z-20 flex flex-col items-end gap-[var(--space-1)]"
     >
       {entries.map(([goalId, frame]) => (
         <div key={goalId} className="pointer-events-auto">

@@ -8,7 +8,7 @@ export function ToastContainer() {
   if (toasts.length === 0) return null
 
   return (
-    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+    <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-[var(--space-2)] max-w-sm w-full pointer-events-none">
       {toasts.map((toast) => {
         // ARIA APG toast pattern: a toast is a transient status message,
         // not a modal dialog. Errors must be announced immediately
@@ -22,7 +22,7 @@ export function ToastContainer() {
           data-testid={toast.testId}
           role={toastRole}
           className={cn(
-            'flex items-start gap-3 rounded-lg border px-4 py-3 shadow-lg pointer-events-auto',
+            'flex items-start gap-[var(--space-2-5)] rounded-lg border px-[var(--space-3)] py-[var(--space-2-5)] shadow-lg pointer-events-auto',
             'animate-in slide-in-from-bottom-2 fade-in',
             toast.variant === 'error'
               ? 'bg-[var(--color-surface-2)] border-[var(--color-error)]/30 text-[var(--color-secondary)]'
@@ -34,13 +34,13 @@ export function ToastContainer() {
           )}
         >
           {toast.variant === 'error' && (
-            <WarningCircle size={16} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
+            <WarningCircle size={16} className="text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
           )}
           {toast.variant === 'success' && (
-            <CheckCircle size={16} className="text-[var(--color-success)] shrink-0 mt-0.5" weight="fill" />
+            <CheckCircle size={16} className="text-[var(--color-success)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
           )}
           {toast.variant === 'warning' && (
-            <Warning size={16} className="text-[var(--color-accent)] shrink-0 mt-0.5" weight="fill" />
+            <Warning size={16} className="text-[var(--color-accent)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
           )}
           <p className="flex-1 text-[length:var(--type-body-compact-size)]">{toast.message}</p>
           {toast.action && (

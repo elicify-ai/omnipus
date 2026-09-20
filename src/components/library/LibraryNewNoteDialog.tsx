@@ -115,7 +115,7 @@ export function LibraryNewNoteDialog({
             searchable as soon as it is saved.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="library-new-note-input">Note name</Label>
           <Input
             id="library-new-note-input"

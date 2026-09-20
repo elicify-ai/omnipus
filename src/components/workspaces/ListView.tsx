@@ -250,28 +250,28 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
         <table className="w-full table-fixed text-[length:var(--type-body-compact-size)]">
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
-              <th className="w-12 px-4 py-2 text-left" aria-sort={ariaSort('priority')}>
+              <th className="w-12 px-[var(--space-3)] py-[var(--space-2)] text-left" aria-sort={ariaSort('priority')}>
                 <ColumnMenu label="Pri" sort={sortCfg('priority')} filter={buildFilter(priValues, priFilter, setPriFilter)} />
               </th>
-              <th className="px-2 py-2 text-left" aria-sort={ariaSort('title')}>
+              <th className="px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('title')}>
                 <ColumnMenu label="Title" sort={sortCfg('title')} />
               </th>
-              <th className="w-24 px-2 py-2 text-left" aria-sort={ariaSort('status')}>
+              <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('status')}>
                 <ColumnMenu label="Status" sort={sortCfg('status')} filter={buildFilter(statusValues, statusFilter, setStatusFilter)} />
               </th>
-              <th className="w-28 px-2 py-2 text-left">
+              <th className="w-28 px-[var(--space-2)] py-[var(--space-2)] text-left">
                 <ColumnMenu label="Tags" filter={buildFilter(tagValues, tagFilter, setTagFilter)} />
               </th>
-              <th className="w-24 px-2 py-2 text-left" aria-sort={ariaSort('agent')}>
+              <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('agent')}>
                 <ColumnMenu label="Agent" sort={sortCfg('agent')} filter={buildFilter(agentValues, agentFilter, setAgentFilter)} />
               </th>
-              <th className="w-28 px-4 py-2 text-right" aria-sort={ariaSort('updated')}>
+              <th className="w-28 px-[var(--space-3)] py-[var(--space-2)] text-right" aria-sort={ariaSort('updated')}>
                 <ColumnMenu label="Updated" align="right" sort={sortCfg('updated')} />
               </th>
               {/* ADR-052 §6.8 — a row action column (▶ Play / ■ Stop per
                   task state). Not sortable/filterable, so it's a plain
                   header rather than a ColumnMenu trigger. */}
-              <th className="w-10 px-2 py-2 text-right">
+              <th className="w-10 px-[var(--space-2)] py-[var(--space-2)] text-right">
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
@@ -279,7 +279,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                <td colSpan={7} className="px-[var(--space-3)] py-[var(--space-5)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   {anyFilterActive ? 'No tasks match the column filters' : 'No tasks to show'}
                 </td>
               </tr>
@@ -363,7 +363,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
           type="button"
           aria-label={`${label} column — ${affordance}`}
           className={cn(
-            'flex items-center gap-1 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider transition-colors',
+            'flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider transition-colors',
             isSorted || isFiltered
               ? 'text-[var(--color-secondary)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -382,12 +382,12 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
         {sort != null && (
           <>
             <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'asc')} className="text-[length:var(--type-utility-xs-size)]">
-              <ArrowUp size={12} className="mr-2 opacity-70" />
+              <ArrowUp size={12} className="mr-[var(--space-2)] opacity-70" />
               Sort ascending
               {isSorted && sort.activeDir === 'asc' && <Check size={12} className="ml-auto" />}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'desc')} className="text-[length:var(--type-utility-xs-size)]">
-              <ArrowDown size={12} className="mr-2 opacity-70" />
+              <ArrowDown size={12} className="mr-[var(--space-2)] opacity-70" />
               Sort descending
               {isSorted && sort.activeDir === 'desc' && <Check size={12} className="ml-auto" />}
             </DropdownMenuItem>
@@ -398,7 +398,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
           <>
             <div className="max-h-56 overflow-y-auto">
               {filter.values.length === 0 ? (
-                <div className="px-2 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No values</div>
+                <div className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No values</div>
               ) : (
                 filter.values.map((v) => (
                   <DropdownMenuCheckboxItem
@@ -449,10 +449,10 @@ function TaskRow({
     // entry point is the Title button below (one tab stop per row, announced as
     // actionable). Borderless — separation is padding + hover, not a rule.
     <tr onClick={onClick} className="cursor-pointer transition-colors hover:bg-[var(--color-surface-2)]/40">
-      <td className="px-4 py-2.5">
-        <span className={cn('rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold', badge.className)}>{badge.label}</span>
+      <td className="px-[var(--space-3)] py-[var(--space-2)]">
+        <span className={cn('rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold', badge.className)}>{badge.label}</span>
       </td>
-      <td className="px-2 py-2.5">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
         <button
           // tabIndex={0}: repo WebKit-tabbability convention (Safari only Tabs
           // to elements with an explicit tabindex). See tabindex-convention.test.ts.
@@ -482,7 +482,7 @@ function TaskRow({
           {task.title}
         </button>
       </td>
-      <td className="px-2 py-2.5">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"
             (orange), distinct from a genuine "Failed" (red), via the shared
             taskDisplayColor/taskDisplayLabel helpers (statusColors.ts). */}
@@ -490,14 +490,14 @@ function TaskRow({
           {taskDisplayLabel(task)}
         </span>
       </td>
-      <td className="px-2 py-2.5">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {tags.length > 0 ? (
-          <div className="flex max-w-[7rem] flex-wrap items-center gap-1">
+          <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
             {tags.slice(0, 2).map((tag) => (
               <span
                 key={tag}
                 title={tag}
-                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-1 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
+                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
               >
                 {tag}
               </span>
@@ -508,14 +508,14 @@ function TaskRow({
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">—</span>
         )}
       </td>
-      <td className="px-2 py-2.5">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {agentName ? (
           <span className="block max-w-[5rem] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{agentName}</span>
         ) : (
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">—</span>
         )}
       </td>
-      <td className="px-4 py-2.5 text-right">
+      <td className="px-[var(--space-3)] py-[var(--space-2)] text-right">
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
       </td>
       {/* ADR-052 §6.8 row action (▶ Play / ■ Stop per task state) — always
@@ -523,7 +523,7 @@ function TaskRow({
           can't hover a row to discover it. TaskActionButton itself already
           stops the click/pointerdown/keydown from bubbling into the row's
           own onClick (open task). */}
-      <td className="px-2 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+      <td className="px-[var(--space-2)] py-[var(--space-2)] text-right" onClick={(e) => e.stopPropagation()}>
         <TaskActionButton task={task} />
       </td>
     </tr>

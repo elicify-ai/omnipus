@@ -45,7 +45,7 @@ export interface KbPdfPageEmbedMountProps {
 
 export function KbPdfPageEmbedMount({ workspaceId, workspacePath, page }: KbPdfPageEmbedMountProps) {
   return (
-    <LazyEmbedMount reservedHeight={PDF_PAGE_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+    <LazyEmbedMount reservedHeight={PDF_PAGE_EMBED_RESERVED_HEIGHT_PX} className="my-[var(--space-2-5)] block">
       <KbPdfPageEmbedContent workspaceId={workspaceId} workspacePath={workspacePath} page={page} />
     </LazyEmbedMount>
   )

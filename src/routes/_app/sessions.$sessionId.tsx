@@ -14,7 +14,7 @@ import { useWorkspacesStore } from '@/store/workspacesStore'
 // fresh, empty chat instead of any indication the session was deleted.
 function SessionNotFound() {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
+    <div className="flex flex-col items-center justify-center h-full gap-[var(--space-2-5)] text-center px-[var(--space-3)]">
       <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Session not found</p>
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] max-w-sm">
         This session may have been deleted.

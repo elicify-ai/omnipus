@@ -99,7 +99,7 @@ function RefusalState({ refusal }: { refusal: NonNullable<ViewResult['refusal']>
   return (
     <div
       role="alert"
-      className="flex flex-col items-center gap-2 px-6 py-10 text-center"
+      className="flex flex-col items-center gap-[var(--space-2)] px-[var(--space-4)] py-[var(--space-6)] text-center"
       data-testid="view-refusal"
     >
       <Prohibit size={24} className="text-[var(--color-warning)]" />
@@ -125,7 +125,7 @@ function RefusalState({ refusal }: { refusal: NonNullable<ViewResult['refusal']>
  *  nothing matched. */
 function EmptyState({ result }: { result: ViewResult }) {
   return (
-    <div className="flex flex-col gap-1.5 px-4 py-8" data-testid="view-empty">
+    <div className="flex flex-col gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-5)]" data-testid="view-empty">
       <p className="text-[13px] text-[var(--color-secondary)]">
         {result.complete ? 'Nothing matches this view.' : 'Nothing to show yet.'}
       </p>
@@ -207,10 +207,10 @@ export function ViewPartsRenderer({
     <div className="flex flex-col" data-testid="view-parts">
       {result.rows_truncated === true && (
         <p
-          className="flex items-start gap-1.5 border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
+          className="flex items-start gap-[var(--space-1)] border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
           data-testid="view-truncated"
         >
-          <WarningCircle size={13} weight="fill" className="mt-px shrink-0" />
+          <WarningCircle size={13} weight="fill" className="mt-[var(--border-width-hairline)] shrink-0" />
           <span>
             Only the first {result.rows.length} rows are shown, and no totals were computed — a total over
             part of the rows would be a wrong number that looks right.
@@ -233,7 +233,7 @@ export function ViewPartsRenderer({
         // spelled it as a `figures` part. Drawn as a footer, each total in
         // the same sentence as its scope (FR-125a).
         <div
-          className="flex flex-col gap-0.5 border-t border-[var(--color-border)] px-3 py-2"
+          className="flex flex-col gap-[var(--space-0-5)] border-t border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)]"
           data-testid="view-aggregates"
         >
           {result.aggregates.map((t, i) => (
@@ -244,14 +244,14 @@ export function ViewPartsRenderer({
             >
               <span className="text-[length:var(--type-caption-size)] uppercase tracking-[0.07em] text-[var(--color-muted)]">{t.label}</span>{' '}
               <span className="font-mono tabular-nums">{t.value}</span>
-              {t.unit !== undefined && <span className="ml-1 text-[var(--color-muted)]">{t.unit}</span>}
-              <span className="ml-1.5 text-[var(--color-muted)]">{t.scope}</span>
+              {t.unit !== undefined && <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{t.unit}</span>}
+              <span className="ml-[var(--space-1)] text-[var(--color-muted)]">{t.scope}</span>
             </p>
           ))}
         </div>
       )}
       {result.problems.length > 0 && (
-        <div className="px-3 py-1.5" data-testid="view-problems">
+        <div className="px-[var(--space-2-5)] py-[var(--space-1)]" data-testid="view-problems">
           {result.problems.map((p, i) => (
             <p key={`${p.code}-${i}`} className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]">
               {p.reason}

@@ -88,14 +88,14 @@ function WebFetchBlock({
     // is the status dot/spinner only. The "open fetched URL" action link is a
     // separate sibling control (mirrors GenericToolCall's "Watch live"), not
     // nested inside the toggle button, so it stays independently clickable.
-    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
-      <div className="flex w-full items-center gap-2">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
+      <div className="flex w-full items-center gap-[var(--space-2)]">
         {/* Header */}
         <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
-            'flex min-w-0 flex-1 items-center gap-2 py-1 transition-colors text-left',
+            'flex min-w-0 flex-1 items-center gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
             hasDetail ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
             !hasDetail ? 'cursor-default' : undefined
           )}
@@ -118,7 +118,7 @@ function WebFetchBlock({
             rel="noopener noreferrer"
             aria-label="Open fetched URL"
             title="Open in new tab"
-            className="shrink-0 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
+            className="shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
           >
             <ArrowSquareOut size={12} />
           </a>
@@ -134,8 +134,8 @@ function WebFetchBlock({
           preview keeps its identity (plain text preview), just without a
           bordered/backgrounded breadcrumb row. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
-          <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-1">{url}</div>
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
+          <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-[var(--space-1)]">{url}</div>
           <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
             {preview}
             {truncated && (

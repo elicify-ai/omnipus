@@ -417,10 +417,10 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
           className="w-full sm:max-w-md flex flex-col overflow-y-auto p-0"
           data-testid="mcp-sheet"
         >
-          <SheetHeader className="px-6 pr-14">
+          <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
             <SheetTitle>{editMode ? 'Edit MCP server' : 'Add MCP Server'}</SheetTitle>
           </SheetHeader>
-          <SheetDescription className="px-6 pt-3">
+          <SheetDescription className="px-[var(--space-4)] pt-[var(--space-2-5)]">
             {editMode
               ? 'Update the configuration for this MCP server.'
               : <>Connect a Model Context Protocol server to extend agent capabilities.{' '}
@@ -435,12 +435,12 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             }
           </SheetDescription>
 
-          <div className="flex-1 px-6 py-4 space-y-4">
+          <div className="flex-1 px-[var(--space-4)] py-[var(--space-3)] space-y-[var(--space-3)]">
             {/* Server name */}
-            <div className="space-y-1">
+            <div className="space-y-[var(--space-1)]">
               <label htmlFor="mcp-name" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Name</label>
               {editMode ? (
-                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] px-1 py-2">{name}</p>
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] px-[var(--space-1)] py-[var(--space-2)]">{name}</p>
               ) : (
                 <Input
                   id="mcp-name"
@@ -454,9 +454,9 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             </div>
 
             {/* Connect mode */}
-            <div className="space-y-2" role="group" aria-labelledby="mcp-connect-mode-label">
+            <div className="space-y-[var(--space-2)]" role="group" aria-labelledby="mcp-connect-mode-label">
               <span id="mcp-connect-mode-label" className="block text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Connect via</span>
-              <div className="flex gap-2">
+              <div className="flex gap-[var(--space-2)]">
                 <button tabIndex={0}
                   type="button"
                   data-testid="mode-network"
@@ -492,7 +492,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
               {/* Standing badge: shown while local-program mode is active */}
               {mode === 'local' && confirmedLocal && (
                 <div
-                  className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-amber-400"
+                  className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400"
                   data-testid="stdio-standing-badge"
                   role="status"
                 >
@@ -505,7 +505,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             {/* Network mode: URL field + Headers (G9) */}
             {mode === 'network' && (
               <>
-                <div className="space-y-1">
+                <div className="space-y-[var(--space-1)]">
                   <label htmlFor="mcp-url" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                     Server URL
                   </label>
@@ -524,11 +524,11 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   )}
                   {networkUrlIsInternal && networkUrlValid && (
                     <div
-                      className="flex items-start gap-1.5 text-[length:var(--type-caption-size)] text-amber-400"
+                      className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400"
                       data-testid="ssrf-caution"
                       role="status"
                     >
-                      <Warning size={13} weight="fill" className="mt-0.5 shrink-0" />
+                      <Warning size={13} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
                       <span>
                         This URL points to an internal or private address. Connecting to
                         internal services may expose sensitive data (SSRF risk). The
@@ -544,8 +544,8 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   summary="headers"
                   defaultOpen={(initialServer?.header_names?.length ?? 0) > 0}
                 >
-                  <div className="space-y-3">
-                    <div className="space-y-1">
+                  <div className="space-y-[var(--space-2-5)]">
+                    <div className="space-y-[var(--space-1)]">
                       <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">HTTP headers (optional)</span>
                       {(initialServer?.header_names?.length ?? 0) > 0 && (
                         <p
@@ -556,9 +556,9 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                           {initialServer!.header_names!.join(', ')}
                         </p>
                       )}
-                      <div className="space-y-1.5">
+                      <div className="space-y-[var(--space-1)]">
                         {headerRows.map((row, idx) => (
-                          <div key={idx} className="flex gap-1.5 items-center">
+                          <div key={idx} className="flex gap-[var(--space-1)] items-center">
                             <Input
                               value={row.key}
                               onChange={(e) => handleHeaderRowChange(idx, 'key', e.target.value)}
@@ -577,7 +577,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                               <button tabIndex={0}
                                 type="button"
                                 onClick={() => handleRemoveHeaderRow(idx)}
-                                className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 rounded shrink-0"
+                                className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-[var(--space-1)] rounded shrink-0"
                                 aria-label={`Remove header ${row.key.trim() || `row ${idx + 1}`}`}
                               >
                                 <Trash size={13} />
@@ -588,7 +588,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                         <button tabIndex={0}
                           type="button"
                           onClick={handleAddHeaderRow}
-                          className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
                           data-testid="add-header-row"
                         >
                           <Plus size={11} /> Add header
@@ -608,8 +608,8 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                 summary="command, args, env variables"
                 defaultOpen
               >
-                <div className="space-y-3">
-                  <div className="space-y-1">
+                <div className="space-y-[var(--space-2-5)]">
+                  <div className="space-y-[var(--space-1)]">
                     <label htmlFor="mcp-command" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                       Command
                     </label>
@@ -623,7 +623,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                     />
                   </div>
 
-                  <div className="space-y-1">
+                  <div className="space-y-[var(--space-1)]">
                     <label htmlFor="mcp-args" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                       Args (comma-separated, optional)
                     </label>
@@ -636,7 +636,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                     />
                   </div>
 
-                  <div className="space-y-1">
+                  <div className="space-y-[var(--space-1)]">
                     <label htmlFor="mcp-env" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                       Environment variables (KEY=value, one per line, optional)
                     </label>
@@ -655,12 +655,12 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                       onChange={(e) => setEnv(e.target.value)}
                       placeholder={"API_KEY=abc123\nDEBUG=true"}
                       rows={3}
-                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none resize-none"
+                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none resize-none"
                     />
                   </div>
 
                   {/* G9: Env file (stdio only) */}
-                  <div className="space-y-1">
+                  <div className="space-y-[var(--space-1)]">
                     <label htmlFor="mcp-env-file" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                       Env file path (optional)
                     </label>
@@ -679,7 +679,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             )}
           </div>
 
-          <SheetFooter className="pt-4 border-t border-[var(--color-border)]">
+          <SheetFooter className="pt-[var(--space-3)] border-t border-[var(--color-border)]">
             <Button
               variant="outline"
               size="sm"

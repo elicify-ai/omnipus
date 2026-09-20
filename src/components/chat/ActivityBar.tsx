@@ -78,9 +78,9 @@ export function ActivityBar() {
         aria-haspopup="dialog"
         aria-expanded={panelOpen}
         aria-label={`Activity — ${label}`}
-        className="inline-flex max-w-full items-center gap-2.5 self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-3)]"
+        className="inline-flex max-w-full items-center gap-[var(--space-2)] self-start rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-3)]"
       >
-        <div className="flex -space-x-2 shrink-0">
+        <div className="flex -space-x-[var(--space-2)] shrink-0">
           {stackItems.map((item) => (
             <div key={item.key} className="rounded-full ring-2 ring-[var(--color-surface-1)]">
               <ActivityAvatar item={item} size="sm" />

@@ -322,7 +322,7 @@ export function BoardView({
       {orphanTasks.length > 0 && (
         <div
           role="status"
-          className="flex items-center gap-1.5 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0"
+          className="flex items-center gap-[var(--space-1)] border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0"
         >
           <Info size={11} weight="fill" className="shrink-0" />
           {orphanTasks.length} task{orphanTasks.length === 1 ? '' : 's'} with an unrecognized status{' '}
@@ -367,7 +367,7 @@ export function BoardView({
  * genuinely task-free) board must never read as a load failure. */
 function BoardEmptyState({ filtered }: { filtered: boolean }) {
   return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-[var(--space-5)]">
       <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
         {filtered ? 'No tasks match the current filter.' : 'No tasks yet.'}
       </p>
@@ -382,11 +382,11 @@ function StatusHeaderRow({ counts }: { counts: Record<TaskStatus, number> }) {
     <div className="flex sticky top-0 z-10 bg-[var(--color-surface-0)] border-b border-[var(--color-border)]/15">
       {COLUMNS.map((col) => (
         // Compact status header: a thin label + count strip.
-        <div key={col.status} className="flex-1 min-w-[162px] flex items-center gap-2 px-3 h-[25px]">
+        <div key={col.status} className="flex-1 min-w-[162px] flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-[25px]">
           <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none" style={{ color: col.headerColor }}>
             {col.label}
           </span>
-          <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-muted)]">
+          <span className="rounded-full bg-[var(--color-surface-2)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-muted)]">
             {counts[col.status] ?? 0}
           </span>
         </div>
@@ -644,7 +644,7 @@ function StatusColumn({
         // count above) stays visible/meaningful regardless of how far a
         // neighboring lane has been scrolled, and scrolling one lane never
         // bleeds into the page/board underneath (`overscroll-contain`).
-        'flex flex-col flex-1 min-w-[162px] min-h-0 gap-2 p-2 overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
+        'flex flex-col flex-1 min-w-[162px] min-h-0 gap-[var(--space-2)] p-[var(--space-2)] overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
         isOver && !canAccept ? 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40' : undefined,
       )}

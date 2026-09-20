@@ -52,7 +52,7 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
         className={
           inline
             ? 'flex items-center justify-center'
-            : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4'
+            : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]'
         }
         data-testid="library-image-preview"
         data-variant={variant}
@@ -60,7 +60,7 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
         <div
           role="status"
           data-testid="library-image-unavailable"
-          className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+          className="flex flex-col items-center gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-4)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           <WarningCircle size={16} weight="fill" />
           <span>
@@ -75,7 +75,7 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
               setAttempt((n) => n + 1)
             }}
             data-testid="library-image-retry"
-            className="inline-flex items-center gap-1 rounded border border-[var(--color-warning)]/60 px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
+            className="inline-flex items-center gap-[var(--space-1)] rounded border border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
           >
             <ArrowClockwise size={12} /> Try again
           </button>
@@ -88,7 +88,7 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
       className={
         inline
           ? 'flex items-center justify-center'
-          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4'
+          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]'
       }
       data-testid="library-image-preview"
       data-variant={variant}

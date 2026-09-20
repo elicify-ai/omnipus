@@ -89,7 +89,7 @@ export function LibraryCreateMenu({
             aria-label="Create"
             title="Create"
             data-testid="library-create-menu-trigger"
-            className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+            className="rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
           >
             <Plus size={16} />
           </button>
@@ -101,7 +101,7 @@ export function LibraryCreateMenu({
                 onSelect={() => setVaultDialogOpen(true)}
                 disabled={!canWriteHere}
                 data-testid="library-create-menu-new-vault"
-                className="flex items-center gap-2"
+                className="flex items-center gap-[var(--space-2)]"
               >
                 <Books size={15} /> New knowledge base
               </DropdownMenuItem>
@@ -112,7 +112,7 @@ export function LibraryCreateMenu({
                 onSelect={onNewNote}
                 disabled={!canWriteHere}
                 data-testid="library-create-menu-new-note"
-                className="flex items-center gap-2"
+                className="flex items-center gap-[var(--space-2)]"
               >
                 <FilePlus size={15} /> New note
               </DropdownMenuItem>
@@ -120,7 +120,7 @@ export function LibraryCreateMenu({
                 onSelect={onNewFolder}
                 disabled={!canWriteHere}
                 data-testid="library-create-menu-new-folder"
-                className="flex items-center gap-2"
+                className="flex items-center gap-[var(--space-2)]"
               >
                 <FolderPlus size={15} /> New folder
               </DropdownMenuItem>
@@ -128,7 +128,7 @@ export function LibraryCreateMenu({
                 onSelect={onUpload}
                 disabled={!canWriteHere || uploadPending}
                 data-testid="library-create-menu-upload"
-                className="flex items-center gap-2"
+                className="flex items-center gap-[var(--space-2)]"
               >
                 {uploadPending ? <SpinnerGap size={15} className="animate-spin" /> : <UploadSimple size={15} />}
                 Upload files
@@ -137,7 +137,7 @@ export function LibraryCreateMenu({
               <DropdownMenuItem
                 onSelect={onAddMount}
                 data-testid="library-create-menu-add-mount"
-                className="flex items-center gap-2"
+                className="flex items-center gap-[var(--space-2)]"
               >
                 <MountFolderIcon size={15} /> Add a folder from your Mac
               </DropdownMenuItem>
@@ -145,7 +145,7 @@ export function LibraryCreateMenu({
                 onSelect={onManageMounts}
                 disabled={mountedCount === 0}
                 data-testid="library-create-menu-manage-mounts"
-                className="flex items-center gap-2"
+                className="flex items-center gap-[var(--space-2)]"
               >
                 <MountFolderIcon size={15} />
                 {mountedCount === 0 ? 'Manage mounted folders' : `Manage ${mountedCount} mounted folders`}

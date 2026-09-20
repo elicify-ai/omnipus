@@ -31,7 +31,7 @@ export function UnitValue({ value, unit }: { value: string; unit?: string | unde
     <span className="whitespace-nowrap font-mono text-[13px] tabular-nums text-[var(--color-secondary)]">
       {formatNumberText(value)}
       {unit !== undefined && unit !== '' && (
-        <span className="ml-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{unit}</span>
+        <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{unit}</span>
       )}
     </span>
   )
@@ -43,7 +43,7 @@ export function ExcludedRowMark() {
     <span
       title="No unit value set, so this row is excluded from every total."
       data-testid="viewpart-excluded-mark"
-      className="ml-1 inline-flex h-[15px] w-[15px] shrink-0 cursor-help items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[length:var(--type-caption-size)] font-semibold text-[var(--color-warning)]"
+      className="ml-[var(--space-1)] inline-flex h-[15px] w-[15px] shrink-0 cursor-help items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[length:var(--type-caption-size)] font-semibold text-[var(--color-warning)]"
     >
       !
     </span>
@@ -53,7 +53,7 @@ export function ExcludedRowMark() {
 /** One rendered total: "Total amount · SGD · 4 — 29,230.00". */
 function TotalEntry({ total }: { total: ViewUnitTotal }) {
   return (
-    <span className="inline-flex items-baseline gap-1.5" data-testid="viewpart-total">
+    <span className="inline-flex items-baseline gap-[var(--space-1)]" data-testid="viewpart-total">
       <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         {aggregateLabel(total.op)} {total.property}
         {total.unit !== undefined && ` · ${total.unit}`}
@@ -84,7 +84,7 @@ export function TotalsFooter({
   return (
     <div className="shrink-0 border-t border-[var(--color-border)]" data-testid="viewpart-totals-footer">
       {totals.length > 0 && (
-        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-3 py-1.5">
+        <div className="flex flex-wrap items-baseline gap-x-[var(--space-3)] gap-y-[var(--space-1)] px-[var(--space-2-5)] py-[var(--space-1)]">
           {totals.map((t, i) => (
             <TotalEntry key={`${t.property}|${t.op}|${t.unit ?? ' '}|${i}`} total={t} />
           ))}
@@ -92,7 +92,7 @@ export function TotalsFooter({
       )}
       {needsNoGrandTotalReason(totals, excluded) && (
         <p
-          className="flex items-start gap-1.5 border-t border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
+          className="flex items-start gap-[var(--space-1)] border-t border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
           data-testid="viewpart-no-grand-total"
         >
           <span className="shrink-0 font-medium text-[var(--color-warning)]">No grand total.</span>
@@ -109,10 +109,10 @@ export function ExcludedLine({ count, reason }: { count: number; reason?: string
   if (count <= 0) return null
   return (
     <p
-      className="flex items-start gap-1.5 border-t border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
+      className="flex items-start gap-[var(--space-1)] border-t border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
       data-testid="viewpart-excluded-line"
     >
-      <WarningCircle size={13} weight="fill" className="mt-px shrink-0" />
+      <WarningCircle size={13} weight="fill" className="mt-[var(--border-width-hairline)] shrink-0" />
       <span>{reason ?? `${count} ${count === 1 ? 'row is' : 'rows are'} excluded from every total.`}</span>
     </p>
   )
@@ -124,7 +124,7 @@ export function GroupHeaderLabel({ label, count, absent }: { label: string; coun
   return (
     <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
       {absent ? 'Not set' : label === '' ? '(empty)' : label}
-      <span className="ml-1.5 normal-case text-[var(--color-muted)]/70">{count}</span>
+      <span className="ml-[var(--space-1)] normal-case text-[var(--color-muted)]/70">{count}</span>
     </span>
   )
 }

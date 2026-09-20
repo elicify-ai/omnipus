@@ -6,7 +6,7 @@ import { useLoadingVisibility } from '@/design-system/use-loading-visibility'
 import { cn } from '@/lib/utils'
 
 const buttonVariants = cva(
-  'relative inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
+  'relative inline-flex items-center justify-center gap-[var(--space-2)] whitespace-nowrap rounded-md text-[length:var(--type-body-compact-size)] font-medium transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50',
   {
     variants: {
       variant: {
@@ -26,9 +26,9 @@ const buttonVariants = cva(
           'text-[var(--color-accent)] underline-offset-4 hover:underline p-0 h-auto',
       },
       size: {
-        default: 'h-9 px-4 py-2',
-        sm: 'h-8 rounded-md px-3 text-[length:var(--type-utility-xs-size)]',
-        lg: 'h-10 rounded-md px-8',
+        default: 'h-9 px-[var(--space-3)] py-[var(--space-2)]',
+        sm: 'h-8 rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]',
+        lg: 'h-10 rounded-md px-[var(--space-5)]',
         icon: 'h-9 w-9',
       },
     },

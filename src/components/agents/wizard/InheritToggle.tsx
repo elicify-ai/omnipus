@@ -21,8 +21,8 @@ export interface InheritToggleProps {
 
 export function InheritToggle({ label, inherit, onChange, testId }: InheritToggleProps) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 cursor-pointer">
-      <span className="flex items-center gap-2 min-w-0">
+    <label className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] cursor-pointer">
+      <span className="flex items-center gap-[var(--space-2)] min-w-0">
         <ArrowsLeftRight size={14} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
         <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{label}</span>
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">

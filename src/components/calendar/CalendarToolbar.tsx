@@ -174,8 +174,8 @@ export function CalendarToolbar({
     <div
       data-testid="calendar-toolbar"
       className={cn(
-        'flex flex-wrap items-center gap-x-2 gap-y-1.5',
-        'px-3 py-2',
+        'flex flex-wrap items-center gap-x-[var(--space-2)] gap-y-[var(--space-1)]',
+        'px-[var(--space-2-5)] py-[var(--space-2)]',
         'border-b border-[var(--color-border)]',
         'bg-[var(--color-surface-1)]',
         'select-none',
@@ -187,7 +187,7 @@ export function CalendarToolbar({
           takes the full width so it sits alone on row 1.                   */}
       <div
         className={cn(
-          'flex items-center gap-1 order-1',
+          'flex items-center gap-[var(--space-1)] order-1',
           // Narrow: own full-width row. NOTE: no unconditional `flex-1` — its
           // flex-basis:0% overrides `w-full`, so both groups would stay on one
           // line and the view tabs/New-task overflowed off-screen (FR-007/I-9).
@@ -214,13 +214,13 @@ export function CalendarToolbar({
           aria-label="Go to today"
           onClick={handleToday}
           className={cn(
-            'flex items-center gap-1.5 shrink-0',
-            'h-8 px-2.5 rounded-md',
+            'flex items-center gap-[var(--space-1)] shrink-0',
+            'h-8 px-[var(--space-2)] rounded-md',
             'text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]',
             'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
             'transition-colors',
             touchTarget,
-            'pointer-coarse:px-3',
+            'pointer-coarse:px-[var(--space-2-5)]',
           )}
         >
           <CalendarBlank size={14} aria-hidden="true" />
@@ -242,7 +242,7 @@ export function CalendarToolbar({
         <h2
           data-testid="calendar-title"
           className={cn(
-            'ml-1 flex-1 min-w-0',
+            'ml-[var(--space-1)] flex-1 min-w-0',
             'text-[length:var(--type-body-compact-size)] font-headline font-semibold',
             'text-[var(--color-secondary)] truncate',
           )}
@@ -257,7 +257,7 @@ export function CalendarToolbar({
           as the nav group (which has flex-1, so this group sits at the end). */}
       <div
         className={cn(
-          'flex items-center gap-1.5 order-3',
+          'flex items-center gap-[var(--space-1)] order-3',
           'w-full @2xl:w-auto',
           'justify-between @2xl:justify-end',
         )}
@@ -272,7 +272,7 @@ export function CalendarToolbar({
         <div
           role="group"
           aria-label="Calendar view"
-          className="flex items-center gap-0.5 rounded-md bg-[var(--color-surface-2)] p-0.5"
+          className="flex items-center gap-[var(--space-0-5)] rounded-md bg-[var(--color-surface-2)] p-[var(--space-0-5)]"
         >
           {CALENDAR_VIEWS.map((view) => {
             const isActive = view === currentView
@@ -285,10 +285,10 @@ export function CalendarToolbar({
                 data-testid={`calendar-view-${view}`}
                 onClick={() => handleViewChange(view)}
                 className={cn(
-                  'flex items-center gap-1 px-2.5 h-7 rounded text-[length:var(--type-utility-xs-size)] font-medium whitespace-nowrap',
+                  'flex items-center gap-[var(--space-1)] px-[var(--space-2)] h-7 rounded text-[length:var(--type-utility-xs-size)] font-medium whitespace-nowrap',
                   'transition-colors',
                   touchTarget,
-                  'pointer-coarse:h-9 pointer-coarse:px-3',
+                  'pointer-coarse:h-9 pointer-coarse:px-[var(--space-2-5)]',
                   isActive
                     ? [
                         'bg-[var(--color-surface-3)]',
@@ -318,7 +318,7 @@ export function CalendarToolbar({
             usage: CalendarScreen); every other/legacy caller renders exactly
             as before. */}
         {onAgentFilterChange && (
-          <div className="flex flex-col gap-0.5 shrink-0">
+          <div className="flex flex-col gap-[var(--space-0-5)] shrink-0">
             <Select
               value={agentFilter ?? AGENT_FILTER_ALL}
               onValueChange={onAgentFilterChange}
@@ -368,10 +368,10 @@ export function CalendarToolbar({
           variant="default"
           size="sm"
           className={cn(
-            'flex items-center gap-1.5 shrink-0',
-            'h-8 px-3',
+            'flex items-center gap-[var(--space-1)] shrink-0',
+            'h-8 px-[var(--space-2-5)]',
             touchTarget,
-            'pointer-coarse:h-11 pointer-coarse:px-4',
+            'pointer-coarse:h-11 pointer-coarse:px-[var(--space-3)]',
           )}
         >
           <Plus size={14} weight="bold" aria-hidden="true" />

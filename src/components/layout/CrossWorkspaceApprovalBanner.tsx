@@ -72,7 +72,7 @@ export function CrossWorkspaceApprovalBanner() {
           tabIndex={0}
           data-testid="cross-workspace-approval-banner"
           onClick={() => goToWorkspace(summary.targetWorkspaceId)}
-          className="flex w-full items-center gap-2 px-4 py-2 bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 transition-colors text-left"
+          className="flex w-full items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 transition-colors text-left"
         >
           <Shield size={14} weight="bold" className="shrink-0" aria-hidden="true" />
           <span className="flex-1 truncate">{summary.label}</span>

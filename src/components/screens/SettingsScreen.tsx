@@ -53,18 +53,18 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride }: Se
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Settings" />
       <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-      <div className="max-w-3xl mx-auto px-4 py-6">
+      <div className="max-w-3xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
         {/* Header */}
-        <div className="mb-6">
+        <div className="mb-[var(--space-4)]">
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Settings</h1>
-          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Configure providers, integrations, gateway, security, and data management.
             Personal preferences live under Profile.
           </p>
           {aboutInfoError && (
             <p
               data-testid="settings-about-fetch-error"
-              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-2"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-2)]"
             >
               Could not fetch gateway build info — gateway may be offline. Feature-flagged tabs
               (e.g. Devices) may be hidden or stale until this loads successfully.
@@ -74,7 +74,7 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride }: Se
 
         <Tabs defaultValue={initialTab}>
           {/* Sticky tab bar — stays visible while scrolling tab content */}
-          <TabsList className="mb-6 flex-wrap h-auto gap-1 sticky top-0 z-10 bg-[var(--color-primary)] py-2 -mx-1 px-1">
+          <TabsList className="mb-[var(--space-4)] flex-wrap h-auto gap-[var(--space-1)] sticky top-0 z-10 bg-[var(--color-primary)] py-[var(--space-2)] -mx-[var(--space-1)] px-[var(--space-1)]">
             <TabsTrigger data-testid="settings-tab-providers" value="providers">Providers</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-models" value="models">Models</TabsTrigger>
             <TabsTrigger data-testid="settings-tab-integrations" value="integrations">Integrations</TabsTrigger>

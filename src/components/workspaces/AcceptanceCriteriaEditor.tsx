@@ -214,26 +214,26 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-[var(--space-2)]">
       {criteria.length === 0 && emptyHint && (
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{emptyHint}</p>
       )}
 
       {criteria.length > 0 && (
-        <ul className="space-y-1.5">
+        <ul className="space-y-[var(--space-1)]">
           {criteria.map((c, idx) => {
             const verifiesVia = formatVerifiesVia(c)
             return (
               <li
                 key={c.id ?? idx}
-                className="flex items-start gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
+                className="flex items-start gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
               >
-                <div className="flex-1 min-w-0 space-y-0.5">
-                  <div className="flex items-start gap-1.5">
+                <div className="flex-1 min-w-0 space-y-[var(--space-0-5)]">
+                  <div className="flex items-start gap-[var(--space-1)]">
                     {c.judgment && (
                       <span
                         data-testid="criterion-judgment-badge"
-                        className="mt-[1px] shrink-0 rounded border border-[var(--color-border)] px-1 py-[1px] text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]"
+                        className="mt-[var(--border-width-hairline)] shrink-0 rounded border border-[var(--color-border)] px-[var(--space-1)] py-[var(--border-width-hairline)] text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]"
                       >
                         {c.judgment}
                       </span>
@@ -241,7 +241,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
                     <p className="text-[var(--color-secondary)] flex-1 min-w-0">{c.text}</p>
                   </div>
                   {verifiesVia && (
-                    <p className="inline-flex max-w-full items-baseline gap-1 rounded bg-[var(--color-surface-1)] px-1.5 py-0.5 font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                    <p className="inline-flex max-w-full items-baseline gap-[var(--space-1)] rounded bg-[var(--color-surface-1)] px-[var(--space-1)] py-[var(--space-0-5)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                       <span className="shrink-0">verifies via:</span>
                       <span className="truncate">{verifiesVia}</span>
                     </p>
@@ -264,7 +264,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         </ul>
       )}
 
-      <div className="flex flex-col gap-1.5 rounded-md border border-dashed border-[var(--color-border)] p-2">
+      <div className="flex flex-col gap-[var(--space-1)] rounded-md border border-dashed border-[var(--color-border)] p-[var(--space-2)]">
         <Input
           aria-label={inputAriaLabel ?? DEFAULT_INPUT_ARIA_LABEL}
           value={text}
@@ -274,7 +274,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
           className="text-[length:var(--type-utility-xs-size)]"
         />
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-[var(--space-2-5)]">
           <button tabIndex={0}
             type="button"
             aria-expanded={expander === 'check'}
@@ -300,7 +300,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
             Locked + disabled while a technical-check or action-count
             expander is open — task.InferJudgment hard-rejects any other
             pairing, so the mismatch can never be built in the first place. */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-[var(--space-2)]">
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Judgment</span>
           <Select
             value={effectiveJudgment}
@@ -325,7 +325,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         </div>
 
         {expander === 'check' && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-[var(--space-2)]">
             <Input
               aria-label="Command"
               value={command}
@@ -345,7 +345,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
         )}
 
         {expander === 'behavior' && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-[var(--space-2)]">
             <Input
               aria-label="Tool name"
               value={tool}
@@ -386,7 +386,7 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
           type="button"
           variant="outline"
           size="sm"
-          className="h-8 gap-1 self-start"
+          className="h-8 gap-[var(--space-1)] self-start"
           onClick={addCriterion}
         >
           <Plus size={12} /> Add criterion

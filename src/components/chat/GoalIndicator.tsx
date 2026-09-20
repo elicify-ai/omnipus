@@ -210,11 +210,11 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
       data-testid="goal-indicator"
       role="status"
       aria-live="polite"
-      className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)]"
+      className="flex flex-col gap-[var(--space-1)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
     >
       {showGoal && goalStatus && goalStatus.state !== 'queued' && (
-        <div className="flex items-start gap-2">
-          <Target size={13} weight="fill" className="mt-0.5 shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
+        <div className="flex items-start gap-[var(--space-2)]">
+          <Target size={13} weight="fill" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
           <div className="flex-1 min-w-0">
             {goalStatus.state === 'active' && (
               <>
@@ -225,11 +225,11 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
                 >
                   {truncateCondition(goalStatus.condition)}
                 </p>
-                <p className="text-[var(--color-muted)] mt-0.5" data-testid="goal-indicator-round">
+                <p className="text-[var(--color-muted)] mt-[var(--space-0-5)]" data-testid="goal-indicator-round">
                   round {goalStatus.round}/{goalStatus.max_rounds} · active loops {goalStatus.active_loops}/{goalStatus.cap}
                 </p>
                 {goalStatus.latest_reason && (
-                  <p className="text-[var(--color-muted)] mt-0.5 italic truncate" title={goalStatus.latest_reason}>
+                  <p className="text-[var(--color-muted)] mt-[var(--space-0-5)] italic truncate" title={goalStatus.latest_reason}>
                     {goalStatus.latest_reason}
                   </p>
                 )}
@@ -243,7 +243,7 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
                     {nonActiveState.text}
                   </p>
                   {goalStatus.latest_reason && (
-                    <p className="text-[var(--color-muted)] mt-0.5 italic truncate" title={goalStatus.latest_reason}>
+                    <p className="text-[var(--color-muted)] mt-[var(--space-0-5)] italic truncate" title={goalStatus.latest_reason}>
                       {goalStatus.latest_reason}
                     </p>
                   )}
@@ -254,7 +254,7 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
         </div>
       )}
       {showLoop && loopStatus && (
-        <div className="flex items-center gap-2" data-testid="loop-status-line">
+        <div className="flex items-center gap-[var(--space-2)]" data-testid="loop-status-line">
           <Repeat size={12} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
           <p className="text-[var(--color-muted)] truncate">
             Loop: {loopStatus.mode === 'interval' ? 'every' : 'self-paced'} · run {loopStatus.run}/{loopStatus.max_runs}

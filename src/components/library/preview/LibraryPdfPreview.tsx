@@ -1736,7 +1736,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 `}</style>
 
       <PreviewHeaderPortal>
-        <div className="flex items-center gap-0.5" role="group" aria-label="View mode">
+        <div className="flex items-center gap-[var(--space-0-5)]" role="group" aria-label="View mode">
           <button
             type="button"
             tabIndex={0}
@@ -1763,7 +1763,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
           </button>
         </div>
-        <div className="flex items-center gap-0.5" role="group" aria-label="Zoom">
+        <div className="flex items-center gap-[var(--space-0-5)]" role="group" aria-label="Zoom">
           <button
             type="button"
             tabIndex={0}
@@ -1783,7 +1783,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             aria-label={`Zoom ${Math.round(zoom * 100)} percent — reset to 100 percent`}
             title="Reset zoom"
             data-testid="library-pdf-zoom-reset"
-            className="rounded px-1 text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+            className="rounded px-[var(--space-1)] text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
           >
             {Math.round(zoom * 100)}%
           </button>
@@ -1838,7 +1838,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 
       {mode === 'edit' && allPagesRendered && hasFormFields === false && (
         <div
-          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+          className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-no-fields-note"
         >
           This PDF has no fillable form fields — you can still add a signature.
@@ -1852,7 +1852,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         // annotation layer builds from the page's own annotations — so this
         // says what is true rather than guessing either way.
         <div
-          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+          className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-field-probe-error"
           title={fieldProbeError}
         >
@@ -1863,7 +1863,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       {mode === 'edit' && editLayerError !== null && (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-error)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+          className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-error)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
           data-testid="library-pdf-edit-layer-error"
         >
           {editLayerError}
@@ -1872,7 +1872,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 
       {mode === 'edit' && placedSignatures.length > 0 && (
         <div
-          className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+          className="flex shrink-0 flex-wrap items-center gap-[var(--space-1)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-signature-list"
         >
           <span>Signatures placed (not yet saved):</span>
@@ -1882,7 +1882,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
               type="button"
               tabIndex={0}
               onClick={() => handleRemoveSignature(sig.key)}
-              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 hover:bg-[var(--color-surface-2)]"
+              className="inline-flex items-center gap-[var(--space-1)] rounded border border-[var(--color-border)] px-[var(--space-1)] py-[var(--space-0-5)] hover:bg-[var(--color-surface-2)]"
               title={`Remove the signature on page ${sig.pageNumber}`}
               data-testid={`library-pdf-signature-chip-${sig.key}`}
             >
@@ -1903,7 +1903,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         // immediate or may be a genuine wait if nothing does — never a
         // silent, unexplained hang.
         <div
-          className="flex flex-1 items-center justify-center gap-2 p-6 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+          className="flex flex-1 items-center justify-center gap-[var(--space-2)] p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-queued"
         >
           <SpinnerGap className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
@@ -1916,7 +1916,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 
       {status === 'loading' && (
         <div
-          className="flex flex-1 items-center justify-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+          className="flex flex-1 items-center justify-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-loading"
         >
           <SpinnerGap className="h-4 w-4 animate-spin" aria-hidden />
@@ -1925,19 +1925,19 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       )}
 
       {status === 'error' && (
-        <div className="flex flex-1 items-center justify-center p-6" data-testid="library-pdf-error">
+        <div className="flex flex-1 items-center justify-center p-[var(--space-4)]" data-testid="library-pdf-error">
           <div
             role="alert"
-            className="max-w-lg rounded-md border border-[var(--color-error)] bg-[var(--color-surface-1)] p-4 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
+            className="max-w-lg rounded-md border border-[var(--color-error)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
           >
             <p className="font-medium">This PDF could not be displayed.</p>
-            <p className="mt-2 text-[var(--color-muted)]">{error}</p>
+            <p className="mt-[var(--space-2)] text-[var(--color-muted)]">{error}</p>
             <button
               type="button"
               tabIndex={0}
               onClick={handleRetry}
               data-testid="library-pdf-retry"
-              className="mt-3 rounded border border-[var(--color-border)] px-3 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+              className="mt-[var(--space-2-5)] rounded border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
             >
               Try again
             </button>
@@ -1947,7 +1947,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 
       <div
         ref={containerRef}
-        className={`min-h-0 flex-1 overflow-auto p-2 ${status === 'ready' ? '' : 'hidden'}`}
+        className={`min-h-0 flex-1 overflow-auto p-[var(--space-2)] ${status === 'ready' ? '' : 'hidden'}`}
         // D-37: the reader's magnification. `zoom` (not `transform`) so the
         // scroll extents follow the magnified content.
         style={{ zoom }}

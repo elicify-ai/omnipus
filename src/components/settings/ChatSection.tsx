@@ -22,20 +22,20 @@ export function ChatSection(): React.ReactElement {
   const setVerboseChatEnabled = useChatPreferencesStore((s) => s.setVerboseChatEnabled)
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-[var(--space-3)]">
       {/* Header */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-[var(--space-2)]">
         <ChatCircleText size={18} className="text-[var(--color-secondary)]" />
         <h2 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Chat display</h2>
       </div>
 
       {/* Verbose chat card */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {/* Toggle row */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between gap-[var(--space-3)]">
           <div className="flex-1 min-w-0">
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Verbose chat</p>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
               Show every tool call in the transcript, including background dispatches,
               status polls, and internal tool-loading calls that are hidden by default.
               This is also the only way to see delegation cards and Judge verdicts

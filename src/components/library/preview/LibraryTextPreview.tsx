@@ -66,7 +66,7 @@ export function LibraryTextPreview({
           with aria-pressed rather than a single toggle, so a screen reader
           hears which of view/edit is current instead of inferring it. */}
       <PreviewHeaderPortal>
-        <div className="flex items-center gap-0.5" role="group" aria-label="View mode">
+        <div className="flex items-center gap-[var(--space-0-5)]" role="group" aria-label="View mode">
           <button
             type="button"
             tabIndex={0}
@@ -111,7 +111,7 @@ export function LibraryTextPreview({
 
       <div className="flex-1 min-h-0 overflow-auto">
         {mode === 'view' ? (
-          <div className="p-4" data-testid="library-preview-view-body">
+          <div className="p-[var(--space-3)]" data-testid="library-preview-view-body">
             {renderView(draft, { switchToEdit: () => setMode('edit') })}
           </div>
         ) : (

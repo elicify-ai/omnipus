@@ -109,7 +109,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
   return (
     // Flat text-line design: no border, no surface fill, no rounded frame —
     // the row is transparent on the thread, matching ToolCallBadge/GenericToolCall.
-    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Collapsed header — FR-H-008 */}
       <button tabIndex={0}
         type="button"
@@ -117,7 +117,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
         onClick={toggle}
         aria-expanded={expanded}
         aria-label={`Subagent: ${label}, ${stepCountText(stepCount)}, status ${span.status}`}
-        className="flex w-full items-center gap-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
+        className="flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
       >
         {/* Status indicator — dot for terminal states, spinner while running */}
         {config.indicator}
@@ -169,7 +169,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
       {show3pRunningNotice && (
         <p
           data-testid="subagent-3p-running-notice"
-          className="pl-[18px] pb-1 -mt-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-sans italic"
+          className="pl-[var(--space-3)] pb-[var(--space-1)] -mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-sans italic"
         >
           External agent — no live progress; results appear when it finishes.
         </p>
@@ -181,11 +181,11 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
       {expanded && (
         <div
           data-testid="subagent-expanded"
-          className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3 space-y-1"
+          className="ml-[3px] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-1)]"
           style={{ maxHeight: '400px', overflowY: 'auto' }}
         >
           {span.steps.length === 0 && !hasFinalResult && (
-            <p className="text-[var(--color-muted)] text-[length:var(--type-caption-size)] py-1">No steps recorded.</p>
+            <p className="text-[var(--color-muted)] text-[length:var(--type-caption-size)] py-[var(--space-1)]">No steps recorded.</p>
           )}
 
           {/* Steps — in arrival order. W4-5: switch on step.kind */}
@@ -199,7 +199,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
             }
             // kind === 'text' — reserved for future subagent-text streaming
             return (
-              <p key={idx} data-testid="subagent-live-step" className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-0.5">
+              <p key={idx} data-testid="subagent-live-step" className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-[var(--space-0-5)]">
                 {step.text}
               </p>
             )
@@ -209,8 +209,8 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
               success dot + muted "Final result" label, matching the flat
               text-line design used everywhere else. */}
           {hasFinalResult && (
-            <div className="mt-2">
-              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
+            <div className="mt-[var(--space-2)]">
+              <div className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
                 {statusDot('bg-[var(--color-success)]')}
                 Final result
               </div>

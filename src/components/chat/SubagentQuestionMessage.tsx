@@ -28,16 +28,16 @@ export function SubagentQuestionMessage({ message }: SubagentQuestionMessageProp
   return (
     <div
       data-testid="subagent-question-message"
-      className="my-1 flex flex-col gap-1"
+      className="my-[var(--space-1)] flex flex-col gap-[var(--space-1)]"
     >
       {/* Sender row — who asked, + untrusted-origin tag */}
-      <div className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)] uppercase tracking-wide">
+      <div className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] uppercase tracking-wide">
         <ChatCircleDots size={11} aria-hidden="true" />
         <span className="font-medium">{message.sender_identity}</span>
         <span className="text-[var(--color-muted)]">asked</span>
         {message.untrusted_origin && (
           <span
-            className="rounded border border-[var(--color-border)] px-1 py-px text-[length:var(--type-caption-size)] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]"
+            className="rounded border border-[var(--color-border)] px-[var(--space-1)] py-[var(--border-width-hairline)] text-[length:var(--type-caption-size)] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]"
             data-testid="subagent-question-untrusted"
           >
             untrusted
@@ -49,14 +49,14 @@ export function SubagentQuestionMessage({ message }: SubagentQuestionMessageProp
           The user replies in normal chat to answer — no reply card, no
           approval/correlation UX (D2). */}
       <div
-        className="rounded-lg rounded-tl-sm bg-[var(--color-surface-1)] border border-[var(--color-border)] px-3.5 py-2.5 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
+        className="rounded-lg rounded-tl-sm bg-[var(--color-surface-1)] border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
         data-testid="subagent-question-text"
       >
         {message.text}
       </div>
 
       {/* In-band reply hint — conversational, no buttons/forms */}
-      <div className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">
+      <div className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">
         <ArrowBendUpRight size={10} aria-hidden="true" />
         <span>Reply in chat to answer</span>
       </div>

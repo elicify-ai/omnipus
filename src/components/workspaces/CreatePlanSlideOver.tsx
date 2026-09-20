@@ -384,13 +384,13 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>{isEdit ? 'Edit plan' : 'New plan'}</SheetTitle>
         </SheetHeader>
 
-        <div className="flex flex-col flex-1 gap-5 px-6 py-4 overflow-y-auto">
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)] overflow-y-auto">
+          <div className="flex flex-col gap-[var(--space-1)]">
+            <div className="flex items-center justify-between gap-[var(--space-2)]">
               <Label htmlFor="cp-title" className="text-[var(--color-secondary)]">
                 Title <span className="text-[var(--color-error)]">*</span>
               </Label>
@@ -417,8 +417,8 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             {titleError && <p id="cp-title-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{titleError}</p>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between gap-2">
+          <div className="flex flex-col gap-[var(--space-1)]">
+            <div className="flex items-center justify-between gap-[var(--space-2)]">
               <Label htmlFor="cp-goal" className="text-[var(--color-secondary)]">Goal</Label>
               <span
                 className={cn(
@@ -441,7 +441,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <Label htmlFor="cp-desc" className="text-[var(--color-secondary)]">Description</Label>
             <Textarea
               id="cp-desc"
@@ -454,7 +454,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <Label className="text-[var(--color-secondary)]">
               Owner agent <span className="text-[var(--color-error)]">*</span>
             </Label>
@@ -479,7 +479,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             )}
           </div>
 
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <Label className="text-[var(--color-secondary)]">Definition of Done</Label>
             <AcceptanceCriteriaEditor
               criteria={form.dod}
@@ -507,10 +507,10 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             unexercised by the primary client. Absence is the preservation
             mechanism; see `buildUpdateBody`.
           */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <Label className="text-[var(--color-secondary)]">Bounds</Label>
-            <div className="flex items-start gap-2">
-              <div className="flex-1 flex flex-col gap-1">
+            <div className="flex items-start gap-[var(--space-2)]">
+              <div className="flex-1 flex flex-col gap-[var(--space-1)]">
                 <Input
                   aria-label="Plan judge max rounds"
                   type="number"
@@ -527,7 +527,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
                   <p id="cp-bounds-rounds-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{boundsRoundsError}</p>
                 )}
               </div>
-              <div className="flex-1 flex flex-col gap-1">
+              <div className="flex-1 flex flex-col gap-[var(--space-1)]">
                 <Input
                   aria-label="Idle expiry days"
                   type="number"
@@ -548,8 +548,8 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
           </div>
 
           {canApprove && (
-            <div className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] p-3">
-              <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-col gap-[var(--space-1)] rounded-md border border-[var(--color-border)] p-[var(--space-2-5)]">
+              <div className="flex items-center justify-between gap-[var(--space-2)]">
                 <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Approve this plan</p>
                 <Button
                   type="button"
@@ -567,7 +567,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
               {approveErrors && approveErrors.length > 0 && (
                 <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="plan-approve-task-errors">
                   <p className="font-medium">Cannot approve — the following tasks are missing criteria:</p>
-                  <ul className="list-disc list-inside mt-1 space-y-0.5">
+                  <ul className="list-disc list-inside mt-[var(--space-1)] space-y-[var(--space-0-5)]">
                     {approveErrors.map((e) => (
                       <li key={e.task_id}>{e.title ?? e.task_id}: {e.reason}</li>
                     ))}
@@ -578,7 +578,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
           )}
         </div>
 
-        <SheetFooter className="flex-row gap-2 px-6 py-4 flex-shrink-0">
+        <SheetFooter className="flex-row gap-[var(--space-2)] px-[var(--space-4)] py-[var(--space-3)] flex-shrink-0">
           <Button
             type="button"
             variant="ghost"

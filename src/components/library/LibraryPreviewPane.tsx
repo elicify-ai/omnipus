@@ -159,7 +159,7 @@ export function LibraryPreviewPane({
   const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null)
 
   const loadingBody = (
-    <div className="flex flex-1 items-center justify-center gap-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+    <div className="flex flex-1 items-center justify-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
       <SpinnerGap size={16} className="animate-spin" /> Loading file…
     </div>
   )
@@ -286,7 +286,7 @@ export function LibraryPreviewPane({
 
           The middle slot is filled by whichever body mounts an editor — see
           previewHeaderSlot for why that is a portal and not lifted state. */}
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-2">
+      <div className="flex h-9 shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2)]">
         <p
           className="min-w-0 flex-1 truncate text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]"
           title={liveEntry.name}
@@ -294,7 +294,7 @@ export function LibraryPreviewPane({
         >
           {liveEntry.name}
         </p>
-        <div ref={setHeaderSlot} className="flex shrink-0 items-center gap-0.5" />
+        <div ref={setHeaderSlot} className="flex shrink-0 items-center gap-[var(--space-0-5)]" />
         <button
           type="button"
           tabIndex={0}
@@ -336,7 +336,7 @@ function UntrustedContentBoundary() {
       role="note"
       aria-label="Untrusted content"
       data-testid="library-preview-untrusted-boundary"
-      className="flex shrink-0 items-center gap-2 border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5"
+      className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-1)]"
     >
       <ShieldWarning size={14} weight="fill" className="shrink-0 text-[var(--color-warning)]" />
       <p className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]">
@@ -533,7 +533,7 @@ function LibraryHtmlFrame({
   if (tokenQuery.isLoading) {
     return (
       <div
-        className="flex flex-1 items-center justify-center gap-2 p-4 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+        className="flex flex-1 items-center justify-center gap-[var(--space-2)] p-[var(--space-3)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         data-testid="library-html-preview-loading"
       >
         <SpinnerGap size={16} className="animate-spin" /> Preparing preview…
@@ -551,12 +551,12 @@ function LibraryHtmlFrame({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-[var(--space-2)]">
       {expired && (
         <div
           role="status"
           data-testid="library-html-preview-expired"
-          className="flex shrink-0 items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2"
+          className="flex shrink-0 items-center gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
         >
           <WarningCircle size={14} weight="fill" className="shrink-0 text-[var(--color-warning)]" />
           <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
@@ -567,9 +567,9 @@ function LibraryHtmlFrame({
             tabIndex={0}
             onClick={() => void tokenQuery.refetch()}
             data-testid="library-html-preview-reload"
-            className="shrink-0 rounded px-2 py-1 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning)]/20"
+            className="shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning)]/20"
           >
-            <ArrowClockwise size={12} className="mr-1 inline" />
+            <ArrowClockwise size={12} className="mr-[var(--space-1)] inline" />
             Reload
           </button>
         </div>
@@ -605,7 +605,7 @@ function PreviewUnavailable({
     <div
       role="alert"
       data-testid={testId}
-      className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 overflow-auto p-8 text-center"
+      className="flex flex-1 min-h-0 flex-col items-center justify-center gap-[var(--space-2-5)] overflow-auto p-[var(--space-5)] text-center"
     >
       <WarningCircle size={28} weight="fill" className="text-[var(--color-warning)]" />
       <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Preview unavailable</p>
@@ -616,7 +616,7 @@ function PreviewUnavailable({
           tabIndex={0}
           onClick={onRetry}
           data-testid="library-html-preview-retry"
-          className="rounded border border-[var(--color-border)] px-3 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          className="rounded border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
         >
           Try again
         </button>

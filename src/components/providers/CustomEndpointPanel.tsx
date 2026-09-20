@@ -53,7 +53,7 @@ export function CustomEndpointPanel({
     <form
       data-testid={testId}
       aria-label="Custom endpoint"
-      className="flex flex-col gap-3 rounded-md border p-3"
+      className="flex flex-col gap-[var(--space-2-5)] rounded-md border p-[var(--space-2-5)]"
       style={{ borderColor: 'var(--color-border)' }}
       onSubmit={(event) => {
         event.preventDefault()
@@ -66,12 +66,12 @@ export function CustomEndpointPanel({
         })
       }}
     >
-      <div className="flex items-center gap-2 text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
+      <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
         <Plug size={14} aria-hidden="true" />
         Custom endpoint
       </div>
 
-      <label className="flex flex-col gap-1 text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-id`}>
+      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-id`}>
         Provider id
         <input
           id={`${testId}-id`}
@@ -79,12 +79,12 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-id"
           value={id}
           onChange={(e) => setId(e.target.value)}
-          className="min-h-[32px] rounded border px-2 text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
       </label>
 
-      <label className="flex flex-col gap-1 text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-base`}>
+      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-base`}>
         API base URL
         <input
           id={`${testId}-api-base`}
@@ -92,12 +92,12 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-api-base"
           value={apiBase}
           onChange={(e) => setApiBase(e.target.value)}
-          className="min-h-[32px] rounded border px-2 text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
       </label>
 
-      <label className="flex flex-col gap-1 text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-protocol`}>
+      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-protocol`}>
         Protocol
         <select
           id={`${testId}-protocol`}
@@ -105,7 +105,7 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-protocol"
           value={protocol}
           onChange={(e) => setProtocol(e.target.value as CustomEndpointProtocol)}
-          className="min-h-[32px] rounded border px-2 text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         >
           {CUSTOM_ENDPOINT_PROTOCOLS.map((value) => (
@@ -116,7 +116,7 @@ export function CustomEndpointPanel({
         </select>
       </label>
 
-      <label className="flex flex-col gap-1 text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-key`}>
+      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-key`}>
         API key
         <input
           id={`${testId}-api-key`}
@@ -125,7 +125,7 @@ export function CustomEndpointPanel({
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          className="min-h-[32px] rounded border px-2 text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
       </label>
@@ -136,13 +136,13 @@ export function CustomEndpointPanel({
         </div>
       )}
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-[var(--space-2)]">
         <button
           type="submit"
           tabIndex={0}
           data-testid="custom-endpoint-submit"
           disabled={!complete || submitting}
-          className="min-h-[32px] rounded border px-3 text-[length:var(--type-body-compact-size)] disabled:opacity-50"
+          className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] disabled:opacity-50"
           style={{ borderColor: 'var(--color-border)' }}
         >
           Add endpoint
@@ -153,7 +153,7 @@ export function CustomEndpointPanel({
             data-testid="custom-endpoint-cancel"
             tabIndex={0}
             onClick={onCancel}
-            className="min-h-[32px] rounded px-3 text-[length:var(--type-body-compact-size)]"
+            className="min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
           </button>

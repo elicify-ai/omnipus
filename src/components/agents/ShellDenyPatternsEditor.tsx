@@ -50,9 +50,9 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
   const errorLines = lineStates.filter((l) => l.error !== null)
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-[var(--space-2)]">
       {/* Info banner */}
-      <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
+      <div className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]">
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Patterns matching command text will be blocked. Empty list = no enforcement.
         </span>
@@ -82,7 +82,7 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
 
       {/* Per-line error messages */}
       {hasErrors && (
-        <div id="shell-deny-errors" className="space-y-1" role="alert">
+        <div id="shell-deny-errors" className="space-y-[var(--space-1)]" role="alert">
           {errorLines.map((l, idx) => (
             <p
               key={idx}

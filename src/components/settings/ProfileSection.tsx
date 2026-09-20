@@ -197,11 +197,11 @@ export function ProfileSection() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Profile & Preferences</h2>
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Personal preferences stored in this browser.
           </p>
         </div>
@@ -209,10 +209,10 @@ export function ProfileSection() {
       </div>
 
       {/* Identity */}
-      <section className="space-y-3">
+      <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Identity</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-          <div className="flex items-center justify-between gap-4">
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+          <div className="flex items-center justify-between gap-[var(--space-3)]">
             <Label htmlFor="pref-name" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] shrink-0">
               Display name
             </Label>
@@ -228,9 +228,9 @@ export function ProfileSection() {
       </section>
 
       {/* Locale */}
-      <section className="space-y-3">
+      <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Locale</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Timezone</p>
@@ -248,9 +248,9 @@ export function ProfileSection() {
       </section>
 
       {/* Appearance */}
-      <section className="space-y-3">
+      <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Appearance</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Theme</p>
@@ -263,7 +263,7 @@ export function ProfileSection() {
 
           <Separator />
 
-          <div className="space-y-3">
+          <div className="space-y-[var(--space-2-5)]">
             <div className="flex items-center justify-between">
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Font size</p>
               <span className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)]">{fontSize}px</span>
@@ -286,22 +286,22 @@ export function ProfileSection() {
       </section>
 
       {/* Change Password */}
-      <section className="space-y-3">
+      <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Security</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-          <div className="space-y-1">
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+          <div className="space-y-[var(--space-1)]">
             <h4 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Change Password</h4>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Update your login password. Must be at least 8 characters.</p>
           </div>
 
           <form
-            className="space-y-3"
+            className="space-y-[var(--space-2-5)]"
             onSubmit={(e) => {
               e.preventDefault()
               handlePasswordChange()
             }}
           >
-            <div className="space-y-1.5">
+            <div className="space-y-[var(--space-1)]">
               <Label htmlFor="current-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
                 Current password
               </Label>
@@ -316,7 +316,7 @@ export function ProfileSection() {
               />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-[var(--space-1)]">
               <Label htmlFor="new-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
                 New password
               </Label>
@@ -331,7 +331,7 @@ export function ProfileSection() {
               />
             </div>
 
-            <div className="space-y-1.5">
+            <div className="space-y-[var(--space-1)]">
               <Label htmlFor="confirm-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
                 Confirm new password
               </Label>
@@ -354,7 +354,7 @@ export function ProfileSection() {
               type="submit"
               size="sm"
               disabled={isChangingPassword}
-              className="gap-1.5"
+              className="gap-[var(--space-1)]"
             >
               <LockKey size={13} weight="bold" />
               {isChangingPassword ? 'Changing...' : 'Change Password'}
@@ -364,7 +364,7 @@ export function ProfileSection() {
       </section>
 
       {/* Workspace Context (USER.md) */}
-      <section className="space-y-3">
+      <section className="space-y-[var(--space-2-5)]">
         <div className="flex items-center justify-between">
           <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider" id="workspace-context-heading">
             Workspace Context
@@ -373,18 +373,18 @@ export function ProfileSection() {
             <AutoSaveIndicator status={contextSaveStatus} error={contextSaveError} />
           )}
         </div>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" id="workspace-context-desc">
             Shared context available to all agents — your role, preferences, and workspace information.
           </p>
           {userContextError ? (
-            <div className="flex flex-col items-center gap-3 py-4 text-center">
+            <div className="flex flex-col items-center gap-[var(--space-2-5)] py-[var(--space-3)] text-center">
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load workspace context.</p>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => refetchUserContext()}
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 <ArrowsClockwise size={13} />
                 Retry

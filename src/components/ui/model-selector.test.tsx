@@ -838,7 +838,7 @@ describe('ModelSelector — variant="ghost"', () => {
     // Ghost trigger must carry the compact height class (composer context-row h-7).
     expect(trigger.className).toContain('h-7')
     // Ghost trigger must carry the compact padding class.
-    expect(trigger.className).toContain('px-1.5')
+    expect(trigger.className).toContain('px-[var(--space-1)]')
   })
 
   it('still renders the selected value and caret in ghost mode', () => {

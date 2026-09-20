@@ -413,10 +413,10 @@ export function SetGoalCardBlock({
     case 'failed': {
       const detail = detailText(result, error)
       return (
-        <details data-testid="set-goal-failed" className="my-1 text-[length:var(--type-utility-xs-size)] font-mono">
+        <details data-testid="set-goal-failed" className="my-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-mono">
           <summary
             tabIndex={0}
-            className="flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[var(--color-muted)]"
+            className="flex cursor-pointer list-none items-center gap-[var(--space-1)] py-[var(--space-0-5)] text-[var(--color-muted)]"
             title={detail || 'Goal registration failed'}
           >
             <Warning size={12} weight="fill" className="shrink-0 text-[var(--color-error)]" aria-hidden="true" />
@@ -425,7 +425,7 @@ export function SetGoalCardBlock({
           {detail && (
             <pre
               data-testid="set-goal-failed-detail"
-              className="ml-[3px] mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all border-l-2 border-[var(--color-border)] py-1 pl-3 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+              className="ml-[3px] mt-[var(--space-1)] max-h-48 overflow-auto whitespace-pre-wrap break-all border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
             >
               {detail}
             </pre>
@@ -438,7 +438,7 @@ export function SetGoalCardBlock({
       return (
         <div
           data-testid="set-goal-chip"
-          className="my-1 flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+          className="my-[var(--space-1)] flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
           title={detail}
         >
           <Target size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />

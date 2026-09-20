@@ -41,7 +41,7 @@ export function Advanced({
         title="Advanced"
         summary="Timeout and rate limits"
       >
-        <div className="space-y-5">
+        <div className="space-y-[var(--space-3)]">
           <ExternalAdvancedFields payload={payload} setField={setField} />
         </div>
       </AdvancedDisclosure>
@@ -53,7 +53,7 @@ export function Advanced({
       title="Advanced"
       summary="Model parameters, rate limits, and runtime knobs"
     >
-      <div className="space-y-5">
+      <div className="space-y-[var(--space-3)]">
         <MainAdvancedFields
           payload={payload}
           setField={setField}
@@ -85,7 +85,7 @@ interface ExternalAdvancedFieldsProps {
 function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsProps) {
   return (
     <>
-      <div className="space-y-2">
+      <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <TimeoutField payload={payload} setField={setField} />
       </div>
@@ -124,9 +124,9 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
   return (
     <>
       {/* Model parameters */}
-      <div className="space-y-2">
+      <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Model parameters</p>
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           <RangeRow
             label="Temperature"
             caption="Sampling temperature (0.0 – 2.0). Lower = more deterministic. Default 0.7."
@@ -148,7 +148,7 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
       </div>
 
       {/* Shell deny patterns */}
-      <div className="space-y-2">
+      <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Shell deny patterns</p>
         <ShellDenyPatternsEditor
           value={shellPolicy.custom_deny_patterns ?? []}
@@ -167,9 +167,9 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
       <RateLimitsFields payload={payload} setField={setField} />
 
       {/* Runtime knobs */}
-      <div className="space-y-2">
+      <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
-        <div className="space-y-1.5">
+        <div className="space-y-[var(--space-1)]">
           <TimeoutField payload={payload} setField={setField} />
           <NumberRow
             label="Max tool calls per turn"
@@ -237,9 +237,9 @@ function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-[var(--space-2)]">
       <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Rate limits</p>
-      <label className="flex items-center gap-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+      <label className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
         <input tabIndex={0}
           type="checkbox"
           checked={rateLimits.use_global_defaults ?? true}
@@ -251,7 +251,7 @@ function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
         <span>Use global defaults</span>
       </label>
       {!rateLimits.use_global_defaults && (
-        <div className="space-y-1.5">
+        <div className="space-y-[var(--space-1)]">
           <NumberRow
             label="LLM calls / hour"
             caption="Maximum LLM API calls per hour for this agent. Empty = no cap."
@@ -295,7 +295,7 @@ interface RangeRowProps {
 function RangeRow({ label, caption, value, min, max, step, onChange }: RangeRowProps) {
   const display = value ?? defaultFor(label)
   return (
-    <div className="space-y-1">
+    <div className="space-y-[var(--space-1)]">
       <div className="flex items-center justify-between">
         <label className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{label}</label>
         <span className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]">{display}</span>
@@ -327,7 +327,7 @@ interface NumberRowProps {
 
 function NumberRow({ label, caption, value, min, step, onChange }: NumberRowProps) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-[var(--space-1)]">
       <label className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">{label}</label>
       <Input
         type="number"

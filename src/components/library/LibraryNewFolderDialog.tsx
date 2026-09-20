@@ -80,7 +80,7 @@ export function LibraryNewFolderDialog({
         <DialogHeader>
           <DialogTitle>New folder</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="library-new-folder-input">Folder name</Label>
           <Input
             id="library-new-folder-input"

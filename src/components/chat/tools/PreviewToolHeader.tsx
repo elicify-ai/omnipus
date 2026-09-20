@@ -71,12 +71,12 @@ export function PreviewToolHeader({
   )
 
   return (
-    <div data-testid={testId} className="flex items-center gap-2 py-1 font-mono text-[length:var(--type-utility-xs-size)]">
+    <div data-testid={testId} className="flex items-center gap-[var(--space-2)] py-[var(--space-1)] font-mono text-[length:var(--type-utility-xs-size)]">
       {statusConfig.indicator}
       {icon}
       <span className="text-[var(--color-muted)] font-mono">{toolName}</span>
       {label && (
-        <code className="ml-1 text-[var(--color-accent)] font-mono text-[length:var(--type-caption-size)] truncate max-w-[280px]">
+        <code className="ml-[var(--space-1)] text-[var(--color-accent)] font-mono text-[length:var(--type-caption-size)] truncate max-w-[280px]">
           {label}
         </code>
       )}

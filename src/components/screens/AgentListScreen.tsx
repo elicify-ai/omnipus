@@ -51,18 +51,18 @@ interface WorkspaceTeamsViewProps {
 function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
   if (workspaces.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+      <div className="flex flex-col items-center justify-center py-[var(--space-8)] gap-[var(--space-3)] text-center">
         <GitFork size={48} weight="thin" className="text-[var(--color-border)]" />
         <div>
           <p className="text-[var(--color-secondary)] font-medium text-[length:var(--type-body-compact-size)]">No workspaces yet</p>
-          <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)] mt-1">
+          <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)] mt-[var(--space-1)]">
             Create a workspace to configure team delegation graphs.
           </p>
         </div>
         <Link
           to="/workspaces"
           tabIndex={0}
-          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
+          className="inline-flex items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:border-[var(--color-accent)]/40 hover:text-[var(--color-accent)]"
         >
           <GitFork size={14} weight="bold" /> Go to Workspaces
         </Link>
@@ -71,8 +71,8 @@ function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
   }
 
   return (
-    <div className="space-y-2">
-      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-4">
+    <div className="space-y-[var(--space-2)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-3)]">
         Each workspace has a team delegation graph. Click a workspace to configure its team.
       </p>
       {workspaces.map((ws) => (
@@ -82,9 +82,9 @@ function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
           params={{ workspaceId: ws.id }}
           tabIndex={0}
           data-testid={`workspace-team-row-${ws.id}`}
-          className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-3 transition-colors hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)]"
+          className="flex items-center justify-between gap-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-2-5)] transition-colors hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)]"
         >
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-[var(--space-2-5)] min-w-0">
             <div
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md"
               style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)' }}
@@ -96,13 +96,13 @@ function WorkspaceTeamsView({ workspaces }: WorkspaceTeamsViewProps) {
                 {ws.name}
               </p>
               {ws.description && (
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate mt-0.5">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate mt-[var(--space-0-5)]">
                   {ws.description}
                 </p>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-[var(--space-2-5)] shrink-0">
             {(ws.core_team ?? []).length > 0 && (
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 {ws.core_team!.length} agent{ws.core_team!.length !== 1 ? 's' : ''}
@@ -191,16 +191,16 @@ function AgentsLibraryView({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
       {/* Filter bar */}
       {workspaces.length > 0 && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-[var(--space-2)]">
           <Popover open={filterMenuOpen} onOpenChange={setFilterMenuOpen}>
             <PopoverTrigger asChild>
               <button tabIndex={0}
                 type="button"
                 data-testid="workspace-filter-trigger"
-                className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[length:var(--type-utility-xs-size)] font-medium transition-colors"
+                className="inline-flex items-center gap-[var(--space-1)] rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium transition-colors"
                 style={{
                   borderColor:
                     workspaceFilter !== 'all'
@@ -222,7 +222,7 @@ function AgentsLibraryView({
                 <CaretDown size={10} />
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" sideOffset={4} className="w-56 p-1">
+            <PopoverContent align="start" sideOffset={4} className="w-56 p-[var(--space-1)]">
               <div role="group" aria-label="Filter by workspace">
                 <button tabIndex={0}
                   type="button"
@@ -232,7 +232,7 @@ function AgentsLibraryView({
                     setFilterMenuOpen(false)
                   }}
                   aria-current={workspaceFilter === 'all' ? 'true' : undefined}
-                  className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
+                  className="flex w-full items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
                   style={{
                     color:
                       workspaceFilter === 'all'
@@ -253,7 +253,7 @@ function AgentsLibraryView({
                       setFilterMenuOpen(false)
                     }}
                     aria-current={workspaceFilter === ws.id ? 'true' : undefined}
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
+                    className="flex w-full items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)]"
                     style={{
                       color:
                         workspaceFilter === ws.id
@@ -274,7 +274,7 @@ function AgentsLibraryView({
               type="button"
               data-testid="workspace-filter-clear"
               onClick={() => setWorkspaceFilter('all')}
-              className="inline-flex items-center gap-1 rounded px-2 py-1 text-[length:var(--type-caption-size)] font-medium transition-colors"
+              className="inline-flex items-center gap-[var(--space-1)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium transition-colors"
               style={{ color: 'var(--color-muted)' }}
             >
               Clear filter
@@ -285,20 +285,20 @@ function AgentsLibraryView({
 
       {/* Roster sections */}
       {agents.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+        <div className="flex flex-col items-center justify-center py-[var(--space-8)] gap-[var(--space-3)] text-center">
           <Robot size={48} weight="thin" className="text-[var(--color-border)]" />
           <div>
             <p className="text-[var(--color-secondary)] font-medium text-[length:var(--type-body-compact-size)]">No agents yet</p>
-            <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)] mt-1">
+            <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)] mt-[var(--space-1)]">
               Create your first agent to get started.
             </p>
           </div>
-          <Button onClick={() => openCreateAgentModal('Main')} className="gap-2">
+          <Button onClick={() => openCreateAgentModal('Main')} className="gap-[var(--space-2)]">
             <Plus size={14} weight="bold" /> New agent
           </Button>
         </div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-[var(--space-5)]">
           {/* Built-in roster — rendered FIRST (Agents-screen IA fix): the
               locked Mia/Jim/Ava/Ray roster is 100% of a fresh install (Main
               agents and Sub-agent workers are both empty until the operator
@@ -322,13 +322,13 @@ function AgentsLibraryView({
                       <h2 className="font-headline text-[length:var(--type-body-compact-size)] font-bold uppercase tracking-wide text-[var(--color-secondary)]">
                         Built-in roster
                       </h2>
-                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                         Core agents — Mia, Jim, Ava, Ray and any other locked system roster.
                       </p>
                     </div>
                   </AccordionTrigger>
                   <AccordionContent>
-                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
+                    <div className="grid gap-[var(--space-3)] grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-[var(--space-2)]">
                       {builtInAgents.map((agent) => (
                         <AgentCard
                           key={agent.id}
@@ -345,12 +345,12 @@ function AgentsLibraryView({
 
           {/* Main agents */}
           <section data-testid="base-agents-section">
-            <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="flex items-start justify-between gap-[var(--space-2-5)] mb-[var(--space-2-5)]">
               <div>
                 <h2 className="font-headline text-[length:var(--type-body-compact-size)] font-bold uppercase tracking-wide text-[var(--color-secondary)]">
                   Main agents
                 </h2>
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                   Chat colleagues — message them, set a default, and delegate work.
                 </p>
               </div>
@@ -358,7 +358,7 @@ function AgentsLibraryView({
                 size="sm"
                 variant="ghost"
                 onClick={() => openCreateAgentModal('Main')}
-                className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                className="gap-[var(--space-1)] shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                 data-testid="add-main-button"
               >
                 <Plus size={12} weight="bold" /> + New Main
@@ -366,7 +366,7 @@ function AgentsLibraryView({
             </div>
             {mainAgents.length === 0 ? (
               <div
-                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
+                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-3)] text-center"
                 data-testid="base-agents-empty"
               >
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
@@ -376,7 +376,7 @@ function AgentsLibraryView({
                 </p>
               </div>
             ) : (
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-[var(--space-3)] grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {mainAgents.map((agent) => (
                   <AgentCard
                     key={agent.id}
@@ -390,21 +390,21 @@ function AgentsLibraryView({
 
           {/* Sub-agent workers */}
           <section data-testid="worker-agents-section">
-            <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="flex items-start justify-between gap-[var(--space-2-5)] mb-[var(--space-2-5)]">
               <div>
                 <h2 className="font-headline text-[length:var(--type-body-compact-size)] font-bold uppercase tracking-wide text-[var(--color-secondary)]">
                   Sub-agent workers
                 </h2>
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                   Delegation-only labour agents — invoked by other agents, not chat targets.
                 </p>
               </div>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-[var(--space-1)]">
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() => openCreateAgentModal('Subagent')}
-                  className="gap-1.5 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                  className="gap-[var(--space-1)] shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                   data-testid="add-subagent-button"
                 >
                   <Plus size={12} weight="bold" /> + New Subagent
@@ -415,7 +415,7 @@ function AgentsLibraryView({
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="gap-1.5 ml-0 sm:ml-2 shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+                      className="gap-[var(--space-1)] ml-0 sm:ml-[var(--space-2)] shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                       data-testid="add-external-trigger"
                       aria-haspopup="dialog"
                       aria-expanded={externalMenuOpen}
@@ -427,7 +427,7 @@ function AgentsLibraryView({
                   <PopoverContent
                     align="end"
                     sideOffset={6}
-                    className="w-56 p-1"
+                    className="w-56 p-[var(--space-1)]"
                     data-testid="add-external-menu"
                   >
                     <div role="group" aria-label="External CLI type">
@@ -444,7 +444,7 @@ function AgentsLibraryView({
                               setExternalMenuOpen(false)
                             }}
                             data-testid={`add-external-${cli}`}
-                            className="flex w-full items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+                            className="flex w-full items-center justify-between gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)] focus:bg-[var(--color-surface-2)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
                           >
                             <span className="font-mono">{CLI_LABELS[cli]}</span>
                             {!available && (
@@ -463,14 +463,14 @@ function AgentsLibraryView({
 
             {cliDetectFailed && (
               <div
-                className="flex items-start gap-2 rounded-lg border px-3 py-2 mb-3"
+                className="flex items-start gap-[var(--space-2)] rounded-lg border px-[var(--space-2-5)] py-[var(--space-2)] mb-[var(--space-2-5)]"
                 style={{
                   borderColor: 'color-mix(in srgb, var(--color-warning) 30%, transparent)',
                   backgroundColor: 'color-mix(in srgb, var(--color-warning) 10%, transparent)',
                 }}
                 data-testid="cli-detect-warning"
               >
-                <WarningCircle size={16} weight="bold" className="mt-0.5 shrink-0" style={{ color: 'var(--color-warning)' }} />
+                <WarningCircle size={16} weight="bold" className="mt-[var(--space-0-5)] shrink-0" style={{ color: 'var(--color-warning)' }} />
                 <p className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-warning)' }}>
                   Could not detect installed external CLIs. External subagent availability is assumed by default.
                 </p>
@@ -479,7 +479,7 @@ function AgentsLibraryView({
 
             {workerAgents.length === 0 ? (
               <div
-                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-5 text-center"
+                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-3)] text-center"
                 data-testid="worker-agents-empty"
               >
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
@@ -488,13 +488,13 @@ function AgentsLibraryView({
                     : 'No sub-agent workers yet.'}
                 </p>
                 {workspaceFilter === 'all' && (
-                  <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]/80 mt-1">
+                  <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]/80 mt-[var(--space-1)]">
                     Create a worker to delegate labour to a third-party runtime.
                   </p>
                 )}
               </div>
             ) : (
-              <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="grid gap-[var(--space-3)] grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {workerAgents.map((agent) => (
                   <WorkerCard key={agent.id} agent={agent} />
                 ))}
@@ -521,13 +521,13 @@ function AgentsLibraryView({
                       <h2 className="font-headline text-[length:var(--type-body-compact-size)] font-bold uppercase tracking-wide text-[var(--color-secondary)]">
                         System
                       </h2>
-                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                         System agents — locked, run out-of-turn (Judge). Not a chat target, not delegable.
                       </p>
                     </div>
                   </AccordionTrigger>
                   <AccordionContent>
-                    <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-2">
+                    <div className="grid gap-[var(--space-3)] grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 pt-[var(--space-2)]">
                       {systemAgents.map((agent) => (
                         <AgentCard key={agent.id} agent={agent} />
                       ))}
@@ -637,8 +637,8 @@ export function AgentListScreen() {
   if (isLoading) {
     return (
       <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-        <div className="max-w-4xl mx-auto px-4 py-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-[var(--space-3)]">
             {[1, 2, 3].map((i) => (
               <div
                 key={i}
@@ -656,8 +656,8 @@ export function AgentListScreen() {
       <div className="absolute inset-0 flex flex-col">
         <ScreenHeader title="Agents" />
         <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-          <div className="max-w-4xl mx-auto px-4 py-6">
-            <div className="flex flex-col items-center justify-center py-16 gap-3">
+          <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
+            <div className="flex flex-col items-center justify-center py-[var(--space-8)] gap-[var(--space-2-5)]">
               <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">Could not load agents.</p>
               <Button variant="outline" size="sm" onClick={() => refetchAgents()}>
                 Retry
@@ -673,12 +673,12 @@ export function AgentListScreen() {
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Agents" />
       <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
         {/* Header */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-[var(--space-4)]">
           <div>
             <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Agents</h1>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
               Browse, configure, and create your AI agents.
             </p>
           </div>
@@ -686,13 +686,13 @@ export function AgentListScreen() {
 
         {/* Two-tab view: Library | Workspace Teams */}
         <Tabs defaultValue="library">
-          <TabsList className="mb-6" data-testid="agents-tabs">
+          <TabsList className="mb-[var(--space-4)]" data-testid="agents-tabs">
             <TabsTrigger value="library" data-testid="agents-tab-library">
-              <Robot size={14} className="mr-1.5" />
+              <Robot size={14} className="mr-[var(--space-1)]" />
               Agents
             </TabsTrigger>
             <TabsTrigger value="teams" data-testid="agents-tab-teams">
-              <Users size={14} className="mr-1.5" />
+              <Users size={14} className="mr-[var(--space-1)]" />
               Workspace Teams
             </TabsTrigger>
           </TabsList>

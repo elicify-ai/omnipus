@@ -24,8 +24,8 @@ export function QueryErrorState({
       role="alert"
       className={cn(
         layout === 'absolute'
-          ? 'absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center'
-          : 'flex flex-1 h-full flex-col items-center justify-center gap-3 p-8 text-center',
+          ? 'absolute inset-0 flex flex-col items-center justify-center gap-[var(--space-2-5)] p-[var(--space-5)] text-center'
+          : 'flex flex-1 h-full flex-col items-center justify-center gap-[var(--space-2-5)] p-[var(--space-5)] text-center',
         className,
       )}
       data-testid={testId ?? 'query-error-state'}

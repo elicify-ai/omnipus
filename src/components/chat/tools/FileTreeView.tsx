@@ -94,13 +94,13 @@ function FileTreeBlock({
     // slot is the status dot/spinner only, like the other rows); each tree
     // entry below keeps its own Folder/File icon and indentation — that's
     // the file tree's identity, preserved per the flat-redesign spec.
-    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
-          'flex w-full items-center gap-2 py-1 transition-colors text-left',
+          'flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
           !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
           isRunning && 'cursor-default'
         )}
@@ -109,10 +109,10 @@ function FileTreeBlock({
       >
         {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{path}</span>
-        <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
+        <span className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] shrink-0">
           <span className={cn()}>{countOrStatusLabel}</span>
           {!isRunning && (
-            <span className="ml-1">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
+            <span className="ml-[var(--space-1)]">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}
         </span>
       </button>
@@ -120,12 +120,12 @@ function FileTreeBlock({
       {/* Tree panel — left-accent block, no bordered card. Entries keep their
           Folder/File icons and paddingLeft-based indentation unchanged. */}
       {expanded && !isRunning && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-1 pl-3 space-y-0.5">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-0-5)]">
           {entries.length > 0 ? (
             entries.map((entry, i) => (
               <div
                 key={i}
-                className="flex items-center gap-1.5 font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+                className="flex items-center gap-[var(--space-1)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                 style={{ '--file-tree-view-indent-depth-px': entry.indent * 12, paddingLeft: 'calc(var(--file-tree-view-indent-depth-px) * 1px)' } as import('react').CSSProperties}
               >
                 {entry.isDir

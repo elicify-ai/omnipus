@@ -183,7 +183,7 @@ function WorkspaceTabContainerView({
           <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
           {activeSegment === 'chat' && (
-            <div className="flex-1 min-w-0 flex @6xl:justify-end px-3" data-testid="workspace-chat-controls">
+            <div className="flex-1 min-w-0 flex @6xl:justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>
           )}
@@ -217,7 +217,7 @@ function WorkspaceNotFoundState() {
 
   return (
     <div
-      className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center"
+      className="flex flex-col items-center justify-center h-full gap-[var(--space-3)] p-[var(--space-5)] text-center"
       data-testid="workspace-not-found"
     >
       <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">Workspace not found.</p>
@@ -228,7 +228,7 @@ function WorkspaceNotFoundState() {
         type="button"
         onClick={handleBackToWorkspace}
         data-testid="workspace-not-found-back-btn"
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-[length:var(--type-body-compact-size)] hover:opacity-90 transition-opacity"
+        className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-[length:var(--type-body-compact-size)] hover:opacity-90 transition-opacity"
       >
         Back to my workspace
       </button>
@@ -239,12 +239,12 @@ function WorkspaceNotFoundState() {
 function WorkspaceShellSkeleton() {
   return (
     <div className="absolute inset-0 flex flex-col">
-      <div className="flex gap-2 px-3 h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)]">
+      <div className="flex gap-[var(--space-2)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)]">
         {[1, 2, 3, 4, 5, 6, 7].map((i) => (
-          <div key={i} className="h-11 w-20 my-1 rounded bg-[var(--color-surface-2)] animate-pulse" />
+          <div key={i} className="h-11 w-20 my-[var(--space-1)] rounded bg-[var(--color-surface-2)] animate-pulse" />
         ))}
       </div>
-      <div className="flex gap-3 p-4 flex-1">
+      <div className="flex gap-[var(--space-2-5)] p-[var(--space-3)] flex-1">
         {[1, 2, 3, 4, 5].map((i) => (
           <div
             key={i}

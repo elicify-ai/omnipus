@@ -63,7 +63,7 @@ export function WriteSetField({
   labelStyle?: 'form' | 'section'
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-[var(--space-1)]">
       {labelStyle === 'section' ? (
         <label
           htmlFor={id}
@@ -132,14 +132,14 @@ export function JoinMemberCheckbox({
   onCheckedChange: (checked: boolean) => void
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-start gap-2">
+    <div className="flex flex-col gap-[var(--space-1)]">
+      <div className="flex items-start gap-[var(--space-2)]">
         <Checkbox
           id={id}
           data-testid="plan-member-join-checkbox"
           checked={checked}
           onCheckedChange={(v) => onCheckedChange(v === true)}
-          className="mt-[1px]"
+          className="mt-[var(--border-width-hairline)]"
         />
         <label htmlFor={id} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] cursor-pointer">
           {JOIN_LABEL}

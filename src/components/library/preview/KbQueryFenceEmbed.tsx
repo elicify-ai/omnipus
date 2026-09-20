@@ -89,7 +89,7 @@ export interface KbQueryFenceEmbedProps {
 
 export function KbQueryFenceEmbed({ workspaceId, collectionId, query }: KbQueryFenceEmbedProps) {
   return (
-    <LazyEmbedMount reservedHeight={QUERY_FENCE_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+    <LazyEmbedMount reservedHeight={QUERY_FENCE_EMBED_RESERVED_HEIGHT_PX} className="my-[var(--space-2-5)] block">
       <KbQueryFenceEmbedContent workspaceId={workspaceId} collectionId={collectionId} query={query} />
     </LazyEmbedMount>
   )
@@ -132,7 +132,7 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
     return (
       <div
         data-testid="kb-query-fence-empty-notation"
-        className="rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+        className="rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
         This query is empty — nothing to search for.
       </div>
@@ -146,7 +146,7 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
     return (
       <div
         data-testid="kb-query-fence-throttled"
-        className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-4 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+        className="flex items-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-3)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       >
         <MagnifyingGlass size={14} className="animate-pulse" /> Busy — retrying in{' '}
         {Math.ceil(throttledRetryDelayMs / 1000)}s
@@ -158,7 +158,7 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
     return (
       <div
         data-testid="kb-query-fence-loading"
-        className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-4 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+        className="flex items-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-3)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       >
         <MagnifyingGlass size={14} className="animate-pulse" /> Searching…
       </div>
@@ -173,9 +173,9 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
     return (
       <div
         data-testid={rateLimited ? 'kb-query-fence-rate-limited' : 'kb-query-fence-error'}
-        className="flex flex-col items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+        className="flex flex-col items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
-        <span className="flex items-center gap-1.5">
+        <span className="flex items-center gap-[var(--space-1)]">
           <Warning size={14} />
           {rateLimited ? 'This query is rate-limited by the knowledge workspace limit.' : 'Could not run this query.'}
         </span>
@@ -202,7 +202,7 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
     return (
       <div
         data-testid="kb-query-fence-waiting"
-        className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-4 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+        className="flex items-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-3)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       >
         <MagnifyingGlass size={14} />
         {searchQuery.fetchStatus === 'paused'
@@ -229,7 +229,7 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
   const incompleteNotice = data.complete ? null : (
     <div
       data-testid="kb-query-fence-incomplete"
-      className="mb-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+      className="mb-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
     >
       {incompleteLead(data.complete_reason)}
       {data.complete_reason ? ` (${data.complete_reason})` : ''}
@@ -246,7 +246,7 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
         {data.complete ? (
           <div
             data-testid="kb-query-fence-no-results"
-            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+            className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
           >
             No results for “{trimmed}”.
           </div>
@@ -260,12 +260,12 @@ function KbQueryFenceEmbedContent({ workspaceId, collectionId, query }: KbQueryF
       {incompleteNotice}
       <div
         data-testid="kb-query-fence-results"
-        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
+        className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
       >
-        <p className="mb-1.5 text-[var(--color-muted)]">
+        <p className="mb-[var(--space-1)] text-[var(--color-muted)]">
           Results for “{trimmed}” ({totalHits})
         </p>
-        <ul className="space-y-1">
+        <ul className="space-y-[var(--space-1)]">
           {data.notes.map((hit) => (
             <li key={`note-${hit.path}`} data-testid="kb-query-fence-note-hit">
               <span className="font-medium">{hit.title}</span>

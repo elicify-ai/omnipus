@@ -364,8 +364,8 @@ function ProviderConfigSheet({
           handleClose('overlay')
         }}
       >
-        <SheetHeader className="px-6 pr-14">
-          <div className="flex items-center gap-2 min-w-0">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
+          <div className="flex items-center gap-[var(--space-2)] min-w-0">
             {entry && (
               <BrandIcon
                 slug={catalogLogoSlug(entry)}
@@ -376,19 +376,19 @@ function ProviderConfigSheet({
             <SheetTitle>{sheetTitle}</SheetTitle>
           </div>
         </SheetHeader>
-        <SheetDescription className="px-6 pt-3">{sheetDescription}</SheetDescription>
+        <SheetDescription className="px-[var(--space-4)] pt-[var(--space-2-5)]">{sheetDescription}</SheetDescription>
 
-        <div className="px-6 space-y-5 overflow-y-auto pr-1 pt-4">
+        <div className="px-[var(--space-4)] space-y-[var(--space-3)] overflow-y-auto pr-[var(--space-1)] pt-[var(--space-3)]">
           {/* View-only variant info — Plan/Region/Endpoint, derived from the
               fetched CatalogProvider (src/lib/catalogDisplay.ts). */}
           {entry && (
             <div
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
               data-testid="variant-info"
             >
-              <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-[length:var(--type-utility-xs-size)]">
+              <div className="flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)] text-[length:var(--type-utility-xs-size)]">
                 <div>
-                  <span className="text-[var(--color-muted)] mr-1.5">Plan</span>
+                  <span className="text-[var(--color-muted)] mr-[var(--space-1)]">Plan</span>
                   <span
                     className="text-[var(--color-secondary)] font-medium"
                     data-testid="variant-plan"
@@ -398,7 +398,7 @@ function ProviderConfigSheet({
                 </div>
                 {entry.region && (
                   <div>
-                    <span className="text-[var(--color-muted)] mr-1.5">Region</span>
+                    <span className="text-[var(--color-muted)] mr-[var(--space-1)]">Region</span>
                     <span
                       className="text-[var(--color-secondary)] font-medium"
                       data-testid="variant-region"
@@ -408,7 +408,7 @@ function ProviderConfigSheet({
                   </div>
                 )}
                 <div className="w-full">
-                  <span className="text-[var(--color-muted)] mr-1.5">Endpoint</span>
+                  <span className="text-[var(--color-muted)] mr-[var(--space-1)]">Endpoint</span>
                   <span
                     className="text-[var(--color-secondary)] font-mono text-[length:var(--type-caption-size)]"
                     data-testid="variant-endpoint"
@@ -422,7 +422,7 @@ function ProviderConfigSheet({
 
           {/* API Key input */}
           <div>
-            <label htmlFor={`api-key-input-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5 block">
+            <label htmlFor={`api-key-input-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)] block">
               API Key
             </label>
             <div className="relative">
@@ -436,7 +436,7 @@ function ProviderConfigSheet({
                   setKeySaved((prev) => ({ ...prev, [draftKey]: false }))
                 }}
                 placeholder={hint}
-                className="pr-9 font-mono text-[length:var(--type-utility-xs-size)]"
+                className="pr-[var(--space-5)] font-mono text-[length:var(--type-utility-xs-size)]"
                 autoComplete="off"
                 data-testid={`api-key-input-${providerId}`}
               />
@@ -473,17 +473,17 @@ function ProviderConfigSheet({
             }
             return (
               <div>
-                <label htmlFor={`add-model-input-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5 block">
+                <label htmlFor={`add-model-input-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)] block">
                   Models
                 </label>
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-2">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-2)]">
                   This provider has no live model list — add the model slugs you want available in the picker.
                 </p>
                 {models.length > 0 ? (
-                  <ul className="flex flex-wrap gap-1.5 mb-2" data-testid={`model-list-${providerId}`}>
+                  <ul className="flex flex-wrap gap-[var(--space-1)] mb-[var(--space-2)]" data-testid={`model-list-${providerId}`}>
                     {models.map((slug) => (
                       <li key={slug}>
-                        <Badge variant="muted" className="gap-1 font-mono">
+                        <Badge variant="muted" className="gap-[var(--space-1)] font-mono">
                           {slug}
                           <button tabIndex={0}
                             type="button"
@@ -499,11 +499,11 @@ function ProviderConfigSheet({
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-2 italic">
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-2)] italic">
                     No models added yet.
                   </p>
                 )}
-                <div className="flex gap-2">
+                <div className="flex gap-[var(--space-2)]">
                   <Input
                     id={`add-model-input-${draftKey}`}
                     value={newModel[draftKey] ?? ''}
@@ -551,7 +551,7 @@ function ProviderConfigSheet({
               aria-labelledby={`discard-key-title-${draftKey}`}
               aria-describedby={`discard-key-body-${draftKey}`}
               data-testid="discard-key-prompt"
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
+              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
             >
               <p
                 id={`discard-key-title-${draftKey}`}
@@ -562,7 +562,7 @@ function ProviderConfigSheet({
               <p id={`discard-key-body-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 The key you typed has not been saved yet.
               </p>
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-[var(--space-2)]">
                 <Button
                   variant="outline"
                   size="sm"
@@ -585,8 +585,8 @@ function ProviderConfigSheet({
           )}
 
           {/* Footer actions */}
-          <div className="flex justify-between gap-2 pt-2">
-            <div className="flex gap-2">
+          <div className="flex justify-between gap-[var(--space-2)] pt-[var(--space-2)]">
+            <div className="flex gap-[var(--space-2)]">
               {provider && provider.status === 'connected' && (
                 <button tabIndex={0}
                   type="button"
@@ -612,7 +612,7 @@ function ProviderConfigSheet({
                 </button>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-[var(--space-2)]">
               <Button
                 variant="outline"
                 size="sm"
@@ -642,7 +642,7 @@ function ProviderConfigSheet({
 
         {/* Disclaimer */}
         {entry && (
-          <div className="mt-6 pt-4 border-t border-[var(--color-border)]">
+          <div className="mt-[var(--space-4)] pt-[var(--space-3)] border-t border-[var(--color-border)]">
             <BrandDisclaimer />
           </div>
         )}
@@ -1092,11 +1092,11 @@ export function ProvidersSection() {
   const canBeDefault = (provider: Provider) => USABLE_PROVIDER_STATUSES.includes(provider.status)
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+    <div className="space-y-[var(--space-3)]">
+      <div className="flex items-start justify-between gap-[var(--space-2-5)]">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h2>
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             API keys are stored encrypted in credentials.json — never in config.json.
           </p>
         </div>
@@ -1110,7 +1110,7 @@ export function ProvidersSection() {
           <Button
             size="sm"
             onClick={openPicker}
-            className="h-8 px-3 text-[length:var(--type-utility-xs-size)] shrink-0 gap-1.5"
+            className="h-8 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] shrink-0 gap-[var(--space-1)]"
             data-testid="connect-provider-btn"
           >
             <Plus size={12} weight="bold" /> Connect a provider
@@ -1140,7 +1140,7 @@ export function ProvidersSection() {
           Failed to load providers. Please try again.
         </p>
       ) : isLoading ? (
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           {[1, 2, 3].map((i) => (
             <div
               key={i}
@@ -1152,7 +1152,7 @@ export function ProvidersSection() {
         /* ── Configured-only list, grouped only when a company has ≥2
              configured variants (FIX-2); a single configured provider is a
              flat row with its own BrandIcon + entry.label. ── */
-        <div className="space-y-4">
+        <div className="space-y-[var(--space-3)]">
           {groups.map((group) => {
             if (group.items.length === 1) {
               const { provider, entry } = group.items[0]
@@ -1184,7 +1184,7 @@ export function ProvidersSection() {
                 {/* Company group header — only rendered here, when ≥2 variants
                     are configured (FIX-2). The per-group "Add another…"
                     control is gone (FIX-1). */}
-                <div className="flex items-center gap-2 mb-1.5">
+                <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
                   {group.logoSlug ? (
                     <BrandIcon
                       slug={group.logoSlug}
@@ -1202,7 +1202,7 @@ export function ProvidersSection() {
                   </span>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="space-y-[var(--space-1)]">
                   {group.items.map(({ provider, entry }) => (
                     <ProviderRow
                       key={provider.id}
@@ -1229,19 +1229,19 @@ export function ProvidersSection() {
           })}
 
           {/* Trademark disclaimer whenever brand marks are shown */}
-          <BrandDisclaimer className="mt-2" />
+          <BrandDisclaimer className="mt-[var(--space-2)]" />
         </div>
       ) : (
         /* ── Empty state (FIX-3) — no default-visible roster; a compact
              message + one primary "Connect a provider" CTA. ── */
         <div
-          className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-8 text-center space-y-3"
+          className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-5)] text-center space-y-[var(--space-2-5)]"
           data-testid="providers-empty-state"
         >
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No providers configured yet.</p>
           <Button
             onClick={openPicker}
-            className="gap-1.5"
+            className="gap-[var(--space-1)]"
             data-testid="connect-provider-btn"
           >
             <Plus size={13} weight="bold" /> Connect a provider
@@ -1258,13 +1258,13 @@ export function ProvidersSection() {
           className="flex h-full flex-col p-0"
           data-testid="provider-picker-sheet"
         >
-          <SheetHeader className="px-6 pr-14">
+          <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
             <SheetTitle>Connect a provider</SheetTitle>
           </SheetHeader>
-          <SheetDescription className="px-6 pt-2">
+          <SheetDescription className="px-[var(--space-4)] pt-[var(--space-2)]">
             Pick the provider whose key or account you want to use.
           </SheetDescription>
-          <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="flex-1 overflow-y-auto px-[var(--space-4)] py-[var(--space-3)]">
             <ProviderPicker
               data-testid="settings-provider-picker"
               catalog={catalogDoc}
@@ -1278,7 +1278,7 @@ export function ProvidersSection() {
             />
             {/* FR-014: brand marks are rendered above, so the disclaimer rides
                 with them. */}
-            <BrandDisclaimer className="mt-4" />
+            <BrandDisclaimer className="mt-[var(--space-3)]" />
           </div>
         </SheetContent>
       </Sheet>

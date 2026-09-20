@@ -228,7 +228,7 @@ function downloadLibraryEntry(workspaceId: string, entry: LibraryEntry): void {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-1 items-center justify-center gap-2 p-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+    <div className="flex flex-1 items-center justify-center gap-[var(--space-2)] p-[var(--space-4)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
       {children}
     </div>
   )
@@ -246,10 +246,10 @@ function UnloadableNotice({
 }) {
   return (
     <div
-      className="flex shrink-0 flex-col gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+      className="flex shrink-0 flex-col gap-[var(--space-1)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
       data-testid="base-preview-unloadable"
     >
-      <span className="flex items-center gap-1.5">
+      <span className="flex items-center gap-[var(--space-1)]">
         <Warning size={13} />
         {count === 1
           ? '1 view from this file could not be loaded and is not shown.'
@@ -258,7 +258,7 @@ function UnloadableNotice({
       {/* UAT D-70: name each missing view and state the loader's reason
           verbatim — the same words the agent door and the search bar use. */}
       {entries !== undefined && entries.length > 0 && (
-        <ul className="flex flex-col gap-0.5 pl-5" data-testid="base-preview-unloadable-list">
+        <ul className="flex flex-col gap-[var(--space-0-5)] pl-[var(--space-3)]" data-testid="base-preview-unloadable-list">
           {entries.map((e, i) => (
             <li key={`${e.code}-${i}`} data-testid="base-preview-unloadable-entry">
               <span className="font-medium text-[var(--color-secondary)]">{e.name ?? e.paths.join(', ')}</span>
@@ -596,7 +596,7 @@ export function BasePreview({
       const allUnloadable = answer.unloadable_count > 0
       return (
         <Centered>
-          <div className="flex flex-col items-center gap-3">
+          <div className="flex flex-col items-center gap-[var(--space-2-5)]">
             <p data-testid="base-preview-no-views">
               {allUnloadable
                 ? answer.unloadable_count === 1
@@ -604,13 +604,13 @@ export function BasePreview({
                   : `All ${answer.unloadable_count} views imported from this base file could not be loaded, so there is nothing to draw.`
                 : 'No views were imported from this base file, so there is nothing to draw.'}
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-[var(--space-2)]">
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => setShowRaw(true)}
                 data-testid="base-preview-view-raw"
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 <Code size={14} /> View raw
               </Button>
@@ -619,7 +619,7 @@ export function BasePreview({
                 variant="outline"
                 onClick={() => downloadLibraryEntry(workspaceId, entry)}
                 data-testid="base-preview-download"
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 <DownloadSimple size={14} /> Download
               </Button>
@@ -660,7 +660,7 @@ export function BasePreview({
       {embed?.caption !== undefined && (
         <p
           data-testid="base-preview-embed-caption"
-          className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+          className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
         >
           {embed.caption}
         </p>
@@ -678,7 +678,7 @@ export function BasePreview({
           role="tablist"
           aria-label="Views"
           data-testid="base-preview-tablist"
-          className={`flex shrink-0 gap-0.5 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-1.5 ${
+          className={`flex shrink-0 gap-[var(--space-0-5)] overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-1)] ${
             embed
               ? 'opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100'
               : ''
@@ -696,7 +696,7 @@ export function BasePreview({
               onClick={() => setSelectedSlug(v.name)}
               data-testid={`base-view-tab-${v.name}`}
               title={v.unservable === true ? v.unservable_reason : undefined}
-              className={`-mb-px whitespace-nowrap border-b-2 px-2.5 py-2 text-[13px] transition-colors ${
+              className={`-mb-px whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[13px] transition-colors ${
                 active
                   ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
                   : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
@@ -706,12 +706,12 @@ export function BasePreview({
               {v.unservable === true && (
                 <Warning
                   size={12}
-                  className="ml-1 inline align-[-1px] text-[var(--color-warning)]"
+                  className="ml-[var(--space-1)] inline align-[-1px] text-[var(--color-warning)]"
                   data-testid={`base-view-tab-unservable-${v.name}`}
                 />
               )}
               {active && result !== undefined && result.refusal === undefined && (
-                <span className="ml-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{result.rows.length}</span>
+                <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{result.rows.length}</span>
               )}
             </button>
           )
@@ -731,7 +731,7 @@ export function BasePreview({
             onClick={() => setShowRaw((v) => !v)}
             data-testid="base-preview-source-toggle"
             title={showRaw ? 'Back to the views' : 'Open the base file as text'}
-            className={`-mb-px ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap border-b-2 px-2.5 py-2 text-[length:var(--type-caption-size)] transition-colors ${
+            className={`-mb-px ml-auto flex shrink-0 items-center gap-[var(--space-1)] whitespace-nowrap border-b-2 px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-caption-size)] transition-colors ${
               showRaw
                 ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
                 : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
@@ -790,7 +790,7 @@ export function BasePreview({
       {failedCollectionLinkQueries > 0 && (
         <div
           data-testid="base-preview-link-graph-degraded"
-          className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
+          className="flex items-center justify-between gap-[var(--space-2-5)] border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
         >
           <span>
             Link checking is incomplete for this view — its links show as unverified rather than
@@ -811,7 +811,7 @@ export function BasePreview({
               if (linkGraph.query.isError) void linkGraph.query.refetch()
             }}
             data-testid="base-preview-link-graph-retry"
-            className="shrink-0 rounded border border-current px-2 py-0.5 text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
+            className="shrink-0 rounded border border-current px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
           >
             Retry
           </button>
@@ -828,7 +828,7 @@ export function BasePreview({
           // app-level admission gate"), so the honest, named reason must win
           // over the indistinguishable-from-a-slow-fetch generic spinner.
           <Centered>
-            <span data-testid="base-preview-result-queued" className="flex items-center gap-2">
+            <span data-testid="base-preview-result-queued" className="flex items-center gap-[var(--space-2)]">
               <SpinnerGap size={16} className="animate-spin" />
               Only {VIEW_EVALUATION_POOL_CEILING} views can evaluate on this page at once. This one
               will run automatically once another finishes or scrolls out of view.
@@ -839,7 +839,7 @@ export function BasePreview({
           // (a capped) Retry-After — say so plainly, with the real wait, rather
           // than the indistinguishable-from-hung generic spinner.
           <Centered>
-            <span data-testid="base-preview-result-throttled" className="flex items-center gap-2">
+            <span data-testid="base-preview-result-throttled" className="flex items-center gap-[var(--space-2)]">
               <SpinnerGap size={16} className="animate-spin" />
               Busy — retrying in {Math.ceil(resultThrottledRetryDelayMs / 1000)}s
             </span>
@@ -880,7 +880,7 @@ export function BasePreview({
             {resultIsBackgroundRefreshFailure && (
               <div
                 data-testid="base-preview-result-refresh-failed"
-                className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
+                className="flex items-center justify-between gap-[var(--space-2-5)] border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
               >
                 <span>
                   {resultQuery.error instanceof ApiError && resultQuery.error.isRateLimited()
@@ -892,7 +892,7 @@ export function BasePreview({
                   tabIndex={0}
                   onClick={() => void resultQuery.refetch()}
                   data-testid="base-preview-result-refresh-retry"
-                  className="shrink-0 rounded border border-current px-2 py-0.5 text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
+                  className="shrink-0 rounded border border-current px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
                 >
                   Retry
                 </button>

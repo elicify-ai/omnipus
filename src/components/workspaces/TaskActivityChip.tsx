@@ -114,7 +114,7 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
     const waitingChip = (
       <span
         data-testid="task-awaiting-approval"
-        className="rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]"
+        className="rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]"
       >
         {variant === 'card'
           ? `In progress · waiting for your approval to use ${waiting.toolName}`
@@ -122,7 +122,7 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
       </span>
     )
     if (variant === 'panel') return waitingChip
-    return <div className="mt-2 flex items-center gap-1.5">{waitingChip}</div>
+    return <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]">{waitingChip}</div>
   }
 
   const activity = taskActivity(task, now)
@@ -133,7 +133,7 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
       data-testid="task-last-activity"
       data-stale={activity.stale ? 'true' : 'false'}
       className={cn(
-        'rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium',
+        'rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium',
         activity.stale
           ? 'bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
           : 'bg-[var(--color-surface-2)] text-[var(--color-muted)]',
@@ -144,5 +144,5 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
   )
 
   if (variant === 'panel') return chip
-  return <div className="mt-2 flex items-center gap-1.5">{chip}</div>
+  return <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]">{chip}</div>
 }

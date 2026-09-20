@@ -209,7 +209,7 @@ export function KnowledgeReader({
       // The measure lives in a custom property so the column and anything a
       // caller nests inside it agree on one number.
       style={{ ['--kb-reading-measure' as string]: '72ch', maxWidth: 'var(--kb-reading-measure)' }}
-      className="w-full mx-auto px-1"
+      className="w-full mx-auto px-[var(--space-1)]"
     >
       <KnowledgeBaseMarkdown
         content={content}
@@ -232,7 +232,7 @@ export function KnowledgeReader({
           <div
             data-testid="knowledge-reader-rails"
             data-collapsible="true"
-            className="mb-3 flex flex-col divide-y divide-[var(--color-border)] border-b border-[var(--color-border)]"
+            className="mb-[var(--space-2-5)] flex flex-col divide-y divide-[var(--color-border)] border-b border-[var(--color-border)]"
           >
             {rails}
           </div>
@@ -247,14 +247,14 @@ export function KnowledgeReader({
       ref={rootRef}
       data-testid="knowledge-reader"
       data-layout="wide"
-      className={cn('w-full flex items-start', rails ? 'gap-8' : '')}
+      className={cn('w-full flex items-start', rails ? 'gap-[var(--space-5)]' : '')}
     >
       <div className="min-w-0 flex-1">{article}</div>
       {rails ? (
         <aside
           data-testid="knowledge-reader-rails"
           data-collapsible="false"
-          className="w-60 shrink-0 sticky top-2 max-h-[calc(100vh-6rem)] overflow-y-auto space-y-5 border-l border-[var(--color-border)] pl-3"
+          className="w-60 shrink-0 sticky top-2 max-h-[calc(100vh-6rem)] overflow-y-auto space-y-[var(--space-3)] border-l border-[var(--color-border)] pl-[var(--space-2-5)]"
         >
           {rails}
         </aside>

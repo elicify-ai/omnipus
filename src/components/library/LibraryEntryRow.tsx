@@ -135,7 +135,7 @@ export function LibraryEntryRow({
       }}
       aria-current={selected ? 'true' : undefined}
       className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2 cursor-pointer transition-colors border border-transparent',
+        'flex items-center gap-[var(--space-2-5)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] cursor-pointer transition-colors border border-transparent',
         selected
           ? 'bg-[var(--color-surface-2)] border-[var(--color-accent)]/40'
           : 'hover:bg-[var(--color-surface-2)]',
@@ -208,13 +208,13 @@ export function LibraryEntryRow({
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 min-w-0">
+        <div className="flex items-center gap-[var(--space-1)] min-w-0">
           <p className="truncate text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]" title={entry.name}>
             {entry.name}
           </p>
           {entry.is_hidden && (
             <span
-              className="shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-1 py-0.5 rounded bg-[var(--color-surface-3)] text-[var(--color-muted)]"
+              className="shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-[var(--space-1)] py-[var(--space-0-5)] rounded bg-[var(--color-surface-3)] text-[var(--color-muted)]"
               data-testid={`library-hidden-badge-${entry.path}`}
             >
               hidden
@@ -223,7 +223,7 @@ export function LibraryEntryRow({
           {mount && (
             <span
               data-testid={`library-mount-badge-${entry.path}`}
-              className={`shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-1 py-0.5 rounded border ${
+              className={`shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-[var(--space-1)] py-[var(--space-0-5)] rounded border ${
                 mount.broad
                   ? 'border-[var(--color-warning)] text-[var(--color-warning)]'
                   : 'border-[var(--color-info)] text-[var(--color-info)]'
@@ -239,14 +239,14 @@ export function LibraryEntryRow({
         {mount ? (
           <p
             data-testid={`library-mount-target-${entry.path}`}
-            className="truncate mt-0.5 text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]"
+            className="truncate mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]"
             title={mount.host_path}
           >
             {mount.host_path}
             {mount.broad && ' — covers your entire home folder'}
           </p>
         ) : (
-          <div className="flex items-center gap-1.5 mt-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+          <div className="flex items-center gap-[var(--space-1)] mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             <span>{entry.is_dir ? '—' : formatLibrarySize(entry.size)}</span>
             <span aria-hidden="true">·</span>
             <span title={entry.modified_at}>{formatRelative(entry.modified_at)}</span>
@@ -277,7 +277,7 @@ export function LibraryEntryRow({
             data-testid={`library-row-menu-${entry.path}`}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)] transition-colors"
+            className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)] transition-colors"
           >
             <DotsThree size={18} weight="bold" />
           </button>
@@ -288,12 +288,12 @@ export function LibraryEntryRow({
           onKeyDown={(e) => e.stopPropagation()}
         >
           {!entry.is_dir && (
-            <DropdownMenuItem onSelect={() => onSelectFile(entry)} className="flex items-center gap-2">
+            <DropdownMenuItem onSelect={() => onSelectFile(entry)} className="flex items-center gap-[var(--space-2)]">
               <Eye size={14} /> Details
             </DropdownMenuItem>
           )}
           {!entry.is_dir && (
-            <DropdownMenuItem onSelect={() => onDownload(entry)} className="flex items-center gap-2">
+            <DropdownMenuItem onSelect={() => onDownload(entry)} className="flex items-center gap-[var(--space-2)]">
               <DownloadSimple size={14} /> Download
             </DropdownMenuItem>
           )}
@@ -306,27 +306,27 @@ export function LibraryEntryRow({
             <DropdownMenuItem
               onSelect={() => onUnmount?.(entry)}
               data-testid={`library-row-unmount-${entry.path}`}
-              className="flex items-center gap-2 text-[var(--color-info)]"
+              className="flex items-center gap-[var(--space-2)] text-[var(--color-info)]"
             >
               <LinkBreak size={14} /> Unmount
               <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)]">files stay</span>
             </DropdownMenuItem>
           ) : (
             <>
-              <DropdownMenuItem onSelect={() => onRename(entry)} className="flex items-center gap-2">
+              <DropdownMenuItem onSelect={() => onRename(entry)} className="flex items-center gap-[var(--space-2)]">
                 <PencilSimple size={14} /> Rename
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onTransfer(entry, 'move')} className="flex items-center gap-2">
+              <DropdownMenuItem onSelect={() => onTransfer(entry, 'move')} className="flex items-center gap-[var(--space-2)]">
                 <ArrowsLeftRight size={14} /> Move…
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onTransfer(entry, 'copy')} className="flex items-center gap-2">
+              <DropdownMenuItem onSelect={() => onTransfer(entry, 'copy')} className="flex items-center gap-[var(--space-2)]">
                 <ArrowsLeftRight size={14} /> Copy…
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => onDelete(entry)}
                 data-testid={`library-row-delete-${entry.path}`}
-                className="flex items-center gap-2 text-[var(--color-error)]"
+                className="flex items-center gap-[var(--space-2)] text-[var(--color-error)]"
               >
                 <Trash size={14} /> Delete
               </DropdownMenuItem>

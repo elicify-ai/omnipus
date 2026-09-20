@@ -133,7 +133,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
       <div
         role="tablist"
         aria-label="Workspace views"
-        className="hidden @6xl:flex items-stretch gap-1 min-w-0 flex-1"
+        className="hidden @6xl:flex items-stretch gap-[var(--space-1)] min-w-0 flex-1"
       >
         {/* First tablist item: the workspace name → settings. Inside the
             tablist (not a stray sibling button) so it IS part of the menu
@@ -149,7 +149,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           aria-selected={settingsActive}
           data-testid="workspace-name-button"
           className={cn(
-            'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors',
+            'relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors',
             ' rounded-t-sm',
             settingsActive
               ? 'text-[var(--color-accent)]'
@@ -187,7 +187,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 // root to 14px), leaving the underline ~5px high. NOT h-full either:
                 // the parent header uses items-center, so height:100% resolves to
                 // auto (no-op) and the underline would float mid-header.
-                'group relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors',
+                'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors',
                 ' rounded-t-sm',
                 isActive
                   ? 'text-[var(--color-accent)]'
@@ -209,7 +209,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
       </div>
 
       {/* ── View-switcher dropdown: shown when container < 1152px (72rem) ── */}
-      <div className="flex @6xl:hidden items-center px-2">
+      <div className="flex @6xl:hidden items-center px-[var(--space-2)]">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button tabIndex={0}
@@ -217,7 +217,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               data-testid="workspace-view-switcher"
               aria-label={`Switch view, currently ${SEGMENT_LABELS[activeSegment]}`}
               className={cn(
-                'flex items-center gap-1.5 px-3 h-11 text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap rounded-md',
+                'flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-11 text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap rounded-md',
                 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors',
                 ' outline-none',
                 'pointer-coarse:min-h-[44px]',
@@ -244,7 +244,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 void navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
               }}
               className={cn(
-                'flex items-center gap-2',
+                'flex items-center gap-[var(--space-2)]',
                 settingsActive ? 'text-[var(--color-accent)]' : undefined,
               )}
             >
@@ -269,7 +269,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                     })
                   }}
                   className={cn(
-                    'flex items-center gap-2',
+                    'flex items-center gap-[var(--space-2)]',
                     isActive ? 'text-[var(--color-accent)]' : undefined,
                   )}
                 >

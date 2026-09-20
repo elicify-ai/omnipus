@@ -129,11 +129,11 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         <TaskActionButton task={task} className="bg-[var(--color-surface-1)]" />
       </div>
 
-      <div className="flex flex-col gap-2 py-2.5 pl-3.5 pr-3">
+      <div className="flex flex-col gap-[var(--space-2)] py-[var(--space-2)] pl-[var(--space-2-5)] pr-[var(--space-2-5)]">
         {/* Top row: status chip + priority. */}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-[var(--space-2)]">
           <span
-            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none"
+            className="inline-flex items-center gap-[var(--space-1)] rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none"
             style={{
               color: visual.color,
               backgroundColor: `${visual.color}1f`, // ~12% alpha tint
@@ -152,7 +152,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
 
           <span
             className={cn(
-              'flex-shrink-0 rounded border px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold leading-none',
+              'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-none',
               PRIORITY_CLASS[priority] ?? PRIORITY_CLASS[3],
             )}
           >
@@ -171,10 +171,10 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
             lint-disjoint paths this member creates/edits. Standalone-task
             nodes (no plan_id) carry neither and skip this row entirely. */}
         {hasPlanMeta && (
-          <div className="flex flex-col gap-1" data-testid={`task-node-planmeta-${task.id}`}>
+          <div className="flex flex-col gap-[var(--space-1)]" data-testid={`task-node-planmeta-${task.id}`}>
             {isJoin && (
               <span
-                className="inline-flex w-fit items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-accent)]"
+                className="inline-flex w-fit items-center gap-[var(--space-1)] rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-accent)]"
                 title="Join member — converges one or more parallel streams into a single artifact"
               >
                 <GitMerge size={10} weight="bold" />
@@ -183,7 +183,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
             )}
             {writeSetLabel && (
               <span
-                className="inline-flex w-fit max-w-full items-center gap-1 text-[length:var(--type-caption-size)] leading-none text-[var(--color-muted)]"
+                className="inline-flex w-fit max-w-full items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] leading-none text-[var(--color-muted)]"
                 title={`Writes: ${writeSetLabel}`}
               >
                 <FolderSimple size={10} weight="fill" className="flex-shrink-0" />
@@ -195,7 +195,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
 
         {/* Bottom row: assigned agent avatar + name. */}
         {hasAgent && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-[var(--space-1)]">
             <span
               className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full"
               style={{ backgroundColor: `${toTint(avatarColor)}` }}

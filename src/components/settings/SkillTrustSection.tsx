@@ -44,7 +44,7 @@ const LEVELS: { value: SkillTrustLevel; label: string; subtitle: string }[] = [
 
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3 animate-pulse">
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
@@ -109,21 +109,21 @@ export function SkillTrustSection(): React.ReactElement {
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
-        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
           <Package size={14} className="text-[var(--color-muted)]" />
           Skill Trust
         </h3>
         <SaveStatus state={saveState} errorMessage={errorMessage} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Controls how unverified community skills are handled during installation and execution.
         </p>
 
-        <div className="space-y-2" role="radiogroup" aria-label="Skill trust level">
+        <div className="space-y-[var(--space-2)]" role="radiogroup" aria-label="Skill trust level">
           {LEVELS.map((lvl) => {
             const isActive = selected === lvl.value
             return (
@@ -142,7 +142,7 @@ export function SkillTrustSection(): React.ReactElement {
                     : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border-hover)]',
                 ].join(' ')}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-[var(--space-2)]">
                   <span
                     className={[
                       'flex-shrink-0 inline-block w-3.5 h-3.5 rounded-full border-2 transition-colors',
@@ -161,7 +161,7 @@ export function SkillTrustSection(): React.ReactElement {
                     {lvl.label}
                   </span>
                 </div>
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1 ml-5 leading-relaxed">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)] ml-[var(--space-3)] leading-relaxed">
                   {lvl.subtitle}
                 </p>
               </button>
@@ -173,9 +173,9 @@ export function SkillTrustSection(): React.ReactElement {
         {selected === 'allow_all' && (
           <div
             role="alert"
-            className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/8 p-3"
+            className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/8 p-[var(--space-2-5)]"
           >
-            <Warning size={14} weight="fill" className="mt-0.5 shrink-0" style={{ color: 'var(--color-warning)' }} />
+            <Warning size={14} weight="fill" className="mt-[var(--space-0-5)] shrink-0" style={{ color: 'var(--color-warning)' }} />
             <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed" style={{ color: 'var(--color-warning)' }}>
               This disables one of your key supply-chain protections. Prefer{' '}
               <span className="font-mono">warn_unverified</span> for normal operation.

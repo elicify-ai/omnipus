@@ -30,7 +30,7 @@ export interface KbAudioEmbedMountProps {
 
 export function KbAudioEmbedMount({ workspaceId, workspacePath }: KbAudioEmbedMountProps) {
   return (
-    <LazyEmbedMount reservedHeight={AUDIO_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+    <LazyEmbedMount reservedHeight={AUDIO_EMBED_RESERVED_HEIGHT_PX} className="my-[var(--space-2-5)] block">
       <KbAudioEmbedContent workspaceId={workspaceId} workspacePath={workspacePath} />
     </LazyEmbedMount>
   )

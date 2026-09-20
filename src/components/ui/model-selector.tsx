@@ -409,8 +409,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         role="alert"
         className={
           isGhost
-            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-[length:var(--type-utility-xs-size)]'
-            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-[length:var(--type-body-compact-size)]'
+            ? 'flex items-center gap-[var(--space-1)] h-7 rounded-md px-[var(--space-1)] text-[length:var(--type-utility-xs-size)]'
+            : 'flex w-full items-center gap-[var(--space-2)] h-10 rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)]'
         }
         style={
           isGhost
@@ -505,8 +505,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         aria-disabled="true"
         className={
           isGhost
-            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-[length:var(--type-utility-xs-size)] cursor-not-allowed opacity-70'
-            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-[length:var(--type-body-compact-size)] cursor-not-allowed opacity-70'
+            ? 'flex items-center gap-[var(--space-1)] h-7 rounded-md px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] cursor-not-allowed opacity-70'
+            : 'flex w-full items-center gap-[var(--space-2)] h-10 rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] cursor-not-allowed opacity-70'
         }
         style={
           isGhost
@@ -583,7 +583,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     const valueUnresolved =
       showUnresolvedIndicator && (!constrainToCatalog || overriding) && value.trim() !== ''
     return (
-      <div className="space-y-1">
+      <div className="space-y-[var(--space-1)]">
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -611,7 +611,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           <p
             id={`${descriptionId}-unresolved`}
             data-testid={triggerTestId ? `${triggerTestId}-unresolved` : undefined}
-            className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+            className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
             role="status"
           >
             <WarningCircle size={11} weight="fill" aria-hidden="true" />
@@ -698,7 +698,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       key={row.key}
       data-testid="model-selector-vendor-heading"
       role="presentation"
-      className="px-2 py-1.5 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
+      className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
       style={{ color: 'var(--color-muted)' }}
     >
       {row.label}
@@ -726,13 +726,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       >
         <Check
           size={14}
-          className="mr-2 shrink-0"
+          className="mr-[var(--space-2)] shrink-0"
           style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
         />
         <span className="min-w-0 flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{row.model.id}</span>
         {row.recommended && (
           <span
-            className="ml-2 shrink-0 rounded border px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
+            className="ml-[var(--space-2)] shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
             style={{
               backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
               color: 'var(--color-accent)',
@@ -777,7 +777,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       })}
     </div>
   ) : (
-    <div className="p-1">{visibleCatalogRows.map(renderCatalogRow)}</div>
+    <div className="p-[var(--space-1)]">{visibleCatalogRows.map(renderCatalogRow)}</div>
   )
 
   const isGhost = variant === 'ghost'
@@ -809,8 +809,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           data-unresolved={valueUnresolved || undefined}
           className={
             isGhost
-              ? 'flex items-center gap-1 h-7 rounded-md px-1.5 text-[length:var(--type-utility-xs-size)] transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--color-surface-2)]'
-              : 'flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-[length:var(--type-body-compact-size)] transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+              ? 'flex items-center gap-[var(--space-1)] h-7 rounded-md px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--color-surface-2)]'
+              : 'flex w-full items-center justify-between h-10 rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] transition-colors disabled:cursor-not-allowed disabled:opacity-50'
           }
           style={
             isGhost
@@ -822,13 +822,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                 }
           }
         >
-          <span className="flex items-center gap-2 min-w-0 flex-1">
+          <span className="flex items-center gap-[var(--space-2)] min-w-0 flex-1">
             <span className="truncate font-mono text-[length:var(--type-body-compact-size)]">{displayValue}</span>
             {valueUnresolved && (
               <span
                 id={`${descriptionId}-unresolved`}
                 data-testid={triggerTestId ? `${triggerTestId}-unresolved` : undefined}
-                className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider border"
+                className="inline-flex shrink-0 items-center gap-[var(--space-1)] px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider border"
                 style={{
                   backgroundColor: 'color-mix(in srgb, var(--color-warning) 15%, transparent)',
                   color: 'var(--color-warning)',
@@ -884,7 +884,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           <CommandList ref={catalogListRef} style={{ maxHeight: 300 }}>
             {catalogStatus === 'loading' ? (
               <div
-                className="flex items-center gap-2 px-3 py-6 text-[length:var(--type-body-compact-size)]"
+                className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)]"
                 style={{ color: 'var(--color-muted)' }}
                 role="status"
                 aria-live="polite"
@@ -917,7 +917,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                       >
                         <Check
                           size={14}
-                          className="mr-2 shrink-0"
+                          className="mr-[var(--space-2)] shrink-0"
                           style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
                         />
                         <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
@@ -943,7 +943,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                     >
                       <Check
                         size={14}
-                        className="mr-2 shrink-0"
+                        className="mr-[var(--space-2)] shrink-0"
                         style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
                       />
                       <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
@@ -957,7 +957,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                   value={`custom:${queryLower}`}
                   onSelect={() => handleUnknownSelect(queryRaw)}
                 >
-                  <Keyboard size={14} className="mr-2 shrink-0" style={{ color: 'var(--color-muted)' }} />
+                  <Keyboard size={14} className="mr-[var(--space-2)] shrink-0" style={{ color: 'var(--color-muted)' }} />
                   <span className="text-[length:var(--type-utility-xs-size)]">
                     Use "<span className="font-mono" style={{ color: 'var(--color-accent)' }}>{queryRaw}</span>"
                   </span>

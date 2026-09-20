@@ -44,13 +44,13 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         data-testid={`agent-card-${agent.id}`}
         onClick={handleOpen}
         className={cn(
-          'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4',
+          'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
           'focus-visible:border-[var(--color-accent)]'
         )}
         aria-label={`View agent ${agent.name}`}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-[var(--space-2-5)]">
           {/* Avatar — decorative next to the visible name below */}
           <div
             className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
@@ -68,7 +68,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
 
           {/* Info */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+            <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-0-5)] flex-wrap">
               <span className="font-headline font-bold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {agent.name}
               </span>
@@ -89,10 +89,10 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 </>
               )}
             </div>
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-2">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-[var(--space-2)]">
               {agent.description || 'No description'}
             </p>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-[var(--space-2)] flex-wrap">
               {agent.status === 'draft' ? (
                 <Badge variant="warning" className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10">draft</Badge>
               ) : agent.status === 'error' ? (
@@ -121,12 +121,12 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               )}
             </div>
             {agent.status === 'draft' && agent.type === 'Main' && (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/70 mt-1">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/70 mt-[var(--space-1)]">
                 Set up SOUL.md to activate this agent
               </p>
             )}
             {agent.status === 'error' && (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/70 mt-1">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/70 mt-[var(--space-1)]">
                 Agent encountered an error — check the activity log
               </p>
             )}
@@ -141,7 +141,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         <button tabIndex={0}
           type="button"
           onClick={onSetDefault}
-          className="absolute bottom-3 right-4 flex items-center justify-center gap-1 min-h-tap-target-min min-w-tap-target-min px-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          className="absolute bottom-3 right-4 flex items-center justify-center gap-[var(--space-1)] min-h-tap-target-min min-w-tap-target-min px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
           aria-label={`Set ${agent.name} as default agent`}
         >
           <Star size={12} weight="fill" />

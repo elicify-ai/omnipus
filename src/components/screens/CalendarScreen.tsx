@@ -562,7 +562,7 @@ export function CalendarScreen({ workspaceId }: CalendarScreenProps) {
         />
       </div>
 
-      <div className="flex-1 min-h-0 min-w-0 p-3" data-testid="calendar-grid">
+      <div className="flex-1 min-h-0 min-w-0 p-[var(--space-2-5)]" data-testid="calendar-grid">
         {isBlockingError ? (
           <QueryErrorState
             layout="fill"

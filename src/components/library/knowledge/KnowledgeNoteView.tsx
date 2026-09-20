@@ -701,14 +701,14 @@ export function KnowledgeNoteView({
       {graphAnswerIssue ? (
         <div
           data-testid="knowledge-graph-unavailable"
-          className="mb-3 flex items-center justify-between gap-3 rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
+          className="mb-[var(--space-2-5)] flex items-center justify-between gap-[var(--space-2-5)] rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
         >
           <span>{graphAnswerIssue.message}</span>
           <button
             tabIndex={0}
             type="button"
             onClick={() => void linksQuery.refetch()}
-            className="shrink-0 rounded border border-current px-2 py-1 text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
+            className="shrink-0 rounded border border-current px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
           >
             Retry
           </button>
@@ -757,7 +757,7 @@ export function KnowledgeNoteView({
               // rendering.
               <p
                 data-testid="knowledge-backlinks-unavailable"
-                className="px-3 py-2 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
+                className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
               >
                 Linked mentions are unavailable for this note: Omnipus could not identify which
                 folder this collection starts at, so it cannot ask which notes link here.

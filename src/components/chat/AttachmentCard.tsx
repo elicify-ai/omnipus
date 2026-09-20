@@ -148,7 +148,7 @@ export function AttachmentCard({ filename, contentType, imageUrl, isImage, remov
   return (
     <div
       className={cn(
-        'relative shrink-0 flex items-center gap-2.5 pl-2 pr-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]',
+        'relative shrink-0 flex items-center gap-[var(--space-2)] pl-[var(--space-2)] pr-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]',
         className,
       )}
       title={filename}

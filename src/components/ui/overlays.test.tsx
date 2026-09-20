@@ -13,12 +13,12 @@ import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetTitle } from '
 describe('overlay contracts', () => {
   it('separates stacked dialog footer actions without changing the desktop row spacing', () => {
     const { container } = render(<DialogFooter><button>Cancel</button><button>Save</button></DialogFooter>)
-    expect(container.firstChild).toHaveClass('gap-2', 'max-sm:pointer-coarse:gap-6', 'sm:space-x-2', 'sm:gap-0')
+    expect(container.firstChild).toHaveClass('gap-[var(--space-2)]', 'max-sm:pointer-coarse:gap-[var(--space-4)]', 'sm:space-x-[var(--space-2)]', 'sm:gap-0')
   })
 
   it('separates stacked sheet footer actions without changing the desktop row spacing', () => {
     const { container } = render(<SheetFooter><button>Cancel</button><button>Save</button></SheetFooter>)
-    expect(container.firstChild).toHaveClass('gap-2', 'max-sm:pointer-coarse:gap-6', 'sm:space-x-2', 'sm:gap-0')
+    expect(container.firstChild).toHaveClass('gap-[var(--space-2)]', 'max-sm:pointer-coarse:gap-[var(--space-4)]', 'sm:space-x-[var(--space-2)]', 'sm:gap-0')
   })
 
   it('traps dialog focus, dismisses with Escape, and restores its trigger', async () => {

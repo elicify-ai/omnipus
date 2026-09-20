@@ -27,7 +27,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
   return (
     <header
       role="banner"
-      className="flex items-center gap-3 px-4 h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
+      className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
     >
       {/* Hamburger — sidebar toggle (full chrome-row height for Fitts / AA) */}
       <button tabIndex={0}
@@ -36,7 +36,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
         onClick={toggle}
         aria-label="Toggle navigation sidebar"
         aria-expanded={isOpen}
-        className="flex items-center justify-center h-chrome-header min-h-chrome-header w-10 -ml-2 rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+        className="flex items-center justify-center h-chrome-header min-h-chrome-header w-10 -ml-[var(--space-2)] rounded-md text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
       >
         <List size={20} />
       </button>
@@ -48,7 +48,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
 
       {/* Optional right-aligned actions slot */}
       {actions && (
-        <div className="flex items-center gap-2 flex-shrink-0" data-testid="screen-header-actions">
+        <div className="flex items-center gap-[var(--space-2)] flex-shrink-0" data-testid="screen-header-actions">
           {actions}
         </div>
       )}

@@ -2576,13 +2576,13 @@ export function BrowserLiveView({
   }
 
   const resolvedClassName = cn(
-                      'flex min-w-0 flex-1 items-center gap-1.5',
+                      'flex min-w-0 flex-1 items-center gap-[var(--space-1)]',
                       connected ? 'cursor-pointer' : 'cursor-not-allowed',
                       'disabled:cursor-not-allowed',
                     )
   return (
     <div data-input-mode="dedicated" data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
-      {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-[length:var(--type-body-compact-size)]">
+      {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
         <span>{inputError}</span>{' '}
         <button type="button" tabIndex={0} disabled={inputState === 'paused' && !inputCanResume} onClick={() => {
           if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
@@ -2594,7 +2594,7 @@ export function BrowserLiveView({
         }}>{inputState === 'paused' ? 'Resume input' : 'Retry input'}</button>
       </div>}
       {viewportHandoffState !== 'idle' && (inputState === 'ready' || inputState === 'paused') && !inputError && !displayError && (
-        <div role={viewportHandoffState === 'failed' ? 'alert' : 'status'} className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-[length:var(--type-body-compact-size)]">
+        <div role={viewportHandoffState === 'failed' ? 'alert' : 'status'} className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
           {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <button type="button" tabIndex={0} onClick={() => setConnectionAttempt(attempt => attempt + 1)}>Retry browser</button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
         </div>
       )}
@@ -2615,13 +2615,13 @@ export function BrowserLiveView({
           pushes its own box as the remote viewport, so a header row that
           changes height forces a full capture rebuild. That is the same
           measured regression the handback hint was made always-mounted for. */}
-      <div className="flex h-browser-tabs min-h-browser-tabs shrink-0 items-center gap-1 px-2">
+      <div className="flex h-browser-tabs min-h-browser-tabs shrink-0 items-center gap-[var(--space-1)] px-[var(--space-2)]">
         {tabState && tabState.tabs.length > 0 ? (
           <div
             role="group"
             aria-label="Browser tabs"
             data-testid="browser-tab-strip"
-            className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+            className="flex min-w-0 flex-1 items-center gap-[var(--space-1)] overflow-x-auto"
             style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
           >
             {tabState.tabs.map((tab) => {
@@ -2631,7 +2631,7 @@ export function BrowserLiveView({
                 <div
                   key={tab.index}
                   className={cn(
-                    'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 py-1 pl-2.5 pr-1 text-[length:var(--type-utility-xs-size)] transition-colors',
+                    'flex shrink-0 max-w-[180px] items-center gap-[var(--space-1)] rounded-t-md border-b-2 py-[var(--space-1)] pl-[var(--space-2)] pr-[var(--space-1)] text-[length:var(--type-utility-xs-size)] transition-colors',
                     // Active tab: Forge-Gold underline + full opacity + a
                     // heavier label weight — colour is never the only signal
                     // (WCAG). Inactive: dimmed, transparent underline.
@@ -2659,7 +2659,7 @@ export function BrowserLiveView({
                     aria-label={`Close tab: ${label}`}
                     title="Close tab"
                     data-testid={`browser-tab-close-${tab.index}`}
-                    className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="shrink-0 rounded p-[var(--space-0-5)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <X size={10} weight="bold" />
                   </button>
@@ -2673,7 +2673,7 @@ export function BrowserLiveView({
               aria-label="Open new tab"
               title="Open a new tab"
               data-testid="browser-tab-new"
-              className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Plus size={13} />
             </button>
@@ -2714,7 +2714,7 @@ export function BrowserLiveView({
           Only the address input is wrapped in the <form>. Enter-to-submit is
           all the form was ever for, and keeping the toggles outside it avoids
           implying they take part in submission. */}
-      <div className="flex h-chrome-header min-h-chrome-header shrink-0 items-center gap-1 px-2">
+      <div className="flex h-chrome-header min-h-chrome-header shrink-0 items-center gap-[var(--space-1)] px-[var(--space-2)]">
         <button tabIndex={0}
           type="button"
           onClick={() => handleToolbarNav('navigate_back')}
@@ -2772,7 +2772,7 @@ export function BrowserLiveView({
         <span
           data-testid="browser-live-agent-chip"
           title={`Driving ${agentDisplayName}'s browser context`}
-          className="flex shrink-0 items-center gap-1.5 px-1 text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)] whitespace-nowrap"
+          className="flex shrink-0 items-center gap-[var(--space-1)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)] whitespace-nowrap"
         >
           <span
             aria-hidden="true"
@@ -2794,7 +2794,7 @@ export function BrowserLiveView({
         </span>
         <span
           data-testid="browser-live-status-chip"
-          className={cn('flex shrink-0 items-center gap-1.5 px-1 text-[length:var(--type-caption-size)] font-medium whitespace-nowrap', driveChip.textClass)}
+          className={cn('flex shrink-0 items-center gap-[var(--space-1)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium whitespace-nowrap', driveChip.textClass)}
         >
           <span
             aria-hidden="true"
@@ -2833,7 +2833,7 @@ export function BrowserLiveView({
 
 
       {/* Body */}
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-[var(--space-2)]">
         {/* State overlay — kept for the data-visual-state attribute (tests +
             future use) but the visible border/frame is REMOVED per operator
             direction. The header chip is the sole driving-state signal now. */}
@@ -2859,7 +2859,7 @@ export function BrowserLiveView({
           data-testid="browser-live-handback-hint"
           aria-hidden={visualState !== 'you-driving'}
           className={cn(
-            'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-3 py-1.5 text-center text-[length:var(--type-caption-size)] text-[var(--color-secondary)]',
+            'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-[var(--space-2-5)] py-[var(--space-1)] text-center text-[length:var(--type-caption-size)] text-[var(--color-secondary)]',
             'bg-black/60 backdrop-blur-sm',
             visualState !== 'you-driving' ? 'invisible' : undefined,
           )}
@@ -2867,7 +2867,7 @@ export function BrowserLiveView({
           Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
         </p>
         {!attached && (
-          <div className="flex min-w-0 max-w-full flex-col items-center gap-2 p-6 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+          <div className="flex min-w-0 max-w-full flex-col items-center gap-[var(--space-2)] p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             {displayError ? (
               <>
                 <WarningCircle size={22} className="text-[var(--color-error)]" />
@@ -2877,7 +2877,7 @@ export function BrowserLiveView({
                   tabIndex={0}
                   onClick={retryWebRTC}
                   data-testid="browser-live-retry"
-                  className="mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="mt-[var(--space-1)] rounded-full border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
                 >
                   Retry
                 </button>
@@ -2990,7 +2990,7 @@ export function BrowserLiveView({
             {!videoReady && (
               <div
                 data-testid="browser-live-waiting-overlay"
-                className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/70 p-6 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+                className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-[var(--space-2)] bg-black/70 p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
               >
                 {displayError ? (
                   <>
@@ -3001,7 +3001,7 @@ export function BrowserLiveView({
                       tabIndex={0}
                       onClick={retryWebRTC}
                       data-testid="browser-live-retry-overlay"
-                      className="pointer-events-auto mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                      className="pointer-events-auto mt-[var(--space-1)] rounded-full border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
                     >
                       Retry
                     </button>
@@ -3050,7 +3050,7 @@ export function BrowserLiveView({
               disabled={!connected}
               aria-label={takeOverLabel}
               title={takeOverLabel}
-              className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-3 py-1.5 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <HandGrabbing size={13} />
               Take over
@@ -3067,9 +3067,9 @@ export function BrowserLiveView({
         {annotateMode && pendingAnnotation && (
           <div
             data-testid="annotate-popover"
-            className="absolute inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 shadow-lg"
+            className="absolute inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] shadow-lg"
           >
-            <div className="flex items-start gap-3">
+            <div className="flex items-start gap-[var(--space-2-5)]">
               <img
                 src={pendingAnnotation.previewUrl}
                 alt="Selected region"
@@ -3105,16 +3105,16 @@ export function BrowserLiveView({
                   autoFocus
                 />
                 {annotateError && (
-                  <p role="alert" className="mt-1 text-[length:var(--type-caption-size)] text-[var(--color-error)]">
+                  <p role="alert" className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">
                     {annotateError}
                   </p>
                 )}
-                <div className="mt-2 flex justify-end gap-2">
+                <div className="mt-[var(--space-2)] flex justify-end gap-[var(--space-2)]">
                   <button tabIndex={0}
                     type="button"
                     onClick={handleCancelAnnotation}
                     disabled={annotateSubmitting}
-                    className="rounded px-2.5 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Cancel
                   </button>
@@ -3122,7 +3122,7 @@ export function BrowserLiveView({
                     type="button"
                     onClick={handleSendAnnotation}
                     disabled={annotateSubmitting || annotateComment.trim().length === 0}
-                    className="rounded bg-[var(--color-accent)] px-3 py-1 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="rounded bg-[var(--color-accent)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {annotateSubmitting ? 'Sending…' : 'Send'}
                   </button>
@@ -3147,7 +3147,7 @@ export function BrowserLiveView({
           clears `mediaStream`, which flips `attached` false and routes the
           user to the top-level empty-state error instead. */}
       {attached && videoReady && !displayError && (frameGateState.status !== 'ready' || !frameGeometryReady) && (
-        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-black/80 px-4 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-text-secondary)]">
+        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-black/80 px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-text-secondary)]">
           {frameCallbacksUnavailable || (frameGateState.status === 'locked' && frameGateState.reason === 'presentation-time-unavailable')
             ? 'Browser input is unavailable because this browser cannot confirm displayed video frames.'
             : frameGateState.status === 'ready' && !frameGeometryReady
@@ -3158,7 +3158,7 @@ export function BrowserLiveView({
         </div>
       )}
       {attached && videoReady && displayError && (
-        <div role="alert" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 min-w-0 [overflow-wrap:anywhere] bg-black/80 px-4 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
+        <div role="alert" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 min-w-0 [overflow-wrap:anywhere] bg-black/80 px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
           {displayError}
         </div>
       )}

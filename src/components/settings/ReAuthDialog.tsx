@@ -79,14 +79,14 @@ export function ReAuthDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex items-center gap-[var(--space-2)]">
             <ShieldCheck size={18} weight="duotone" className="text-[var(--color-accent)]" />
             {title}
           </DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           <Label htmlFor="reauth-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Password
           </Label>
@@ -108,7 +108,7 @@ export function ReAuthDialog({
               placeholder="Your password"
               autoComplete="current-password"
               autoFocus
-              className="pr-10"
+              className="pr-[var(--space-6)]"
               data-testid="reauth-password-input"
             />
             <button tabIndex={0}
@@ -124,9 +124,9 @@ export function ReAuthDialog({
             <div
               role="alert"
               data-testid="reauth-error"
-              className="flex items-start gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
+              className="flex items-start gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
             >
-              <XCircle size={13} weight="fill" className="shrink-0 mt-0.5" />
+              <XCircle size={13} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
               <span>{error}</span>
             </div>
           )}

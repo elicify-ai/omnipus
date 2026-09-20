@@ -36,13 +36,13 @@ export class ErrorBoundary extends Component<Props, State> {
         )
 
       return this.props.fallback ?? (
-        <div className="flex flex-col items-center justify-center p-8 gap-3 text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
+        <div className="flex flex-col items-center justify-center p-[var(--space-5)] gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           <p style={{ color: 'var(--color-error)' }}>Something went wrong</p>
           <p className="text-[length:var(--type-utility-xs-size)]">{error?.message}</p>
           {isChunkLoadError ? (
             <button tabIndex={0}
               onClick={() => window.location.reload()}
-              className="px-3 py-1.5 rounded-md text-[length:var(--type-utility-xs-size)] border transition-colors"
+              className="px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-utility-xs-size)] border transition-colors"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
             >
               Reload
@@ -50,7 +50,7 @@ export class ErrorBoundary extends Component<Props, State> {
           ) : (
             <button tabIndex={0}
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="px-3 py-1.5 rounded-md text-[length:var(--type-utility-xs-size)] border transition-colors"
+              className="px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-utility-xs-size)] border transition-colors"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
             >
               Try again

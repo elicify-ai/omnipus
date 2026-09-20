@@ -159,7 +159,7 @@ const DateTimePicker = React.forwardRef<HTMLButtonElement, DateTimePickerProps>(
           disabled={blocked}
           autoFocus
         />
-        <div className="flex items-center gap-2 border-t border-[var(--color-border)] p-3">
+        <div className="flex items-center gap-[var(--space-2)] border-t border-[var(--color-border)] p-[var(--space-2-5)]">
           <Clock size={14} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
           <Select value={value ? pad2(value.getHours()) : undefined} onValueChange={handleHourChange} disabled={blocked}>
             <SelectTrigger aria-label="Hour" className="h-8 w-[4.5rem] text-[length:var(--type-utility-xs-size)]">

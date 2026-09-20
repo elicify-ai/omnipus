@@ -132,16 +132,16 @@ function BashOutputBlock({
   )
 
   return (
-    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header row — a single toggle button; there is no sibling action on
           this row (unlike BrowserTool/BrowserNavigate's "Watch live"), so
           the caret lives INSIDE the button and the whole row is one click
           target. */}
-      <div className="flex w-full items-center gap-2">
+      <div className="flex w-full items-center gap-[var(--space-2)]">
         <button tabIndex={0}
           type="button"
           onClick={() => setExpanded((e) => !e)}
-          className="flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
+          className="flex flex-1 min-w-0 items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors hover:bg-[var(--color-surface-2)]/60 cursor-pointer"
           aria-expanded={expanded}
         >
           {statusConfig.indicator}
@@ -160,15 +160,15 @@ function BashOutputBlock({
           keeps its own identity (bg-[#0d1117]) but is no longer wrapped in
           an outer bordered frame. */}
       {expanded && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
           <div className="bg-[#0d1117] rounded-sm">
             {isRunning && !output ? (
-              <div className="px-3 py-2 text-[var(--color-muted)] italic flex items-center gap-2">
+              <div className="px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)]">
                 <ArrowsClockwise size={11} className="animate-spin" />
                 {isBackground ? 'Running in background...' : 'Executing...'}
               </div>
             ) : (
-              <pre className="px-3 py-2 text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+              <pre className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
                 {output || <span className="text-[var(--color-muted)] italic">(no output)</span>}
               </pre>
             )}

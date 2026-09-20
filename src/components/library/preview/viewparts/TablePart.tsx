@@ -83,7 +83,7 @@ function NoRecordIdMark() {
       data-testid="viewpart-row-no-id"
       title={NO_RECORD_ID_REASON}
       aria-label={NO_RECORD_ID_REASON}
-      className="ml-1.5 rounded border border-[var(--color-border)] px-1 text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]"
+      className="ml-[var(--space-1)] rounded border border-[var(--color-border)] px-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]"
     >
       no id
     </span>
@@ -143,7 +143,7 @@ function Cell({
   if (!numeric) {
     return (
       <td
-        className={`max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)] ${inertClassName}`}
+        className={`max-w-[16rem] truncate border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[var(--color-secondary)] ${inertClassName}`}
         {...(inert ? { onClick: inertOnClick, 'data-inert': 'true' } : {})}
       >
         {primary && onOpenPath ? (
@@ -175,7 +175,7 @@ function Cell({
       </span>
     )
   return (
-    <td className="whitespace-nowrap border-b border-[var(--color-border)] px-3 py-1.5 text-right">
+    <td className="whitespace-nowrap border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right">
       {primary && onOpenPath ? (
         <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="inline-block text-right">
           {numberBody}
@@ -292,7 +292,7 @@ export function TablePart({
               {columns.map((property) => (
                 <th
                   key={property}
-                  className={`border-b border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] ${
+                  className={`border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] ${
                     numeric.has(property) ? 'text-right' : 'text-left'
                   }`}
                 >
@@ -369,7 +369,7 @@ function FragmentRows({
       <tr data-testid="viewpart-group-header">
         <td
           colSpan={columns.length}
-          className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1"
+          className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)]"
         >
           <GroupHeaderLabel label={group.key} count={group.count} absent={group.absent} />
         </td>
@@ -395,12 +395,12 @@ function FragmentRows({
             // its own column, so the label claims one anyway rather than an
             // invalid 0.
             colSpan={Math.max(columns.length - 1, 1)}
-            className="border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+            className="border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           >
             Subtotal · {s.property}
             {s.unit !== undefined && ` · ${s.unit}`} · {s.count} {s.count === 1 ? 'row' : 'rows'}
           </td>
-          <td className="whitespace-nowrap border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-right font-medium">
+          <td className="whitespace-nowrap border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-right font-medium">
             <span className="font-mono text-[13px] tabular-nums text-[var(--color-secondary)]">
               {formatNumberText(s.value)}
             </span>
@@ -411,7 +411,7 @@ function FragmentRows({
         <tr data-testid="viewpart-group-excluded">
           <td
             colSpan={columns.length}
-            className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+            className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
           >
             {group.excluded_reason ?? `${group.excluded_count} excluded from this subtotal.`}
           </td>

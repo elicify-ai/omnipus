@@ -308,14 +308,14 @@ function CategoryToolRow({
         `so it cannot be relaxed here.`
       : undefined
   return (
-    <div className="flex items-center justify-between py-1 gap-2" data-testid={`tool-row-${tool.name}`}>
-      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono truncate flex-1 flex items-center gap-1.5" title={tool.name}>
+    <div className="flex items-center justify-between py-[var(--space-1)] gap-[var(--space-2)]" data-testid={`tool-row-${tool.name}`}>
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono truncate flex-1 flex items-center gap-[var(--space-1)]" title={tool.name}>
         <span className="truncate">{tool.name}</span>
         {effective === undefined && (
           <span
             title="This tool has no explicit policy entry — needs attention."
             data-testid={`tool-unconfigured-${tool.name}`}
-            className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-warning)]"
+            className="inline-flex items-center gap-[var(--space-0-5)] shrink-0 px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-warning)]"
           >
             <Warning size={9} weight="bold" />
             Unset
@@ -329,14 +329,14 @@ function CategoryToolRow({
             href="/#/settings"
             title={lockTitle}
             data-testid={`global-override-${tool.name}`}
-            className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-warning)] hover:bg-[var(--color-surface-2)]"
+            className="inline-flex items-center gap-[var(--space-0-5)] shrink-0 px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-warning)] hover:bg-[var(--color-surface-2)]"
           >
             {isUnconfigured ? <Warning size={9} weight="bold" /> : <LockSimple size={9} weight="bold" />}
             Global: {floorLabel}
           </a>
         )}
       </span>
-      <div className="flex gap-1 shrink-0">
+      <div className="flex gap-[var(--space-1)] shrink-0">
         {ALL_POLICIES.map((p) => {
           const locked = isPolicyLocked(p, floor)
           return (
@@ -407,13 +407,13 @@ function CategorySection({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center justify-between w-full px-3 py-2.5 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+        className="flex items-center justify-between w-full px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
       >
-        <span className="flex items-center gap-2">
+        <span className="flex items-center gap-[var(--space-2)]">
           <span>{label}</span>
           {/* Summary pill — always visible in the header */}
           <span
-            className={`px-1.5 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold border ${pillClass}`}
+            className={`px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border ${pillClass}`}
             data-testid={`category-pill-${categoryKey}`}
           >
             {PILL_LABEL[summary]}
@@ -424,8 +424,8 @@ function CategorySection({
 
       {/* Expanded content */}
       {open && (
-        <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3">
-          <div className="space-y-0.5">
+        <div className="px-[var(--space-2-5)] pb-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]">
+          <div className="space-y-[var(--space-0-5)]">
             {tools.map((tool) => (
               <CategoryToolRow
                 key={tool.name}
@@ -503,12 +503,12 @@ function McpServerSection({
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
       {/* Header row: toggle + server name + bulk controls */}
-      <div className="flex items-center justify-between px-3 py-2">
+      <div className="flex items-center justify-between px-[var(--space-2-5)] py-[var(--space-2)]">
         <button tabIndex={0}
           type="button"
           aria-expanded={open}
           onClick={() => setOpen((o) => !o)}
-          className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors min-w-0 flex-1 text-left"
+          className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors min-w-0 flex-1 text-left"
           data-testid="advanced-disclosure-trigger"
         >
           <span className="truncate">{server}</span>
@@ -521,7 +521,7 @@ function McpServerSection({
         {/* Per-server bulk allow/ask/deny — only shown when a wildcard key is derivable */}
         {wildcardKey != null && (
           <div
-            className="flex gap-1 shrink-0 ml-3"
+            className="flex gap-[var(--space-1)] shrink-0 ml-[var(--space-2-5)]"
             data-testid={`mcp-server-bulk-${server}`}
           >
             {ALL_POLICIES.map((p) => {
@@ -538,7 +538,7 @@ function McpServerSection({
                     e.stopPropagation()
                     onWildcardPolicy(wildcardKey, p)
                   }}
-                  className={`px-2 py-0.5 rounded text-[length:var(--type-caption-size)] font-medium border transition-colors capitalize disabled:opacity-40 disabled:cursor-not-allowed ${BULK_BUTTON_CLASS(isActive, p)}`}
+                  className={`px-[var(--space-2)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-medium border transition-colors capitalize disabled:opacity-40 disabled:cursor-not-allowed ${BULK_BUTTON_CLASS(isActive, p)}`}
                 >
                   {p.charAt(0).toUpperCase() + p.slice(1)}
                 </button>
@@ -550,19 +550,19 @@ function McpServerSection({
 
       {/* Expanded content */}
       {open && (
-        <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3" data-testid="advanced-disclosure-content">
+        <div className="px-[var(--space-2-5)] pb-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]" data-testid="advanced-disclosure-content">
           {/* Source badge */}
-          <div className="flex items-center gap-1.5 mb-2">
+          <div className="flex items-center gap-[var(--space-1)] mb-[var(--space-2)]">
             <Database size={11} className="text-[var(--color-muted)]" />
             <span
-              className="px-1.5 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/40"
+              className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/40"
               data-testid={`mcp-source-badge-${server}`}
             >
               MCP
             </span>
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{server}</span>
           </div>
-          <div className="space-y-0.5" data-testid={`mcp-server-${server}`}>
+          <div className="space-y-[var(--space-0-5)]" data-testid={`mcp-server-${server}`}>
             {serverTools.map((tool) => (
               <CategoryToolRow
                 key={tool.name}
@@ -704,11 +704,11 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-4" data-testid="tool-policy-editor">
+    <div className="space-y-[var(--space-3)]" data-testid="tool-policy-editor">
       {/* 1. Role preset selector */}
-      <div className="space-y-2">
+      <div className="space-y-[var(--space-2)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">Role preset</p>
-        <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-[var(--space-2)] flex-wrap">
           {(Object.entries(POLICY_PRESETS) as [RolePreset, typeof POLICY_PRESETS[RolePreset]][]).map(([role, preset]) => (
             <button tabIndex={0}
               key={role}
@@ -717,7 +717,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
               onClick={() => handlePresetClick(role)}
               data-testid={`preset-${role}`}
               title={preset.description}
-              className={`px-3 py-1.5 rounded-md text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={`px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 activePreset === role
                   ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
                   : 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
@@ -737,9 +737,9 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
               system.* tools appear here under "System"; general builtins under
               "General" (core category). No tool appears twice. */}
       {Object.keys(groupedBuiltin).length > 0 && (
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">Tool categories</p>
-          <div className="space-y-1.5" data-testid="category-grid">
+          <div className="space-y-[var(--space-1)]" data-testid="category-grid">
             {Object.entries(groupedBuiltin).map(([cat, catTools]) => (
               <CategorySection
                 key={cat}
@@ -757,9 +757,9 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
 
       {/* 3. MCP tools grouped per-server */}
       {mcpTools.length > 0 && (
-        <div className="space-y-2" data-testid="mcp-tools-section">
+        <div className="space-y-[var(--space-2)]" data-testid="mcp-tools-section">
           <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">MCP server tools</p>
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             {Object.entries(groupedMcp).map(([server, serverTools]) => (
               <McpServerSection
                 key={server}
@@ -784,7 +784,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
       <AlertDialog open={pendingGrant != null} onOpenChange={(open) => { if (!open) setPendingGrant(null) }}>
         <AlertDialogContent data-testid="execute-plan-grant-dialog">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
+            <AlertDialogTitle className="flex items-center gap-[var(--space-2)]">
               <ShieldWarning size={18} weight="bold" className="text-[var(--color-warning)]" />
               Confirm autonomous plan execution
             </AlertDialogTitle>

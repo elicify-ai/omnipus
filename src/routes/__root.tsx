@@ -5,10 +5,10 @@ import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 // US-4: Branded 404 empty state with mascot and back-to-chat link
 function NotFoundPage() {
   return (
-    <div className="flex flex-col items-center justify-center h-full min-h-screen gap-6 p-8 text-center bg-[var(--color-primary)]">
+    <div className="flex flex-col items-center justify-center h-full min-h-screen gap-[var(--space-4)] p-[var(--space-5)] text-center bg-[var(--color-primary)]">
       <img src={OmnipusAvatar} alt="omnipus.ai" className="h-20 w-20 opacity-50" />
       <div>
-        <h1 className="font-headline text-5xl font-bold text-[var(--color-secondary)] mb-2">
+        <h1 className="font-headline text-5xl font-bold text-[var(--color-secondary)] mb-[var(--space-2)]">
           404
         </h1>
         <p className="text-[var(--color-muted)] text-lg">
@@ -18,7 +18,7 @@ function NotFoundPage() {
       <Link
         to="/"
         tabIndex={0}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-[length:var(--type-body-compact-size)] hover:bg-[var(--color-accent-hover)] transition-colors"
+        className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-[length:var(--type-body-compact-size)] hover:bg-[var(--color-accent-hover)] transition-colors"
       >
         <House size={16} />
         Back to Chat

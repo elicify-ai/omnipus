@@ -27,7 +27,7 @@ const modalForcedColors = (selector: string, focus = `${selector} [data-ds-actio
 
 export const DialogContract: Story = {
   parameters: config({ motionTargets: ['[role=dialog]'], forcedColors: modalForcedColors('[role=dialog]') }),
-  render: () => <Dialog><DialogTrigger data-ds-trigger="true" className="h-11 px-4">Open dialog</DialogTrigger><DialogContent><DialogTitle>Dialog</DialogTitle><DialogDescription>Scrollable modal content</DialogDescription></DialogContent></Dialog>,
+  render: () => <Dialog><DialogTrigger data-ds-trigger="true" className="h-11 px-[var(--space-3)]">Open dialog</DialogTrigger><DialogContent><DialogTitle>Dialog</DialogTitle><DialogDescription>Scrollable modal content</DialogDescription></DialogContent></Dialog>,
   play: async ({ canvasElement }) => { const canvas = within(canvasElement); await userEvent.click(canvas.getByRole('button', { name: 'Open dialog' })); await expect(within(document.body).getByRole('dialog')).toBeVisible() },
 }
 export const DialogKeyboard: Story = {
@@ -40,7 +40,7 @@ export const DialogFooterTargets: Story = {
 }
 export const SheetContract: Story = {
   parameters: config({ motionTargets: ['[role=dialog]'], forcedColors: modalForcedColors('[role=dialog]') }),
-  render: () => <Sheet><SheetTrigger data-ds-trigger="true" className="h-11 px-4">Open sheet</SheetTrigger><SheetContent size="md"><SheetTitle>Sheet</SheetTitle><SheetDescription>Named medium size</SheetDescription></SheetContent></Sheet>,
+  render: () => <Sheet><SheetTrigger data-ds-trigger="true" className="h-11 px-[var(--space-3)]">Open sheet</SheetTrigger><SheetContent size="md"><SheetTitle>Sheet</SheetTitle><SheetDescription>Named medium size</SheetDescription></SheetContent></Sheet>,
   play: async ({ canvasElement }) => { await userEvent.click(within(canvasElement).getByRole('button', { name: 'Open sheet' })); await expect(within(document.body).getByRole('dialog')).toBeVisible() },
 }
 export const SheetKeyboard: Story = {
@@ -104,7 +104,7 @@ export const MenuContract: Story = {
   // The addon cannot classify individual axe nodes. Playwright replaces this
   // one rule with the stricter reviewed proof in accessibility-exceptions.json.
   parameters: { ...config({ motionTargets: ['[role=menu]'], forcedColors: { boundaries: ['[role=menu]'] } }), a11y: { config: { rules: [{ id: 'aria-hidden-focus', enabled: false }] } } },
-  render: () => <DropdownMenu><DropdownMenuTrigger data-ds-trigger="true" className="h-11 px-4">Menu</DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem>Item</DropdownMenuItem><DropdownMenuSub><DropdownMenuSubTrigger>More</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuItem>Nested</DropdownMenuItem></DropdownMenuSubContent></DropdownMenuSub></DropdownMenuContent></DropdownMenu>,
+  render: () => <DropdownMenu><DropdownMenuTrigger data-ds-trigger="true" className="h-11 px-[var(--space-3)]">Menu</DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem>Item</DropdownMenuItem><DropdownMenuSub><DropdownMenuSubTrigger>More</DropdownMenuSubTrigger><DropdownMenuSubContent><DropdownMenuItem>Nested</DropdownMenuItem></DropdownMenuSubContent></DropdownMenuSub></DropdownMenuContent></DropdownMenu>,
   play: async ({ canvasElement }) => { await userEvent.click(within(canvasElement).getByRole('button', { name: 'Menu' })); await expect(within(document.body).getByRole('menuitem', { name: 'Item' })).toBeVisible() },
 }
 export const MenuKeyboard: Story = {
@@ -113,7 +113,7 @@ export const MenuKeyboard: Story = {
 }
 export const PopoverContract: Story = {
   parameters: config({ motionTargets: ['[data-radix-popper-content-wrapper]'], forcedColors: { boundaries: ['[role=dialog]'] } }),
-  render: () => <Popover><PopoverTrigger data-ds-trigger="true" className="h-11 px-4">Popover</PopoverTrigger><PopoverContent aria-label="Popover details">Popover content</PopoverContent></Popover>,
+  render: () => <Popover><PopoverTrigger data-ds-trigger="true" className="h-11 px-[var(--space-3)]">Popover</PopoverTrigger><PopoverContent aria-label="Popover details">Popover content</PopoverContent></Popover>,
   play: async ({ canvasElement }) => { await userEvent.click(within(canvasElement).getByRole('button', { name: 'Popover' })); await expect(within(document.body).getByText('Popover content')).toBeVisible() },
 }
 export const PopoverKeyboard: Story = {

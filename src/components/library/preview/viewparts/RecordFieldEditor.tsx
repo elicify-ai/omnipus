@@ -513,9 +513,9 @@ function EditableValueCell({
 
   if (conflictMessage !== undefined) {
     return (
-      <span className="inline-flex flex-wrap items-center gap-1.5" data-testid="viewpart-cell-conflict">
+      <span className="inline-flex flex-wrap items-center gap-[var(--space-1)]" data-testid="viewpart-cell-conflict">
         <span className="min-w-0 truncate">{renderValue(value)}</span>
-        <span className="inline-flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+        <span className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <WarningCircle size={12} weight="fill" />
           {conflictMessage}
         </span>
@@ -540,7 +540,7 @@ function EditableValueCell({
 
   if (cell.type === 'enum') {
     return (
-      <span className="inline-flex items-center gap-1.5">
+      <span className="inline-flex items-center gap-[var(--space-1)]">
         <select
           tabIndex={0}
           value={value}
@@ -554,7 +554,7 @@ function EditableValueCell({
           }}
           data-testid="viewpart-cell-editor-enum"
           aria-label={`Edit ${cell.property}`}
-          className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
         >
           {/* UAT D-71 (2026-09-13): a blank entry, so a value can be TAKEN
               AWAY as well as set. Choosing it sends `values: []` — the same
@@ -588,7 +588,7 @@ function EditableValueCell({
     // select. `value` is the wire spelling ('true' / 'false' / '' absent);
     // an absent value renders unchecked and a first tick writes `true`.
     return (
-      <span className="inline-flex items-center gap-1.5">
+      <span className="inline-flex items-center gap-[var(--space-1)]">
         <input
           tabIndex={0}
           type="checkbox"
@@ -624,7 +624,7 @@ function EditableValueCell({
     // cell. That is the same invisible-failure shape the error is there to
     // prevent, one level down.
     return (
-      <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5">
+      <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--space-1)]">
         <button
           tabIndex={0}
           type="button"
@@ -637,7 +637,7 @@ function EditableValueCell({
           }}
           data-testid="viewpart-cell-editor-trigger"
           aria-label={`Edit ${cell.property}`}
-          className="group inline-flex max-w-full min-w-0 items-center gap-1 text-left"
+          className="group inline-flex max-w-full min-w-0 items-center gap-[var(--space-1)] text-left"
         >
           <span className="min-w-0 truncate">{renderValue(value)}</span>
           <PencilSimple
@@ -655,7 +655,7 @@ function EditableValueCell({
   }
 
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5" onMouseDown={stop} onClick={stop}>
+    <span className="inline-flex min-w-0 items-center gap-[var(--space-1)]" onMouseDown={stop} onClick={stop}>
       <input
         tabIndex={0}
         type={cell.type === 'date' ? 'date' : 'text'}
@@ -682,7 +682,7 @@ function EditableValueCell({
         }}
         data-testid={`viewpart-cell-editor-${cell.type}`}
         aria-label={`Edit ${cell.property}`}
-        className="min-w-0 max-w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
+        className="min-w-0 max-w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
       />
       {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
       {error !== undefined && (
@@ -853,7 +853,7 @@ function RelationCellEditor({
 
   if (!open) {
     return (
-      <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5">
+      <span className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--space-1)]">
         <button
           tabIndex={0}
           type="button"
@@ -864,7 +864,7 @@ function RelationCellEditor({
           }}
           data-testid="viewpart-relation-trigger"
           aria-label={`Edit ${cell.property}`}
-          className="group inline-flex max-w-full min-w-0 items-center gap-1 text-left"
+          className="group inline-flex max-w-full min-w-0 items-center gap-[var(--space-1)] text-left"
         >
           <span className="min-w-0 truncate">{renderValue(cell.value)}</span>
           <PencilSimple
@@ -885,7 +885,7 @@ function RelationCellEditor({
 
   return (
     <span
-      className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-1.5"
+      className="inline-flex max-w-full min-w-0 flex-wrap items-center gap-[var(--space-1)]"
       onMouseDown={stop}
       onClick={stop}
       data-testid="viewpart-relation-editor"
@@ -898,7 +898,7 @@ function RelationCellEditor({
             <span
               key={stored}
               data-testid={`viewpart-relation-chip-${label}`}
-              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)]"
+              className="inline-flex items-center gap-[var(--space-1)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)]"
             >
               {label}
               <button
@@ -937,13 +937,13 @@ function RelationCellEditor({
         }}
         data-testid="viewpart-relation-search"
         aria-label={`Search targets for ${cell.property}`}
-        className="min-w-0 w-36 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
+        className="min-w-0 w-36 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
       />
       {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
 
       {results.length > 0 && (
         <span
-          className="flex max-w-full flex-col gap-0.5 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1 py-1"
+          className="flex max-w-full flex-col gap-[var(--space-0-5)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-1)]"
           data-testid="viewpart-relation-results"
         >
           {results.slice(0, 8).map((hit) => {
@@ -977,7 +977,7 @@ function RelationCellEditor({
 
       {conflictMessage !== undefined && (
         <span
-          className="inline-flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+          className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
           data-testid="viewpart-relation-conflict"
         >
           <WarningCircle size={12} weight="fill" />

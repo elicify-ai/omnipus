@@ -31,7 +31,7 @@ export function TilesPart({
   const imageProperty = part.source.image
   return (
     <div className="flex min-h-0 flex-col" data-testid="viewpart-tiles">
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2 p-3">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-[var(--space-2)] p-[var(--space-2-5)]">
         {rows.map((row) => {
           const imagePath = imageProperty === undefined ? '' : cellValue(row, imageProperty)
           const url = imagePath === '' ? undefined : resolveImageUrl?.(imagePath)
@@ -41,7 +41,7 @@ export function TilesPart({
                 <img src={url} alt="" className="h-20 w-full rounded object-cover" loading="lazy" />
               ) : (
                 <div
-                  className="flex h-20 w-full items-center justify-center rounded bg-[var(--color-surface-3)] px-2 text-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                  className="flex h-20 w-full items-center justify-center rounded bg-[var(--color-surface-3)] px-[var(--space-2)] text-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                   data-testid="viewpart-tile-placeholder"
                 >
                   {imagePath === '' ? 'No image' : imagePath.split('/').pop()}
@@ -61,14 +61,14 @@ export function TilesPart({
               onClick={() => onOpenPath(row.path)}
               aria-label={`Open ${row.title}`}
               data-testid="viewpart-tile"
-              className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+              className="flex flex-col gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)] text-left transition-colors hover:bg-[var(--color-surface-2)]"
             >
               {content}
             </button>
           ) : (
             <div
               key={row.path}
-              className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2"
+              className="flex flex-col gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)]"
               data-testid="viewpart-tile"
             >
               {content}

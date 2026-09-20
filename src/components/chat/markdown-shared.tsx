@@ -50,7 +50,7 @@ export function PhosphorEmojiSpan({
       ]
     : undefined
   if (Icon) {
-    return <Icon size={14} weight="regular" className="inline-block align-middle text-[var(--color-accent)] mx-0.5" />
+    return <Icon size={14} weight="regular" className="inline-block align-middle text-[var(--color-accent)] mx-[var(--space-0-5)]" />
   }
   return <span {...props}>{children}</span>
 }
@@ -104,7 +104,7 @@ export function createLinkRenderer(effectivePreview: EffectivePreview) {
 // ── Inline code ───────────────────────────────────────────────────────────────
 export function InlineCode({ children }: { children?: ReactNode }) {
   return (
-    <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-1.5 py-0.5 rounded text-[var(--color-accent)]">
+    <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[var(--color-accent)]">
       {children}
     </code>
   )
@@ -253,23 +253,23 @@ export const commonMarkdownComponents = {
   // LLM output is frequently hard-wrapped mid-paragraph; preserving that intent reads
   // better than reflowing into one run-on line. Applied to BOTH paths for parity.
   p: ({ children }: { children?: ReactNode }) => (
-    <p className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)] my-1.5 whitespace-pre-wrap">{children}</p>
+    <p className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)] my-[var(--space-1)] whitespace-pre-wrap">{children}</p>
   ),
 
   h1: ({ children }: { children?: ReactNode }) => (
-    <h1 className="text-xl font-bold text-[var(--color-secondary)] mt-5 mb-2 border-b border-[var(--color-border)] pb-1">
+    <h1 className="text-xl font-bold text-[var(--color-secondary)] mt-[var(--space-3)] mb-[var(--space-2)] border-b border-[var(--color-border)] pb-[var(--space-1)]">
       {children}
     </h1>
   ),
   h2: ({ children }: { children?: ReactNode }) => (
-    <h2 className="text-lg font-semibold text-[var(--color-secondary)] mt-4 mb-2">{children}</h2>
+    <h2 className="text-lg font-semibold text-[var(--color-secondary)] mt-[var(--space-3)] mb-[var(--space-2)]">{children}</h2>
   ),
   h3: ({ children }: { children?: ReactNode }) => (
-    <h3 className="text-base font-semibold text-[var(--color-secondary)] mt-3 mb-1">{children}</h3>
+    <h3 className="text-base font-semibold text-[var(--color-secondary)] mt-[var(--space-2-5)] mb-[var(--space-1)]">{children}</h3>
   ),
 
   ul: ({ children }: { children?: ReactNode }) => (
-    <ul style={{ listStyleType: 'disc' }} className="pl-6 my-2 space-y-1 text-[var(--color-secondary)]">
+    <ul style={{ listStyleType: 'disc' }} className="pl-[var(--space-4)] my-[var(--space-2)] space-y-[var(--space-1)] text-[var(--color-secondary)]">
       {children}
     </ul>
   ),
@@ -277,7 +277,7 @@ export const commonMarkdownComponents = {
   // renders correctly — react-markdown delivers it as a prop, and dropping it would
   // reset every such list to 1.
   ol: ({ children, start }: { children?: ReactNode; start?: number }) => (
-    <ol start={start} style={{ listStyleType: 'decimal' }} className="pl-6 my-2 space-y-1 text-[var(--color-secondary)]">
+    <ol start={start} style={{ listStyleType: 'decimal' }} className="pl-[var(--space-4)] my-[var(--space-2)] space-y-[var(--space-1)] text-[var(--color-secondary)]">
       {children}
     </ol>
   ),
@@ -293,28 +293,28 @@ export const commonMarkdownComponents = {
   em: ({ children }: { children?: ReactNode }) => <em className="italic">{children}</em>,
 
   blockquote: ({ children }: { children?: ReactNode }) => (
-    <blockquote className="border-l-2 border-[var(--color-accent)]/50 pl-3 my-2 text-[var(--color-muted)] italic">
+    <blockquote className="border-l-2 border-[var(--color-accent)]/50 pl-[var(--space-2-5)] my-[var(--space-2)] text-[var(--color-muted)] italic">
       {children}
     </blockquote>
   ),
 
   table: ({ children }: { children?: ReactNode }) => (
-    <div className="overflow-x-auto my-2">
+    <div className="overflow-x-auto my-[var(--space-2)]">
       <table className="min-w-full text-[length:var(--type-utility-xs-size)] border-collapse">{children}</table>
     </div>
   ),
   // `style` is forwarded on table cells: remark-gfm encodes column alignment
   // (:---:) as a `style={{ textAlign }}` prop; dropping it left-aligns every column.
   th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <th style={style?.textAlign ? { textAlign: style.textAlign } : undefined} className="border border-[var(--color-border)] px-3 py-1.5 text-left font-semibold bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
+    <th style={style?.textAlign ? { textAlign: style.textAlign } : undefined} className="border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-left font-semibold bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
       {children}
     </th>
   ),
   td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <td style={style?.textAlign ? { textAlign: style.textAlign } : undefined} className="border border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">{children}</td>
+    <td style={style?.textAlign ? { textAlign: style.textAlign } : undefined} className="border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[var(--color-secondary)]">{children}</td>
   ),
 
-  hr: () => <hr className="my-4 border-[var(--color-border)]" />,
+  hr: () => <hr className="my-[var(--space-3)] border-[var(--color-border)]" />,
   // `satisfies Partial<Components>` pins each renderer to react-markdown's component
   // contract at the DEFINITION site (not just where it's spread), so a renderer with a
   // wrong signature fails here — catching the asymmetric-drift this module exists to stop.

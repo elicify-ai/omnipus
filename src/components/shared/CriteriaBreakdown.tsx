@@ -101,15 +101,15 @@ export function CriteriaBreakdown({ criteria, emptyText }: CriteriaBreakdownProp
   }
 
   return (
-    <ul className="space-y-1.5" data-testid="criteria-breakdown">
+    <ul className="space-y-[var(--space-1)]" data-testid="criteria-breakdown">
       {criteria.map((c, idx) => {
         const verifiesVia = formatVerifiesVia(c)
         return (
           <li
             key={c.id ?? idx}
-            className="px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] space-y-0.5"
+            className="px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] space-y-[var(--space-0-5)]"
           >
-            <div className="flex items-start gap-1.5">
+            <div className="flex items-start gap-[var(--space-1)]">
               {c.judgment &&
                 (() => {
                   const { Icon, label } = JUDGMENT_ICON[c.judgment]
@@ -123,7 +123,7 @@ export function CriteriaBreakdown({ criteria, emptyText }: CriteriaBreakdownProp
                       data-testid="criterion-judgment-badge"
                       title={label}
                       aria-label={label}
-                      className="mt-[2px] inline-flex shrink-0 text-[var(--color-muted)]"
+                      className="mt-[var(--space-0-5)] inline-flex shrink-0 text-[var(--color-muted)]"
                     >
                       <Icon size={11} weight="bold" aria-hidden="true" />
                     </span>
@@ -132,7 +132,7 @@ export function CriteriaBreakdown({ criteria, emptyText }: CriteriaBreakdownProp
               <p className="text-[var(--color-secondary)] flex-1 min-w-0">{c.text}</p>
             </div>
             {verifiesVia && (
-              <p className="inline-flex max-w-full items-baseline gap-1 rounded bg-[var(--color-surface-1)] px-1.5 py-0.5 font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+              <p className="inline-flex max-w-full items-baseline gap-[var(--space-1)] rounded bg-[var(--color-surface-1)] px-[var(--space-1)] py-[var(--space-0-5)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 <span className="shrink-0">verifies via:</span>
                 <span className="truncate">{verifiesVia}</span>
               </p>

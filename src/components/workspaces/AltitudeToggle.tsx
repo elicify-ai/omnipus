@@ -56,7 +56,7 @@ export function AltitudeToggle({ value, onChange }: AltitudeToggleProps) {
 
   return (
     <div
-      className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-0.5 gap-0.5"
+      className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-0-5)] gap-[var(--space-0-5)]"
       role="radiogroup"
       aria-label="Board depth"
     >
@@ -75,7 +75,7 @@ export function AltitudeToggle({ value, onChange }: AltitudeToggleProps) {
             onClick={() => onChange(opt.value)}
             onKeyDown={handleKeyDown}
             className={cn(
-              'px-2.5 py-1 text-[length:var(--type-caption-size)] font-medium rounded-md transition-colors',
+              'px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium rounded-md transition-colors',
               checked
                 ? 'bg-[var(--color-surface-1)] text-[var(--color-secondary)] shadow-sm'
                 : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',

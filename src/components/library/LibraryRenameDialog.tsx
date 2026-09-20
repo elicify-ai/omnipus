@@ -97,7 +97,7 @@ export function LibraryRenameDialog({
         <DialogHeader>
           <DialogTitle>Rename {entry.is_dir ? 'folder' : 'file'}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="library-rename-input">New name</Label>
           <Input
             id="library-rename-input"

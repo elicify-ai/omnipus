@@ -163,22 +163,22 @@ export function SkillsScreen() {
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Skills & Tools" />
     <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-    <div className="max-w-4xl mx-auto px-4 py-6">
-      <div className="mb-6">
-        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-0.5">
+    <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
+      <div className="mb-[var(--space-4)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
           Manage agent capabilities — skills, MCP servers, and built-in tools.
         </p>
       </div>
 
       <Tabs defaultValue="skills">
-        <TabsList className="mb-6">
-          <TabsTrigger value="skills" className="gap-1.5">
+        <TabsList className="mb-[var(--space-4)]">
+          <TabsTrigger value="skills" className="gap-[var(--space-1)]">
             <PuzzlePiece size={13} /> Installed Skills
           </TabsTrigger>
-          <TabsTrigger value="mcp" className="gap-1.5">
+          <TabsTrigger value="mcp" className="gap-[var(--space-1)]">
             <HardDrives size={13} /> MCP Servers
           </TabsTrigger>
-          <TabsTrigger value="builtins" className="gap-1.5">
+          <TabsTrigger value="builtins" className="gap-[var(--space-1)]">
             <Wrench size={13} /> Built-in Tools
           </TabsTrigger>
         </TabsList>
@@ -190,33 +190,33 @@ export function SkillsScreen() {
           ) : skillsLoading ? (
             <SkeletonList />
           ) : skills.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-4 text-center">
+            <div className="flex flex-col items-center justify-center py-[var(--space-8)] gap-[var(--space-3)] text-center">
               <div className="text-[var(--color-border)]">
                 <PuzzlePiece size={40} weight="thin" />
               </div>
-              <div className="space-y-1">
+              <div className="space-y-[var(--space-1)]">
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No skills installed.</p>
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/70">Browse the skill registry to add capabilities to your agents.</p>
               </div>
-              <Button size="sm" className="gap-1.5 mt-1" onClick={() => setSkillBrowserOpen(true)}>
+              <Button size="sm" className="gap-[var(--space-1)] mt-[var(--space-1)]" onClick={() => setSkillBrowserOpen(true)}>
                 <MagnifyingGlass size={13} /> Browse Skills
               </Button>
             </div>
           ) : (
             <>
-              <div className="flex justify-end mb-3">
-                <Button size="sm" className="gap-1.5" onClick={() => setSkillBrowserOpen(true)}>
+              <div className="flex justify-end mb-[var(--space-2-5)]">
+                <Button size="sm" className="gap-[var(--space-1)]" onClick={() => setSkillBrowserOpen(true)}>
                   <MagnifyingGlass size={13} /> Browse Skills
                 </Button>
               </div>
-            <div className="space-y-2">
+            <div className="space-y-[var(--space-2)]">
               {skills.map((skill) => (
                 <div
                   key={skill.id}
-                  className="flex items-start gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                  className="flex items-start gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-[var(--space-2)] flex-wrap">
                       <span className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{skill.name}</span>
                       {skill.version && skill.version !== '0.0.0' && (
                         <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">v{skill.version}</span>
@@ -232,7 +232,7 @@ export function SkillsScreen() {
                         </Badge>
                       )}
                       {skill.verified && (
-                        <Badge variant="success" className="gap-1 text-[length:var(--type-caption-size)]">
+                        <Badge variant="success" className="gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
                           <Shield size={9} weight="fill" /> Verified
                         </Badge>
                       )}
@@ -243,8 +243,8 @@ export function SkillsScreen() {
                         {skill.status}
                       </Badge>
                     </div>
-                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1">{skill.description}</p>
-                    <div className="flex items-center gap-3 mt-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">{skill.description}</p>
+                    <div className="flex items-center gap-[var(--space-2-5)] mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                       {skill.author && <span>by {skill.author}</span>}
                       {skill.agent_assignment && <span>→ {skill.agent_assignment}</span>}
                     </div>
@@ -258,7 +258,7 @@ export function SkillsScreen() {
                         rather than omitting the line entirely when there is
                         no timestamp. */}
                     <div
-                      className="flex items-center gap-1 mt-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                      className="flex items-center gap-[var(--space-1)] mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       data-testid={`skill-last-invoked-${skill.id}`}
                     >
                       <Clock size={11} />
@@ -273,7 +273,7 @@ export function SkillsScreen() {
                     <button tabIndex={0}
                       type="button"
                       onClick={() => setConfirmDeleteSkill(skill.name)}
-                      className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded shrink-0"
+                      className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-[var(--space-1)] rounded shrink-0"
                       aria-label={`Remove ${skill.name}`}
                     >
                       <Trash size={14} />
@@ -288,8 +288,8 @@ export function SkillsScreen() {
 
         {/* MCP Servers */}
         <TabsContent value="mcp">
-          <div className="flex justify-end mb-3">
-            <Button size="sm" className="gap-1.5" onClick={() => { setMcpEditTarget(null); setMcpModalOpen(true) }}>
+          <div className="flex justify-end mb-[var(--space-2-5)]">
+            <Button size="sm" className="gap-[var(--space-1)]" onClick={() => { setMcpEditTarget(null); setMcpModalOpen(true) }}>
               <Plus size={13} /> Add Server
             </Button>
           </div>
@@ -300,7 +300,7 @@ export function SkillsScreen() {
           ) : mcpServers.length === 0 ? (
             <EmptyState icon={<HardDrives size={40} weight="thin" />} message="No MCP servers connected." />
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-[var(--space-2)]">
               {mcpServers.map((server) => {
                 const isExpanded = expandedMcp === server.id
                 return (
@@ -308,9 +308,9 @@ export function SkillsScreen() {
                     key={server.id}
                     className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
                   >
-                    <div className="flex items-center gap-3 p-4">
+                    <div className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]">
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-[var(--space-2)]">
                           <span className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{server.name}</span>
                           <Badge variant="outline" className="text-[length:var(--type-caption-size)] font-mono">{server.transport}</Badge>
                           <Badge
@@ -321,7 +321,7 @@ export function SkillsScreen() {
                           </Badge>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-[var(--space-2)] shrink-0">
                         <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                           {server.tool_count} tools
                         </span>
@@ -337,7 +337,7 @@ export function SkillsScreen() {
                           type="button"
                           onClick={() => handleTestMcp(server.id)}
                           disabled={testingMcp === server.id}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors p-1 rounded disabled:opacity-50"
+                          className="text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors p-[var(--space-1)] rounded disabled:opacity-50"
                           aria-label={`Test ${server.name}`}
                           data-testid={`test-mcp-${server.id}`}
                         >
@@ -350,7 +350,7 @@ export function SkillsScreen() {
                         <button tabIndex={0}
                           type="button"
                           onClick={() => { setMcpEditTarget(server); setMcpModalOpen(true) }}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
+                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-[var(--space-1)] rounded"
                           aria-label={`Edit ${server.name}`}
                           data-testid={`edit-mcp-${server.id}`}
                         >
@@ -359,7 +359,7 @@ export function SkillsScreen() {
                         <button tabIndex={0}
                           type="button"
                           onClick={() => setExpandedMcp(isExpanded ? null : server.id)}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-1 rounded"
+                          className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors p-[var(--space-1)] rounded"
                           aria-expanded={isExpanded}
                           aria-controls={isExpanded ? `mcp-tools-${server.id}` : undefined}
                           aria-label={`${isExpanded ? 'Hide' : 'Show'} tools for ${server.name}`}
@@ -369,7 +369,7 @@ export function SkillsScreen() {
                         <button tabIndex={0}
                           type="button"
                           onClick={() => setConfirmDeleteMcp(server.id)}
-                          className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-1 rounded"
+                          className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors p-[var(--space-1)] rounded"
                           aria-label={`Remove ${server.name}`}
                         >
                           <Trash size={14} />
@@ -377,20 +377,20 @@ export function SkillsScreen() {
                       </div>
                     </div>
                     {isExpanded && (
-                      <div id={`mcp-tools-${server.id}`} className="px-4 pb-4 border-t border-[var(--color-border)]">
+                      <div id={`mcp-tools-${server.id}`} className="px-[var(--space-3)] pb-[var(--space-3)] border-t border-[var(--color-border)]">
                         {server.tools && server.tools.length > 0 ? (
-                          <div className="pt-3 flex flex-wrap gap-1.5">
+                          <div className="pt-[var(--space-2-5)] flex flex-wrap gap-[var(--space-1)]">
                             {server.tools.map((tool) => (
                               <span
                                 key={tool}
-                                className="font-mono text-[length:var(--type-caption-size)] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
+                                className="font-mono text-[length:var(--type-caption-size)] px-[var(--space-2)] py-[var(--space-0-5)] rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
                               >
                                 {tool}
                               </span>
                             ))}
                           </div>
                         ) : (
-                          <p className="pt-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No tool details available.</p>
+                          <p className="pt-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No tool details available.</p>
                         )}
                       </div>
                     )}
@@ -549,13 +549,13 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-[var(--space-3)]">
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         What your agents can do — grouped by capability area. Click a category to see the individual tools.
         Permissions are managed in{' '}
         <a tabIndex={0}
           href="/settings?tab=security"
-          className="inline-flex items-center gap-0.5 text-[var(--color-accent)] hover:opacity-80 underline"
+          className="inline-flex items-center gap-[var(--space-0-5)] text-[var(--color-accent)] hover:opacity-80 underline"
           data-testid="manage-permissions-link"
         >
           Settings → Security
@@ -570,7 +570,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
           message="No tools available."
         />
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           {categories.map((cat) => {
             const catTools = grouped[cat]
             const description =
@@ -587,7 +587,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                 <button tabIndex={0}
                   type="button"
                   onClick={() => toggleCategory(cat)}
-                  className="flex items-center gap-3 w-full px-4 py-3 text-left hover:bg-[var(--color-surface-2)] transition-colors"
+                  className="flex items-center gap-[var(--space-2-5)] w-full px-[var(--space-3)] py-[var(--space-2-5)] text-left hover:bg-[var(--color-surface-2)] transition-colors"
                   aria-expanded={isExpanded}
                   aria-controls={isExpanded ? `tool-category-tools-${cat}` : undefined}
                   data-testid={`tool-category-toggle-${cat}`}
@@ -596,11 +596,11 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                     <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
                       {CATEGORY_LABELS[cat] ?? cat}
                     </span>
-                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                       {description}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-[var(--space-2)] shrink-0">
                     <Badge variant="muted" className="text-[length:var(--type-caption-size)]">
                       {catTools.length} tool{catTools.length !== 1 ? 's' : ''}
                     </Badge>
@@ -614,14 +614,14 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                 {isExpanded && (
                   <div
                     id={`tool-category-tools-${cat}`}
-                    className="px-4 pb-3 border-t border-[var(--color-border)] pt-2"
+                    className="px-[var(--space-3)] pb-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-2)]"
                     data-testid={`tool-category-tools-${cat}`}
                   >
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-[var(--space-1)]">
                       {catTools.map((tool) => (
                         <span
                           key={tool.name}
-                          className="font-mono text-[length:var(--type-caption-size)] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
+                          className="font-mono text-[length:var(--type-caption-size)] px-[var(--space-2)] py-[var(--space-0-5)] rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
                           title={tool.description ?? tool.name}
                           aria-label={tool.description ? `${tool.name} — ${tool.description}` : tool.name}
                         >

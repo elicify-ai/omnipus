@@ -14,7 +14,7 @@ import { SaveStatus, useSaveStatus } from './SaveStatus'
 
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3 animate-pulse">
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
@@ -35,13 +35,13 @@ interface ToggleRowProps {
 
 function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps) {
   return (
-    <div className="flex items-start justify-between gap-4">
+    <div className="flex items-start justify-between gap-[var(--space-3)]">
       <div className="flex-1 min-w-0">
         <label htmlFor={id} className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] cursor-pointer">
           {label}
         </label>
         {description && (
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5 leading-relaxed">{description}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-relaxed">{description}</p>
         )}
       </div>
       <button tabIndex={0}
@@ -83,14 +83,14 @@ interface NumberRowProps {
 
 function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onChange }: NumberRowProps) {
   return (
-    <div className="space-y-1">
+    <div className="space-y-[var(--space-1)]">
       <label htmlFor={id} className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
         {label}
       </label>
       {description && (
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">{description}</p>
       )}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-[var(--space-2)]">
         <Input
           id={id}
           type="number"
@@ -105,7 +105,7 @@ function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onC
             const v = parseFloat(e.target.value)
             onChange(isNaN(v) ? min : v)
           }}
-          className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] focus:outline-none"
+          className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] focus:outline-none"
         />
         {unit && <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{unit}</span>}
       </div>
@@ -345,16 +345,16 @@ export function MemorySection(): React.ReactElement {
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
-        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
           <Brain size={14} className="text-[var(--color-muted)]" />
           Memory &amp; Recap
         </h3>
         <SaveStatus state={saveState} errorMessage={errorMessage} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-5">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Global settings for automatic session recap (context compaction) and memory retention.
           These settings apply across all workspaces and agents.
@@ -381,7 +381,7 @@ export function MemorySection(): React.ReactElement {
           />
         )}
 
-        <div className="border-t border-[var(--color-border)] pt-4 space-y-4">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
           {/* Bootstrap recap */}
           <ToggleRow
             id="bootstrap-recap-enabled"
@@ -405,8 +405,8 @@ export function MemorySection(): React.ReactElement {
         </div>
 
         {/* Summarization model */}
-        <div className="border-t border-[var(--color-border)] pt-4 space-y-4">
-          <div className="space-y-1">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
+          <div className="space-y-[var(--space-1)]">
             <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Summarization model</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
               Recap runs a background summarization call — a fast, cheap model is recommended.
@@ -421,7 +421,7 @@ export function MemorySection(): React.ReactElement {
           )}
 
           {/* Primary model */}
-          <div className="space-y-1">
+          <div className="space-y-[var(--space-1)]">
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Primary model</p>
             <ModelSelector
               models={availableModels}
@@ -437,14 +437,14 @@ export function MemorySection(): React.ReactElement {
           </div>
 
           {/* Fallback chain */}
-          <div className="space-y-2">
+          <div className="space-y-[var(--space-2)]">
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Fallback models</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
               Tried in order if the primary model fails.
             </p>
 
             {form.recap_fallback_models.length > 0 && (
-              <div className="space-y-1" data-testid="recap-fallback-list">
+              <div className="space-y-[var(--space-1)]" data-testid="recap-fallback-list">
                 {form.recap_fallback_models.map((entry, idx) => {
                   const providerMissing = !entry.provider
                   const providerLabel = providerMissing
@@ -457,12 +457,12 @@ export function MemorySection(): React.ReactElement {
                     <div
                       key={entry.model}
                       data-testid={`recap-fallback-row-${entry.model}`}
-                      className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5"
+                      className="flex items-center gap-[var(--space-2)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)]"
                     >
                       <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
                       <span
                         data-testid={`recap-fallback-provider-${entry.model}`}
-                        className="inline-flex items-center px-1.5 rounded text-[length:var(--type-caption-size)] font-semibold shrink-0"
+                        className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold shrink-0"
                         style={{
                           backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                           color: 'var(--color-accent)',
@@ -542,7 +542,7 @@ export function MemorySection(): React.ReactElement {
           </div>
         </div>
 
-        <div className="border-t border-[var(--color-border)] pt-4 space-y-4">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
           <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Retention</p>
 
           <NumberRow
@@ -566,7 +566,7 @@ export function MemorySection(): React.ReactElement {
           />
         </div>
 
-        <div className="border-t border-[var(--color-border)] pt-4 flex justify-end">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex justify-end">
           <Button
             size="sm"
             onClick={handleSave}

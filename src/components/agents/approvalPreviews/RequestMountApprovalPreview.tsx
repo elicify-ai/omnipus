@@ -50,9 +50,9 @@ export function RequestMountApprovalPreview({ args, agentName, sessionId }: Tool
   const workspaceName = resolveWorkspaceName(sessionId)
 
   return (
-    <div className="px-5 py-4 space-y-4">
+    <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-3)]">
       <div>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-1 flex items-center gap-1">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)] flex items-center gap-[var(--space-1)]">
           <FolderPlus size={13} aria-hidden="true" />
           Folder
         </p>
@@ -68,14 +68,14 @@ export function RequestMountApprovalPreview({ args, agentName, sessionId }: Tool
       </div>
 
       <div>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-1">Why</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Why</p>
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           {reason || 'No reason was given.'}
         </p>
       </div>
 
       <div>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-1">Workspace</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Workspace</p>
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{workspaceName}</p>
       </div>
 
@@ -83,7 +83,7 @@ export function RequestMountApprovalPreview({ args, agentName, sessionId }: Tool
           Agents can already read files outside their workspace (ADR-068), so
           the copy must not imply that declining withholds reading — a founder
           who declines believing they kept the folder private has been misled. */}
-      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] pt-3 border-t border-[var(--color-border)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] pt-[var(--space-2-5)] border-t border-[var(--color-border)]">
         {agentName} will be able to change files in this folder until you remove it.
       </p>
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">

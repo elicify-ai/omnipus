@@ -34,7 +34,7 @@ function BrowserLiveRoute() {
 
   if (!session || !agent) {
     return (
-      <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+      <div className="absolute inset-0 flex items-center justify-center p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
         Missing session or agent — open this page via the "Watch live" / pop-out action in the app.
       </div>
     )

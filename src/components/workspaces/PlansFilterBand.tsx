@@ -126,7 +126,7 @@ export function PlansFilterBand({
     <div
       role="group"
       aria-label="Plans filter"
-      className="flex items-stretch gap-3 overflow-x-auto px-6 py-4 bg-[var(--color-surface-0)] flex-shrink-0"
+      className="flex items-stretch gap-[var(--space-2-5)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] bg-[var(--color-surface-0)] flex-shrink-0"
     >
       <AllTasksTile
         selected={selectedPlanId === null}
@@ -166,7 +166,7 @@ export function PlansFilterBand({
           aria-label="New plan"
           className={cn(
             TILE_SIZE,
-            'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--color-border)] p-3 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
+            'flex flex-col items-center justify-center gap-[var(--space-1)] rounded-lg border border-dashed border-[var(--color-border)] p-[var(--space-2-5)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
           )}
         >
           <Plus size={16} />
@@ -193,7 +193,7 @@ function AllTasksTile({
       data-testid="all-tasks-tile"
       className={cn(
         TILE_SIZE,
-        'rounded-lg border bg-[var(--color-surface-1)] p-3 transition-colors',
+        'rounded-lg border bg-[var(--color-surface-1)] p-[var(--space-2-5)] transition-colors',
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
@@ -204,11 +204,11 @@ function AllTasksTile({
         aria-pressed={selected}
         aria-label="All tasks"
         onClick={onSelect}
-        className="flex h-full w-full flex-col items-start gap-2 text-left"
+        className="flex h-full w-full flex-col items-start gap-[var(--space-2)] text-left"
       >
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] font-medium',
+            'inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium',
             selected ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]',
           )}
         >
@@ -277,7 +277,7 @@ function PlanFilterTile({
       title={plan.title}
       className={cn(
         TILE_SIZE,
-        'group relative rounded-lg border border-l-2 border-l-[var(--color-accent)]/40 bg-[var(--color-surface-1)] p-3 transition-colors',
+        'group relative rounded-lg border border-l-2 border-l-[var(--color-accent)]/40 bg-[var(--color-surface-1)] p-[var(--space-2-5)] transition-colors',
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
@@ -287,14 +287,14 @@ function PlanFilterTile({
           never nested inside it, so they can never trigger onSelect. Hover-
           revealed on pointer-fine devices, always visible on touch. */}
       <div
-        className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+        className="absolute right-1.5 top-1.5 z-10 flex items-center gap-[var(--space-0-5)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
         onClick={(e) => e.stopPropagation()}
       >
         <button tabIndex={0}
           type="button"
           aria-label={`Edit plan ${plan.title}`}
           onClick={onEdit}
-          className="inline-flex items-center justify-center rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          className="inline-flex items-center justify-center rounded p-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
         >
           <PencilSimple size={13} />
         </button>
@@ -310,7 +310,7 @@ function PlanFilterTile({
             <button tabIndex={0}
               type="button"
               aria-label={`Plan actions for ${plan.title}`}
-              className="inline-flex items-center justify-center rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+              className="inline-flex items-center justify-center rounded p-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
             >
               <DotsThreeVertical size={14} weight="bold" />
             </button>
@@ -319,7 +319,7 @@ function PlanFilterTile({
             <DropdownMenuItem
               onClick={() => setConfirmClear(true)}
               disabled={isClearing || plan.state === 'running'}
-              className={cn('flex items-center gap-2', 'text-[color:var(--color-error)]')}
+              className={cn('flex items-center gap-[var(--space-2)]', 'text-[color:var(--color-error)]')}
             >
               <Broom size={13} />
               {isClearing ? 'Clearing…' : 'Clear'}
@@ -335,11 +335,11 @@ function PlanFilterTile({
         aria-pressed={selected}
         aria-label={plan.title}
         onClick={onSelect}
-        className="flex h-full w-full flex-col items-start gap-2 pr-10 text-left"
+        className="flex h-full w-full flex-col items-start gap-[var(--space-2)] pr-[var(--space-6)] text-left"
       >
-        <span className="flex flex-wrap items-center gap-1">
+        <span className="flex flex-wrap items-center gap-[var(--space-1)]">
           <span
-            className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold leading-tight"
+            className="inline-flex flex-shrink-0 items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight"
             style={{ color: displayColor, backgroundColor: `${displayColor}1a` }}
           >
             <PlanStateGlyph state={plan.state} cancelled={cancelled} />
@@ -354,7 +354,7 @@ function PlanFilterTile({
             <span
               data-testid={`plan-phase-chip-${plan.id}`}
               className={cn(
-                'flex-shrink-0 rounded border px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none',
+                'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none',
                 phaseChip.tone === 'warning'
                   ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                   : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
@@ -407,9 +407,9 @@ function PlanFilterTile({
           </span>
         )}
 
-        <span className="flex flex-wrap items-center gap-1.5">
+        <span className="flex flex-wrap items-center gap-[var(--space-1)]">
           <span
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+            className="inline-flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             role="img"
             aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}
           >
@@ -421,7 +421,7 @@ function PlanFilterTile({
           {owner && (
             <span
               title={owner.name}
-              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             >
               {owner.name.split('—')[0].trim()}
             </span>

@@ -123,37 +123,37 @@ export function ReSignInDialog({
           {statusText}
         </div>
 
-        <div className="space-y-3">
+        <div className="space-y-[var(--space-2-5)]">
           <div>
-            <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5">Run in a terminal</p>
+            <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)]">Run in a terminal</p>
             <code
-              className="block rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]"
+              className="block rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]"
               data-testid="re-sign-in-command"
             >
               {copy.command}
             </code>
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1.5" data-testid="re-sign-in-instruction">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]" data-testid="re-sign-in-instruction">
               {copy.instruction}
             </p>
           </div>
 
           {phase.kind === 'still_expired' && (
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-1.5" role="alert" aria-live="assertive">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]" role="alert" aria-live="assertive">
               <Warning size={13} weight="fill" /> Still expired — run the command above, then check again.
             </p>
           )}
           {phase.kind === 'not_signed_in' && (
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-1.5" role="alert" aria-live="assertive">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]" role="alert" aria-live="assertive">
               <Warning size={13} weight="fill" /> Not signed in yet — run the command above, then check again.
             </p>
           )}
           {phase.kind === 'error' && (
-            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)] flex items-start gap-1.5" role="alert" aria-live="assertive">
-              <XCircle size={13} weight="fill" className="shrink-0 mt-0.5" /> {phase.message}
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)] flex items-start gap-[var(--space-1)]" role="alert" aria-live="assertive">
+              <XCircle size={13} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" /> {phase.message}
             </p>
           )}
           {phase.kind === 'signed_in' && (
-            <div className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-success)]" role="status" data-testid="re-sign-in-success">
+            <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-success)]" role="status" data-testid="re-sign-in-success">
               <CheckCircle size={16} weight="fill" />
               {phase.accountLabel ? `Signed in as ${phase.accountLabel}` : 'Signed in'}
             </div>
@@ -163,7 +163,7 @@ export function ReSignInDialog({
             <Button
               onClick={() => void handleCheck()}
               disabled={phase.kind === 'checking'}
-              className="w-full gap-2"
+              className="w-full gap-[var(--space-2)]"
               data-testid="re-sign-in-check-btn"
             >
               {phase.kind === 'checking' ? <SpinnerGap size={14} className="animate-spin" /> : null}

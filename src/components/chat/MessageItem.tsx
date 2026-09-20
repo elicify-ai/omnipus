@@ -34,13 +34,13 @@ const markdownComponents = {
     const isInline = !className
     if (isInline) {
       return (
-        <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-1.5 py-0.5 rounded text-[var(--color-accent)]">
+        <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[var(--color-accent)]">
           {children}
         </code>
       )
     }
     return (
-      <pre className="bg-[var(--color-surface-2)] rounded-md p-3 overflow-x-auto my-2">
+      <pre className="bg-[var(--color-surface-2)] rounded-md p-[var(--space-2-5)] overflow-x-auto my-[var(--space-2)]">
         <code className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)] block">
           {children}
         </code>
@@ -81,7 +81,7 @@ function MessageBubble({ text, isUser }: { text: string; isUser: boolean }) {
   return (
     <div
       className={cn(
-        'rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed',
+        'rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed',
         isUser
           ? 'bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm'
           : 'bg-transparent text-[var(--color-secondary)] rounded-tl-sm'
@@ -145,14 +145,14 @@ export function MessageItem({ message }: MessageItemProps) {
     // Goal outcome line (founder decision 2026-09-14) — always shown.
     if (message.goalOutcome) {
       return (
-        <div className="flex justify-center px-4 py-2">
+        <div className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
           <GoalOutcomeRow outcome={message.goalOutcome} />
         </div>
       )
     }
     return (
-      <div className="flex justify-center py-2">
-        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+      <div className="flex justify-center py-[var(--space-2)]">
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
           {message.content}
         </span>
       </div>
@@ -182,7 +182,7 @@ export function MessageItem({ message }: MessageItemProps) {
   return (
     <div
       data-message-id={message.id}
-      className={cn('group flex gap-3 px-4 py-3', isUser ? 'flex-row-reverse' : undefined)}
+      className={cn('group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]', isUser ? 'flex-row-reverse' : undefined)}
     >
       {/* Avatar — O11 icon attribution: for assistant messages, use the
           agent's own icon + color when known, rather than a generic Robot.
@@ -202,12 +202,12 @@ export function MessageItem({ message }: MessageItemProps) {
       </div>
 
       {/* Content */}
-      <div className={cn('flex flex-col gap-1 max-w-[85%] min-w-0', isUser ? 'items-end' : undefined)}>
+      <div className={cn('flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0', isUser ? 'items-end' : undefined)}>
         {/* Agent label — shown above assistant messages when the agent is known */}
         {!isUser && agentName && (
           <span
             data-testid="agent-label"
-            className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] px-1 capitalize"
+            className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] px-[var(--space-1)] capitalize"
           >
             {agentName}
           </span>
@@ -217,8 +217,8 @@ export function MessageItem({ message }: MessageItemProps) {
             text part) — matches the old behavior where "Thinking…" could
             show above already-baked tool call badges. */}
         {showThinking && (
-          <div className="rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed bg-transparent text-[var(--color-secondary)] rounded-tl-sm">
-            <span className="text-[var(--color-muted)] italic flex items-center gap-2">
+          <div className="rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed bg-transparent text-[var(--color-secondary)] rounded-tl-sm">
+            <span className="text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)]">
               <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse" />
               Thinking...
             </span>
@@ -251,7 +251,7 @@ export function MessageItem({ message }: MessageItemProps) {
         })}
 
         {/* Footer */}
-        <div className="flex items-center gap-3 px-1">
+        <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-1)]">
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {formatTimestamp(message.timestamp)}
           </span>
@@ -279,19 +279,19 @@ export function MessageItem({ message }: MessageItemProps) {
           && verboseChatEnabled
           && message.errorDetail
           && message.errorDetail.length > 0 && (
-          <details className="px-1 mt-1 group/error-detail" data-testid="error-detail-disclosure">
+          <details className="px-[var(--space-1)] mt-[var(--space-1)] group/error-detail" data-testid="error-detail-disclosure">
             <summary
               tabIndex={0}
               className={cn(
                 'text-[length:var(--type-caption-size)] text-[var(--color-muted)] cursor-pointer select-none',
-                'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
+                'inline-flex items-center gap-[var(--space-1)] hover:text-[var(--color-secondary)] transition-colors',
               )}
             >
               Technical details
             </summary>
             <pre
               className={cn(
-                'mt-1 px-2 py-1.5 rounded-md',
+                'mt-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded-md',
                 'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
                 'font-mono text-[length:var(--type-caption-size)] leading-relaxed whitespace-pre-wrap break-all',
                 'max-h-40 overflow-y-auto',

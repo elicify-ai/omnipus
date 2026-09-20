@@ -110,7 +110,7 @@ export function UnmountedEmbedsNotice() {
   return (
     <div
       data-testid="unmounted-embeds-notice"
-      className="flex shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+      className="flex shrink-0 items-center gap-[var(--space-1)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
     >
       <Info size={13} />
       {UNMOUNTED_EMBEDS_NOTICE_TEXT}

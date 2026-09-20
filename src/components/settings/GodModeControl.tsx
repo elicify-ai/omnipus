@@ -160,7 +160,7 @@ export function GodModeControl() {
   const busy = isSaving || reauthOpen
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-[var(--space-2-5)]">
       <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
         Danger zone
       </h3>
@@ -186,9 +186,9 @@ export function GodModeControl() {
             : 'border-[var(--color-error)]/30 bg-[var(--color-surface-1)]',
         ].join(' ')}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 space-y-1.5">
-            <div className="flex items-center gap-2">
+        <div className="flex items-start justify-between gap-[var(--space-3)]">
+          <div className="min-w-0 space-y-[var(--space-1)]">
+            <div className="flex items-center gap-[var(--space-2)]">
               <Warning
                 size={16}
                 weight="fill"
@@ -204,7 +204,7 @@ export function GodModeControl() {
                 disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.
                 Audit logging, the prompt-guard, and rate limiting stay on.
               </p>
-              <p className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+              <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
                 Changing this requires re-typing your password.
               </p>
@@ -238,7 +238,7 @@ export function GodModeControl() {
                   never-touched fresh install and falsely claimed it was
                   "authorized but not yet active". */}
               {persisted && !available && !isLoading && (
-                <div className="space-y-1">
+                <div className="space-y-[var(--space-1)]">
                   <p
                     data-testid="god-mode-restart-note"
                     className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
@@ -351,10 +351,10 @@ export function GodModeActiveBanner() {
       <div
         role="alert"
         data-testid="god-mode-status-unknown-banner"
-        className="flex items-start gap-3 rounded-lg border border-amber-500/60 bg-amber-500/10 px-4 py-3"
+        className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-amber-500/60 bg-amber-500/10 px-[var(--space-3)] py-[var(--space-2-5)]"
       >
-        <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-amber-400" />
-        <div className="space-y-1">
+        <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-amber-400" />
+        <div className="space-y-[var(--space-1)]">
           <p className="text-[length:var(--type-body-compact-size)] font-semibold text-amber-400">God-mode status unavailable</p>
           <p className="text-[length:var(--type-utility-xs-size)] text-amber-400/80">
             Could not fetch god-mode status from the gateway — it may be offline. If god-mode was
@@ -370,10 +370,10 @@ export function GodModeActiveBanner() {
     <div
       role="alert"
       data-testid="god-mode-active-banner"
-      className="flex items-start gap-3 rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-4 py-3"
+      className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-[var(--color-error)]" />
-      <div className="space-y-1">
+      <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-error)]" />
+      <div className="space-y-[var(--space-1)]">
         <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">God-mode is active</p>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/80">
           All permission prompts are bypassed and the kernel sandbox, network restrictions, and shell guard are

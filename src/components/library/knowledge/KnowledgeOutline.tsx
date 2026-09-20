@@ -195,11 +195,11 @@ export function KnowledgeOutline({
           {query.data?.frontmatter_malformed && (
             <p
               data-testid="knowledge-outline-frontmatter-malformed"
-              className="flex items-start gap-2 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+              className="flex items-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
             >
               <WarningCircle
                 size={14}
-                className="mt-px shrink-0"
+                className="mt-[var(--border-width-hairline)] shrink-0"
                 aria-hidden="true"
               />
               <span>
@@ -215,7 +215,7 @@ export function KnowledgeOutline({
             // KnowledgeBacklinks.
             <p
               data-testid="knowledge-outline-loading"
-              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               Reading this note&apos;s headings…
             </p>
@@ -233,14 +233,14 @@ export function KnowledgeOutline({
           {query.isSuccess && headings.length === 0 && (
             <p
               data-testid="knowledge-outline-empty"
-              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               This note has no headings.
             </p>
           )}
 
           {query.isSuccess && headings.length > 0 && (
-            <ul className="flex flex-col py-1">
+            <ul className="flex flex-col py-[var(--space-1)]">
               {headings.map((heading, i) => {
                 const depth = depths[i];
                 const clamped = Math.min(

@@ -239,18 +239,18 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           link, over a thin separator. (Matches the operator mockup: section
           labels + hairline separators + link-style create actions, generous
           spacing.) */}
-      <div className="flex items-center justify-between px-6 pt-5 pb-3 flex-shrink-0">
+      <div className="flex items-center justify-between px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)] flex-shrink-0">
         <h2 className="font-headline text-base font-bold text-[var(--color-secondary)]">Plans</h2>
         <button tabIndex={0}
           type="button"
           onClick={() => setPlanSlideOver({ open: true, plan: null })}
-          className="flex items-center gap-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
         >
           <Plus size={14} />
           New Plan
         </button>
       </div>
-      <div className="mx-6 border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
+      <div className="mx-[var(--space-4)] border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
 
       {/* Plans-as-filter band (ADR-051 D2/D3) — overview + single-select
           filter, not navigation. Its own dashed "New plan" tile is hidden;
@@ -272,10 +272,10 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           replaces "Team Task Backlog" when a plan filter is active — ADR-051
           D2, Visibility of System Status) + the Board/List/Graph switcher +
           filters + a minimalist "+ New Task" link, over a thin separator. */}
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 px-6 pt-6 pb-3 flex-shrink-0">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-[var(--space-2-5)] px-[var(--space-4)] pt-[var(--space-4)] pb-[var(--space-2-5)] flex-shrink-0">
         {/* Left: dynamic heading + the flat Board/List/Graph view switcher. */}
-        <div className="flex min-w-0 items-center gap-5">
-          <div className="flex min-w-0 items-center gap-1" data-testid="tasks-heading">
+        <div className="flex min-w-0 items-center gap-[var(--space-3)]">
+          <div className="flex min-w-0 items-center gap-[var(--space-1)]" data-testid="tasks-heading">
             <h2 className="font-headline text-base font-bold text-[var(--color-secondary)] truncate">
               {heading}
             </h2>
@@ -291,7 +291,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
             per-column Excel-style filtering (Agent/Tags/Status/Pri live in the
             table headers there), and the Graph view honors the plan filter
             alone, so neither renders these toolbar filters. */}
-        <div className="flex items-center justify-center gap-2">
+        <div className="flex items-center justify-center gap-[var(--space-2)]">
           {view === 'board' && (
             <AgentFilterDropdown agents={agents} value={ownerAgentId} onChange={setOwnerAgentId} />
           )}
@@ -301,11 +301,11 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         </div>
 
         {/* Right: New Task on its own. */}
-        <div className="flex flex-col items-end gap-0.5">
+        <div className="flex flex-col items-end gap-[var(--space-0-5)]">
           <button tabIndex={0}
             type="button"
             onClick={() => setCreateTaskOpen(true)}
-            className="flex items-center gap-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+            className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
           >
             <Plus size={14} />
             New Task
@@ -330,22 +330,22 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           )}
         </div>
       </div>
-      <div className="mx-6 border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
+      <div className="mx-[var(--space-4)] border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
 
       {agentsError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
+        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
           Agent details failed to load — task avatars may be missing.
         </div>
       )}
       {plansError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
+        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
           Plans failed to load — the plans filter band may be incomplete.
         </div>
       )}
       {tasksError && tasks.length > 0 && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
+        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
           Couldn't refresh — showing last-known tasks.
         </div>
@@ -450,7 +450,7 @@ function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: 
 
   return (
     <div
-      className="flex items-center gap-4 flex-shrink-0"
+      className="flex items-center gap-[var(--space-3)] flex-shrink-0"
       role="radiogroup"
       aria-label="Task view"
     >
@@ -472,7 +472,7 @@ function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: 
             // Flat like the workspace header tabs — no border, background or
             // shadow; just an icon + label on the header, gold when active.
             className={cn(
-              'flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] font-medium transition-colors',
+              'flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium transition-colors',
               checked
                 ? 'text-[var(--color-accent)]'
                 : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -526,7 +526,7 @@ function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownPro
             variant="ghost"
             size="sm"
             aria-label={`Filter by agent (current: ${selected?.name ?? 'all agents'})`}
-            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-[length:var(--type-utility-xs-size)] font-medium"
+            className="flex h-8 min-w-0 max-w-[200px] items-center gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium"
           >
             {selected ? (
               <AgentAvatar agent={selected} />
@@ -543,7 +543,7 @@ function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownPro
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-64">
-          <DropdownMenuItem onClick={() => onChange(null)} className="flex items-center gap-2">
+          <DropdownMenuItem onClick={() => onChange(null)} className="flex items-center gap-[var(--space-2)]">
             <div
               aria-hidden="true"
               className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-surface-3)] text-[var(--color-muted)]"
@@ -559,7 +559,7 @@ function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownPro
             <DropdownMenuItem
               key={agent.id}
               onClick={() => onChange(agent.id)}
-              className="flex items-center gap-2"
+              className="flex items-center gap-[var(--space-2)]"
               title={agent.name}
             >
               <AgentAvatar agent={agent} />
@@ -604,7 +604,7 @@ function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectPr
             variant="ghost"
             size="sm"
             aria-label="Filter by tags"
-            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-[length:var(--type-utility-xs-size)] font-medium"
+            className="flex h-8 min-w-0 max-w-[200px] items-center gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-medium"
           >
             <Tag size={13} className="shrink-0 opacity-70" />
             <span className="truncate">{label}</span>
@@ -651,14 +651,14 @@ function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectPr
 
 function BoardSkeleton() {
   return (
-    <div className="flex gap-3 p-4 overflow-x-auto overscroll-contain flex-1">
+    <div className="flex gap-[var(--space-2-5)] p-[var(--space-3)] overflow-x-auto overscroll-contain flex-1">
       {[1, 2, 3, 4, 5, 6].map((i) => (
         <div
           key={i}
           className="flex flex-col min-w-[180px] flex-1 rounded-xl border border-[var(--color-border)] animate-pulse"
         >
           <div className="h-10 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]" />
-          <div className="flex flex-col gap-2 p-2">
+          <div className="flex flex-col gap-[var(--space-2)] p-[var(--space-2)]">
             {[1, 2].map((j) => (
               <div key={j} className="h-14 rounded-lg bg-[var(--color-surface-2)]" />
             ))}

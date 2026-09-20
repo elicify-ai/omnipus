@@ -405,7 +405,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
 
   return (
     <div className="absolute inset-0 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-6 flex flex-col gap-6">
+      <div className="max-w-2xl mx-auto px-[var(--space-4)] py-[var(--space-4)] flex flex-col gap-[var(--space-4)]">
         {/* Header with autosave indicator */}
         <div className="flex items-center justify-between">
           <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
@@ -415,7 +415,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Name */}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <Label htmlFor="ws-name">Name</Label>
           <Input
             id="ws-name"
@@ -431,7 +431,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Description */}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <Label htmlFor="ws-description">Description</Label>
           <Textarea
             id="ws-description"
@@ -445,7 +445,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Workspace / Project Instructions */}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <div className="flex items-center justify-between">
             <Label htmlFor="ws-instructions">
               Workspace / Project Instructions
@@ -458,13 +458,13 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             Applied to every agent working in this workspace, on top of their persona. Like a project CLAUDE.md.
           </p>
           {instructionsError ? (
-            <div className="flex flex-col items-center gap-3 py-4 text-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+            <div className="flex flex-col items-center gap-[var(--space-2-5)] py-[var(--space-3)] text-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load project instructions.</p>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => void refetchInstructions()}
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 <ArrowsClockwise size={13} />
                 Retry
@@ -489,18 +489,18 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Danger zone */}
-        <div className="mt-2 flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
+        <div className="mt-[var(--space-2)] flex flex-col gap-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
           <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
             Manage
           </span>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-[var(--space-2)]">
             {(!isDefault || isArchived) && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => archiveMutation.mutate()}
                 disabled={archiveMutation.isPending}
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 {isArchived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}
                 {isArchived ? 'Restore workspace' : 'Archive workspace'}
@@ -512,7 +512,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
                 variant="outline"
                 size="sm"
                 onClick={() => setConfirmDelete(true)}
-                className="gap-1.5 border-[var(--color-error)]/40 text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
+                className="gap-[var(--space-1)] border-[var(--color-error)]/40 text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
               >
                 <Trash size={14} />
                 Delete workspace

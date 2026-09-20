@@ -24,7 +24,7 @@ interface CliPathValidationHintProps {
 export function CliPathValidationHint({ validation, detectHint, testId }: CliPathValidationHintProps) {
   if (validation.kind === 'pending') {
     return (
-      <p data-testid={testId} data-cli-status="pending" className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+      <p data-testid={testId} data-cli-status="pending" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         <Spinner size={11} className="animate-spin" />
         Checking…
       </p>
@@ -33,7 +33,7 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
 
   if (validation.kind === 'error') {
     return (
-      <p data-testid={testId} data-cli-status="error" className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-amber-400">
+      <p data-testid={testId} data-cli-status="error" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400">
         <WarningCircle size={11} weight="fill" />
         Couldn't verify — you can still save. Will retry on the next edit.
       </p>
@@ -45,28 +45,28 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
     switch (reason) {
       case 'ok':
         return (
-          <p data-testid={testId} data-cli-status="ok" className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-emerald-400">
+          <p data-testid={testId} data-cli-status="ok" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-emerald-400">
             <CheckCircle size={11} weight="fill" />
             CLI runs{version ? ` · v${version}` : ''}
           </p>
         )
       case 'unauthenticated':
         return (
-          <p data-testid={testId} data-cli-status="unauthenticated" className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-amber-400">
+          <p data-testid={testId} data-cli-status="unauthenticated" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400">
             <WarningCircle size={11} weight="fill" />
             Installed — not logged in. You can still save.
           </p>
         )
       case 'missing-binary':
         return (
-          <p data-testid={testId} data-cli-status="missing-binary" className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-error)]">
+          <p data-testid={testId} data-cli-status="missing-binary" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">
             <XCircle size={11} weight="fill" />
             No CLI found at this path.
           </p>
         )
       case 'handshake-failed':
         return (
-          <p data-testid={testId} data-cli-status="handshake-failed" className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-error)]">
+          <p data-testid={testId} data-cli-status="handshake-failed" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">
             <XCircle size={11} weight="fill" />
             Did not run, or returned no version.
           </p>
@@ -75,7 +75,7 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
         // unknown-cli, or any future/stale reason value the SPA bundle
         // doesn't recognize (F-17 stale-bundle safety) — non-blocking.
         return (
-          <p data-testid={testId} data-cli-status="unknown" className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-amber-400">
+          <p data-testid={testId} data-cli-status="unknown" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400">
             <WarningCircle size={11} weight="fill" />
             Couldn't verify — you can still save.
           </p>

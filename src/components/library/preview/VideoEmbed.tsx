@@ -147,7 +147,7 @@ function RefusedLinkFallback({ url, title, note }: { url: string; title?: string
       >
         {title && title.trim() !== '' ? title : url}
       </a>
-      <span className="ml-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">({note})</span>
+      <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">({note})</span>
     </span>
   )
 }

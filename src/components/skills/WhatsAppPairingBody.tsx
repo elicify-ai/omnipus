@@ -23,8 +23,8 @@ function RetryableState({
   onRetry?: () => void
 }) {
   return (
-    <div className="flex flex-col items-center gap-3">
-      <div className={`flex items-center gap-2 ${iconProps?.className ?? ''}`}>
+    <div className="flex flex-col items-center gap-[var(--space-2-5)]">
+      <div className={`flex items-center gap-[var(--space-2)] ${iconProps?.className ?? ''}`}>
         <IconComponent size={14} {...iconProps} className={undefined} />
         <p className="text-[length:var(--type-utility-xs-size)]">{message}</p>
       </div>
@@ -33,7 +33,7 @@ function RetryableState({
           type="button"
           onClick={onRetry}
           data-testid="whatsapp-retry"
-          className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
+          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
         >
           <ArrowsClockwise size={13} />
           Retry
@@ -56,7 +56,7 @@ export function WhatsAppPairingBody({
   // Shared spinner — used for both the explicit 'waiting' state and any
   // unexpected/unknown status that falls through the switch below.
   const generatingSpinner = (
-    <div className="flex items-center gap-2 text-[var(--color-muted)]">
+    <div className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
       <Spinner size={14} className="animate-spin" />
       <p className="text-[length:var(--type-utility-xs-size)]">Generating your QR code&hellip;</p>
     </div>
@@ -72,7 +72,7 @@ export function WhatsAppPairingBody({
     return (
       <>
         {/* QR must sit on a light background to scan reliably in dark mode. */}
-        <div data-testid="whatsapp-qr" className="rounded-md bg-white p-3">
+        <div data-testid="whatsapp-qr" className="rounded-md bg-white p-[var(--space-2-5)]">
           <QRCodeSVG value={pairing.qr} size={184} level="L" title="WhatsApp pairing QR code" />
         </div>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] text-center">
@@ -87,7 +87,7 @@ export function WhatsAppPairingBody({
   switch (pairing.status) {
     case 'linked':
       return (
-        <div className="flex items-center gap-2 text-[var(--color-success)]">
+        <div className="flex items-center gap-[var(--space-2)] text-[var(--color-success)]">
           <CheckCircle size={16} weight="fill" />
           <p className="text-[length:var(--type-utility-xs-size)] font-medium">Linked successfully.</p>
         </div>

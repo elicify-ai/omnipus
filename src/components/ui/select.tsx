@@ -17,7 +17,7 @@ const SelectTrigger = React.forwardRef<
     // so the explicit tabIndex stamp lives here; {...props} may override.
     tabIndex={0}
     className={cn(
-      'flex h-9 w-full items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] [@media(pointer:coarse)]:h-[44px] placeholder:text-[var(--color-muted)] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
+      'flex h-9 w-full items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] [@media(pointer:coarse)]:h-[44px] placeholder:text-[var(--color-muted)] disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1',
       className
     )}
     {...props}
@@ -36,7 +36,7 @@ const SelectScrollUpButton = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.ScrollUpButton
     ref={ref}
-    className={cn('flex cursor-default items-center justify-center py-1', className)}
+    className={cn('flex cursor-default items-center justify-center py-[var(--space-1)]', className)}
     {...props}
   >
     <CaretUp size={14} aria-hidden="true" />
@@ -50,7 +50,7 @@ const SelectScrollDownButton = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.ScrollDownButton
     ref={ref}
-    className={cn('flex cursor-default items-center justify-center py-1', className)}
+    className={cn('flex cursor-default items-center justify-center py-[var(--space-1)]', className)}
     {...props}
   >
     <CaretDown size={14} aria-hidden="true" />
@@ -77,7 +77,7 @@ const SelectContent = React.forwardRef<
       <SelectScrollUpButton />
       <SelectPrimitive.Viewport
         className={cn(
-          'p-1',
+          'p-[var(--space-1)]',
           position === 'popper' ? 'h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]' : undefined
         )}
       >
@@ -95,7 +95,7 @@ const SelectLabel = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Label
     ref={ref}
-    className={cn('py-1.5 pl-8 pr-2 text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)]', className)}
+    className={cn('py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)]', className)}
     {...props}
   />
 ))
@@ -108,7 +108,7 @@ const SelectItem = React.forwardRef<
   <SelectPrimitive.Item
     ref={ref}
     className={cn(
-      'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-[length:var(--type-body-compact-size)] outline-none focus:bg-[var(--color-surface-3)] focus:text-[var(--color-secondary)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      'relative flex w-full cursor-default select-none items-center rounded-sm py-[var(--space-1)] pl-[var(--space-5)] pr-[var(--space-2)] text-[length:var(--type-body-compact-size)] outline-none focus:bg-[var(--color-surface-3)] focus:text-[var(--color-secondary)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className
     )}
     {...props}
@@ -129,7 +129,7 @@ const SelectSeparator = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SelectPrimitive.Separator
     ref={ref}
-    className={cn('-mx-1 my-1 h-px bg-[var(--color-border)]', className)}
+    className={cn('-mx-[var(--space-1)] my-[var(--space-1)] h-px bg-[var(--color-border)]', className)}
     {...props}
   />
 ))

@@ -43,10 +43,10 @@ export function AdvancedDisclosure({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center justify-between w-full px-3 py-2.5 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+        className="flex items-center justify-between w-full px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
         data-testid="advanced-disclosure-trigger"
       >
-        <span className="flex flex-col items-start gap-0.5 text-left">
+        <span className="flex flex-col items-start gap-[var(--space-0-5)] text-left">
           <span>{title}</span>
           {summary && !open && (
             <span className="text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)]">{summary}</span>
@@ -57,7 +57,7 @@ export function AdvancedDisclosure({
 
       {open && (
         <div
-          className="px-3 pb-3 border-t border-[var(--color-border)] pt-3"
+          className="px-[var(--space-2-5)] pb-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]"
           data-testid="advanced-disclosure-content"
         >
           {children}

@@ -122,7 +122,7 @@ function FileOpBlock({
   // positionally — a wrapper div would have broken four existing tests for a
   // purely cosmetic reason.
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-[length:var(--type-utility-xs-size)] font-mono">
+    <div className="mt-[var(--space-2)] flex flex-wrap items-center gap-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-mono">
       {statusConfig.indicator}
       <span className="text-[var(--color-muted)] shrink-0">{label}</span>
       <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
@@ -135,7 +135,7 @@ function FileOpBlock({
         {statusConfig.label}
       </span>
       {showReason && (
-        <span className={cn('basis-full pl-5 break-words', textClass)}>{reason}</span>
+        <span className={cn('basis-full pl-[var(--space-3)] break-words', textClass)}>{reason}</span>
       )}
     </div>
   )

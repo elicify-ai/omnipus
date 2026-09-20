@@ -61,9 +61,9 @@ const AlertDialogContent = React.forwardRef<
         props.onInteractOutside?.(event)
       }}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-md translate-x-[-50%] translate-y-[-50%] gap-4',
+        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-md translate-x-[-50%] translate-y-[-50%] gap-[var(--space-3)]',
         'max-h-[90dvh] overflow-y-auto overscroll-contain',
-        'border border-[var(--color-border)] bg-[var(--color-surface-1)] p-6 shadow-2xl',
+        'border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-4)] shadow-2xl',
         'rounded-xl text-[var(--color-secondary)]',
         'data-[state=open]:animate-in data-[state=closed]:animate-out motion-reduce:animate-none',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
@@ -78,7 +78,7 @@ const AlertDialogContent = React.forwardRef<
 AlertDialogContent.displayName = 'AlertDialogContent'
 
 const AlertDialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col space-y-1.5 text-center sm:text-left', className)} {...props} />
+  <div className={cn('flex flex-col space-y-[var(--space-1)] text-center sm:text-left', className)} {...props} />
 )
 AlertDialogHeader.displayName = 'AlertDialogHeader'
 
@@ -100,7 +100,7 @@ AlertDialogHeader.displayName = 'AlertDialogHeader'
 const AlertDialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
     className={cn(
-      'flex flex-col gap-2 max-sm:pointer-coarse:gap-6 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0',
+      'flex flex-col gap-[var(--space-2)] max-sm:pointer-coarse:gap-[var(--space-4)] sm:flex-row sm:justify-end sm:space-x-[var(--space-2)] sm:gap-0',
       className,
     )}
     {...props}

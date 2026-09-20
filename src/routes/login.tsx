@@ -115,7 +115,7 @@ function LoginScreen() {
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden"
+      className="min-h-screen flex flex-col items-center justify-center p-[var(--space-4)] relative overflow-hidden"
       style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)' }}
     >
       {/* Atmospheric depth */}
@@ -131,7 +131,7 @@ function LoginScreen() {
         initial={{ scale: 0.75, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ duration: 0.5, ease: [0.34, 1.56, 0.64, 1] }}
-        className="relative mb-8"
+        className="relative mb-[var(--space-5)]"
       >
         <div
           aria-hidden
@@ -151,11 +151,11 @@ function LoginScreen() {
         transition={{ delay: 0.18, duration: 0.38 }}
         className="w-full max-w-sm z-10"
       >
-        <h1 className="font-headline text-3xl font-bold text-center mb-2"
+        <h1 className="font-headline text-3xl font-bold text-center mb-[var(--space-2)]"
           style={{ color: 'var(--color-secondary)' }}>
           Sign in to <Wordmark />
         </h1>
-        <p className="text-[length:var(--type-body-compact-size)] text-center mb-8" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)] text-center mb-[var(--space-5)]" style={{ color: 'var(--color-muted)' }}>
           Enter your username and password
         </p>
 
@@ -164,21 +164,21 @@ function LoginScreen() {
             data-testid="logout-notice"
             role="status"
             aria-live="polite"
-            className="mb-6 flex items-start gap-2 rounded-lg px-3 py-2.5 text-[length:var(--type-utility-xs-size)]"
+            className="mb-[var(--space-4)] flex items-start gap-[var(--space-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
             style={{
               backgroundColor: 'rgba(212,175,55,0.08)',
               border: '1px solid rgba(212,175,55,0.25)',
               color: 'var(--color-secondary)',
             }}
           >
-            <Info size={14} weight="bold" className="mt-0.5 shrink-0" style={{ color: 'var(--color-accent)' }} />
+            <Info size={14} weight="bold" className="mt-[var(--space-0-5)] shrink-0" style={{ color: 'var(--color-accent)' }} />
             <span>{logoutNotice}</span>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-[var(--space-3)]">
           <div>
-            <label htmlFor="login-username" className="text-[length:var(--type-utility-xs-size)] font-medium mb-1.5 block"
+            <label htmlFor="login-username" className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-1)] block"
               style={{ color: 'var(--color-muted)' }}>
               Username
             </label>
@@ -191,14 +191,14 @@ function LoginScreen() {
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="admin"
                 autoComplete="username"
-                className="pl-9"
+                className="pl-[var(--space-5)]"
                 autoFocus
               />
             </div>
           </div>
 
           <div>
-            <label htmlFor="login-password" className="text-[length:var(--type-utility-xs-size)] font-medium mb-1.5 block"
+            <label htmlFor="login-password" className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-1)] block"
               style={{ color: 'var(--color-muted)' }}>
               Password
             </label>
@@ -211,7 +211,7 @@ function LoginScreen() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Password"
                 autoComplete="current-password"
-                className="pl-9 pr-9"
+                className="pl-[var(--space-5)] pr-[var(--space-5)]"
               />
               <button tabIndex={0}
                 type="button"
@@ -240,7 +240,7 @@ function LoginScreen() {
 
           <Button
             type="submit"
-            className="w-full h-11 gap-2 font-headline font-bold"
+            className="w-full h-11 gap-[var(--space-2)] font-headline font-bold"
             disabled={!username.trim() || !password || status === 'loading'}
           >
             {status === 'loading' ? (

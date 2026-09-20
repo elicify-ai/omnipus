@@ -36,7 +36,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
 
   if (isLoading) {
     return (
-      <div className="mt-2 space-y-1.5 pl-2 border-l-2 border-[var(--color-border)]">
+      <div className="mt-[var(--space-2)] space-y-[var(--space-1)] pl-[var(--space-2)] border-l-2 border-[var(--color-border)]">
         {[1, 2].map((i) => (
           <div key={i} className="h-5 rounded bg-[var(--color-surface-2)] animate-pulse" />
         ))}
@@ -50,14 +50,14 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
   // with a way to retry, scaled to fit the compact nested-list context.
   if (isError) {
     return (
-      <div className="mt-2 pl-2 border-l-2 border-[var(--color-error)]/40">
+      <div className="mt-[var(--space-2)] pl-[var(--space-2)] border-l-2 border-[var(--color-error)]/40">
         <button tabIndex={0}
           type="button"
           onClick={(e) => {
             e.stopPropagation()
             refetch()
           }}
-          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] transition-colors"
+          className="flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] transition-colors"
         >
           <ArrowsClockwise size={11} />
           Couldn&apos;t load subtasks — Retry
@@ -69,7 +69,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
   if (children.length === 0) return null
 
   const resolvedClassName = cn(
-              'w-full flex items-center gap-1.5 rounded px-1.5 py-1 text-left',
+              'w-full flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-left',
               'text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
               'hover:bg-[var(--color-surface-2)] transition-colors',
             )
@@ -81,7 +81,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
     // row as pressable at all. Wrapping each row's button in its own <li>
     // keeps exactly one tab stop per row (the button) while the <li> itself
     // carries the listitem semantics.
-    <ul className="mt-2 list-none space-y-1 pl-2 border-l-2 border-[var(--color-border)]" aria-label="Subtasks">
+    <ul className="mt-[var(--space-2)] list-none space-y-[var(--space-1)] pl-[var(--space-2)] border-l-2 border-[var(--color-border)]" aria-label="Subtasks">
       {children.map((child) => (
         <li key={child.id}>
           <button tabIndex={0}

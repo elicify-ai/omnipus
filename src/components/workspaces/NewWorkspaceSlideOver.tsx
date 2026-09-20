@@ -98,15 +98,15 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>
             New workspace
           </SheetTitle>
         </SheetHeader>
 
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-5 px-6 py-4">
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)]">
           {/* Name */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <Label htmlFor="new-workspace-name" className="text-[var(--color-secondary)]">
               Name <span className="text-[var(--color-error)]">*</span>
             </Label>
@@ -128,7 +128,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
           </div>
 
           {/* Description */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <Label htmlFor="new-workspace-desc" className="text-[var(--color-secondary)]">
               Description
             </Label>
@@ -150,19 +150,19 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
           </div>
 
           {/* Core team — agent multi-select (US-10 AC #5) */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <Label htmlFor="new-workspace-core-team" className="text-[var(--color-secondary)]">
               Core team
             </Label>
             {/* Selected agent chips */}
             {form.core_team.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-[var(--space-1)]">
                 {form.core_team.map((agentId) => {
                   const agent = agents.find((a) => a.id === agentId)
                   return (
                     <span
                       key={agentId}
-                      className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
+                      className="flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
                     >
                       {agent?.name ?? agentId}
                       <button tabIndex={0}
@@ -241,7 +241,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
 
           <div className="flex-1" />
 
-          <SheetFooter className="flex-row gap-2 px-0 py-2">
+          <SheetFooter className="flex-row gap-[var(--space-2)] px-0 py-[var(--space-2)]">
             <Button
               type="button"
               variant="ghost"

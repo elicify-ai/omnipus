@@ -128,12 +128,12 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
     return (
       <div
         className={cn(
-          'flex flex-col gap-2 pl-2 pr-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]',
+          'flex flex-col gap-[var(--space-2)] pl-[var(--space-2)] pr-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]',
           className,
         )}
         title={name}
       >
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-[var(--space-2)]">
           <div className="shrink-0 w-9 h-9 rounded-md flex items-center justify-center bg-[var(--color-error)]/10 text-[var(--color-error)]">
             <ImageBroken size={20} weight="fill" />
           </div>
@@ -145,7 +145,7 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
         <MediaActionToolbar
           variant="bar"
           actions={errorActions}
-          className="pt-1.5 border-t border-[var(--color-border)] flex-wrap"
+          className="pt-[var(--space-1)] border-t border-[var(--color-border)] flex-wrap"
         />
       </div>
     )

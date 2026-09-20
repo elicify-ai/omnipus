@@ -134,17 +134,17 @@ export function renderSkillAwareContent(
   if (matchedSkill && skillMatch) {
     // R2: compact skill indicator — show message text + chip, or chip alone
     return (
-      <div className="rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-1">
+      <div className="rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-[var(--space-1)]">
         {skillMatch[2] ? (
           <>
             <p className="whitespace-pre-wrap break-words">{skillMatch[2]}</p>
-            <span className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               <Lightning size={10} weight="fill" className="text-[var(--color-accent)]" />
               skill: {matchedSkill.name}
             </span>
           </>
         ) : (
-          <span className="flex items-center gap-1 text-[length:var(--type-utility-xs-size)]">
+          <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]">
             <Lightning size={12} weight="fill" className="text-[var(--color-accent)]" />
             {matchedSkill.name}
           </span>
@@ -214,15 +214,15 @@ export function UserMessage() {
       data-testid="user-message"
       data-message-id={message.id}
       data-goal-command={setsGoal ? 'true' : undefined}
-      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)] flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
-      <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
+      <div className="flex flex-col items-end gap-[var(--space-1)] max-w-[85%] min-w-0">
         {setsGoal && <GoalCommandMarker />}
         {renderSkillAwareContent(content, skills, commandLabels, () => (
-          <div className="rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
+          <div className="rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
             <MessagePrimitive.Parts>
               {({ part }) => {
                 if (part.type !== 'text') return null
@@ -259,17 +259,17 @@ function SystemMessage() {
   // always shown, never gated by Verbose chat. See src/lib/goalOutcome.ts.
   if (storeMsg?.goalOutcome) {
     return (
-      <MessagePrimitive.Root className="flex justify-center px-4 py-2">
+      <MessagePrimitive.Root className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
         <GoalOutcomeRow outcome={storeMsg.goalOutcome} />
       </MessagePrimitive.Root>
     )
   }
   return (
     <MessagePrimitive.Root
-      className="flex justify-center py-2"
+      className="flex justify-center py-[var(--space-2)]"
       data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
     >
-      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type !== 'text') return null
@@ -508,8 +508,8 @@ function ThinkingIndicator({ label }: { label?: string | null } = {}) {
   const displayText = label ?? rotatingPhrase
 
   return (
-    <span className="text-[var(--color-muted)] italic flex items-center gap-2.5 py-1">
-      <span className="flex gap-1">
+    <span className="text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)] py-[var(--space-1)]">
+      <span className="flex gap-[var(--space-1)]">
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '0ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
@@ -698,7 +698,7 @@ function AssistantMessageRetryButton() {
       type="button"
       onClick={handleRetry}
       aria-label="Retry — resend the last user message"
-      className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
       title="Retry — resend the last user message"
     >
       <ArrowCounterClockwise size={11} />
@@ -719,7 +719,7 @@ function InlineMedia() {
   if (!storeMsg?.media?.length) return null
 
   return (
-    <div className="flex flex-col gap-2 mt-2">
+    <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-2)]">
       {storeMsg.media.map((m, i) =>
         m.type === 'image' ? (
           <div key={`${m.url}-${i}`} className="max-w-2xl">
@@ -729,7 +729,7 @@ function InlineMedia() {
               filename={m.filename}
             />
             {m.caption && (
-              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
             )}
           </div>
         ) : (
@@ -737,7 +737,7 @@ function InlineMedia() {
             key={`${m.url}-${i}`}
             href={m.url}
             download={m.filename}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+            className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
           >
             <File size={14} />
             {m.filename}
@@ -1002,7 +1002,7 @@ function InterruptedMessageMarkers() {
           key={m.id}
           data-testid="interrupted-marker"
           data-message-id={m.id}
-          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-1"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
         >
           (interrupted)
         </div>
@@ -1012,7 +1012,7 @@ function InterruptedMessageMarkers() {
           key={m.id}
           data-testid="truncated-marker"
           data-message-id={m.id}
-          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-1"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
         >
           (cut off at the output limit)
         </div>
@@ -1037,14 +1037,14 @@ function UserMessageRetryButton({ message }: { message: ChatMessage }) {
   }
 
   return (
-    <div className="flex items-center justify-end gap-2 mt-1">
+    <div className="flex items-center justify-end gap-[var(--space-2)] mt-[var(--space-1)]">
       <span className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">Send failed</span>
       <button tabIndex={0}
         type="button"
         data-testid="user-message-retry"
         onClick={handleRetry}
         aria-label="Retry — resend this message"
-        className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+        className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
         title="Retry — resend this message"
       >
         <ArrowCounterClockwise size={11} />
@@ -1100,17 +1100,17 @@ export function VirtualUserMessageRow({
       data-message-id={message.id}
       data-status={message.status}
       data-goal-command={setsGoal ? 'true' : undefined}
-      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)] flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
-      <div className="flex flex-col items-end gap-1.5 max-w-[85%] min-w-0">
+      <div className="flex flex-col items-end gap-[var(--space-1)] max-w-[85%] min-w-0">
         {setsGoal && <GoalCommandMarker />}
         {/* Attachments the user sent — image thumbnails + colour-coded file
             cards, shown above the text like ChatGPT. */}
         {message.media && message.media.length > 0 && (
-          <div className="flex flex-wrap gap-2 justify-end">
+          <div className="flex flex-wrap gap-[var(--space-2)] justify-end">
             {message.media.map((m, i) =>
               m.type === 'image' ? (
                 // Sent images (screenshots) get the full ChatImage treatment — hover
@@ -1129,7 +1129,7 @@ export function VirtualUserMessageRow({
             commandLabels,
             () => (
               <div className={cn(
-                "rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed rounded-tr-sm",
+                "rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed rounded-tr-sm",
                 isError
                   ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
                   : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
@@ -1157,7 +1157,7 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
   // Goal outcome line — see SystemMessage's identical branch (live path).
   if (message.goalOutcome) {
     return (
-      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-4 py-2">
+      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
         <GoalOutcomeRow outcome={message.goalOutcome} />
       </div>
     )
@@ -1167,9 +1167,9 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
       data-message-role="system"
       data-message-id={message.id}
       data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
-      className="flex justify-center py-2"
+      className="flex justify-center py-[var(--space-2)]"
     >
-      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
         <span>{message.content}</span>
       </div>
     </div>
@@ -1190,7 +1190,7 @@ function StaticCopyButton({ text }: { text: string }) {
       type="button"
       aria-label="Copy message"
       onClick={handleCopy}
-      className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
       title="Copy message"
     >
       {copied ? (
@@ -1352,7 +1352,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
       data-message-role="assistant"
       data-message-id={message.id}
       data-status="complete"
-      className="group flex gap-3 px-4 py-3"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <div
         className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
@@ -1365,7 +1365,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           <Robot size={14} weight="bold" />
         )}
       </div>
-      <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
+      <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
           <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {agentDisplayName}
@@ -1375,7 +1375,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
-            <div className="flex flex-col gap-2 mb-2">
+            <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
               {mediaItems.map((m, i) =>
                 m.type === 'image' ? (
                   <div key={`${m.url}-${i}`} className="max-w-2xl">
@@ -1385,7 +1385,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                       filename={m.filename}
                     />
                     {m.caption && (
-                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
                     )}
                   </div>
                 ) : (
@@ -1393,7 +1393,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                     key={`${m.url}-${i}`}
                     href={m.url}
                     download={m.filename}
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                    className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
                   >
                     <File size={14} />
                     {m.filename}
@@ -1571,7 +1571,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             terminal-empty variant (isTerminalEmpty): the turn finished with
             nothing to show, so there is still nothing to copy. */}
         {!showEmptyPlaceholder && !isTerminalEmpty && (
-          <div className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
+          <div className="flex items-center gap-[var(--space-1)] opacity-70 hover:opacity-100 transition-opacity duration-150">
             <StaticCopyButton text={message.content ?? ''} />
           </div>
         )}
@@ -1580,7 +1580,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             "(cut off at the output limit)"; getMessageStatusSuffix decides
             which (or neither), never both. */}
         {statusSuffix && (
-          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
 
         {/* ADR-051 — verbose-only "Technical details" disclosure for typed
@@ -1597,19 +1597,19 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           && verboseChatEnabled
           && message.errorDetail
           && message.errorDetail.length > 0 && (
-          <details className="px-1 mt-1" data-testid="error-detail-disclosure">
+          <details className="px-[var(--space-1)] mt-[var(--space-1)]" data-testid="error-detail-disclosure">
             <summary
               tabIndex={0}
               className={cn(
                 'text-[length:var(--type-caption-size)] text-[var(--color-muted)] cursor-pointer select-none',
-                'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
+                'inline-flex items-center gap-[var(--space-1)] hover:text-[var(--color-secondary)] transition-colors',
               )}
             >
               Technical details
             </summary>
             <pre
               className={cn(
-                'mt-1 px-2 py-1.5 rounded-md',
+                'mt-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded-md',
                 'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
                 'font-mono text-[length:var(--type-caption-size)] leading-relaxed whitespace-pre-wrap break-all',
                 'max-h-40 overflow-y-auto',
@@ -1638,7 +1638,7 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
   return (
     <div
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
+      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
     >
       <div className="max-w-4xl mx-auto w-full">
         {messages.map((msg) => {
@@ -1811,7 +1811,7 @@ function VirtualizedMessageListInner({
       ref={scrollContainerRef}
       autoScroll
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
+      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
       style={{ position: 'relative' }}
     >
       <VirtualizerAutoFollow scrollRef={scrollContainerRef} contentRef={contentRef} />
@@ -1954,10 +1954,10 @@ function AssistantMessage() {
       data-testid="assistant-message"
       data-message-id={message.id}
       data-status={message.status?.type ?? 'complete'}
-      className="group flex gap-3 px-4 py-3"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <AssistantMessageAvatar agent={agent} />
-      <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
+      <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
           <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{agentDisplayName}</span>
         )}
@@ -2009,12 +2009,12 @@ function AssistantMessage() {
             the terminal-empty variant (isTerminalEmpty): the turn is over
             and there is still nothing to copy or retry. */}
         {!showEmptyPlaceholder && !isTerminalEmpty && (
-          <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
+          <ActionBarPrimitive.Root className="flex items-center gap-[var(--space-1)] opacity-70 hover:opacity-100 transition-opacity duration-150">
             <ActionBarPrimitive.Copy asChild>
               <button tabIndex={0}
                 type="button"
                 aria-label="Copy message"
-                className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
                 title="Copy message"
               >
                 <AuiIf condition={(s) => s.message.isCopied}>
@@ -2034,7 +2034,7 @@ function AssistantMessage() {
             cancelled ("(interrupted)") or cut off at the provider's
             output-token limit ("(cut off at the output limit)"). */}
         {statusSuffix && (
-          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
       </div>
     </MessagePrimitive.Root>
@@ -2565,7 +2565,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {reconnectPhase === 'gave_up' && (
         <div
           data-testid="reconnect-banner"
-          className="mb-2 rounded-lg px-3 py-2 bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 flex items-center gap-2"
+          className="mb-[var(--space-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 flex items-center gap-[var(--space-2)]"
         >
           <WifiSlash size={14} className="text-[var(--color-error)] shrink-0" />
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
@@ -2574,7 +2574,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <button tabIndex={0}
             type="button"
             onClick={reconnect}
-            className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
+            className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
             aria-label="Reconnect now"
           >
             <ArrowClockwise size={12} weight="bold" />
@@ -2585,7 +2585,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {showTransientDisconnect && (reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
         <div
           data-testid="reconnect-banner"
-          className="mb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-1.5"
+          className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]"
         >
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] inline-block animate-pulse" />
           {reconnectPhase === 'slow'
@@ -2594,7 +2594,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
       {showTransientDisconnect && !isConnected && reconnectPhase === null && (
-        <div data-testid="reconnect-banner" className="mb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex items-center gap-1">
+        <div data-testid="reconnect-banner" className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex items-center gap-[var(--space-1)]">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
           Disconnected — reconnecting...
         </div>
@@ -2615,7 +2615,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {(outboundQueue.length > 0 || pendingDrainQueue.length > 0) && (
         <div
           data-testid="outbound-queue-indicator"
-          className="mb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-1.5"
+          className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]"
         >
           <Clock size={12} className="shrink-0" />
           {(() => {
@@ -2675,7 +2675,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           // max-h + scroll: the menu opens UPWARD from the composer, so a tall
           // list (many commands + skills) pushed its top rows above the
           // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
-          className="mb-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
+          className="mb-[var(--space-2)] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
         >
           {/* LOW S8: fetchCommands('web') errored — surface the gap instead
               of letting every backend command silently vanish from the
@@ -2699,7 +2699,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             <div
               data-testid="slash-commands-error"
               role="presentation"
-              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] italic"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] italic"
             >
               Commands unavailable
             </div>
@@ -2723,7 +2723,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   <div
                     role="presentation"
                     className={cn(
-                      'px-3 py-1 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
+                      'px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
                       globalIndex === 0
                         ? 'border-b border-[var(--color-border)]'
                         : 'border-t border-[var(--color-border)]',
@@ -2763,7 +2763,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   // rather than serializing as `data-highlighted="false"`).
                   data-highlighted={globalIndex === clampedSlashHighlight || undefined}
                   className={cn(
-                    'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
+                    'w-full flex items-baseline gap-[var(--space-2-5)] px-[var(--space-2-5)] py-[var(--space-2)] text-left transition-colors',
                     globalIndex === clampedSlashHighlight
                       ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
                       : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
@@ -2830,7 +2830,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   <div
                     data-testid="slash-menu-footer"
                     role="presentation"
-                    className="px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
+                    className="px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
                   >
                     {/* Cap-footer copy fix (gate 2 LOW): `footerCopy` (declared
                         above, alongside `menuIsRendered`) already accounts for
@@ -2863,7 +2863,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           vertical breathing room the focus ring on the controls was cut off
           at the top. Compact h-7 controls + py-0.5 keeps the ring visible. */}
       <div
-        className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 py-1"
+        className="flex items-center gap-[var(--space-1)] min-w-0 overflow-x-auto px-[var(--space-1)] py-[var(--space-1)]"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
         {/* Agent → model. Attach lives INSIDE the input card (leading the
@@ -2892,7 +2892,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         {/* Input row — single ComposerPrimitive.Root, items-end: textarea and
             send/stop share one flex container + one bottom baseline. */}
         <ComposerPrimitive.Root
-          className="flex items-end gap-2 p-2"
+          className="flex items-end gap-[var(--space-2)] p-[var(--space-2)]"
           onSubmit={(e) => {
             // Mid-turn steering: this native form-submit path is NEVER
             // actually reached while streaming (verified — see
@@ -2939,7 +2939,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <ComposerPrimitive.AddAttachment
             disabled={attachDisabled}
             tabIndex={5}
-            className="shrink-0 h-7 w-7 mb-1.5 rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             aria-label="Add files or context"
             title="Add files or context"
           >
@@ -2990,7 +2990,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 // ~6px descender line-box gap below the element inside its block
                 // wrapper — the wrapper (not the textarea) is what items-end
                 // aligns, so the gap read as send sitting below the input.
-                'block w-full resize-none bg-transparent px-3 py-2 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none',
+                'block w-full resize-none bg-transparent px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none',
                 'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
                 'focus:outline-none focus:ring-0',
                 (!inputEnabled || isStreaming) ? 'opacity-60 cursor-not-allowed' : undefined,
@@ -3048,7 +3048,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             {slashMenu.showGhostText && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 px-3 py-2.5 text-[length:var(--type-body-compact-size)] leading-6 flex items-start"
+                className="pointer-events-none absolute inset-0 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] leading-6 flex items-start"
                 data-testid="ghost-text"
               >
                 <span className="invisible whitespace-pre">{slashMenu.inputValue}</span>
@@ -3085,9 +3085,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 className={cn(
                   // h-9 + mb-0.5: same footprint as the send button it replaces
                   // mid-stream (keeps the row from jumping on morph).
-                  'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
+                  'shrink-0 rounded-lg mb-[var(--space-0-5)] flex items-center justify-center transition-colors',
                   cancelState.stopLabel === 'stopping'
-                    ? 'px-3 h-9 gap-1.5 text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                    ? 'px-[var(--space-2-5)] h-9 gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                     : 'w-9 h-9',
                   isStreaming
                     ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
@@ -3119,7 +3119,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   disabled={!inputEnabled}
                   onClick={submitMidStreamMessage}
                   className={cn(
-                    'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
+                    'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
                     inputEnabled
                       ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)]'
                       : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
@@ -3179,7 +3179,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 }
               }}
               className={cn(
-                'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
+                'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying
                   ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
                     // Muted accent while reconnecting — functional but visually signals
@@ -3219,7 +3219,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <div
             id="mid-stream-send-hint"
             data-testid="mid-stream-send-hint"
-            className="px-3 pb-1.5 -mt-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+            className="px-[var(--space-2-5)] pb-[var(--space-1)] -mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           >
             Send into the running response
           </div>
@@ -3231,7 +3231,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             them on send and threads the media:// ref into our transport via onNew.
             LibraryAttachmentChips renders staged workspace-library reuse refs
             (ADR-051 Rev 4 / Slice H) alongside them. */}
-        <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
+        <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-2)] empty:hidden [&:has(*)]:pb-[var(--space-2)]">
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
           <LibraryAttachmentChips />
         </div>
@@ -3243,7 +3243,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           direction), Claude-Code style. Opens the ActivityPanel slide-out on
           click. ActivityBar renders null when idle, so `empty:hidden`
           collapses this wrapper — no stray padding when nothing runs. */}
-      <div className="px-1 pt-1.5 empty:hidden">
+      <div className="px-[var(--space-1)] pt-[var(--space-1)] empty:hidden">
         <ActivityBar />
       </div>
 
@@ -3308,15 +3308,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
 function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-8 p-8">
-      <div className="flex flex-col items-center gap-6 text-center max-w-md">
+    <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-[var(--space-5)] p-[var(--space-5)]">
+      <div className="flex flex-col items-center gap-[var(--space-4)] text-center max-w-md">
         <img
           src={OmnipusAvatar}
           alt="omnipus.ai mark"
           className="h-20 w-20 drop-shadow-lg"
         />
         <div>
-          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)] mb-2">
+          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)] mb-[var(--space-2)]">
             Welcome to <Wordmark className="text-2xl" />
           </h1>
           <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
@@ -3482,7 +3482,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       {agentRemoved && (
         <div
           data-testid="agent-removed-banner"
-          className="px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-2"
+          className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-[var(--space-2)]"
         >
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
             Agent removed — this session is read-only
@@ -3492,7 +3492,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
 
       {/* Task session banner — shown when viewing a task execution transcript */}
       {attachedSessionType === 'task' && (
-        <div className="px-4 py-2 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-2">
+        <div className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]">
           <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
             Task: {attachedTaskTitle ?? 'Task Execution'}
@@ -3502,7 +3502,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
 
       {/* History fetch error */}
       {historyError ? (
-        <div className="flex flex-col items-center justify-center flex-1 gap-3 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+        <div className="flex flex-col items-center justify-center flex-1 gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           <p>Could not load messages.</p>
           <Button variant="outline" size="sm" onClick={() => refetchHistory()}>
             <ArrowCounterClockwise size={14} /> Retry
@@ -3520,7 +3520,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
 
           {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
           {messages.length === 0 ? (
-            <div className="flex-1 overflow-y-auto pt-4 pb-2">
+            <div className="flex-1 overflow-y-auto pt-[var(--space-3)] pb-[var(--space-2)]">
               <WelcomeState hasAgent={!!activeAgentId} />
             </div>
           ) : (
@@ -3538,7 +3538,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               (including `bash`) are handled by the global ToolApprovalModal
               (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
           {rateLimitEvent && (
-            <div className="px-4 space-y-2 pb-2">
+            <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
               <RateLimitIndicator
                 scope={rateLimitEvent.scope}
                 resource={rateLimitEvent.resource}
@@ -3556,7 +3556,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               goalStatus=null so GoalIndicator's goal branch is dormant.
               GoalIndicator renders nothing when loopStatus is also absent. */}
           {loopStatus && (
-            <div className="px-4 space-y-2 pb-2">
+            <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
               <GoalIndicator goalStatus={null} loopStatus={loopStatus} />
             </div>
           )}
@@ -3596,7 +3596,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <GoalPillTray />
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
-            <div className="w-full max-w-3xl mx-auto px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+            <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(0.5rem,env(safe-area-inset-bottom))]">
               <OmnipusComposer agentRemoved={agentRemoved} />
             </div>
           </div>

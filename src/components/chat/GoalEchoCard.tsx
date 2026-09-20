@@ -114,14 +114,14 @@ function GoalAccordionSection({
 }) {
   const [open, setOpen] = useState(false)
   return (
-    <div className="mt-2.5" data-testid={testId}>
+    <div className="mt-[var(--space-2)]" data-testid={testId}>
       <button
         type="button"
         tabIndex={0}
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         data-testid={`${testId}-trigger`}
-        className="flex w-full items-center gap-1.5 text-left text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
+        className="flex w-full items-center gap-[var(--space-1)] text-left text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
       >
         {open ? (
           <CaretDown size={10} className="shrink-0" aria-hidden="true" />
@@ -139,7 +139,7 @@ function GoalAccordionSection({
         )}
       </button>
       {open && (
-        <div className="mt-1.5" data-testid={`${testId}-content`}>
+        <div className="mt-[var(--space-1)]" data-testid={`${testId}-content`}>
           {children}
         </div>
       )}
@@ -207,12 +207,12 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
   return (
     <div
       data-testid="goal-echo-card"
-      className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-[length:var(--type-utility-xs-size)]"
+      className="my-[var(--space-2)] border-y border-[var(--color-border)] py-[var(--space-2)] px-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
     >
       {/* Header — record banner, flat zone style matching AskUserQuestionCard.
           No "reply to confirm" language (ADR-088 D9 deletes the confirm
           ritual): this is the agent's working assumptions, not a proposal. */}
-      <div className="flex items-center gap-2 mb-2">
+      <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-2)]">
         <Target size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
         <span className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
           Goal — working assumptions
@@ -263,7 +263,7 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
       {showSecondaryCondition && (
         <>
           <p
-            className="mt-1.5 font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]"
+            className="mt-[var(--space-1)] font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]"
             data-testid="goal-echo-condition-caption"
           >
             Set as
@@ -276,7 +276,7 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
 
       {/* Round accounting — only when the numbers are real (see showProgress). */}
       {showProgress && (
-        <p className="text-[var(--color-muted)] mt-1.5 tabular-nums" data-testid="goal-echo-round">
+        <p className="text-[var(--color-muted)] mt-[var(--space-1)] tabular-nums" data-testid="goal-echo-round">
           {frame.max_rounds} rounds · {frame.cap} concurrent loop{frame.cap === 1 ? '' : 's'}
         </p>
       )}

@@ -14,12 +14,12 @@ export function FiguresPart({ part }: { part: ViewResultPart }) {
   const excluded = part.excluded_count ?? 0
   return (
     <div className="flex flex-col" data-testid="viewpart-figures">
-      <div className="flex flex-wrap gap-x-6 gap-y-3 px-3 py-3">
+      <div className="flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-2-5)] px-[var(--space-2-5)] py-[var(--space-2-5)]">
         {totals.length === 0 && (
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No figures were computed for this view.</p>
         )}
         {totals.map((t, i) => (
-          <div key={`${t.property}|${t.op}|${t.unit ?? ' '}|${i}`} className="flex flex-col gap-0.5" data-testid="viewpart-figure">
+          <div key={`${t.property}|${t.op}|${t.unit ?? ' '}|${i}`} className="flex flex-col gap-[var(--space-0-5)]" data-testid="viewpart-figure">
             <span className="text-[length:var(--type-caption-size)] uppercase tracking-[0.07em] text-[var(--color-muted)]">
               {aggregateLabel(t.op)} {t.property}
               {t.unit !== undefined && ` · ${t.unit}`}
@@ -27,7 +27,7 @@ export function FiguresPart({ part }: { part: ViewResultPart }) {
             <span className="font-mono text-[1.15rem] tabular-nums text-[var(--color-secondary)]">
               {formatNumberText(t.value)}
               {t.unit !== undefined && (
-                <span className="ml-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{t.unit}</span>
+                <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{t.unit}</span>
               )}
             </span>
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
@@ -38,7 +38,7 @@ export function FiguresPart({ part }: { part: ViewResultPart }) {
       </div>
       {needsNoGrandTotalReason(totals, excluded) && (
         <p
-          className="flex items-start gap-1.5 px-3 pb-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
+          className="flex items-start gap-[var(--space-1)] px-[var(--space-2-5)] pb-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
           data-testid="viewpart-no-grand-total"
         >
           <span className="shrink-0 font-medium text-[var(--color-warning)]">No combined figure.</span>

@@ -108,7 +108,7 @@ export function KnowledgeViewsList({
   const views = viewsQuery.data?.views ?? []
   if (viewsQuery.isError) {
     return (
-      <div data-testid="knowledge-views-error" className="flex flex-col gap-2">
+      <div data-testid="knowledge-views-error" className="flex flex-col gap-[var(--space-2)]">
         <LibraryErrorBanner
           message={
             viewsQuery.error instanceof Error
@@ -122,7 +122,7 @@ export function KnowledgeViewsList({
           tabIndex={0}
           onClick={() => void viewsQuery.refetch()}
           data-testid="knowledge-views-retry"
-          className="self-start rounded border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          className="self-start rounded border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
         >
           Try again
         </button>
@@ -141,12 +141,12 @@ export function KnowledgeViewsList({
     // keeps every view reachable by scrolling the list, never the page.
     <div
       data-testid="knowledge-views-list"
-      className="flex max-h-[min(384px,45vh)] flex-col gap-1 overflow-y-auto"
+      className="flex max-h-[min(384px,45vh)] flex-col gap-[var(--space-1)] overflow-y-auto"
     >
-      <p className="px-2 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+      <p className="px-[var(--space-2)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
         Saved views
       </p>
-      <ul className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-[var(--space-1)]">
         {views.map((v) => {
           const unservable = v.unservable === true
           return (
@@ -160,17 +160,17 @@ export function KnowledgeViewsList({
                 data-view={v.name}
                 onClick={() => setOpenView({ name: v.name, label: v.label })}
                 className={cn(
-                  'flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors',
+                  'flex w-full flex-col items-start gap-[var(--space-0-5)] rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
                   unservable
                     ? 'cursor-default opacity-60'
                     : 'hover:bg-[var(--color-surface-2)]',
                 )}
               >
-                <span className="flex w-full items-center gap-1.5 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+                <span className="flex w-full items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
                   <SquaresFour size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
                   <span className="flex-1 truncate">{v.label}</span>
                   {v.kind !== undefined && (
-                    <Badge variant="outline" className="px-1.5 py-0 text-[length:var(--type-caption-size)] leading-4">
+                    <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
                       {v.kind}
                     </Badge>
                   )}
@@ -197,9 +197,9 @@ export function KnowledgeViewsList({
       {(viewsQuery.data?.unloadable_count ?? 0) > 0 && viewsQuery.data?.unloadable && (
         <p
           data-testid="knowledge-views-unloadable"
-          className="flex items-start gap-1.5 px-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
+          className="flex items-start gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
         >
-          <Warning size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
+          <Warning size={13} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0" />
           <span>
             {viewsQuery.data.unloadable_count === 1
               ? '1 view file could not be loaded and is not shown.'
@@ -280,7 +280,7 @@ function KnowledgeViewDialog({
           <DialogDescription>Saved view</DialogDescription>
         </DialogHeader>
         {viewResultQuery.isPending && (
-          <div role="status" className="flex items-center gap-2 py-6 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+          <div role="status" className="flex items-center gap-[var(--space-2)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             <CircleNotch size={16} aria-hidden="true" className="animate-spin" />
             Loading view…
           </div>

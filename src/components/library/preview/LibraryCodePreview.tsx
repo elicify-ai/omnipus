@@ -148,7 +148,7 @@ function CodeValidityNotice({
     <div
       role="status"
       data-testid="library-code-invalid-notice"
-      className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+      className="mb-[var(--space-2)] flex flex-wrap items-center gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <span className="min-w-0 flex-1">
         This file is not valid {name} — {problem}. It was saved exactly as written; nothing that
@@ -159,7 +159,7 @@ function CodeValidityNotice({
         tabIndex={0}
         onClick={onFix}
         data-testid="library-code-invalid-fix"
-        className="rounded border border-[var(--color-warning)]/60 px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
+        className="rounded border border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
       >
         Fix
       </button>
@@ -202,13 +202,13 @@ export function LibraryCodePreview({ workspaceId, entry, content, onSaved }: Lib
                 <p
                   role="status"
                   data-testid="library-code-plain-notice"
-                  className="mb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+                  className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
                 >
                   Shown as plain text without highlighting: {plainReason}.
                 </p>
                 <pre
                   data-testid="library-code-plain"
-                  className="whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-2)] px-4 py-3 font-mono text-[length:var(--type-caption-size)] leading-[1.65] text-[var(--color-secondary)]"
+                  className="whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] font-mono text-[length:var(--type-caption-size)] leading-[1.65] text-[var(--color-secondary)]"
                 >
                   {draft}
                 </pre>

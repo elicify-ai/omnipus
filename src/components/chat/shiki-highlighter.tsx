@@ -65,14 +65,14 @@ export function CopyCodeHeader({ language, code }: Omit<CodeHeaderProps, 'node'>
   }
 
   return (
-    <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] rounded-t-md">
+    <div className="flex items-center justify-between px-[var(--space-2-5)] py-[var(--space-1)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] rounded-t-md">
       <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono uppercase tracking-wide">
         {language || 'code'}
       </span>
       <button tabIndex={0}
         type="button"
         onClick={handleCopy}
-        className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+        className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
         aria-label="Copy code to clipboard"
       >
         {copied ? (

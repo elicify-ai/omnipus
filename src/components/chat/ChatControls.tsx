@@ -126,7 +126,7 @@ export function ChatControls({ className }: ChatControlsProps) {
       className={cn(
         // Single inline cluster — never wraps; overflow-x-auto scrolls rather
         // than clips on extreme sizes (≤320px).
-        'flex items-center gap-1.5 min-w-0 overflow-x-auto',
+        'flex items-center gap-[var(--space-1)] min-w-0 overflow-x-auto',
         className,
       )}
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
@@ -165,11 +165,11 @@ export function ChatControls({ className }: ChatControlsProps) {
         aria-busy={creatingBrowserSession}
         title="Open a live browser session"
         className={cn(
-          'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
+          'flex items-center justify-center shrink-0 px-[var(--space-2)] h-8 gap-[var(--space-1)] rounded-md',
           'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
           'transition-colors text-[length:var(--type-utility-xs-size)] whitespace-nowrap',
           'disabled:cursor-not-allowed disabled:opacity-50',
-          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
+          'pointer-coarse:min-h-[44px] pointer-coarse:px-[var(--space-2-5)]',
         )}
       >
         {creatingBrowserSession ? <SpinnerGap size={15} className="animate-spin" /> : <Monitor size={15} />}
@@ -188,10 +188,10 @@ export function ChatControls({ className }: ChatControlsProps) {
         aria-label="Open library"
         title="Browse this workspace's files"
         className={cn(
-          'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
+          'flex items-center justify-center shrink-0 px-[var(--space-2)] h-8 gap-[var(--space-1)] rounded-md',
           'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
           'transition-colors text-[length:var(--type-utility-xs-size)] whitespace-nowrap',
-          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
+          'pointer-coarse:min-h-[44px] pointer-coarse:px-[var(--space-2-5)]',
         )}
       >
         <Files size={15} />

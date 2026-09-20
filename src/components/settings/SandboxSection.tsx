@@ -176,7 +176,7 @@ function StatusDot({ variant }: { variant: DotVariant }) {
 
 function CapBadge({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-block rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-mono border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
+    <span className="inline-block rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-mono border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
       {children}
     </span>
   )
@@ -186,8 +186,8 @@ function CapBadge({ children }: { children: React.ReactNode }) {
 
 function SandboxSkeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3 animate-pulse">
-      <div className="flex items-center gap-2">
+    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
+      <div className="flex items-center gap-[var(--space-2)]">
         <div className="w-2 h-2 rounded-full bg-[var(--color-border)]" />
         <div className="h-4 w-32 rounded bg-[var(--color-border)]" />
       </div>
@@ -204,7 +204,7 @@ function CapabilitiesPanel({ data }: { data: SandboxStatus }) {
   const hasSyscalls = data.blocked_syscalls && data.blocked_syscalls.length > 0
 
   return (
-    <div className="border-t border-[var(--color-border)] pt-3 space-y-3 mt-3">
+    <div className="border-t border-[var(--color-border)] pt-[var(--space-2-5)] space-y-[var(--space-2-5)] mt-[var(--space-2-5)]">
       <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         Capabilities
       </p>
@@ -217,9 +217,9 @@ function CapabilitiesPanel({ data }: { data: SandboxStatus }) {
       )}
 
       {hasFeatures && (
-        <div className="space-y-1.5">
+        <div className="space-y-[var(--space-1)]">
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Landlock features</span>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-[var(--space-1)]">
             {data.landlock_features!.map((f) => (
               <CapBadge key={f}>{f}</CapBadge>
             ))}
@@ -238,12 +238,12 @@ function CapabilitiesPanel({ data }: { data: SandboxStatus }) {
       </div>
 
       {hasSyscalls && (
-        <div className="space-y-1.5">
+        <div className="space-y-[var(--space-1)]">
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Blocked syscalls ({data.blocked_syscalls!.length})
           </span>
           <div
-            className="flex flex-wrap gap-1 max-h-28 overflow-y-auto pr-1"
+            className="flex flex-wrap gap-[var(--space-1)] max-h-28 overflow-y-auto pr-[var(--space-1)]"
             style={{ scrollbarWidth: 'thin' }}
           >
             {data.blocked_syscalls!.map((sc) => (
@@ -270,9 +270,9 @@ function Abi4Banner({
   return (
     <div
       role="alert"
-      className="flex flex-col sm:flex-row sm:items-start gap-2 rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2.5"
+      className="flex flex-col sm:flex-row sm:items-start gap-[var(--space-2)] rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-[var(--space-2-5)] py-[var(--space-2)]"
     >
-      <Warning size={14} className="mt-0.5 shrink-0 text-yellow-400" weight="fill" />
+      <Warning size={14} className="mt-[var(--space-0-5)] shrink-0 text-yellow-400" weight="fill" />
       <p className="flex-1 text-[length:var(--type-utility-xs-size)] text-yellow-200 leading-relaxed">
         Your Linux kernel uses Landlock v{abiVersion}, which is not yet supported (issue {issueRef}).
         Enforce mode will exit with code 78 at boot. Use &lsquo;permissive&rsquo; or &lsquo;off&rsquo; until Landlock support is upgraded.
@@ -890,12 +890,12 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
     if (statusIsError) {
       const errorDetail = statusError instanceof Error ? statusError.message : undefined
       return (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 flex items-start gap-2">
-          <XCircle size={14} style={{ color: 'var(--color-error)' }} className="mt-0.5 shrink-0" />
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] flex items-start gap-[var(--space-2)]">
+          <XCircle size={14} style={{ color: 'var(--color-error)' }} className="mt-[var(--space-0-5)] shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load sandbox status</p>
             {errorDetail && (
-              <p className="mt-0.5 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] break-words">
+              <p className="mt-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] break-words">
                 {errorDetail}
               </p>
             )}
@@ -903,7 +903,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
           <Button
             size="sm"
             variant="outline"
-            className="h-7 px-2 text-[length:var(--type-utility-xs-size)] shrink-0"
+            className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] shrink-0"
             onClick={() => { void statusRefetch() }}
             disabled={statusFetching}
           >
@@ -916,8 +916,8 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
     if (!statusData) return null
 
     return (
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
-        <div className="flex items-center gap-2 mb-3">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
+        <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-2-5)]">
           <StatusDot variant={dotVariant} />
           <HeaderIcon
             size={14}
@@ -934,7 +934,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
         )}
 
         {statusData.notes && statusData.notes.length > 0 && (
-          <div className="mt-2 rounded-md border border-yellow-500/30 bg-yellow-500/5 p-2 space-y-1">
+          <div className="mt-[var(--space-2)] rounded-md border border-yellow-500/30 bg-yellow-500/5 p-[var(--space-2)] space-y-[var(--space-1)]">
             {statusData.notes.map((note, i) => (
               <p key={i} className="text-[length:var(--type-caption-size)] text-yellow-400 leading-relaxed">
                 <span className="font-semibold">Note:</span> {note}
@@ -948,7 +948,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
             <button tabIndex={0}
               type="button"
               onClick={() => setStatusExpanded((e) => !e)}
-              className="mt-3 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              className="mt-[var(--space-2-5)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
               aria-expanded={statusExpanded}
             >
               {statusExpanded ? <CaretUp size={10} /> : <CaretDown size={10} />}
@@ -962,18 +962,18 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
-        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
           <Cpu size={14} className="text-[var(--color-muted)]" />
           Process Sandbox
         </h3>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-[var(--space-2)]">
           <SaveStatus state={saveState} errorMessage={errorMessage} />
           <Button
             size="sm"
             variant="outline"
-            className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)]"
+            className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
             aria-label="Refresh sandbox status"
             onClick={() => { void statusRefetch() }}
             disabled={statusFetching}
@@ -997,9 +997,9 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
 
       {/* Config editor — only shown when status loaded successfully */}
       {!statusLoading && !statusIsError && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
           {/* ── Mode radio — top of config section ── */}
-          <div className="space-y-2">
+          <div className="space-y-[var(--space-2)]">
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Sandbox mode</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">
               Whether the operating system polices the programs an agent starts. It does not decide
@@ -1010,14 +1010,14 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
             {/* Restart pending notice */}
             {restartPending && (
               <div
-                className="flex items-start gap-2 rounded-md border p-2.5"
+                className="flex items-start gap-[var(--space-2)] rounded-md border p-[var(--space-2)]"
                 style={{
                   borderColor: 'rgba(234,179,8,0.35)',
                   backgroundColor: 'rgba(234,179,8,0.08)',
                 }}
                 role="status"
               >
-                <Warning size={14} weight="fill" style={{ color: 'var(--color-warning)' }} className="mt-0.5 shrink-0" />
+                <Warning size={14} weight="fill" style={{ color: 'var(--color-warning)' }} className="mt-[var(--space-0-5)] shrink-0" />
                 <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-secondary)]">
                   <span className="font-semibold" style={{ color: 'var(--color-warning)' }}>
                     Restart required.
@@ -1032,17 +1032,17 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
             )}
 
             {configLoading ? (
-              <div className="space-y-2 animate-pulse">
+              <div className="space-y-[var(--space-2)] animate-pulse">
                 <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
                 <div className="h-3 w-1/2 rounded bg-[var(--color-border)]" />
               </div>
             ) : (
-              <fieldset className="space-y-2">
+              <fieldset className="space-y-[var(--space-2)]">
                 <legend className="sr-only">Sandbox mode</legend>
                 {SANDBOX_MODES.map((m) => (
                   <label
                     key={m.value}
-                    className={`flex items-start gap-2 p-2 rounded-md border cursor-pointer transition-colors ${
+                    className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                       effectiveMode === m.value
                         ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
                         : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
@@ -1054,7 +1054,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                       value={m.value}
                       checked={effectiveMode === m.value}
                       onChange={() => handleModeChange(m.value)}
-                      className="mt-0.5 accent-[var(--color-accent)]"
+                      className="mt-[var(--space-0-5)] accent-[var(--color-accent)]"
                       aria-label={`Sandbox mode: ${m.label}`}
                     />
                     <div className="flex-1 min-w-0">
@@ -1075,7 +1075,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 or because that path happened to be enumerated. Before this the
                 only way to change it was to hand-edit config.json. */}
             {!configLoading && (
-              <fieldset className="space-y-2 mt-4 border-t border-[var(--color-border)] pt-4">
+              <fieldset className="space-y-[var(--space-2)] mt-[var(--space-3)] border-t border-[var(--color-border)] pt-[var(--space-3)]">
                 <legend className="sr-only">Filesystem model</legend>
                 <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
                   Filesystem model
@@ -1087,7 +1087,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 {FILESYSTEM_MODELS.map((m) => (
                   <label
                     key={m.value}
-                    className={`flex items-start gap-2 p-2 rounded-md border cursor-pointer transition-colors ${
+                    className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                       currentFsModel === m.value
                         ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
                         : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
@@ -1100,7 +1100,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                       value={m.value}
                       checked={currentFsModel === m.value}
                       onChange={() => handleFilesystemModelChange(m.value)}
-                      className="mt-0.5 accent-[var(--color-accent)]"
+                      className="mt-[var(--space-0-5)] accent-[var(--color-accent)]"
                       aria-label={`Filesystem model: ${m.label}`}
                       data-testid={`sandbox-fs-model-${m.value}`}
                     />
@@ -1131,7 +1131,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
               value the server never sent is exactly the lie this section is
               here to stop telling. */}
           <div
-            className="space-y-2 border-t border-[var(--color-border)] pt-4"
+            className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-3)]"
             data-testid="workspace-limit-section"
           >
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Shell workspace limit</p>
@@ -1144,13 +1144,13 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
             </p>
 
             {configLoading ? (
-              <div className="space-y-2 animate-pulse">
+              <div className="space-y-[var(--space-2)] animate-pulse">
                 <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
                 <div className="h-3 w-1/2 rounded bg-[var(--color-border)]" />
               </div>
             ) : !workspaceLimitSupported ? (
               <div
-                className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-2.5"
+                className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-2)]"
                 role="status"
                 data-testid="workspace-limit-unavailable"
               >
@@ -1158,7 +1158,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                   size={14}
                   weight="fill"
                   style={{ color: 'var(--color-muted)' }}
-                  className="mt-0.5 shrink-0"
+                  className="mt-[var(--space-0-5)] shrink-0"
                 />
                 <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-secondary)]">
                   <span className="font-semibold">Cannot be changed from here.</span> This gateway
@@ -1171,14 +1171,14 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 </p>
               </div>
             ) : (
-              <fieldset className="space-y-2">
+              <fieldset className="space-y-[var(--space-2)]">
                 <legend className="sr-only">Shell workspace limit</legend>
                 {WORKSPACE_LIMIT_OPTIONS.map((o) => {
                   const selected = currentWorkspaceLimit === (o.value === 'on')
                   return (
                     <label
                       key={o.value}
-                      className={`flex items-start gap-2 p-2 rounded-md border cursor-pointer transition-colors ${
+                      className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                         selected
                           ? 'border-[var(--color-accent)]/50 bg-[var(--color-accent)]/5'
                           : 'border-[var(--color-border)] hover:bg-[var(--color-surface-2)]'
@@ -1191,7 +1191,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                         value={o.value}
                         checked={selected}
                         onChange={() => handleWorkspaceLimitChange(o.value === 'on')}
-                        className="mt-0.5 accent-[var(--color-accent)]"
+                        className="mt-[var(--space-0-5)] accent-[var(--color-accent)]"
                         aria-label={`Shell workspace limit: ${o.label}`}
                         data-testid={`sandbox-workspace-limit-${o.value}`}
                       />
@@ -1207,11 +1207,11 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
           </div>
 
           {/* ── Paths / SSRF editor ── */}
-          <div className="space-y-4 border-t border-[var(--color-border)] pt-4">
+          <div className="space-y-[var(--space-3)] border-t border-[var(--color-border)] pt-[var(--space-3)]">
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Sandbox configuration</p>
 
             {configLoading ? (
-              <div className="space-y-2 animate-pulse">
+              <div className="space-y-[var(--space-2)] animate-pulse">
                 <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
                 <div className="h-3 w-1/2 rounded bg-[var(--color-border)]" />
               </div>
@@ -1252,7 +1252,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
           </div>
 
           {/* ── Global shell deny patterns ── */}
-          <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
+          <div className="space-y-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-3)]">
             <div className="flex items-center justify-between">
               <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Global shell deny patterns</p>
               {denyPatternsSaving && (

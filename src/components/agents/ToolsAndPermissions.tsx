@@ -301,7 +301,7 @@ export function ToolsAndPermissions({
 
   if (toolsLoading) {
     return (
-      <div className="space-y-2 py-4">
+      <div className="space-y-[var(--space-2)] py-[var(--space-3)]">
         {[1, 2, 3].map((i) => (
           <div key={i} className="h-9 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
         ))}
@@ -311,21 +311,21 @@ export function ToolsAndPermissions({
 
   if (toolsError) {
     return (
-      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] py-4">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] py-[var(--space-3)]">
         Failed to load tool list. Check that the backend is running.
       </p>
     )
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
       {/* B-2 (US-D5 / #332): locked agent read-only notice */}
       {isLocked && (
         <div
           data-testid="locked-agent-readonly-notice"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Lock size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
+          <Lock size={13} className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]" />
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             Tool policies for locked core agents are read-only. To change tool access,
             create a custom agent.
@@ -339,9 +339,9 @@ export function ToolsAndPermissions({
       {isExternal && !isLocked && (
         <div
           data-testid="external-cli-tools-notice"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Info size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
+          <Info size={13} className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]" />
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             Tool policies do not apply to agents running on an external CLI runner —
             the runner manages its own tool access. Configure per-tool flags on the
@@ -355,9 +355,9 @@ export function ToolsAndPermissions({
         <div
           role="status"
           data-testid="shell-fs-conflict-banner"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Info size={13} className="text-[var(--color-secondary)] shrink-0 mt-0.5" />
+          <Info size={13} className="text-[var(--color-secondary)] shrink-0 mt-[var(--space-0-5)]" />
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             <code className="font-mono text-[var(--color-secondary)]">bash</code>{' '}
             can perform filesystem operations directly. Denying{' '}
@@ -373,7 +373,7 @@ export function ToolsAndPermissions({
 
       {/* Save status — hidden for locked/external agents (no writes ever fire) */}
       {!isLocked && !isExternal && (
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-[var(--space-2-5)]">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {Object.keys(policies).length} tool polic{Object.keys(policies).length !== 1 ? 'ies' : 'y'} configured

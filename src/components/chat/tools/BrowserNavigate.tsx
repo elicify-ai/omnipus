@@ -126,17 +126,17 @@ export function BrowserNavigateBlock({
     // Flat text-line design (ticket "Tool components in chat", P2): no
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread.
-    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header — a row of composed controls (mirrors BrowserToolBlock in
           BrowserTool.tsx): the expand/collapse toggle is its own button so
           "Watch live" can be a separate, independently clickable sibling
           rather than nested inside it. */}
-      <div className="flex w-full items-center gap-2">
+      <div className="flex w-full items-center gap-[var(--space-2)]">
         <button tabIndex={0}
           type="button"
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
-            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            'flex flex-1 min-w-0 items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
             hasDetail ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
             !hasDetail ? 'cursor-default' : undefined
           )}
@@ -167,7 +167,7 @@ export function BrowserNavigateBlock({
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
+          className="shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
         >
           <Broadcast size={13} />
           <span>Watch live</span>
@@ -184,7 +184,7 @@ export function BrowserNavigateBlock({
           bordered/backgrounded panel; each section keeps its own spacing
           via space-y-2 rather than individual borders/fills. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]">
           {/* Full URL breadcrumb */}
           <div>
             <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all">{url}</span>
@@ -192,7 +192,7 @@ export function BrowserNavigateBlock({
 
           {/* Screenshot indicator (image itself renders in the assistant reply bubble via the media frame). */}
           {screenshotData && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-[var(--space-1)]">
               <Camera size={11} className="text-[var(--color-muted)]" />
               <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Screenshot captured</span>
             </div>

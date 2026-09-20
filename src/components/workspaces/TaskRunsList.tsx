@@ -87,7 +87,7 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
   }
 
   return (
-    <div className={cn('space-y-1.5', className)}>
+    <div className={cn('space-y-[var(--space-1)]', className)}>
       <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         Run history
       </p>
@@ -97,9 +97,9 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
       ) : isError ? (
         <div
           data-testid="task-runs-error"
-          className="flex items-center justify-between gap-2 rounded-md border border-[color:var(--color-error)]/30 bg-[color:var(--color-error)]/10 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[color:var(--color-error)]"
+          className="flex items-center justify-between gap-[var(--space-2)] rounded-md border border-[color:var(--color-error)]/30 bg-[color:var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-error)]"
         >
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-[var(--space-1)]">
             <Warning size={13} weight="fill" />
             {isApiError(error) ? error.userMessage : 'Failed to load run history.'}
           </span>
@@ -107,7 +107,7 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
             type="button"
             variant="outline"
             size="sm"
-            className="h-6 shrink-0 px-2 text-[length:var(--type-caption-size)]"
+            className="h-6 shrink-0 px-[var(--space-2)] text-[length:var(--type-caption-size)]"
             onClick={() => void refetch()}
             disabled={isFetching}
           >
@@ -117,13 +117,13 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
       ) : visibleRuns.length === 0 ? (
         <div
           data-testid="task-runs-empty"
-          className="flex items-center gap-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+          className="flex items-center gap-[var(--space-1)] rounded-md border border-dashed border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         >
           <ClockCounterClockwise size={14} />
           No runs yet.
         </div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-[var(--space-2)]">
           {visibleRuns.map((run) => (
             <TaskRunRow key={run.run_id} run={run} onOpenInChat={() => openRunInChat(run)} />
           ))}
@@ -142,13 +142,13 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
     <li
       data-testid="task-run-row"
       className={cn(
-        'space-y-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2.5',
+        'space-y-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)]',
         isFailed ? 'border-[color:var(--color-error)]/30' : undefined,
       )}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Badge className={cn('h-6 rounded-md border-transparent px-2 text-[length:var(--type-caption-size)]', badgeClass)}>
+      <div className="flex items-center justify-between gap-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)]">
+          <Badge className={cn('h-6 rounded-md border-transparent px-[var(--space-2)] text-[length:var(--type-caption-size)]', badgeClass)}>
             {statusLabel(run.status)}
           </Badge>
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
@@ -161,7 +161,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
       {showResult ? (
         <pre
           data-testid="task-run-result"
-          className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-2 font-mono text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-secondary)]"
+          className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-[var(--space-2)] font-mono text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-secondary)]"
         >
           {run.result}
         </pre>
@@ -172,7 +172,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
           type="button"
           variant="outline"
           size="sm"
-          className="h-7 w-full gap-2 text-[length:var(--type-utility-xs-size)]"
+          className="h-7 w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
           onClick={onOpenInChat}
         >
           <ChatCircle size={12} />
@@ -185,7 +185,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
 
 function TaskRunsSkeleton() {
   return (
-    <div className="animate-pulse space-y-2" data-testid="task-runs-skeleton">
+    <div className="animate-pulse space-y-[var(--space-2)]" data-testid="task-runs-skeleton">
       {[1, 2, 3].map((i) => (
         <div key={i} className="h-16 rounded-md bg-[var(--color-surface-2)]" />
       ))}

@@ -30,7 +30,7 @@ export function LibraryDownloadCard({ entry, reason, onDownload }: LibraryDownlo
   const { Icon, color, label } = fileTypeMeta(entry.name, entry.mime)
   return (
     <div
-      className="flex flex-1 min-h-0 flex-col items-center justify-center gap-4 overflow-auto p-8 text-center"
+      className="flex flex-1 min-h-0 flex-col items-center justify-center gap-[var(--space-3)] overflow-auto p-[var(--space-5)] text-center"
       data-testid="library-download-card"
     >
       <div
@@ -44,12 +44,12 @@ export function LibraryDownloadCard({ entry, reason, onDownload }: LibraryDownlo
         <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]" title={entry.name}>
           {entry.name}
         </p>
-        <p className="mt-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+        <p className="mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           {label} · {formatLibrarySize(entry.size)} · modified {formatRelative(entry.modified_at)}
         </p>
       </div>
       <p className="max-w-xs text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{REASON_COPY[reason]}</p>
-      <Button size="sm" onClick={() => onDownload(entry)} data-testid="library-download-card-button" className="gap-1.5">
+      <Button size="sm" onClick={() => onDownload(entry)} data-testid="library-download-card-button" className="gap-[var(--space-1)]">
         <DownloadSimple size={14} /> Download
       </Button>
     </div>

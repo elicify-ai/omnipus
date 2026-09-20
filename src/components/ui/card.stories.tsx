@@ -5,5 +5,5 @@ export default meta
 type Story = StoryObj<typeof meta>
 const content = <><CardHeader><CardTitle>Sovereign workspace</CardTitle><CardDescription>Private by default.</CardDescription></CardHeader><CardContent>Workspace content</CardContent><CardFooter>Updated now</CardFooter></>
 export const Default: Story = { args: { children: content, className: 'max-w-md' } }
-export const Dense: Story = { args: { ...Default.args, className: 'max-w-sm [&>div]:p-4' } }
+export const Dense: Story = { args: { ...Default.args, className: 'max-w-sm [&>div]:p-[var(--space-3)]' } }
 export const NarrowViewport: Story = { args: { ...Default.args, className: 'w-full' }, parameters: { viewport: { defaultViewport: 'mobile1' } } }

@@ -386,28 +386,28 @@ export function SignInDialog({
           {statusText}
         </div>
 
-        <div className="space-y-4">
+        <div className="space-y-[var(--space-3)]">
           {phase.kind === 'starting' && (
-            <div className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="sign-in-starting">
+            <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="sign-in-starting">
               <SpinnerGap size={14} className="animate-spin" />
               Starting sign-in…
             </div>
           )}
 
           {phase.kind === 'cli_login' && (
-            <div className="space-y-3">
+            <div className="space-y-[var(--space-2-5)]">
               <div>
-                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5">Run in a terminal</p>
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)]">Run in a terminal</p>
                 <code
-                  className="block rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]"
+                  className="block rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]"
                   data-testid="cli-login-command"
                 >
                   {phase.command}
                 </code>
-                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1.5">{phase.instructions}</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">{phase.instructions}</p>
               </div>
               {phase.checkResult === 'not_yet' && (
-                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-1.5" role="alert" aria-live="assertive">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]" role="alert" aria-live="assertive">
                   <Warning size={13} weight="fill" />{' '}
                   {phase.checkReason
                     ? `Not signed in yet — ${phase.checkReason}.`
@@ -416,18 +416,18 @@ export function SignInDialog({
               )}
               {phase.checkResult === 'expired' && (
                 <p
-                  className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-start gap-1.5"
+                  className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-start gap-[var(--space-1)]"
                   role="alert"
                   aria-live="assertive"
                   data-testid="cli-login-expired"
                 >
-                  <Warning size={13} weight="fill" className="shrink-0 mt-0.5" /> {cliSessionRejectedText(providerLabel, phase.command)}
+                  <Warning size={13} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" /> {cliSessionRejectedText(providerLabel, phase.command)}
                 </p>
               )}
               <Button
                 onClick={handleCheckCliSignIn}
                 disabled={phase.checking}
-                className="w-full gap-2"
+                className="w-full gap-[var(--space-2)]"
                 data-testid="check-sign-in-btn"
               >
                 {phase.checking ? <SpinnerGap size={14} className="animate-spin" /> : null}
@@ -437,14 +437,14 @@ export function SignInDialog({
           )}
 
           {phase.kind === 'device_code' && (
-            <div className="space-y-3">
+            <div className="space-y-[var(--space-2-5)]">
               <div>
-                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5">1. Open the sign-in page</p>
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)]">1. Open the sign-in page</p>
                 <a tabIndex={0}
                   href={phase.verificationUrl}
                   target="_blank"
                   rel="noopener"
-                  className="inline-flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-accent)] hover:underline"
+                  className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-accent)] hover:underline"
                   data-testid="verification-link"
                 >
                   {phase.verificationUrl}
@@ -452,10 +452,10 @@ export function SignInDialog({
                 </a>
               </div>
               <div>
-                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5">2. Enter this code</p>
-                <div className="flex items-center gap-2">
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)]">2. Enter this code</p>
+                <div className="flex items-center gap-[var(--space-2)]">
                   <output
-                    className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2.5 text-center text-lg font-mono font-bold tracking-[0.2em] text-[var(--color-secondary)]"
+                    className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-center text-lg font-mono font-bold tracking-[0.2em] text-[var(--color-secondary)]"
                     data-testid="user-code"
                   >
                     {phase.userCode}
@@ -464,7 +464,7 @@ export function SignInDialog({
                     variant="outline"
                     size="sm"
                     onClick={handleCopyCode}
-                    className="h-10 px-3 gap-1.5 shrink-0"
+                    className="h-10 px-[var(--space-2-5)] gap-[var(--space-1)] shrink-0"
                     aria-label="Copy code"
                     data-testid="copy-code-btn"
                   >
@@ -478,7 +478,7 @@ export function SignInDialog({
                   accessibility tree so a screen reader announces it once, not
                   twice, while sighted operators still see the spinner + copy. */}
               <div
-                className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+                className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
                 data-testid="device-code-waiting"
                 aria-hidden="true"
               >
@@ -486,18 +486,18 @@ export function SignInDialog({
                 Waiting for you to approve this sign-in…
               </div>
               {providerId === 'openai-chatgpt' && codexLoginPresent && (
-                <div className="pt-1 border-t border-[var(--color-border)]">
+                <div className="pt-[var(--space-1)] border-t border-[var(--color-border)]">
                   <button tabIndex={0}
                     type="button"
                     onClick={handleImportCodexLogin}
                     disabled={importing}
-                    className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 mt-2"
+                    className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 mt-[var(--space-2)]"
                     data-testid="import-codex-login-btn"
                   >
                     {importing ? 'Checking…' : 'Use my existing Codex login'}
                   </button>
                   {importError && (
-                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-1" role="alert" aria-live="assertive">
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]" role="alert" aria-live="assertive">
                       {importError}
                     </p>
                   )}
@@ -508,7 +508,7 @@ export function SignInDialog({
 
           {phase.kind === 'signed_in' && (
             <div
-              className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-success)]"
+              className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-success)]"
               role="status"
               data-testid="sign-in-success"
             >
@@ -518,14 +518,14 @@ export function SignInDialog({
           )}
 
           {(phase.kind === 'expired' || phase.kind === 'denied' || phase.kind === 'error') && (
-            <div className="space-y-3">
+            <div className="space-y-[var(--space-2-5)]">
               <div
-                className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
+                className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
                 role="alert"
                 aria-live="assertive"
                 data-testid="sign-in-failure"
               >
-                <XCircle size={15} weight="fill" className="shrink-0 mt-0.5" />
+                <XCircle size={15} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
                 <span>
                   {phase.kind === 'expired' && 'Sign-in expired before it was approved.'}
                   {phase.kind === 'denied' && 'Sign-in was denied.'}

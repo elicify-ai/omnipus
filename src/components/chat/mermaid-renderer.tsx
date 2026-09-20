@@ -86,12 +86,12 @@ function MermaidErrorCard({ error, code }: { error: string; code: string }) {
   return (
     <div
       role="status"
-      className="my-2 overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+      className="my-[var(--space-2)] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)]"
     >
       {/* Quiet, neutral caption — no red, no parser dump. The raw error is on
           hover (title=) and in the console, never shouted into the transcript. */}
-      <div className="flex items-center justify-between gap-2 px-3 py-1.5 text-[length:var(--type-caption-size)]">
-        <span className="flex items-center gap-1.5 text-[var(--color-muted)]" title={error}>
+      <div className="flex items-center justify-between gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)]" title={error}>
           <Code size={13} />
           <span>Diagram couldn&apos;t be drawn — showing source</span>
         </span>
@@ -100,14 +100,14 @@ function MermaidErrorCard({ error, code }: { error: string; code: string }) {
           onClick={handleFix}
           disabled={sent}
           aria-label={sent ? 'Fix requested' : 'Ask the assistant to fix the diagram'}
-          className="flex shrink-0 items-center gap-1 text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex shrink-0 items-center gap-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-60"
         >
           <ArrowClockwise size={11} />
           {sent ? 'Fix requested' : 'Fix'}
         </button>
       </div>
       {/* The source as an ordinary code block — the content is still readable. */}
-      <pre className="overflow-x-auto whitespace-pre-wrap break-words border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
         {code}
       </pre>
     </div>
@@ -415,7 +415,7 @@ function MermaidDiagramImpl({ code: rawCode, streaming = false }: MermaidDiagram
 
   if (!svg) {
     return (
-      <div className="my-2 flex items-center gap-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-1">
+      <div className="my-[var(--space-2)] flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-1)]">
         <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-pulse" />
         Rendering diagram...
       </div>
@@ -480,7 +480,7 @@ function MermaidDiagramImpl({ code: rawCode, streaming = false }: MermaidDiagram
   ]
 
   return (
-    <div className="group/mermaid relative my-3 overflow-x-auto rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
+    <div className="group/mermaid relative my-[var(--space-2-5)] overflow-x-auto rounded-lg bg-[var(--color-surface-2)] border border-[var(--color-border)]">
       {/* Hover-revealed overlay toolbar — only on the success (SVG ready) path.
           [@media(hover:none)] forces it visible on touch devices (iPad), where
           group-hover never fires and the controls would otherwise be invisible. */}
@@ -490,14 +490,14 @@ function MermaidDiagramImpl({ code: rawCode, streaming = false }: MermaidDiagram
 
       {view === 'image' ? (
         <div
-          className="flex justify-center p-4"
+          className="flex justify-center p-[var(--space-3)]"
           dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
         />
       ) : (
-        <div className="p-4">
+        <div className="p-[var(--space-3)]">
           {/* Language label */}
-          <div className="mb-1.5 text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)] select-none">mermaid</div>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] bg-[var(--color-surface-1)] rounded-md p-3">
+          <div className="mb-[var(--space-1)] text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)] select-none">mermaid</div>
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] bg-[var(--color-surface-1)] rounded-md p-[var(--space-2-5)]">
             {code}
           </pre>
         </div>

@@ -183,7 +183,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
 
   if (tasksError && tasks.length === 0) {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center">
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-[var(--space-2-5)] p-[var(--space-5)] text-center">
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           Failed to load the task graph. Check your connection and try again.
         </p>
@@ -201,13 +201,13 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
       {agentsError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <Info size={12} weight="fill" className="shrink-0" />
           Agent details failed to load — task avatars may be missing.
         </div>
       )}
       {plansError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <Info size={12} weight="fill" className="shrink-0" />
           Plans failed to load — the plan filter may be incomplete.
         </div>
@@ -218,7 +218,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
           selector is hidden, so with no active plan there's nothing to show and
           an empty bordered strip read as a stray line above the canvas. */}
       {(!hidePlanSelector || activePlan) && (
-      <div className="flex items-center gap-3 px-4 py-2 flex-shrink-0">
+      <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2)] flex-shrink-0">
         {!hidePlanSelector && (
           <>
             <span className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] flex-shrink-0">By plan</span>
@@ -269,13 +269,13 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
               ? planSecondaryChipLabel(activePlan)
               : null
           return (
-          <div className="flex flex-1 min-w-0 flex-col gap-1 pl-2">
-            <div className="flex flex-1 min-w-0 items-center gap-2">
+          <div className="flex flex-1 min-w-0 flex-col gap-[var(--space-1)] pl-[var(--space-2)]">
+            <div className="flex flex-1 min-w-0 items-center gap-[var(--space-2)]">
               {/* ADR-052 FR-015/US-8 — a user-cancelled plan renders
                   "Cancelled" (orange), distinct from a genuine "Failed" (red),
                   via the shared planDisplayColor/planDisplayLabel helpers. */}
               <span
-                className="flex-shrink-0 rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold"
+                className="flex-shrink-0 rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold"
                 style={{
                   color: planDisplayColor(activePlan),
                   backgroundColor: `${planDisplayColor(activePlan)}1a`,
@@ -288,7 +288,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                 <span
                   data-testid={`plan-phase-chip-${activePlan.id}`}
                   className={cn(
-                    'flex-shrink-0 rounded border px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none',
+                    'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none',
                     chip.tone === 'warning'
                       ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                       : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
@@ -309,7 +309,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                   `done`. Labelled + tooltipped so it reads as plan progress, not
                   some ambient metric. */}
               <div
-                className="flex flex-shrink-0 items-center gap-1.5"
+                className="flex flex-shrink-0 items-center gap-[var(--space-1)]"
                 role="img"
                 aria-label={`Plan progress: ${Math.round((activePlan.progress ?? 0) * 100)}% of tasks done`}
                 title={`Plan progress — ${Math.round((activePlan.progress ?? 0) * 100)}% of this plan's tasks are done`}
@@ -382,10 +382,10 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
 /** Dark shimmer placeholder while the first task fetch resolves. */
 function GraphSkeleton() {
   return (
-    <div className="absolute inset-0 bg-[var(--color-surface-0)] p-8">
-      <div className="flex h-full items-center gap-12">
+    <div className="absolute inset-0 bg-[var(--color-surface-0)] p-[var(--space-5)]">
+      <div className="flex h-full items-center gap-[var(--space-7)]">
         {[0, 1, 2].map((rank) => (
-          <div key={rank} className="flex flex-1 flex-col gap-6">
+          <div key={rank} className="flex flex-1 flex-col gap-[var(--space-4)]">
             {[0, 1].map((row) => (
               <div
                 key={row}

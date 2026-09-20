@@ -277,7 +277,7 @@ export function ProviderDetailPanel({
       data-testid={testId}
       aria-label={`Configure ${company.company}`}
       role="group"
-      className="flex flex-col gap-3 rounded-md border p-3"
+      className="flex flex-col gap-[var(--space-2-5)] rounded-md border p-[var(--space-2-5)]"
       style={{ borderColor: 'var(--color-border)' }}
     >
       <h3 className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
@@ -286,7 +286,7 @@ export function ProviderDetailPanel({
 
       {/* ── Plan (FR-027) ──────────────────────────────────────────────── */}
       {planOptions.length > 1 && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <span
             id={planGroupLabelId}
             className="text-[length:var(--type-utility-xs-size)] uppercase"
@@ -298,7 +298,7 @@ export function ProviderDetailPanel({
             role="group"
             aria-labelledby={planGroupLabelId}
             data-testid={`${testId}-plans`}
-            className="flex flex-wrap items-center gap-1"
+            className="flex flex-wrap items-center gap-[var(--space-1)]"
           >
             {planOptions.map((value) => (
               <button
@@ -308,7 +308,7 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-plan-${value || 'standard'}`}
                 aria-pressed={plan === value}
                 onClick={() => setPlan(value)}
-                className="min-h-[32px] rounded border px-3 text-[length:var(--type-body-compact-size)]"
+                className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
                 style={{
                   borderColor: 'var(--color-border)',
                   color: 'var(--color-secondary)',
@@ -324,7 +324,7 @@ export function ProviderDetailPanel({
 
       {/* ── Region, pre-selected from the locale (FR-027) ───────────────── */}
       {company.regions.length > 0 && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <span
             id={regionGroupLabelId}
             data-testid={`${testId}-region-copy`}
@@ -337,7 +337,7 @@ export function ProviderDetailPanel({
             role="group"
             aria-labelledby={regionGroupLabelId}
             data-testid={`${testId}-regions`}
-            className="flex flex-wrap items-center gap-1"
+            className="flex flex-wrap items-center gap-[var(--space-1)]"
           >
             {company.regions.map((value) => (
               <button
@@ -347,7 +347,7 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-region-${value}`}
                 aria-pressed={region === value}
                 onClick={() => setRegion(value)}
-                className="min-h-[32px] rounded border px-3 text-[length:var(--type-body-compact-size)]"
+                className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
                 style={{
                   borderColor: 'var(--color-border)',
                   color: 'var(--color-secondary)',
@@ -385,7 +385,7 @@ export function ProviderDetailPanel({
               Runs on your machine — no API key needed.
             </p>
           ) : (
-            <label className="flex flex-col gap-1 text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-key-input`}>
+            <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-key-input`}>
               API key
               <input
                 id={`${testId}-api-key-input`}
@@ -394,7 +394,7 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-api-key-input`}
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                className="min-h-[32px] rounded border px-2 text-[length:var(--type-body-compact-size)]"
+                className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                 style={{ borderColor: 'var(--color-border)' }}
               />
             </label>
@@ -402,13 +402,13 @@ export function ProviderDetailPanel({
         }
       />
 
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-[var(--space-2)]">
         <button
           type="button"
           tabIndex={0}
           data-testid={`${testId}-continue`}
           onClick={() => onConfirm?.(selection)}
-          className="min-h-[32px] rounded border px-3 text-[length:var(--type-body-compact-size)]"
+          className="min-h-[32px] rounded border px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
         >
           Continue
@@ -419,7 +419,7 @@ export function ProviderDetailPanel({
             tabIndex={0}
             data-testid={`${testId}-cancel`}
             onClick={onCancel}
-            className="min-h-[32px] rounded px-3 text-[length:var(--type-body-compact-size)]"
+            className="min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
           </button>

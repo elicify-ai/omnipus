@@ -24,7 +24,7 @@ export function EmbedMountPlaceholder() {
     <div
       data-testid="kb-embed-mount-loading"
       aria-hidden="true"
-      className="flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-6 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+      className="flex items-center justify-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-4)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
     >
       <SpinnerGap size={14} className="animate-spin" /> Loading…
     </div>
@@ -41,7 +41,7 @@ export function EmbedMountMissing({ workspacePath, parentDir }: { workspacePath:
   return (
     <div
       data-testid="kb-embed-mount-missing"
-      className="flex flex-col items-center gap-1 rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+      className="flex flex-col items-center gap-[var(--space-1)] rounded-md border border-dashed border-[var(--color-warning)]/50 px-[var(--space-2-5)] py-[var(--space-4)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <Warning size={16} />
       <span>
@@ -56,7 +56,7 @@ export function EmbedMountError({ message, onRetry }: { message: string; onRetry
   return (
     <div
       data-testid="kb-embed-mount-error"
-      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
+      className="flex flex-col items-center gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-4)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <Warning size={16} />
       <span>{message}</span>

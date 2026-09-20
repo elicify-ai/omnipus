@@ -73,13 +73,13 @@ function FileReadBlock({
     // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
     // language. The decorative FileText tool-type icon is gone; the leading
     // slot is the status dot/spinner only.
-    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
-          'flex w-full items-center gap-2 py-1 transition-colors text-left',
+          'flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
           !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
           isRunning && 'cursor-default'
         )}
@@ -88,10 +88,10 @@ function FileReadBlock({
       >
         {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{name}</span>
-        <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
+        <span className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] shrink-0">
           <span className={cn()}>{countOrStatusLabel}</span>
           {!isRunning && (
-            <span className="ml-1">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
+            <span className="ml-[var(--space-1)]">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}
         </span>
       </button>
@@ -99,9 +99,9 @@ function FileReadBlock({
       {/* File content panel — left-accent block, no bordered card. The
           content pane keeps its dark code-block styling (bg-[#0d1117]). */}
       {expanded && !isRunning && content && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
-          <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-1">{path}</div>
-          <pre className="p-2 text-[length:var(--type-caption-size)] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[#0d1117]">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
+          <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-[var(--space-1)]">{path}</div>
+          <pre className="p-[var(--space-2)] text-[length:var(--type-caption-size)] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[#0d1117]">
             {preview}
             {isTruncated && (
               <span className="text-[var(--color-muted)] italic">

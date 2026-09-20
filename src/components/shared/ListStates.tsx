@@ -5,7 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 export function SkeletonList() {
   return (
-    <div className="space-y-2">
+    <div className="space-y-[var(--space-2)]">
       {[1, 2, 3].map((i) => (
         <Skeleton
           key={i}

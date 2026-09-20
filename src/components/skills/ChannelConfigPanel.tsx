@@ -146,7 +146,7 @@ function PasswordField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={hasStoredSecret ? STORED_SECRET_PLACEHOLDER : field.placeholder}
-        className="pr-9 font-mono text-[length:var(--type-utility-xs-size)]"
+        className="pr-[var(--space-5)] font-mono text-[length:var(--type-utility-xs-size)]"
         autoComplete="off"
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid || undefined}
@@ -275,7 +275,7 @@ function ChannelFieldRow({
   const invalid = error ? true : undefined
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-[var(--space-1)]">
       <Label
         htmlFor={`field-${field.key}`}
         id={`field-label-${field.key}`}
@@ -283,12 +283,12 @@ function ChannelFieldRow({
       >
         {field.label}
         {field.required && (
-          <span className="text-[var(--color-error)] ml-0.5">*</span>
+          <span className="text-[var(--color-error)] ml-[var(--space-0-5)]">*</span>
         )}
       </Label>
 
       {field.type === 'toggle' ? (
-        <div className="flex items-center gap-2 py-1">
+        <div className="flex items-center gap-[var(--space-2)] py-[var(--space-1)]">
           <Switch
             id={`field-${field.key}`}
             checked={Boolean(getValue(field.key))}
@@ -814,7 +814,7 @@ export function ChannelConfigPanel({
         className="sm:w-[480px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto p-0"
         aria-describedby={descriptionId}
       >
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>
             Configure {channelName}
           </SheetTitle>
@@ -835,7 +835,7 @@ export function ChannelConfigPanel({
             expects. */}
         <p
           id={descriptionId}
-          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-6 pt-3"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-[var(--space-4)] pt-[var(--space-2-5)]"
         >
           {isGoogleChat
             ? 'Choose how you want to connect Google Chat, then fill in the credentials below.'
@@ -845,7 +845,7 @@ export function ChannelConfigPanel({
         </p>
 
         {isLoading ? (
-          <div className="px-6 pt-6 space-y-4">
+          <div className="px-[var(--space-4)] pt-[var(--space-4)] space-y-[var(--space-3)]">
             {[1, 2, 3].map((i) => (
               <div key={i} className="h-10 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
             ))}
@@ -858,11 +858,11 @@ export function ChannelConfigPanel({
           // app-state-fetch-error-banner: role="alert" + explicit retry copy)
           // rather than the routing sub-section's inline red text, since this
           // failure blocks the whole form, not one field.
-          <div className="px-6 pt-6">
+          <div className="px-[var(--space-4)] pt-[var(--space-4)]">
             <div
               data-testid="channel-config-fetch-error"
               role="alert"
-              className="flex flex-col items-start gap-2 px-4 py-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[length:var(--type-utility-xs-size)] font-medium"
+              className="flex flex-col items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2-5)] rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[length:var(--type-utility-xs-size)] font-medium"
             >
               <span>Couldn&apos;t load {channelName} configuration. Check your connection and try again.</span>
               <button tabIndex={0}
@@ -875,21 +875,21 @@ export function ChannelConfigPanel({
             </div>
           </div>
         ) : (
-          <div className="px-6 pt-5 space-y-5">
+          <div className="px-[var(--space-4)] pt-[var(--space-3)] space-y-[var(--space-3)]">
             {/* #324 — Google Chat auth method picker */}
             {isGoogleChat && (
-              <div className="space-y-3">
+              <div className="space-y-[var(--space-2-5)]">
                 <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                   How do you want to connect?
                 </p>
                 <p className="text-[length:var(--type-caption-size)] text-amber-400 leading-relaxed">
                   Switching connection method clears any values already entered for the other method.
                 </p>
-                <div className="flex flex-col gap-2" role="radiogroup" aria-label="Connection method">
+                <div className="flex flex-col gap-[var(--space-2)]" role="radiogroup" aria-label="Connection method">
                   {GCHAT_AUTH_OPTIONS.map((opt) => (
                     <label
                       key={opt.value}
-                      className={`flex items-start gap-3 p-3 rounded-md border cursor-pointer transition-colors ${
+                      className={`flex items-start gap-[var(--space-2-5)] p-[var(--space-2-5)] rounded-md border cursor-pointer transition-colors ${
                         gChatAuthMethod === opt.value
                           ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/5'
                           : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border)]/80'
@@ -901,13 +901,13 @@ export function ChannelConfigPanel({
                         value={opt.value}
                         checked={gChatAuthMethod === opt.value}
                         onChange={() => handleGChatMethodSwitch(opt.value)}
-                        className="mt-0.5 accent-[var(--color-accent)]"
+                        className="mt-[var(--space-0-5)] accent-[var(--color-accent)]"
                         aria-label={opt.label}
                         aria-describedby={`gchat-auth-desc-${opt.value}`}
                       />
                       <div>
                         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{opt.label}</p>
-                        <p id={`gchat-auth-desc-${opt.value}`} className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-0.5">{opt.description}</p>
+                        <p id={`gchat-auth-desc-${opt.value}`} className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">{opt.description}</p>
                       </div>
                     </label>
                   ))}
@@ -930,7 +930,7 @@ export function ChannelConfigPanel({
             {/* Advanced fields — collapsed under the shared AdvancedDisclosure (#323). */}
             {advancedFields.length > 0 && (
               <AdvancedDisclosure>
-                <div className="space-y-4">
+                <div className="space-y-[var(--space-3)]">
                   {advancedFields.map((field) => (
                     <ChannelFieldRow
                       key={field.key}
@@ -956,7 +956,7 @@ export function ChannelConfigPanel({
               (whatsAppNativeUnavailable ? (
                 <p
                   data-testid="native-unavailable-hint"
-                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed mt-[var(--space-1)] p-[var(--space-2-5)] rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
                 >
                   WhatsApp requires the native build (whatsmeow); this server build
                   doesn&apos;t include it, so linked-device pairing is unavailable.
@@ -966,7 +966,7 @@ export function ChannelConfigPanel({
               ) : (
                 <p
                   data-testid="whatsapp-enable-prompt"
-                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed mt-[var(--space-1)] p-[var(--space-2-5)] rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
                 >
                   Save &amp; Enable WhatsApp to start pairing. Once enabled, the QR code will appear here automatically.
                 </p>
@@ -974,7 +974,7 @@ export function ChannelConfigPanel({
 
             {/* Routing — hidden for webchat (no agent-routing concept) */}
             {!isWebchat && (
-              <div className="pt-2 border-t border-[var(--color-border)] space-y-3">
+              <div className="pt-[var(--space-2)] border-t border-[var(--color-border)] space-y-[var(--space-2-5)]">
                 <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                   Routing
                 </h3>
@@ -983,9 +983,9 @@ export function ChannelConfigPanel({
                     Couldn&apos;t load routing — save may overwrite current setting.
                   </p>
                 ) : (
-                  <div className="space-y-3">
+                  <div className="space-y-[var(--space-2-5)]">
                     {/* Workspace selector (US-1 / FR-001) */}
-                    <div className="space-y-1.5">
+                    <div className="space-y-[var(--space-1)]">
                       <Label
                         htmlFor="routing-workspace-select"
                         className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]"
@@ -1026,7 +1026,7 @@ export function ChannelConfigPanel({
                     </div>
 
                     {/* Agent selector (US-2 / FR-002) — disabled until workspace chosen */}
-                    <div className="space-y-1.5">
+                    <div className="space-y-[var(--space-1)]">
                       <Label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                         Default agent
                       </Label>
@@ -1120,9 +1120,9 @@ export function ChannelConfigPanel({
             )}
 
             {/* Actions */}
-            <div className="flex flex-col gap-2 pt-2 border-t border-[var(--color-border)]">
+            <div className="flex flex-col gap-[var(--space-2)] pt-[var(--space-2)] border-t border-[var(--color-border)]">
               <Button
-                className="w-full gap-1.5"
+                className="w-full gap-[var(--space-1)]"
                 onClick={() => doSaveAndEnable()}
                 disabled={isBusy}
               >
@@ -1131,7 +1131,7 @@ export function ChannelConfigPanel({
               </Button>
               <Button
                 variant="outline"
-                className="w-full gap-1.5"
+                className="w-full gap-[var(--space-1)]"
                 onClick={() => doSave()}
                 disabled={isBusy}
               >

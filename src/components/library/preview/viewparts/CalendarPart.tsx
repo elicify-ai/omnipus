@@ -137,14 +137,14 @@ export function CalendarPart({
     <div className="flex min-h-0 flex-col" data-testid="viewpart-calendar">
       {!hasDateSource && (
         <p
-          className="border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
+          className="border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
           data-testid="viewpart-calendar-no-date"
         >
           This calendar names no date property to place records on, so the grid is empty. Every record is
           listed below instead.
         </p>
       )}
-      <div className="flex items-center gap-2 px-3 py-1.5">
+      <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)]">
         <button
           type="button"
           tabIndex={0}
@@ -167,11 +167,11 @@ export function CalendarPart({
           <CaretRight size={13} />
         </button>
       </div>
-      <div className="grid grid-cols-7 gap-px border-t border-[var(--color-border)] bg-[var(--color-border)]">
+      <div className="grid grid-cols-7 gap-[var(--border-width-hairline)] border-t border-[var(--color-border)] bg-[var(--color-border)]">
         {DAY_HEADERS.map((h, i) => (
           <div
             key={`${h}${i}`}
-            className="bg-[var(--color-surface-1)] px-1.5 py-1 text-center text-[length:var(--type-caption-size)] uppercase text-[var(--color-muted)]"
+            className="bg-[var(--color-surface-1)] px-[var(--space-1)] py-[var(--space-1)] text-center text-[length:var(--type-caption-size)] uppercase text-[var(--color-muted)]"
           >
             {h}
           </div>
@@ -179,7 +179,7 @@ export function CalendarPart({
         {cells.map((cell) => (
           <div
             key={cell.iso}
-            className={`min-h-[3.5rem] bg-[var(--color-surface-0)] p-1 text-[length:var(--type-caption-size)] ${
+            className={`min-h-[3.5rem] bg-[var(--color-surface-0)] p-[var(--space-1)] text-[length:var(--type-caption-size)] ${
               cell.inMonth ? '' : 'opacity-40'
             }`}
             data-testid={cell.inMonth ? 'viewpart-calendar-day' : 'viewpart-calendar-day-outside'}
@@ -195,14 +195,14 @@ export function CalendarPart({
                   title={row.title}
                   aria-label={`Open ${row.title}`}
                   data-testid="viewpart-calendar-event"
-                  className="mt-0.5 block w-full truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="mt-[var(--space-0-5)] block w-full truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
                 >
                   {row.title}
                 </button>
               ) : (
                 <div
                   key={row.path}
-                  className="mt-0.5 truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+                  className="mt-[var(--space-0-5)] truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                   title={row.title}
                   data-testid="viewpart-calendar-event"
                 >
@@ -215,7 +215,7 @@ export function CalendarPart({
       </div>
       {unscheduled.length > 0 && (
         <div
-          className="flex flex-col gap-1 border-t border-[var(--color-border)] px-3 py-2"
+          className="flex flex-col gap-[var(--space-1)] border-t border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)]"
           data-testid="viewpart-calendar-unscheduled"
         >
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
@@ -223,7 +223,7 @@ export function CalendarPart({
               ? `1 record has no ${dateProperty ?? 'date'} and is not on the calendar:`
               : `${unscheduled.length} records have no ${dateProperty ?? 'date'} and are not on the calendar:`}
           </p>
-          <div className="flex flex-wrap gap-1">
+          <div className="flex flex-wrap gap-[var(--space-1)]">
             {unscheduled.map((row) =>
               onOpenPath ? (
                 <button
@@ -234,7 +234,7 @@ export function CalendarPart({
                   title={row.title}
                   aria-label={`Open ${row.title}`}
                   data-testid="viewpart-calendar-unscheduled-row"
-                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
                 >
                   {row.title}
                 </button>
@@ -243,7 +243,7 @@ export function CalendarPart({
                   key={row.path}
                   title={row.title}
                   data-testid="viewpart-calendar-unscheduled-row"
-                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                 >
                   {row.title}
                 </span>

@@ -121,7 +121,7 @@ export function LibraryNewVaultDialog({
             A knowledge base is notes, records, and saved views the agent can search.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="library-new-vault-name">Name</Label>
           <Input
             id="library-new-vault-name"

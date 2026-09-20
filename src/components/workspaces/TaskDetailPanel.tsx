@@ -645,7 +645,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const blockedBy = task.blocked_by ?? []
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
       {/* Autosave indicator — every field change saves immediately. */}
       <div className="flex justify-end min-h-[14px]" data-testid="task-detail-autosave">
         <AutoSaveIndicator status={saveStatus} error={saveError} />
@@ -655,7 +655,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           pattern as the Goal field below). */}
       <Field label="Title">
         {editingTitle ? (
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             <Input
               value={titleDraft}
               onChange={(e) => { setTitleDraft(e.target.value); setTitleError('') }}
@@ -673,14 +673,14 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             {titleError && (
               <p id="task-title-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{titleError}</p>
             )}
-            <div className="flex gap-1.5">
-              <Button size="sm" className="h-6 px-2 text-[length:var(--type-caption-size)] gap-1" onClick={handleSaveTitle}>
+            <div className="flex gap-[var(--space-1)]">
+              <Button size="sm" className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]" onClick={handleSaveTitle}>
                 <Check size={10} weight="bold" /> Save
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 px-2 text-[length:var(--type-caption-size)] gap-1"
+                className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]"
                 onClick={() => { setTitleDraft(task.title); setTitleError(''); setEditingTitle(false) }}
               >
                 <X size={10} /> Cancel
@@ -689,11 +689,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </div>
         ) : (
           <div className="relative group">
-            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] pr-6">{task.title}</p>
+            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] pr-[var(--space-4)]">{task.title}</p>
             <button tabIndex={0}
               type="button"
               onClick={() => { setTitleDraft(task.title); setEditingTitle(true) }}
-              className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
               aria-label="Edit title"
             >
               <PencilSimple size={12} />
@@ -706,7 +706,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           goal record once the task starts its own session). */}
       <Field label="Goal">
         {editingPrompt ? (
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             <Textarea
               value={promptDraft}
               onChange={(e) => setPromptDraft(e.target.value)}
@@ -714,14 +714,14 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               autoFocus
               maxLength={10000}
             />
-            <div className="flex gap-1.5">
-              <Button size="sm" className="h-6 px-2 text-[length:var(--type-caption-size)] gap-1" onClick={handleSavePrompt}>
+            <div className="flex gap-[var(--space-1)]">
+              <Button size="sm" className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]" onClick={handleSavePrompt}>
                 <Check size={10} weight="bold" /> Save
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 px-2 text-[length:var(--type-caption-size)] gap-1"
+                className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]"
                 onClick={() => { setPromptDraft(task.prompt ?? ''); setEditingPrompt(false) }}
               >
                 <X size={10} /> Cancel
@@ -730,13 +730,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </div>
         ) : (
           <div className="relative group">
-            <pre className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 whitespace-pre-wrap break-words leading-relaxed">
+            <pre className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-[var(--space-2-5)] whitespace-pre-wrap break-words leading-relaxed">
               {task.prompt || <span className="text-[var(--color-muted)]">No prompt set.</span>}
             </pre>
             <button tabIndex={0}
               type="button"
               onClick={() => setEditingPrompt(true)}
-              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
               aria-label="Edit prompt"
             >
               <PencilSimple size={12} />
@@ -763,8 +763,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Status */}
       <Field label="Status">
         {isRunning ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
+          <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+            <Badge className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
               In Progress
             </Badge>
             {/* "Last activity 5 s ago" (founder decision 2026-09-14). */}
@@ -772,7 +772,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </div>
         ) : task.status === 'blocked' ? (
           // blocked is backend-derived (unmet dependency) — show read-only, not selectable
-          <Badge className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
+          <Badge className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
             Blocked (dependency unmet)
           </Badge>
         ) : task.status === 'done' ? (
@@ -781,7 +781,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           // offers transitions the backend rejects.
           <Badge
             data-testid="status-done-terminal"
-            className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-success)]/10 text-[color:var(--color-success)] border-transparent rounded-md px-2 inline-flex items-center"
+            className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-success)]/10 text-[color:var(--color-success)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center"
           >
             Done (final)
           </Badge>
@@ -804,7 +804,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           />
         )}
         {statusError && (
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-1.5">{statusError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]">{statusError}</p>
         )}
       </Field>
 
@@ -834,7 +834,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           ]}
         />
         {noWorkspaceForAssignment && (
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
             Task has no workspace — plan assignment unavailable
           </p>
         )}
@@ -897,7 +897,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         {criteriaError && (
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{criteriaError}</p>
         )}
-        <div className="mt-2">
+        <div className="mt-[var(--space-2)]">
           {/* GOAL-FR-054/FR-055 (C-81/C-42): `dod` is now passed to the
               EXISTING CriteriaVerdictList, which already accepts the prop
               and already renders a distinctly-labelled "Definition of
@@ -934,7 +934,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {isRunning && typeof task.attempt_count === 'number' && task.attempt_count > 0 && (
         <Button
           variant="outline"
-          className="w-full gap-2 text-[length:var(--type-utility-xs-size)] h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
           onClick={() => setConfirmStopLoop(true)}
           disabled={isStoppingLoop}
         >
@@ -984,14 +984,14 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         {/* F3: a workspace-less task would otherwise offer choices the
             backend guarantees will 400 — disable + explain instead. */}
         {noWorkspaceForAssignment ? (
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
             Task has no workspace — assignment unavailable
           </p>
         ) : teamError ? (
           // F1: a failed team-set fetch degrades to the unscoped roster —
           // surface that degrade instead of leaving it indistinguishable
           // from a healthy, unrestricted workspace.
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
             Team list unavailable — showing all agents
           </p>
         ) : null}
@@ -1002,7 +1002,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           <p
             data-testid="task-assignee-warning"
             role="status"
-            className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-warning)] mt-1.5"
+            className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-warning)] mt-[var(--space-1)]"
           >
             {task.assignee_warning.message}
           </p>
@@ -1026,7 +1026,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           editing here. */}
       {isScheduledTrigger(task.trigger) && (
         <Field label="Trigger">
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
               {scheduledTriggerSummary(task.trigger)}
             </p>
@@ -1035,7 +1035,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                 to="/workspaces/$workspaceId/calendar"
                 params={{ workspaceId: task.workspace_id }}
                 tabIndex={0}
-                className="inline-flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[color:var(--color-accent)] hover:underline"
+                className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-accent)] hover:underline"
               >
                 <CalendarBlank size={12} />
                 Edit in workspace calendar
@@ -1065,7 +1065,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               <CaretDown size={12} className="shrink-0 opacity-70" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-1" align="start">
+          <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-[var(--space-1)]" align="start">
             {depCandidates.map((t) => {
               const checked = blockedBy.includes(t.id)
               return (
@@ -1074,7 +1074,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                   type="button"
                   onClick={() => handleToggleDep(t.id)}
                   aria-pressed={checked}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-[length:var(--type-utility-xs-size)] text-left hover:bg-[var(--color-surface-1)] transition-colors"
+                  className="w-full flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] text-left hover:bg-[var(--color-surface-1)] transition-colors"
                 >
                   {/* The row button carries the checked state via aria-pressed
                       — this Checkbox is a decorative visual echo, not a
@@ -1093,13 +1093,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </PopoverContent>
         </Popover>
         {blockedBy.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
+          <div className="flex flex-wrap gap-[var(--space-1)] mt-[var(--space-1)]">
             {blockedBy.map((id) => {
               const dep = depCandidates.find((x) => x.id === id) ?? wsTasks.find((x) => x.id === id)
               return (
                 <span
                   key={id}
-                  className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+                  className="inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                 >
                   <span className="max-w-[120px] truncate">{dep?.title ?? id}</span>
                   <button tabIndex={0}
@@ -1116,7 +1116,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </div>
         )}
         {depError && (
-          <p role="alert" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-1.5">{depError}</p>
+          <p role="alert" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]">{depError}</p>
         )}
       </Field>
 
@@ -1131,7 +1131,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           }}
         />
         {dueError && (
-          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-1.5">{dueError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]">{dueError}</p>
         )}
       </Field>
 
@@ -1142,7 +1142,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Start button — inbox / next tasks */}
       {isStartable && (
         <Button
-          className="w-full gap-2 text-[length:var(--type-utility-xs-size)] h-8"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8"
           onClick={() => doStart()}
           disabled={isStarting}
         >
@@ -1155,7 +1155,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {isFailed && (
         <Button
           variant="outline"
-          className="w-full gap-2 text-[length:var(--type-utility-xs-size)] h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
           onClick={() => doRetry()}
           disabled={isRetrying}
         >
@@ -1183,15 +1183,15 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       <TaskRunsList
         taskId={task.id}
         onNavigate={onClose}
-        className="pt-2 border-t border-[var(--color-border)]"
+        className="pt-[var(--space-2)] border-t border-[var(--color-border)]"
       />
 
       {/* Artifacts */}
       {(task.artifacts?.length ?? 0) > 0 && (
         <Field label="Artifacts">
-          <div className="space-y-1">
+          <div className="space-y-[var(--space-1)]">
             {task.artifacts!.map((path) => (
-              <div key={path} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]">
+              <div key={path} className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]">
                 <span className="flex-1 font-mono text-[var(--color-secondary)] truncate">{path}</span>
                 <button tabIndex={0}
                   type="button"
@@ -1210,23 +1210,23 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Sub-tasks (children via parent_task_id) */}
       {subtasks.length > 0 && (
         <Field label={`Sub-tasks (${subtasks.length})`}>
-          <div className="space-y-1">
+          <div className="space-y-[var(--space-1)]">
             {subtasks.map((sub) => (
               <button tabIndex={0}
                 key={sub.id}
                 type="button"
                 onClick={() => onTaskSelect?.(sub)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-1)] transition-colors text-left"
+                className="w-full flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-surface-1)] transition-colors text-left"
               >
                 <Badge
                   variant="outline"
-                  className={cn('text-[length:var(--type-caption-size)] px-1 py-0 shrink-0 border-0', STATUS_BADGE[sub.status] ?? '')}
+                  className={cn('text-[length:var(--type-caption-size)] px-[var(--space-1)] py-0 shrink-0 border-0', STATUS_BADGE[sub.status] ?? '')}
                 >
                   {sub.status}
                 </Badge>
                 <span className="flex-1 text-[var(--color-secondary)] truncate">{sub.title}</span>
                 {sub.agent_name && (
-                  <span className="shrink-0 text-[var(--color-muted)] flex items-center gap-0.5">
+                  <span className="shrink-0 text-[var(--color-muted)] flex items-center gap-[var(--space-0-5)]">
                     <Robot size={10} /> {sub.agent_name}
                   </span>
                 )}
@@ -1237,7 +1237,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       )}
 
       {/* Metadata */}
-      <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
+      <div className="pt-[var(--space-2)] border-t border-[var(--color-border)] space-y-[var(--space-1)]">
         {task.created_by && <MetaRow label="Created by" value={task.created_by} />}
         <MetaRow label="Created" value={formatDateTime(task.created_at)} />
         <MetaRow label="Updated" value={formatDateTime(task.updated_at)} />
@@ -1247,11 +1247,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
       {/* Delete button (danger zone) — confirmed via AlertDialog (was firing
           with zero confirmation, a one-click irreversible data-loss trap). */}
-      <div className="pt-2 border-t border-[var(--color-border)]">
+      <div className="pt-[var(--space-2)] border-t border-[var(--color-border)]">
         <Button
           variant="ghost"
           size="sm"
-          className="w-full gap-2 text-[length:var(--type-utility-xs-size)] h-8 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]"
           onClick={() => setConfirmDelete(true)}
           disabled={isDeleting}
         >
@@ -1301,12 +1301,12 @@ export function WorkflowTaskDetailPanel({
   return (
     <Sheet open={task != null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent side="right" className="w-full sm:w-[380px] md:w-[460px] overflow-y-auto p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>{task?.title ?? ''}</SheetTitle>
         </SheetHeader>
 
         {task && (
-          <div className="px-6 py-4">
+          <div className="px-[var(--space-4)] py-[var(--space-3)]">
             <TaskDetailPanel task={task} onClose={onClose} onTaskSelect={onTaskSelect} />
           </div>
         )}
@@ -1319,7 +1319,7 @@ export function WorkflowTaskDetailPanel({
 
 function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-[var(--space-1)]">
       <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">{label}</p>
       {children}
     </div>
@@ -1330,7 +1330,7 @@ function Field({ label, children }: { label: React.ReactNode; children: React.Re
 
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center gap-2 text-[length:var(--type-utility-xs-size)]">
+    <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)]">
       <span className="text-[var(--color-muted)] w-[80px] shrink-0">{label}</span>
       <span className="text-[var(--color-secondary)]">{value}</span>
     </div>

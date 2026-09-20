@@ -80,7 +80,7 @@ function MountVaultState({ workspaceId, path }: { workspaceId: string | null; pa
       <p
         data-testid="library-mounts-vault-checking"
         role="status"
-        className="mt-1.5 flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+        className="mt-[var(--space-1)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
       >
         <SpinnerGap size={12} aria-hidden="true" className="animate-spin" />
         Checking whether this mount is a knowledge base
@@ -96,7 +96,7 @@ function MountVaultState({ workspaceId, path }: { workspaceId: string | null; pa
       <p
         data-testid="library-mounts-vault-error"
         role="alert"
-        className="mt-1.5 text-[length:var(--type-caption-size)] text-[var(--color-error)]"
+        className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]"
       >
         Could not check whether this mount is a knowledge base.
       </p>
@@ -114,7 +114,7 @@ function MountVaultState({ workspaceId, path }: { workspaceId: string | null; pa
   // ordinary mounted folder says nothing extra, and a finished index says
   // nothing extra either, matching that component's own honesty rule (a
   // banner shown on every visit trains people to ignore the real warning).
-  return <KnowledgeEmptyState state={state} className="mt-1.5 px-2.5 py-2" />
+  return <KnowledgeEmptyState state={state} className="mt-[var(--space-1)] px-[var(--space-2)] py-[var(--space-2)]" />
 }
 
 export function LibraryMountsDialog({
@@ -137,9 +137,9 @@ export function LibraryMountsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           {mounts.length === 0 && (
-            <p className="py-6 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
+            <p className="py-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               No folders are mounted.
             </p>
           )}
@@ -151,9 +151,9 @@ export function LibraryMountsDialog({
               <div
                 key={entry.path}
                 data-testid={`library-mounts-row-${mount.name}`}
-                className="rounded border border-[var(--color-border)] px-3 py-2"
+                className="rounded border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)]"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-[var(--space-2-5)]">
                   {/* Same shared MountFolderIcon LibraryEntryRow renders for
                       this same entry in the tree: --color-mount, escalated
                       to --color-warning for a broad grant. */}
@@ -162,10 +162,10 @@ export function LibraryMountsDialog({
                     className={mount.broad ? 'text-[var(--color-warning)]' : 'text-[var(--color-mount)]'}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-[var(--space-2)]">
                       <span className="text-[length:var(--type-body-compact-size)] font-medium">{mount.name}</span>
                       {mount.broad && (
-                        <span className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+                        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
                           <Warning size={12} /> Broad grant
                         </span>
                       )}

@@ -20,10 +20,10 @@ function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
   return (
     <div
       data-testid="pair-device-instructions"
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4 space-y-3"
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-3)] space-y-[var(--space-2-5)]"
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)]">
           <DeviceMobile size={15} className="text-[var(--color-accent)] shrink-0" />
           <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Pairing a device</p>
         </div>
@@ -36,7 +36,7 @@ function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
           Close
         </button>
       </div>
-      <ol className="space-y-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] list-decimal list-inside">
+      <ol className="space-y-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] list-decimal list-inside">
         <li>Open the Omnipus app on the device you want to pair.</li>
         <li>Go to <span className="font-semibold text-[var(--color-secondary)]">Settings → Connect to gateway</span> and enter this gateway&apos;s URL.</li>
         <li>The device will request pairing and appear in the <span className="font-semibold text-[var(--color-secondary)]">Pending Requests</span> list below.</li>
@@ -49,7 +49,7 @@ function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
         href="https://omnipus.ai/docs/device-pairing"
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:opacity-80 transition-opacity"
+        className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:opacity-80 transition-opacity"
         data-testid="pair-device-docs-link"
       >
         Learn more <ArrowRight size={11} />
@@ -96,14 +96,14 @@ export function DevicesSection() {
   const paired: DevicePaired[] = data?.paired ?? []
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-[var(--space-4)]">
       {/* Explainer + Pair entry point (UAT fix #3) */}
       <div
-        className="flex items-start gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+        className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-3)]"
         data-testid="devices-explainer"
       >
-        <Info size={15} className="text-[var(--color-accent)] shrink-0 mt-0.5" />
-        <div className="flex-1 min-w-0 space-y-2">
+        <Info size={15} className="text-[var(--color-accent)] shrink-0 mt-[var(--space-0-5)]" />
+        <div className="flex-1 min-w-0 space-y-[var(--space-2)]">
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
             Approve other devices or clients to connect to your gateway — similar to Linked Devices on messaging apps.
           </p>
@@ -114,7 +114,7 @@ export function DevicesSection() {
             size="sm"
             variant="outline"
             onClick={() => setShowPairInstructions((v) => !v)}
-            className="gap-1.5 text-[length:var(--type-utility-xs-size)]"
+            className="gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
             data-testid="pair-device-btn"
           >
             <DeviceMobile size={13} />
@@ -133,7 +133,7 @@ export function DevicesSection() {
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-muted)' }}>
           Pending Requests
         </h3>
-        <p className="text-[length:var(--type-utility-xs-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-0-5)]" style={{ color: 'var(--color-muted)' }}>
           New devices awaiting admin approval. Verify the 6-digit code shown on the device before approving.
         </p>
       </div>
@@ -141,35 +141,35 @@ export function DevicesSection() {
       {isLoading ? (
         <div className="h-24 rounded-lg border animate-pulse" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-1)' }} />
       ) : isError ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-6 rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="flex flex-col items-center justify-center gap-[var(--space-2-5)] py-[var(--space-4)] rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>
           <DeviceMobile size={22} weight="duotone" style={{ color: 'var(--color-error)' }} />
           <div>
             <p className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: 'var(--color-error)' }}>Failed to load devices</p>
-            <p className="text-[length:var(--type-utility-xs-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>Could not reach the gateway to list pending and paired devices.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-0-5)]" style={{ color: 'var(--color-muted)' }}>Could not reach the gateway to list pending and paired devices.</p>
           </div>
           <Button size="sm" variant="outline" onClick={() => refetch()} data-testid="devices-retry-btn">
             Retry
           </Button>
         </div>
       ) : pending.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-6 rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="flex flex-col items-center justify-center gap-[var(--space-2-5)] py-[var(--space-4)] rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>
           <Clock size={22} weight="duotone" style={{ color: 'var(--color-muted)' }} />
           <p className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>No pending requests</p>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           {pending.map((req) => (
-            <div key={req.device_id} className="p-3 rounded-lg border space-y-2" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-1)' }}>
+            <div key={req.device_id} className="p-[var(--space-2-5)] rounded-lg border space-y-[var(--space-2)]" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-1)' }}>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-[var(--space-2)]">
                   <DeviceMobile size={16} style={{ color: 'var(--color-secondary)' }} />
                   <span className="text-[length:var(--type-body-compact-size)] font-medium" style={{ color: 'var(--color-secondary)' }}>{req.device_name}</span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-[var(--space-2)]">
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 px-2"
+                    className="h-7 px-[var(--space-2)]"
                     onClick={() => handleReject(req.device_id)}
                     title="Reject"
                   >
@@ -178,7 +178,7 @@ export function DevicesSection() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-7 px-2"
+                    className="h-7 px-[var(--space-2)]"
                     onClick={() => handleApprove(req.device_id)}
                     title="Approve"
                   >
@@ -186,8 +186,8 @@ export function DevicesSection() {
                   </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-4 text-[length:var(--type-caption-size)]" style={{ color: 'var(--color-muted)' }}>
-                <span className="flex items-center gap-1">
+              <div className="flex items-center gap-[var(--space-3)] text-[length:var(--type-caption-size)]" style={{ color: 'var(--color-muted)' }}>
+                <span className="flex items-center gap-[var(--space-1)]">
                   <Fingerprint size={10} />
                   {req.fingerprint.slice(0, 12)}…
                 </span>
@@ -199,28 +199,28 @@ export function DevicesSection() {
       )}
 
       {/* Paired Devices */}
-      <div className="pt-2">
+      <div className="pt-[var(--space-2)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wider" style={{ color: 'var(--color-muted)' }}>
           Paired Devices
         </h3>
-        <p className="text-[length:var(--type-utility-xs-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-0-5)]" style={{ color: 'var(--color-muted)' }}>
           Devices that have been approved to access your Omnipus agent.
         </p>
       </div>
 
       {paired.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 py-8 rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>
+        <div className="flex flex-col items-center justify-center gap-[var(--space-2-5)] py-[var(--space-5)] rounded-lg border border-dashed text-center" style={{ borderColor: 'var(--color-border)' }}>
           <DeviceMobile size={28} weight="duotone" style={{ color: 'var(--color-muted)' }} />
           <div>
             <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>No paired devices</p>
-            <p className="text-[length:var(--type-utility-xs-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>Approved devices will appear here.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-0-5)]" style={{ color: 'var(--color-muted)' }}>Approved devices will appear here.</p>
           </div>
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           {paired.map((dev) => (
-            <div key={dev.device_id} className="flex items-center justify-between p-3 rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-1)' }}>
-              <div className="flex items-center gap-3">
+            <div key={dev.device_id} className="flex items-center justify-between p-[var(--space-2-5)] rounded-lg border" style={{ borderColor: 'var(--color-border)', backgroundColor: 'var(--color-surface-1)' }}>
+              <div className="flex items-center gap-[var(--space-2-5)]">
                 <DeviceMobile size={18} style={{ color: dev.status === 'active' ? 'var(--color-secondary)' : 'var(--color-muted)' }} />
                 <div>
                   <p className="text-[length:var(--type-body-compact-size)] font-medium" style={{ color: dev.status === 'active' ? 'var(--color-secondary)' : 'var(--color-muted)' }}>{dev.device_name}</p>
@@ -229,7 +229,7 @@ export function DevicesSection() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-[var(--space-2)]">
                 {dev.status === 'active' ? (
                   <CheckCircle size={14} weight="fill" style={{ color: 'var(--color-success)' }} />
                 ) : (

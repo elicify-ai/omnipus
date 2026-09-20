@@ -42,7 +42,7 @@ function Calendar({ className, classNames, showOutsideDays = true, onDayFocus, .
       showOutsideDays={showOutsideDays}
       data-calendar-viewport="true"
       className={cn(
-        'box-border max-w-full overflow-x-auto overscroll-x-contain p-3 font-inter [@media(pointer:coarse)]:p-0',
+        'box-border max-w-full overflow-x-auto overscroll-x-contain p-[var(--space-2-5)] font-inter [@media(pointer:coarse)]:p-0',
         className,
       )}
       classNames={{

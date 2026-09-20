@@ -913,15 +913,15 @@ export function LibraryExplorer({
   return (
     <div className={cn('flex h-full flex-col', className)} data-testid="library-explorer">
       {/* Toolbar / breadcrumb row */}
-      <div className="flex items-center gap-2 px-3 h-chrome-header min-h-chrome-header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
-        <nav aria-label="Library breadcrumb" className="flex items-center gap-1 min-w-0 flex-1 text-[length:var(--type-body-compact-size)] overflow-hidden">
+      <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
+        <nav aria-label="Library breadcrumb" className="flex items-center gap-[var(--space-1)] min-w-0 flex-1 text-[length:var(--type-body-compact-size)] overflow-hidden">
           <button
             type="button"
             tabIndex={0}
             onClick={handleGoRoot}
             data-testid="library-crumb-root"
             className={cn(
-              'flex items-center gap-1.5 shrink-0 rounded px-1.5 py-1 transition-colors',
+              'flex items-center gap-[var(--space-1)] shrink-0 rounded px-[var(--space-1)] py-[var(--space-1)] transition-colors',
               workspaceId === null
                 ? 'text-[var(--color-accent)] font-medium'
                 : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
@@ -939,7 +939,7 @@ export function LibraryExplorer({
                 onClick={handleGoWorkspaceRoot}
                 data-testid="library-crumb-workspace"
                 className={cn(
-                  'truncate rounded px-1.5 py-1 transition-colors min-w-0',
+                  'truncate rounded px-[var(--space-1)] py-[var(--space-1)] transition-colors min-w-0',
                   pathSegments.length === 0
                     ? 'text-[var(--color-accent)] font-medium'
                     : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
@@ -950,14 +950,14 @@ export function LibraryExplorer({
             </>
           )}
           {pathSegments.map((seg, i) => (
-            <span key={`${seg}-${i}`} className="flex items-center gap-1 min-w-0">
+            <span key={`${seg}-${i}`} className="flex items-center gap-[var(--space-1)] min-w-0">
               <CaretRight size={12} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
               <button
                 type="button"
                 tabIndex={0}
                 onClick={() => handleBreadcrumbSegment(i, pathSegments)}
                 className={cn(
-                  'truncate rounded px-1.5 py-1 transition-colors min-w-0',
+                  'truncate rounded px-[var(--space-1)] py-[var(--space-1)] transition-colors min-w-0',
                   i === pathSegments.length - 1
                     ? 'text-[var(--color-accent)] font-medium'
                     : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
@@ -969,11 +969,11 @@ export function LibraryExplorer({
           ))}
         </nav>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-[var(--space-1)] shrink-0">
           {workspaceId !== null && (
             <label
               htmlFor="library-show-hidden"
-              className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mr-1 select-none cursor-pointer"
+              className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mr-[var(--space-1)] select-none cursor-pointer"
             >
               <Switch
                 id="library-show-hidden"
@@ -994,7 +994,7 @@ export function LibraryExplorer({
             <span
               title="Folders on your Mac mounted into this workspace"
               data-testid="library-mounts-count"
-              className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+              className="flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
@@ -1044,7 +1044,7 @@ export function LibraryExplorer({
               aria-label="Open Library in a new tab"
               title="Open in new tab"
               data-testid="library-popout-button"
-              className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+              className="rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
             >
               <ArrowSquareOut size={16} />
             </button>
@@ -1059,7 +1059,7 @@ export function LibraryExplorer({
               aria-label="Close Library"
               title="Close"
               data-testid="library-close-button"
-              className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+              className="rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
             >
               <X size={16} />
             </button>
@@ -1072,7 +1072,7 @@ export function LibraryExplorer({
           way Rename/Move do. A failed upload must never look identical to
           nothing happening. */}
       {uploadError && (
-        <div className="shrink-0 p-2 pb-0">
+        <div className="shrink-0 p-[var(--space-2)] pb-0">
           <LibraryErrorBanner
             message={uploadError}
             onDismiss={() => setUploadError(undefined)}
@@ -1086,7 +1086,7 @@ export function LibraryExplorer({
           it clears itself the moment that address changes — a dismiss button
           would only let it disagree with the URL. */}
       {deepLinkMessage && (
-        <div className="shrink-0 p-2 pb-0">
+        <div className="shrink-0 p-[var(--space-2)] pb-0">
           <LibraryErrorBanner message={deepLinkMessage} testId="library-deeplink-unresolved" />
         </div>
       )}
@@ -1111,7 +1111,7 @@ export function LibraryExplorer({
           reads the frame for its own collection_id from there. Do not add a
           poll — the frame is the contract's answer to progress (FR-080). */}
       {workspaceId !== null && (
-        <div className="shrink-0 p-2 pb-0">
+        <div className="shrink-0 p-[var(--space-2)] pb-0">
           {/* UAT #699 / D-115: the empty-collection state's "Write the first
               note" button is live only when a handler is wired; with none the
               panel used to say nothing at all about how a note gets made. */}
@@ -1131,7 +1131,7 @@ export function LibraryExplorer({
               <div
                 role="status"
                 data-testid="library-obsidian-not-imported"
-                className="mt-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-3 py-2 text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]"
+                className="mt-[var(--space-2)] rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]"
               >
                 This is an Obsidian vault that has not been imported into Omnipus yet. Its notes are
                 indexed and searchable, but record types, records and views stay at zero until the
@@ -1152,7 +1152,7 @@ export function LibraryExplorer({
       {/* Body */}
       <div
         className={cn(
-          'min-h-0 min-w-0 overflow-y-auto p-2 relative',
+          'min-h-0 min-w-0 overflow-y-auto p-[var(--space-2)] relative',
           // Preview open: it takes the larger share (60% split / 55% stacked —
           // the stacked figure is the old even split plus the 10% the operator
           // asked for). Closed: the list has the whole box to itself.
@@ -1188,7 +1188,7 @@ export function LibraryExplorer({
                   tabIndex={0}
                   onClick={() => handleOpenWorkspaceNode(node)}
                   data-testid={`library-workspace-node-${node.id}`}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 hover:bg-[var(--color-surface-2)] text-left transition-colors"
+                  className="flex w-full items-center gap-[var(--space-2-5)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] hover:bg-[var(--color-surface-2)] text-left transition-colors"
                 >
                   {/* Icon-consistency pass (2026-09-07): every surface that
                       names a workspace uses the same Phosphor Buildings glyph
@@ -1415,7 +1415,7 @@ export function LibraryExplorer({
               &ldquo;{skillsDisclosure?.mountName}&rdquo; grants {skillsDisclosure?.count}{' '}
               skill{skillsDisclosure?.count === 1 ? '' : 's'}
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
+            <AlertDialogDescription className="space-y-[var(--space-2)]">
               <span className="block">{skillsDisclosure?.grantsMessage}</span>
               {skillsDisclosure?.thresholdWarning && (
                 <span
@@ -1535,7 +1535,7 @@ export function LibraryExplorer({
 
 function ListSkeleton() {
   return (
-    <div className="flex flex-col gap-1.5 p-1" data-testid="library-loading-skeleton">
+    <div className="flex flex-col gap-[var(--space-1)] p-[var(--space-1)]" data-testid="library-loading-skeleton">
       {[1, 2, 3, 4].map((i) => (
         <div
           key={i}
@@ -1558,7 +1558,7 @@ function parentFolderName(path: string): string {
 
 function EmptyState({ icon, message }: { icon: React.ReactNode; message: string }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-8 text-center text-[var(--color-muted)]">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-5)] text-center text-[var(--color-muted)]">
       {icon}
       <p className="text-[length:var(--type-body-compact-size)]">{message}</p>
     </div>

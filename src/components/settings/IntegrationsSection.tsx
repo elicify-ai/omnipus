@@ -90,17 +90,17 @@ export function IntegrationsSection() {
         key={p.id}
         className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
       >
-        <div className="flex items-center gap-3 px-4 py-3">
+        <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]">
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-[var(--space-2)] flex-wrap">
               <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{p.display_name}</span>
               {p.active && (
-                <Badge data-testid={`active-${p.id}`} variant="success" className="gap-1">
+                <Badge data-testid={`active-${p.id}`} variant="success" className="gap-[var(--space-1)]">
                   <Star size={10} weight="fill" /> Active
                 </Badge>
               )}
               {p.configured ? (
-                <Badge variant="muted" className="gap-1">
+                <Badge variant="muted" className="gap-[var(--space-1)]">
                   <CheckCircle size={10} weight="fill" /> Configured
                 </Badge>
               ) : p.requires_key ? (
@@ -122,13 +122,13 @@ export function IntegrationsSection() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-[var(--space-2)] shrink-0">
             {/* Activate — only when configured and not already active. */}
             {p.configured && !p.active && (
               <Button
                 size="sm"
                 variant="outline"
-                className="h-7 px-3 text-[length:var(--type-utility-xs-size)]"
+                className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
                 onClick={() => requestChange(p.id, { kind: p.kind, active: true })}
                 disabled={isSaving}
                 data-testid={`activate-${p.id}`}
@@ -139,7 +139,7 @@ export function IntegrationsSection() {
             {p.requires_key && (
               <Button
                 size="sm"
-                className="h-7 px-3 text-[length:var(--type-utility-xs-size)]"
+                className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
                 onClick={() => setExpanded(isExpanded ? null : p.id)}
                 data-testid={`addkey-${p.id}`}
               >
@@ -152,16 +152,16 @@ export function IntegrationsSection() {
         </div>
 
         {isExpanded && p.requires_key && (
-          <div className="border-t border-[var(--color-border)] px-4 py-4 space-y-3 bg-[var(--color-surface-2)]">
+          <div className="border-t border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)] bg-[var(--color-surface-2)]">
             <div>
-              <label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5 block">API Key</label>
+              <label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)] block">API Key</label>
               <div className="relative">
                 <Input
                   type={showKey[p.id] ? 'text' : 'password'}
                   value={keyVal}
                   onChange={(e) => setApiKeys((prev) => ({ ...prev, [p.id]: e.target.value }))}
                   placeholder={`${p.display_name} API key`}
-                  className="pr-9 font-mono text-[length:var(--type-utility-xs-size)]"
+                  className="pr-[var(--space-5)] font-mono text-[length:var(--type-utility-xs-size)]"
                   autoComplete="off"
                   data-testid={`key-input-${p.id}`}
                 />
@@ -174,11 +174,11 @@ export function IntegrationsSection() {
                   {showKey[p.id] ? <EyeSlash size={14} /> : <Eye size={14} />}
                 </button>
               </div>
-              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-1.5">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
                 Stored encrypted (AES-256-GCM) — saving requires re-typing your password.
               </p>
             </div>
-            <div className="flex justify-end gap-2">
+            <div className="flex justify-end gap-[var(--space-2)]">
               <Button variant="outline" size="sm" onClick={() => setExpanded(null)}>
                 Cancel
               </Button>
@@ -200,10 +200,10 @@ export function IntegrationsSection() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
       <div>
         <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Integrations</h2>
-        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
           Configure the web-search and voice-input providers your agents use. API keys are stored
           encrypted; changes require re-typing your password.
         </p>
@@ -214,7 +214,7 @@ export function IntegrationsSection() {
       )}
 
       {isLoading ? (
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           {[1, 2, 3].map((i) => (
             <div
               key={i}
@@ -224,8 +224,8 @@ export function IntegrationsSection() {
         </div>
       ) : data ? (
         <>
-          <section className="space-y-2">
-            <div className="flex items-center gap-2 text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          <section className="space-y-[var(--space-2)]">
+            <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               <MagnifyingGlass size={13} weight="bold" /> Web Search
             </div>
             {data.search.length === 0 ? (
@@ -235,8 +235,8 @@ export function IntegrationsSection() {
             )}
           </section>
 
-          <section className="space-y-2">
-            <div className="flex items-center gap-2 text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          <section className="space-y-[var(--space-2)]">
+            <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
               <Microphone size={13} weight="bold" /> Voice Input
             </div>
             {data.voice.length === 0 ? (

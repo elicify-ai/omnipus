@@ -20,17 +20,17 @@ export function EvidenceViewer({ evidence }: EvidenceViewerProps) {
   const passed = !exitCodeUnavailable && evidence.exit_code === 0
 
   return (
-    <div className="rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)] p-2 text-[length:var(--type-caption-size)] font-mono" data-testid="evidence-viewer">
-      <p className="text-[var(--color-muted)] mb-1 truncate" title={evidence.command}>
+    <div className="rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)] p-[var(--space-2)] text-[length:var(--type-caption-size)] font-mono" data-testid="evidence-viewer">
+      <p className="text-[var(--color-muted)] mb-[var(--space-1)] truncate" title={evidence.command}>
         $ {evidence.command}
       </p>
       <pre className="whitespace-pre-wrap break-words text-[var(--color-secondary)] max-h-[160px] overflow-y-auto">
         {evidence.output}
       </pre>
-      <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+      <div className="flex items-center gap-[var(--space-1)] mt-[var(--space-1)] flex-wrap">
         <span
           className={cn(
-            'rounded px-1.5 py-0.5',
+            'rounded px-[var(--space-1)] py-[var(--space-0-5)]',
             passed
               ? 'bg-[var(--color-success)]/10 text-[color:var(--color-success)]'
               : 'bg-[var(--color-error)]/10 text-[color:var(--color-error)]',
@@ -39,17 +39,17 @@ export function EvidenceViewer({ evidence }: EvidenceViewerProps) {
           exit {exitCodeUnavailable ? '—' : evidence.exit_code}
         </span>
         {evidence.timed_out && (
-          <span className="rounded px-1.5 py-0.5 bg-[var(--color-error)]/10 text-[color:var(--color-error)]" data-testid="evidence-timed-out">
+          <span className="rounded px-[var(--space-1)] py-[var(--space-0-5)] bg-[var(--color-error)]/10 text-[color:var(--color-error)]" data-testid="evidence-timed-out">
             timed out
           </span>
         )}
         {evidence.policy_denied && (
-          <span className="rounded px-1.5 py-0.5 bg-[var(--color-error)]/10 text-[color:var(--color-error)]" data-testid="evidence-policy-denied">
+          <span className="rounded px-[var(--space-1)] py-[var(--space-0-5)] bg-[var(--color-error)]/10 text-[color:var(--color-error)]" data-testid="evidence-policy-denied">
             policy denied
           </span>
         )}
         {evidence.truncated && (
-          <span className="rounded px-1.5 py-0.5 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]" data-testid="evidence-truncated">
+          <span className="rounded px-[var(--space-1)] py-[var(--space-0-5)] bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]" data-testid="evidence-truncated">
             truncated
           </span>
         )}

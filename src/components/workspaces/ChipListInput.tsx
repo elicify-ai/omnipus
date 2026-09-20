@@ -129,8 +129,8 @@ export function ChipListInput({
   const resolvedChipClassName = classes(CHIP_BASE_CLASS, chipClassName)
   const resolvedChipRemoveClassName = classes('shrink-0', chipRemoveClassName)
   return (
-    <div className="flex flex-col gap-1.5" data-testid={testId}>
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-[var(--space-1)]" data-testid={testId}>
+      <div className="flex items-center gap-[var(--space-2)]">
         <Input
           id={id}
           aria-label={ariaLabel}
@@ -151,7 +151,7 @@ export function ChipListInput({
           type="button"
           variant="outline"
           size="sm"
-          className="h-9 px-2 shrink-0"
+          className="h-9 px-[var(--space-2)] shrink-0"
           onClick={commit}
           aria-label={`Add ${noun}`}
           disabled={!draft.trim()}
@@ -161,7 +161,7 @@ export function ChipListInput({
       </div>
       {error && <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{error}</p>}
       {values.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1">
+        <div className="flex flex-wrap gap-[var(--space-1)] mt-[var(--space-1)]">
           {values.map((value, index) => (
             <span
               // Position-qualified: a list can legitimately arrive from the

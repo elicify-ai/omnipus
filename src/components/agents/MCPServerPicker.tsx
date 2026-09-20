@@ -10,7 +10,7 @@ interface MCPServerPickerProps {
 export function MCPServerPicker({ servers, mcpConfig, onChange }: MCPServerPickerProps) {
   if (servers.length === 0) {
     return (
-      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] py-2">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] py-[var(--space-2)]">
         No MCP servers configured. Add servers in Settings.
       </p>
     )
@@ -27,15 +27,15 @@ export function MCPServerPicker({ servers, mcpConfig, onChange }: MCPServerPicke
   }
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-[var(--space-1)]">
       {servers.map((server) => {
         const isEnabled = enabledIds.has(server.id)
         return (
           <div
             key={server.id}
-            className="flex items-center justify-between px-3 py-2.5 rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)]"
+            className="flex items-center justify-between px-[var(--space-2-5)] py-[var(--space-2)] rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)]"
           >
-            <div className="min-w-0 flex-1 mr-4">
+            <div className="min-w-0 flex-1 mr-[var(--space-3)]">
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] font-medium truncate">
                 {server.name}
               </p>

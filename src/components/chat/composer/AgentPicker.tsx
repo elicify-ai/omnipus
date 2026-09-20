@@ -199,12 +199,12 @@ export function AgentPicker({
 
   if (hasHardError) {
     return (
-      <div className={cn('flex items-center gap-2 px-2 min-w-0', className)}>
+      <div className={cn('flex items-center gap-[var(--space-2)] px-[var(--space-2)] min-w-0', className)}>
         <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] truncate">Could not load agents</span>
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 px-2 text-[length:var(--type-caption-size)] shrink-0"
+          className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] shrink-0"
           onClick={() => refetch()}
         >
           Retry
@@ -235,7 +235,7 @@ export function AgentPicker({
         disabled
         tabIndex={tabIndex}
         className={cn(
-          'flex items-center gap-1.5 h-7 px-1.5 text-[length:var(--type-utility-xs-size)] font-medium max-w-[200px] min-w-0',
+          'flex items-center gap-[var(--space-1)] h-7 px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium max-w-[200px] min-w-0',
           className,
         )}
         title={`This session belongs to ${lockedWorkerAgent.name} — the agent cannot be changed for a worker session.`}
@@ -262,7 +262,7 @@ export function AgentPicker({
 
   if (isDraftOnly) {
     return (
-      <div className={cn('flex items-center gap-2 px-2 min-w-0', className)}>
+      <div className={cn('flex items-center gap-[var(--space-2)] px-[var(--space-2)] min-w-0', className)}>
         <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">
           All agents are in draft status. Configure an agent to start chatting.
         </span>
@@ -302,7 +302,7 @@ export function AgentPicker({
             // Compact everywhere — deliberately NO pointer-coarse:min-h-[44px]:
             // on touch devices the 44px floor inflated the control (operator
             // wants the composer context row genuinely compact).
-            'flex items-center gap-1.5 h-7 px-1.5 text-[length:var(--type-utility-xs-size)] font-medium max-w-[200px] min-w-0',
+            'flex items-center gap-[var(--space-1)] h-7 px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium max-w-[200px] min-w-0',
             className,
           )}
           title={activeAgent?.description || activeAgent?.name || 'Select agent'}
@@ -343,7 +343,7 @@ export function AgentPicker({
           <DropdownMenuItem
             key={agent.id}
             onClick={() => handleAgentSelect(agent.id)}
-            className="flex items-center gap-2"
+            className="flex items-center gap-[var(--space-2)]"
             title={agent.description || agent.name}
           >
             {/* Fix 9: aria-hidden — same rationale as the trigger's dot

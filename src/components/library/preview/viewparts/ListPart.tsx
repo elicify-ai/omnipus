@@ -37,7 +37,7 @@ function ListRow({
   const renderDetailValue = (v: string): ReactNode => (cellLinks ? <CellText value={v} resolver={cellLinks} /> : v)
   return (
     <li
-      className={`flex items-baseline gap-2 border-b border-[var(--color-border)] px-3 py-1.5 text-[13px] last:border-b-0 ${
+      className={`flex items-baseline gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[13px] last:border-b-0 ${
         onOpenPath ? 'cursor-pointer hover:bg-[var(--color-surface-2)]/40' : ''
       }`}
       data-testid="viewpart-list-row"
@@ -122,7 +122,7 @@ export function ListPart({
       ) : (
         groups.map((group) => (
           <div key={`${group.key}|${group.absent === true}`}>
-            <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1">
+            <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)]">
               <GroupHeaderLabel label={group.key} count={group.count} absent={group.absent} />
             </div>
             <ul>

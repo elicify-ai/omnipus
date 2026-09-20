@@ -98,17 +98,17 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
   const doneTodos = todos.filter((t: Todo) => t.status === 'completed').length
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-[var(--space-1)]">
       <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         {/* GOAL-FR-057 — relabelled Todos (visible text only; the three
             aria-labels below stay byte-identical, C-62/C-79). */}
         {`Todos${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}
       </p>
-      <div className="space-y-1">
+      <div className="space-y-[var(--space-1)]">
         {todos.map((todo: Todo, idx: number) => (
           <div
             key={idx}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
+            className="w-full flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
           >
             <button tabIndex={0}
               type="button"
@@ -119,7 +119,7 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
               aria-checked={
                 todo.status === 'completed' ? true : todo.status === 'in_progress' ? 'mixed' : false
               }
-              className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity disabled:opacity-50 disabled:pointer-events-none"
+              className="flex items-center gap-[var(--space-2)] flex-1 text-left hover:opacity-80 transition-opacity disabled:opacity-50 disabled:pointer-events-none"
             >
               {todo.status === 'completed' ? (
                 <CheckSquare size={13} className="shrink-0 text-[color:var(--color-success)]" />
@@ -148,7 +148,7 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
           </div>
         ))}
       </div>
-      <div className="flex items-center gap-2 mt-1.5">
+      <div className="flex items-center gap-[var(--space-2)] mt-[var(--space-1)]">
         <Input
           aria-label="New checklist item"
           value={newTodo}
@@ -168,7 +168,7 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
           type="button"
           variant="outline"
           size="sm"
-          className="h-8 px-2 shrink-0"
+          className="h-8 px-[var(--space-2)] shrink-0"
           onClick={handleAddTodo}
           aria-label="Add checklist item"
           disabled={disabled || !newTodo.trim()}

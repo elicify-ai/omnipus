@@ -182,7 +182,7 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
         alignItems: 'center',
         gap: '3px',
         width: '100%',
-        padding: '1px 4px',
+        padding: 'var(--border-width-hairline) var(--space-1)',
         borderRadius: '4px',
         overflow: 'hidden',
         cursor: 'pointer',

@@ -88,7 +88,7 @@ export function KnowledgeRailPanelHeader({
   );
 
   const className =
-    "flex w-full items-center gap-2 px-3 py-2 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)]";
+    "flex w-full items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)]";
 
   if (!collapsible) return <h3 className={className}>{body}</h3>;
 

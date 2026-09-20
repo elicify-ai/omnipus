@@ -95,7 +95,7 @@ function ActivityRow({
         disabled={!canExpand}
         aria-expanded={canExpand ? expanded : undefined}
         className={cn(
-          'flex w-full items-center gap-2 py-1.5 text-left transition-colors',
+          'flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
           canExpand ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : 'cursor-default',
         )}
       >
@@ -126,21 +126,21 @@ function ActivityRow({
       </button>
 
       {canExpand && expanded && item.kind === 'judge' && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2" data-testid="judge-verdict-detail">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]" data-testid="judge-verdict-detail">
           {/* Per-criterion verdict list (ADR-049 D2/D4/US-13/SD-C11). `text`
               is the raw criterion_id — this global feed has no title lookup
               (see JudgeActivityItem's doc comment). */}
-          <ul className="space-y-1">
+          <ul className="space-y-[var(--space-1)]">
             {item.criterionVerdicts.map((cv, idx) => (
-              <li key={idx} className="flex items-start gap-1.5 text-[length:var(--type-caption-size)]">
+              <li key={idx} className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
                 {cv.met ? (
-                  <Check size={11} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-success)]" aria-hidden="true" />
+                  <Check size={11} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[color:var(--color-success)]" aria-hidden="true" />
                 ) : (
-                  <X size={11} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-error)]" aria-hidden="true" />
+                  <X size={11} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[color:var(--color-error)]" aria-hidden="true" />
                 )}
                 <div className="min-w-0">
                   <p className="font-mono text-[var(--color-secondary)] truncate">{cv.text}</p>
-                  {cv.reason && <p className="text-[var(--color-muted)] whitespace-pre-wrap mt-0.5">{cv.reason}</p>}
+                  {cv.reason && <p className="text-[var(--color-muted)] whitespace-pre-wrap mt-[var(--space-0-5)]">{cv.reason}</p>}
                 </div>
               </li>
             ))}
@@ -159,7 +159,7 @@ function ActivityRow({
       )}
 
       {canExpand && expanded && item.kind !== 'judge' && steps && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-1">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-1)]">
           {/* surface="panel" (Fix 2, user-approved 2026-07-16): this panel is
               the designated home for the background/noisy step detail the
               thread hides by default — its policy INVERTS to show
@@ -170,7 +170,7 @@ function ActivityRow({
             step.kind === 'tool' ? (
               <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} surface="panel" />
             ) : (
-              <p key={idx} className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-0.5">
+              <p key={idx} className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-[var(--space-0-5)]">
                 {step.text}
               </p>
             ),
@@ -180,8 +180,8 @@ function ActivityRow({
               dot + muted "Final result" label, matching SubagentBlock's own
               treatment (the thread card this replaces at idle/default). */}
           {finalResult && (
-            <div className="mt-1">
-              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
+            <div className="mt-[var(--space-1)]">
+              <div className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
                 {statusDot('bg-[var(--color-success)]')}
                 Final result
               </div>
@@ -194,7 +194,7 @@ function ActivityRow({
       )}
 
       {show3pNotice && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1">
+        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No live step detail yet</p>
         </div>
       )}
@@ -218,17 +218,17 @@ export function ActivityPanel({
           <Badge variant={running.length > 0 ? 'default' : 'muted'}>{running.length} running</Badge>
         </SheetHeader>
 
-        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+        <div className="flex-1 overflow-y-auto px-[var(--space-2-5)] py-[var(--space-2-5)] space-y-[var(--space-3)]">
           {isEmpty && (
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] text-center py-6">No background activity yet.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] text-center py-[var(--space-4)]">No background activity yet.</p>
           )}
 
           {running.length > 0 && (
-            <div className="space-y-2">
-              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
+            <div className="space-y-[var(--space-2)]">
+              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-[var(--space-1)]">
                 Running now
               </h3>
-              <div className="space-y-1">
+              <div className="space-y-[var(--space-1)]">
                 {running.map((item) => (
                   <ActivityRow key={item.key} item={item} />
                 ))}
@@ -237,11 +237,11 @@ export function ActivityPanel({
           )}
 
           {recentlyFinished.length > 0 && (
-            <div className="space-y-2">
-              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
+            <div className="space-y-[var(--space-2)]">
+              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-[var(--space-1)]">
                 Recently finished
               </h3>
-              <div className="space-y-1">
+              <div className="space-y-[var(--space-1)]">
                 {recentlyFinished.map((item) => (
                   <ActivityRow key={item.key} item={item} />
                 ))}

@@ -139,7 +139,7 @@ function ModelLimitLine({ providerId, row }: { providerId: string; row: ModelLim
   const notEntitled = row.entitled === false
   return (
     <div
-      className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 border-b border-[var(--color-border)] last:border-0"
+      className="flex flex-wrap items-center gap-x-[var(--space-2-5)] gap-y-[var(--space-1)] py-[var(--space-1)] border-b border-[var(--color-border)] last:border-0"
       data-testid={`model-limit-row-${providerId}-${row.id}`}
     >
       <span
@@ -161,7 +161,7 @@ function ModelLimitLine({ providerId, row }: { providerId: string; row: ModelLim
           limits unknown
         </Badge>
       )}
-      <div className="flex flex-wrap items-center gap-x-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+      <div className="flex flex-wrap items-center gap-x-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         {row.windowUnknown ? (
           <>
             <span data-testid={`model-limit-window-${providerId}-${row.id}`}>{NO_CONTEXT_LENGTH_COPY}</span>
@@ -406,7 +406,7 @@ export function ProviderRow({
         />
       )}
 
-      <div className="flex items-center gap-3 px-4 py-3">
+      <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]">
         {showIcon && (
           entry ? (
             <BrandIcon slug={catalogLogoSlug(entry)} size={22} decorative className="shrink-0" />
@@ -415,14 +415,14 @@ export function ProviderRow({
           )
         )}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-[var(--space-2)] flex-wrap">
             <button
               tabIndex={0}
               type="button"
               onClick={() => setExpanded((v) => !v)}
               aria-expanded={expanded}
               aria-controls={`model-limits-${provider.id}`}
-              className="flex items-center gap-1 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+              className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
               data-testid={`provider-row-expand-toggle-${provider.id}`}
             >
               <CaretDown
@@ -432,7 +432,7 @@ export function ProviderRow({
               />
               <span data-testid={`provider-row-title-${provider.id}`}>{title}</span>
             </button>
-            <Badge data-testid={badge.testId} variant={badge.variant} className="gap-1">
+            <Badge data-testid={badge.testId} variant={badge.variant} className="gap-[var(--space-1)]">
               {badge.icon}
               {badge.text}
             </Badge>
@@ -452,28 +452,28 @@ export function ProviderRow({
             )}
           </div>
           {subtitle && (
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
               {subtitle}
             </p>
           )}
           {provider.models && provider.models.length > 0 && (
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5 font-mono">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] font-mono">
               {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}
             </p>
           )}
           {provider.error && (
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-0.5">{provider.error}</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-0-5)]">{provider.error}</p>
           )}
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-[var(--space-2)] shrink-0">
           {onCheckEntitlement && (
             <button
               tabIndex={0}
               type="button"
               onClick={onCheckEntitlement}
               disabled={checkingEntitlement}
-              className="flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
+              className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
               data-testid={`check-entitlement-btn-${provider.id}`}
             >
               {checkingEntitlement ? (
@@ -498,7 +498,7 @@ export function ProviderRow({
               variant={signInActionLabel(provider.status) === 'Manage' ? 'outline' : 'default'}
               onClick={handleSignInAction}
               disabled={signingIn}
-              className="h-7 px-3 text-[length:var(--type-utility-xs-size)]"
+              className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
               data-testid={
                 signInActionLabel(provider.status) === 'Manage'
                   ? `manage-btn-${provider.id}`
@@ -511,7 +511,7 @@ export function ProviderRow({
             <Button
               size="sm"
               onClick={onConfigure}
-              className="h-7 px-3 text-[length:var(--type-utility-xs-size)]"
+              className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
               data-testid={`configure-btn-${provider.id}`}
             >
               {connected ? 'Edit' : (
@@ -528,7 +528,7 @@ export function ProviderRow({
         <p
           role="alert"
           aria-live="assertive"
-          className="px-4 pb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
+          className="px-[var(--space-3)] pb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
           data-testid={`entitlement-error-${provider.id}`}
         >
           {entitlementError}
@@ -541,7 +541,7 @@ export function ProviderRow({
       {expanded && (
         <div
           id={`model-limits-${provider.id}`}
-          className="border-t border-[var(--color-border)] px-4 py-2 bg-[var(--color-surface-2)]"
+          className="border-t border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)]"
           data-testid={`model-limits-${provider.id}`}
         >
           {limitRows.length > 0 ? (
@@ -549,7 +549,7 @@ export function ProviderRow({
               <ModelLimitLine key={row.id} providerId={provider.id} row={row} />
             ))
           ) : (
-            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] py-1.5" data-testid={`model-limits-empty-${provider.id}`}>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] py-[var(--space-1)]" data-testid={`model-limits-empty-${provider.id}`}>
               No catalog data available for this provider.
             </p>
           )}

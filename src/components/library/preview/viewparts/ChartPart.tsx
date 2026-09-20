@@ -70,7 +70,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
 
   if (allKeys.length === 0) {
     return (
-      <div className="px-3 py-3 text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="viewpart-chart">
+      <div className="px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="viewpart-chart">
         No points to draw — the series is empty.
       </div>
     )
@@ -122,7 +122,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
 
   return (
     <div className="flex flex-col" data-testid="viewpart-chart">
-      <div className="overflow-x-auto px-3 py-2">
+      <div className="overflow-x-auto px-[var(--space-2-5)] py-[var(--space-2)]">
         <svg
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           className="h-auto w-full max-w-[36rem]"
@@ -255,9 +255,9 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
         </svg>
       </div>
       {/* Legend: one entry per series, unit named — never merged (G2). */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1 px-3 pb-2" data-testid="viewpart-chart-legend">
+      <div className="flex flex-wrap gap-x-[var(--space-3)] gap-y-[var(--space-1)] px-[var(--space-2-5)] pb-[var(--space-2)]" data-testid="viewpart-chart-legend">
         {series.map((s, si) => (
-          <span key={s.unit ?? `series-${si}`} className="inline-flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+          <span key={s.unit ?? `series-${si}`} className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             <span
               className="inline-block h-2 w-2 rounded-sm"
               style={{ backgroundColor: SERIES_COLORS[si % SERIES_COLORS.length] }}

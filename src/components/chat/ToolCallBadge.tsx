@@ -127,8 +127,8 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread. Separation comes from `mt-2`
     // spacing and the status dot, not a card frame.
-    <div data-testid="tool-call-badge" data-tool={toolCall.tool} className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
-      <div className="flex w-full items-center gap-2">
+    <div data-testid="tool-call-badge" data-tool={toolCall.tool} className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
+      <div className="flex w-full items-center gap-[var(--space-2)]">
         {/* Toggle button. Mirrors GenericToolCall.tsx's `disabled={!hasDetail}`
             gate: while running, there is nothing to expand — a focusable
             button whose Enter/Space no-ops while still announcing
@@ -142,7 +142,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           onClick={() => !isRunning && setExpanded((e) => !e)}
           disabled={isRunning}
           className={cn(
-            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
+            'flex flex-1 min-w-0 items-center gap-[var(--space-2)] py-[var(--space-1)] text-left transition-colors',
             !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
             isRunning ? 'cursor-default' : undefined
           )}
@@ -169,15 +169,15 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           stands in for the old bordered panel, aligned under the status-dot
           column instead of boxing the whole row. */}
       {expanded && !isRunning && (
-        <div className="ml-[3px] space-y-2 border-l-2 border-[var(--color-border)] py-1 pl-3">
+        <div className="ml-[3px] space-y-[var(--space-2)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div>
-            <div className="text-[var(--color-muted)] mb-1">Tool</div>
+            <div className="text-[var(--color-muted)] mb-[var(--space-1)]">Tool</div>
             <code className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] break-all">
               {toolCall.tool}
             </code>
           </div>
           <div>
-            <div className="text-[var(--color-muted)] mb-1">Parameters</div>
+            <div className="text-[var(--color-muted)] mb-[var(--space-1)]">Parameters</div>
             {/* Fix 7 (2026-07-16): capped like the Result pane below — params
                 are now retained post-completion (see chat.ts's params-survive
                 -merge fix), so an uncapped write_file/edit content param can
@@ -188,7 +188,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           </div>
           {toolCall.result !== undefined && (
             <div>
-              <div className="text-[var(--color-muted)] mb-1">Result</div>
+              <div className="text-[var(--color-muted)] mb-[var(--space-1)]">Result</div>
               {/* Keyboard-scrollable: WebKit doesn't put a plain scrollable
                   <pre> in the Tab order by default, so a keyboard-only user
                   can't reach/scroll it at all. tabIndex + role="region" +

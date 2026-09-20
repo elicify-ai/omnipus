@@ -116,18 +116,18 @@ describe('AlertDialog', () => {
   // the class contract is the unit oracle. Overlapping 44px hit-regions at
   // coarse 390×844 is the real-browser oracle (lead re-runs that check; do not
   // pin pre-geometry page coordinates here).
-  it('footer applies gap-6 only for coarse pointers below sm', () => {
+  it('footer widens the stacked gap only for coarse pointers below sm', () => {
     render(<Harness open onOpenChange={() => {}} onAction={() => {}} />)
     const footer = screen.getByRole('button', { name: 'Cancel' }).closest('div')
     expect(footer).not.toBeNull()
     expect(footer).toHaveClass(
       'flex',
       'flex-col',
-      'gap-2',
-      'max-sm:pointer-coarse:gap-6',
+      'gap-[var(--space-2)]',
+      'max-sm:pointer-coarse:gap-[var(--space-4)]',
       'sm:flex-row',
       'sm:justify-end',
-      'sm:space-x-2',
+      'sm:space-x-[var(--space-2)]',
       'sm:gap-0',
     )
     expect(footer).not.toHaveClass('gap-6')

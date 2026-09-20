@@ -48,11 +48,11 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
   }
 
   return (
-    <div className="px-4 py-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
+    <div className="px-[var(--space-3)] py-[var(--space-2-5)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
       {/* Workspace name row */}
-      <div className="flex items-center gap-2 mb-1">
+      <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
         {editingName ? (
-          <div className="flex items-center gap-2 flex-1">
+          <div className="flex items-center gap-[var(--space-2)] flex-1">
             <Input
               value={nameDraft}
               onChange={(e) => setNameDraft(e.target.value)}
@@ -66,7 +66,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
             />
             <Button
               size="sm"
-              className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)]"
+              className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
               onClick={handleSaveName}
               disabled={updateMutation.isPending}
             >
@@ -76,7 +76,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 px-2 text-[length:var(--type-utility-xs-size)]"
+              className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
               onClick={handleCancelEdit}
             >
               <X size={12} />
@@ -94,7 +94,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
                 setEditingName(true)
               }}
               aria-label="Edit workspace name"
-              className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+              className="p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
             >
               <PencilSimple size={14} />
             </button>
@@ -103,7 +103,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
       </div>
 
       {/* Description */}
-      <div className="flex items-center gap-4 flex-wrap mb-2">
+      <div className="flex items-center gap-[var(--space-3)] flex-wrap mb-[var(--space-2)]">
         {workspace.description && (
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] flex-shrink-0 max-w-xl">
             {workspace.description}

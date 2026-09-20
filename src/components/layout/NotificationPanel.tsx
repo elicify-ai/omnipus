@@ -113,14 +113,14 @@ export function NotificationPanel() {
                 <button tabIndex={0}
                   type="button"
                   onClick={() => handleClick(item)}
-                  className={`flex w-full items-start gap-2.5 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-2)] ${
+                  className={`flex w-full items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2-5)] text-left transition-colors hover:bg-[var(--color-surface-2)] ${
                     item.read ? '' : 'bg-[var(--color-surface-2)]'
                   }`}
                 >
                   <Circle
                     size={10}
                     weight="fill"
-                    className="mt-1.5 shrink-0"
+                    className="mt-[var(--space-1)] shrink-0"
                     style={{
                       color: item.read
                         ? 'var(--color-border)'
@@ -128,7 +128,7 @@ export function NotificationPanel() {
                     }}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-baseline justify-between gap-[var(--space-2)]">
                       <span
                         className={`truncate text-[length:var(--type-body-compact-size)] ${
                           item.read
@@ -146,7 +146,7 @@ export function NotificationPanel() {
                       </span>
                     </div>
                     {item.body && (
-                      <p className="mt-0.5 line-clamp-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                      <p className="mt-[var(--space-0-5)] line-clamp-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                         {item.body}
                       </p>
                     )}

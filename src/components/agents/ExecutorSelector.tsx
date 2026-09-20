@@ -110,8 +110,8 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
   }
 
   return (
-    <div className="space-y-3" data-testid="executor-selector">
-      <div className="space-y-1.5">
+    <div className="space-y-[var(--space-2-5)]" data-testid="executor-selector">
+      <div className="space-y-[var(--space-1)]">
         <label htmlFor="executor-kind" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Runtime
         </label>
@@ -160,7 +160,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
       </div>
 
       {kind === 'external-cli' && (
-        <div className="space-y-1.5" data-testid="executor-cli-block">
+        <div className="space-y-[var(--space-1)]" data-testid="executor-cli-block">
           <label htmlFor="executor-cli" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             CLI tool
           </label>
@@ -189,9 +189,9 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
       {kind === 'remote-a2a' && (
         <div
           data-testid="executor-remote-a2a-note"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Info size={14} className="text-[var(--color-muted)] shrink-0 mt-0.5" weight="fill" />
+          <Info size={14} className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
             Remote (A2A) executors are <strong className="text-[var(--color-secondary)]">reserved — not available in v0.1.0</strong>.
             Selecting this will cause delegated sub-turns to fail with an error until A2A resolution ships.
@@ -225,7 +225,7 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
   })
 
   return (
-    <div className="space-y-2 pt-1">
+    <div className="space-y-[var(--space-2)] pt-[var(--space-1)]">
       <Button
         type="button"
         variant="outline"
@@ -236,7 +236,7 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
           mutate()
         }}
         data-testid="runner-test-button"
-        className="gap-1.5"
+        className="gap-[var(--space-1)]"
       >
         {isPending && <Spinner size={13} className="animate-spin" />}
         {isPending ? 'Testing…' : 'Test Connection'}
@@ -245,9 +245,9 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
       {error && (
         <div
           data-testid="runner-test-request-error"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <XCircle size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
+          <XCircle size={14} className="text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug">
             Test request failed: {getErrorMessage(error, 'Test request failed')}
           </p>
@@ -273,10 +273,10 @@ function RunnerTestResult({ result }: { result: RunnerTestResponse }) {
     <div
       data-testid="runner-test-result"
       data-reason={result.reason || 'ok'}
-      className={`flex items-start gap-2 rounded-md border px-3 py-2.5 ${toneClass}`}
+      className={`flex items-start gap-[var(--space-2)] rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] ${toneClass}`}
     >
-      <Icon size={15} className="shrink-0 mt-0.5" weight="fill" />
-      <div className="min-w-0 space-y-0.5">
+      <Icon size={15} className="shrink-0 mt-[var(--space-0-5)]" weight="fill" />
+      <div className="min-w-0 space-y-[var(--space-0-5)]">
         <p className="text-[length:var(--type-utility-xs-size)] font-medium leading-tight">{status.title}</p>
         <p className="text-[length:var(--type-caption-size)] opacity-90 leading-snug break-words">{result.message}</p>
         {result.cli_version && (

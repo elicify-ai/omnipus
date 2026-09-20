@@ -11,7 +11,7 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      'inline-flex h-9 items-center justify-start rounded-lg bg-[var(--color-surface-1)] p-1 gap-1',
+      'inline-flex h-9 items-center justify-start rounded-lg bg-[var(--color-surface-1)] p-[var(--space-1)] gap-[var(--space-1)]',
       className
     )}
     {...props}
@@ -26,7 +26,7 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      'relative inline-flex items-center justify-center whitespace-nowrap rounded-md px-3 py-1 text-[length:var(--type-body-compact-size)] font-medium ring-offset-[var(--color-primary)] transition-all motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50',
+      'relative inline-flex items-center justify-center whitespace-nowrap rounded-md px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium ring-offset-[var(--color-primary)] transition-all motion-reduce:transition-none disabled:pointer-events-none disabled:opacity-50',
       'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
       'data-[state=active]:bg-[var(--color-surface-2)] data-[state=active]:text-[var(--color-secondary)] data-[state=active]:shadow-sm',
       className
@@ -52,7 +52,7 @@ const TabsContent = React.forwardRef<
     // callers with a genuinely control-free panel can pass tabIndex={0} back.
     tabIndex={-1}
     className={cn(
-      'mt-4 ring-offset-[var(--color-primary)]',
+      'mt-[var(--space-3)] ring-offset-[var(--color-primary)]',
       className
     )}
     {...props}

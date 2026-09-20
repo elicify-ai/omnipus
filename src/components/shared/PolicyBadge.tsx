@@ -27,7 +27,7 @@ export function PolicyBadge({ policy, onClick, active, disabled, title }: Policy
       disabled={disabled}
       title={title}
       aria-pressed={active}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+      className={`inline-flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
         active ? cfg.activeColor : `border-transparent ${cfg.color} hover:bg-[var(--color-surface-2)]`
       }`}
     >

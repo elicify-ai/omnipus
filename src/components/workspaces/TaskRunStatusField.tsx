@@ -132,13 +132,13 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
     : taskLevelCanRunNow
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-[var(--space-1)]">
       <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Run status</p>
       {showBadge ? (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-[var(--space-2)]">
           <Badge
             data-testid="task-run-status-badge"
-            className={cn('h-7 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-2 inline-flex items-center', badgeClass)}
+            className={cn('h-7 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center', badgeClass)}
           >
             {statusLabel(badgeStatus)}
           </Badge>
@@ -159,7 +159,7 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
         <Button
           type="button"
           size="sm"
-          className="gap-2 text-[length:var(--type-utility-xs-size)] h-8"
+          className="gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8"
           onClick={() => doRunNow()}
           disabled={isStarting}
         >

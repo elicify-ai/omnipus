@@ -189,13 +189,13 @@ export function RemoveProviderDialog({
         )}
 
         {grouped.length > 0 && (
-          <div className="space-y-3" data-testid="remove-provider-dependents">
+          <div className="space-y-[var(--space-2-5)]" data-testid="remove-provider-dependents">
             {grouped.map(({ role, dependents }) => (
-              <div key={role} data-testid={`dependent-group-${role}`} className="space-y-1">
+              <div key={role} data-testid={`dependent-group-${role}`} className="space-y-[var(--space-1)]">
                 <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
                   {dependentGroupHeading(role, displayName)}
                 </p>
-                <ul className="max-h-40 overflow-y-auto space-y-0.5">
+                <ul className="max-h-40 overflow-y-auto space-y-[var(--space-0-5)]">
                   {dependents.map((dependent) => (
                     <li
                       key={`${role}:${dependent.id}`}
@@ -212,13 +212,13 @@ export function RemoveProviderDialog({
         )}
 
         {needsNewDefault && !onlyProvider && (
-          <div className="space-y-2" data-testid="new-default-section">
+          <div className="space-y-[var(--space-2)]" data-testid="new-default-section">
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">New default model</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {displayName} backs the default model. Choose the model that takes over before
               removing it.
             </p>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-[var(--space-1)]">
               {candidates.map((candidate) => {
                 const pressed = candidate.id === activeCandidateId
                 return (
@@ -234,7 +234,7 @@ export function RemoveProviderDialog({
                       // carrying it across would submit a pair that does not exist.
                       setModel('')
                     }}
-                    className="flex items-center gap-1.5 rounded border px-2 py-1 text-[length:var(--type-utility-xs-size)]"
+                    className="flex items-center gap-[var(--space-1)] rounded border px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
                     style={{
                       borderColor: pressed ? 'var(--color-accent)' : 'var(--color-border)',
                       color: 'var(--color-secondary)',

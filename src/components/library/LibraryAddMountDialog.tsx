@@ -245,7 +245,7 @@ export function LibraryAddMountDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-[var(--space-2-5)]">
           <label htmlFor="mount-path" className="text-[length:var(--type-utility-xs-size)] uppercase tracking-wide text-[var(--color-muted)]">
             Folder on your Mac
           </label>
@@ -264,25 +264,25 @@ export function LibraryAddMountDialog({
 
           {selected?.mountable === false && (
             <p
-              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
+              className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
               data-testid="library-add-mount-refused"
             >
-              <Prohibit size={16} className="mt-0.5 shrink-0" />
+              <Prohibit size={16} className="mt-[var(--space-0-5)] shrink-0" />
               {selected.reason ?? 'This folder cannot be mounted.'}
             </p>
           )}
           {selected?.broad && selected.mountable !== false && (
             <p
-              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
+              className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-add-mount-broad"
             >
-              <Warning size={16} className="mt-0.5 shrink-0" />
+              <Warning size={16} className="mt-[var(--space-0-5)] shrink-0" />
               {selected.reason ?? 'This is a broad grant.'}
             </p>
           )}
           {selected && selected.mountable && !selected.broad && (
-            <p className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-success)]">
-              <CheckCircle size={16} className="mt-0.5 shrink-0" />
+            <p className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-success)]">
+              <CheckCircle size={16} className="mt-[var(--space-0-5)] shrink-0" />
               Scoped to this folder and what is inside it.
             </p>
           )}
@@ -293,24 +293,24 @@ export function LibraryAddMountDialog({
               answers that must never live in a toast. */}
           {showRefusal && (
             <p
-              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
+              className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
               data-testid="library-add-mount-dialog-refused"
             >
-              <Prohibit size={16} className="mt-0.5 shrink-0" />
+              <Prohibit size={16} className="mt-[var(--space-0-5)] shrink-0" />
               {refusal}
             </p>
           )}
           {showingCreatedWarning && (
             <p
-              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
+              className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-add-mount-dialog-broad"
             >
-              <Warning size={16} className="mt-0.5 shrink-0" />
+              <Warning size={16} className="mt-[var(--space-0-5)] shrink-0" />
               {createdWarning}
             </p>
           )}
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-[var(--space-2)]">
             <Button type="button" variant="outline" size="sm" onClick={toggleBrowse}>
               {browsing ? 'Hide browser' : 'Browse…'}
             </Button>
@@ -321,7 +321,7 @@ export function LibraryAddMountDialog({
 
           {browsing && (
             <div className="rounded border border-[var(--color-border)] overflow-hidden">
-              <div className="flex items-center gap-2 px-2 py-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
+              <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] border-b border-[var(--color-border)] bg-[var(--color-surface-2)]">
                 <Button
                   type="button"
                   variant="ghost"
@@ -339,9 +339,9 @@ export function LibraryAddMountDialog({
               </div>
 
               <div className="max-h-56 overflow-y-auto" data-testid="library-add-mount-browser">
-                {listError && <p className="p-3 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">{listError}</p>}
+                {listError && <p className="p-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">{listError}</p>}
                 {!listError && listing?.entries.length === 0 && (
-                  <p className="p-3 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No folders here.</p>
+                  <p className="p-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No folders here.</p>
                 )}
                 {listing?.entries.map((entry) => (
                   <button
@@ -354,7 +354,7 @@ export function LibraryAddMountDialog({
                       if (entry.mountable) void load(entry.path)
                     }}
                     data-testid={`library-add-mount-row-${entry.name}`}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[length:var(--type-body-compact-size)] border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-2)] ${
+                    className={`flex w-full items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-body-compact-size)] border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-2)] ${
                       path === entry.path ? 'bg-[var(--color-surface-3)]' : ''
                     }`}
                   >

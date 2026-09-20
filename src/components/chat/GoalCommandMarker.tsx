@@ -30,7 +30,7 @@ export function GoalCommandMarker() {
     <span
       data-testid="goal-command-marker"
       title="This message set a goal"
-      className="inline-flex items-center gap-1 font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]"
+      className="inline-flex items-center gap-[var(--space-1)] font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]"
     >
       <Target size={10} weight="fill" className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
       Goal

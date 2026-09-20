@@ -70,7 +70,7 @@ function Card({
   // The title is a shrinkable flex item that wraps at word boundaries and
   // breaks an unbroken run, so the card always stays inside its column.
   const content = (
-    <span className="flex min-w-0 items-baseline gap-1">
+    <span className="flex min-w-0 items-baseline gap-[var(--space-1)]">
       <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]" data-testid="viewpart-board-card-title">
         {row.title}
       </span>
@@ -86,7 +86,7 @@ function Card({
         onClick={() => onOpenPath(row.path)}
         aria-label={`Open ${row.title}`}
         data-testid="viewpart-board-card"
-        className="block w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-3)]"
+        className="block w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-3)]"
       >
         {content}
       </button>
@@ -94,7 +94,7 @@ function Card({
   }
   return (
     <div
-      className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+      className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
       data-testid="viewpart-board-card"
     >
       {content}
@@ -116,12 +116,12 @@ export function ColumnsPart({
   const columns = columnsFromGroups(part, rows) ?? columnsFromChoiceCells(part, rows)
   return (
     <div className="flex min-h-0 flex-col" data-testid="viewpart-columns">
-      <div className="overflow-x-auto p-3">
-        <div className="flex items-start gap-2">
+      <div className="overflow-x-auto p-[var(--space-2-5)]">
+        <div className="flex items-start gap-[var(--space-2)]">
           {columns.map((col) => (
             <div
               key={`${col.key}|${col.absent}`}
-              className="flex w-44 shrink-0 flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2"
+              className="flex w-44 shrink-0 flex-col gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)]"
               data-testid="viewpart-board-column"
             >
               <GroupHeaderLabel label={col.key} count={col.rows.length} absent={col.absent} />

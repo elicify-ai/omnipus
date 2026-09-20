@@ -69,7 +69,7 @@ function LinkOnlyFallback({ href, label }: { href: string; label: string }) {
   const safe = isSafeHref(href)
 
   return (
-    <div data-testid="preview-link-fallback" className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)]">
+    <div data-testid="preview-link-fallback" className="mt-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]">
       <span className="text-[var(--color-muted)]">{label}: </span>
       {safe ? (
         <a tabIndex={0}
@@ -83,7 +83,7 @@ function LinkOnlyFallback({ href, label }: { href: string; label: string }) {
       ) : (
         <span className="text-[var(--color-muted)] italic">
           Cannot render link — invalid scheme:{' '}
-          <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-1 rounded break-all">
+          <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-[var(--space-1)] rounded break-all">
             {href}
           </code>
         </span>
@@ -104,7 +104,7 @@ function ErrorBlock({
   onRetry?: () => void
 }) {
   return (
-    <div className="mt-2 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 px-3 py-2 text-[length:var(--type-utility-xs-size)] space-y-1.5">
+    <div className="mt-[var(--space-2)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/5 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] space-y-[var(--space-1)]">
       <p className="text-[var(--color-error)]">{message}</p>
       {href && (
         <a tabIndex={0}
@@ -121,7 +121,7 @@ function ErrorBlock({
           type="button"
           onClick={onRetry}
           aria-label="Retry warmup"
-          className="mt-1 flex items-center gap-1 px-2 py-1 rounded border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+          className="mt-[var(--space-1)] flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
         >
           <ArrowsClockwise size={11} />
           Retry
@@ -142,9 +142,9 @@ function WarmupPlaceholder({ toolName }: { toolName: string }) {
   return (
     <div
       aria-live="polite"
-      className="flex items-center gap-2 px-4 py-6 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+      className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
     >
-      <span className="flex gap-1">
+      <span className="flex gap-[var(--space-1)]">
         <span
           className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce"
           style={{ animationDelay: '0ms' }}
@@ -302,7 +302,7 @@ export function IframePreview(props: IframePreviewProps) {
   // No result yet (tool still running).
   if (!result) {
     return (
-      <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[length:var(--type-utility-xs-size)] px-3 py-2 text-[var(--color-muted)]">
+      <div className="mt-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[length:var(--type-utility-xs-size)] px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-muted)]">
         Waiting for {toolName}…
       </div>
     )
@@ -316,7 +316,7 @@ export function IframePreview(props: IframePreviewProps) {
       return <LinkOnlyFallback href={result.url} label="Preview" />
     }
     return (
-      <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[length:var(--type-utility-xs-size)] px-3 py-2 text-[var(--color-muted)]">
+      <div className="mt-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[length:var(--type-utility-xs-size)] px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-muted)]">
         Preview URL unavailable.
       </div>
     )
@@ -331,7 +331,7 @@ export function IframePreview(props: IframePreviewProps) {
   // Dev mode — still warming up.
   if (isWarmupRequired && (warmupPhase === 'starting' || warmupPhase === 'probing')) {
     return (
-      <div className="mt-2 rounded-md border border-[var(--color-border)] overflow-hidden">
+      <div className="mt-[var(--space-2)] rounded-md border border-[var(--color-border)] overflow-hidden">
         <div data-testid="preview-warmup" className="bg-[var(--color-surface-1)] min-h-[80px] flex items-center justify-center">
           <WarmupPlaceholder toolName={toolName} />
         </div>
@@ -342,8 +342,8 @@ export function IframePreview(props: IframePreviewProps) {
   // Dev mode — warmup timed out.
   if (isWarmupRequired && warmupPhase === 'error') {
     return (
-      <div className="mt-2 rounded-md border border-[var(--color-border)] overflow-hidden">
-        <div className="bg-[var(--color-surface-1)] min-h-[80px] flex items-center justify-center p-4">
+      <div className="mt-[var(--space-2)] rounded-md border border-[var(--color-border)] overflow-hidden">
+        <div className="bg-[var(--color-surface-1)] min-h-[80px] flex items-center justify-center p-[var(--space-3)]">
           <ErrorBlock
             message="Dev server did not respond in time. It may still be starting."
             href={href}
@@ -357,8 +357,8 @@ export function IframePreview(props: IframePreviewProps) {
   // Ready — render the clickable preview link (US-9 / FR-016: link, never an
   // embedded iframe).
   return (
-    <div data-testid="preview-link-block" className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-      <div className="flex items-center gap-1.5 px-2 py-1 bg-[var(--color-surface-2)] border-b border-[var(--color-border)]">
+    <div data-testid="preview-link-block" className="mt-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
+      <div className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)]">
         <Globe size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
         <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono flex-1 truncate">
           {toolName}
@@ -369,7 +369,7 @@ export function IframePreview(props: IframePreviewProps) {
           onClick={handleOpen}
           aria-label="Open preview in new tab"
           title="Open in new tab"
-          className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
+          className="p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
         >
           <ArrowSquareOut size={13} />
         </button>
@@ -379,13 +379,13 @@ export function IframePreview(props: IframePreviewProps) {
           onClick={handleCopy}
           aria-label="Copy preview link"
           title="Copy link"
-          className="p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
+          className="p-[var(--space-1)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors"
         >
           <Copy size={13} />
         </button>
       </div>
 
-      <div className="px-3 py-2">
+      <div className="px-[var(--space-2-5)] py-[var(--space-2)]">
         <a tabIndex={0}
           data-testid="preview-link"
           href={href}
@@ -395,7 +395,7 @@ export function IframePreview(props: IframePreviewProps) {
         >
           {href}
         </a>
-        <p className="mt-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+        <p className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           Opens in your browser. The agent can also show you this preview through its built-in browser panel.
         </p>
       </div>

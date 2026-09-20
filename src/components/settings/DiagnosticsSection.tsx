@@ -107,15 +107,15 @@ export function DiagnosticsSection() {
   }
 
   return (
-    <section className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+    <section className="space-y-[var(--space-3)]">
+      <div className="flex items-start justify-between gap-[var(--space-2-5)]">
         <div>
           <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wider"
             style={{ color: 'var(--color-muted)' }}>
             Security health
           </h3>
           {result && (
-            <p className="text-[length:var(--type-caption-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-[length:var(--type-caption-size)] mt-[var(--space-0-5)]" style={{ color: 'var(--color-muted)' }}>
               Last checked:{' '}
               {new Date(result.checked_at).toLocaleString(undefined, {
                 month: 'short',
@@ -129,7 +129,7 @@ export function DiagnosticsSection() {
         <Button
           size="sm"
           variant="outline"
-          className="h-7 px-3 text-[length:var(--type-utility-xs-size)] gap-1.5 shrink-0"
+          className="h-7 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] gap-[var(--space-1)] shrink-0"
           onClick={() => doRun()}
           disabled={isRunning}
         >
@@ -157,7 +157,7 @@ export function DiagnosticsSection() {
         />
       ) : isError ? (
         <div
-          className="flex items-center gap-2.5 p-4 rounded-lg border"
+          className="flex items-center gap-[var(--space-2)] p-[var(--space-3)] rounded-lg border"
           style={{
             borderColor: 'rgba(239,68,68,0.25)',
             backgroundColor: 'rgba(239,68,68,0.06)',
@@ -169,16 +169,16 @@ export function DiagnosticsSection() {
           </p>
         </div>
       ) : result ? (
-        <div className="space-y-4">
+        <div className="space-y-[var(--space-3)]">
           <div
-            className="rounded-lg border p-4 space-y-3"
+            className="rounded-lg border p-[var(--space-3)] space-y-[var(--space-2-5)]"
             style={{
               borderColor: 'var(--color-border)',
               backgroundColor: 'var(--color-surface-1)',
             }}
           >
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-[var(--space-2)]">
                 {result.score >= 67 ? (
                   <ShieldCheck size={15} weight="fill" style={{ color: securityColor }} />
                 ) : (
@@ -188,12 +188,12 @@ export function DiagnosticsSection() {
                   Security Score
                 </span>
               </div>
-              <div className="flex items-baseline gap-1">
+              <div className="flex items-baseline gap-[var(--space-1)]">
                 <span className="text-2xl font-headline font-bold" style={{ color: securityColor }}>
                   {result.score}
                 </span>
                 <span className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>/100</span>
-                <span className="text-[length:var(--type-utility-xs-size)] font-semibold ml-1.5" style={{ color: securityColor }}>
+                <span className="text-[length:var(--type-utility-xs-size)] font-semibold ml-[var(--space-1)]" style={{ color: securityColor }}>
                   {getSecurityLabel(result.score)}
                 </span>
               </div>
@@ -213,7 +213,7 @@ export function DiagnosticsSection() {
                   }}
                 />
               </div>
-              <div className="flex justify-between mt-1">
+              <div className="flex justify-between mt-[var(--space-1)]">
                 <span className="text-[length:var(--type-caption-size)]" style={{ color: 'var(--color-muted)' }}>
                   0
                 </span>
@@ -233,18 +233,18 @@ export function DiagnosticsSection() {
             </p>
 
             {issuesByGroup && (
-              <div className="flex items-center gap-4 pt-0.5">
-                <div className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)]"
+              <div className="flex items-center gap-[var(--space-3)] pt-[var(--space-0-5)]">
+                <div className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
                   style={{ color: 'var(--color-error)' }}>
                   <XCircle size={11} weight="fill" />
                   {issuesByGroup.high.length} high
                 </div>
-                <div className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)]"
+                <div className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
                   style={{ color: 'var(--color-warning)' }}>
                   <Warning size={11} weight="fill" />
                   {issuesByGroup.medium.length} medium
                 </div>
-                <div className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)]"
+                <div className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
                   style={{ color: 'var(--color-info)' }}>
                   <Info size={11} weight="fill" />
                   {issuesByGroup.low.length} low
@@ -256,7 +256,7 @@ export function DiagnosticsSection() {
           {/* US-B4: score = 100 shows "protected" panel; otherwise show issue list */}
           {result.issues.length === 0 ? (
             <div
-              className="flex items-center gap-2.5 p-4 rounded-lg border"
+              className="flex items-center gap-[var(--space-2)] p-[var(--space-3)] rounded-lg border"
               data-testid="all-clear-panel"
               style={{
                 borderColor: 'rgba(16,185,129,0.25)',
@@ -270,15 +270,15 @@ export function DiagnosticsSection() {
             </div>
           ) : (
             issuesByGroup && (
-              <div className="space-y-3">
+              <div className="space-y-[var(--space-2-5)]">
                 {(['high', 'medium', 'low'] as const).map((severity) => {
                   const sev = issuesByGroup[severity]
                   if (sev.length === 0) return null
                   const cfg = SEVERITY_CONFIG[severity]
 
                   return (
-                    <div key={severity} className="space-y-1.5">
-                      <div className="flex items-center gap-1.5">
+                    <div key={severity} className="space-y-[var(--space-1)]">
+                      <div className="flex items-center gap-[var(--space-1)]">
                         <cfg.Icon size={11} weight="fill" style={{ color: cfg.color }} />
                         <span
                           className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
@@ -307,7 +307,7 @@ export function DiagnosticsSection() {
         </div>
       ) : (
         <div
-          className="flex flex-col items-center justify-center gap-3 py-8 rounded-lg border border-dashed text-center"
+          className="flex flex-col items-center justify-center gap-[var(--space-2-5)] py-[var(--space-5)] rounded-lg border border-dashed text-center"
           style={{ borderColor: 'var(--color-border)' }}
         >
           <ShieldWarning size={28} weight="duotone" style={{ color: 'var(--color-muted)' }} />
@@ -315,7 +315,7 @@ export function DiagnosticsSection() {
             <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
               No security scan yet
             </p>
-            <p className="text-[length:var(--type-utility-xs-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-0-5)]" style={{ color: 'var(--color-muted)' }}>
               Click "Check now" to see your security posture
             </p>
           </div>
@@ -344,33 +344,33 @@ function IssueCard({
       aria-expanded={expanded}
       onClick={onToggle}
       onKeyDown={(e) => e.key === 'Enter' && onToggle()}
-      className="rounded-lg border p-3 space-y-0 cursor-pointer transition-opacity"
+      className="rounded-lg border p-[var(--space-2-5)] space-y-0 cursor-pointer transition-opacity"
       data-testid={`issue-card-${issue.id}`}
       style={{
         borderColor: config.borderColor,
         backgroundColor: config.bgColor,
       }}
     >
-      <div className="flex items-start justify-between gap-2">
+      <div className="flex items-start justify-between gap-[var(--space-2)]">
         <p className="text-[length:var(--type-body-compact-size)] font-medium" style={{ color: 'var(--color-secondary)' }}>
           {issue.title}
         </p>
         <CaretRight
           size={12}
           style={{ color: config.color }}
-          className={`shrink-0 mt-0.5 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
+          className={`shrink-0 mt-[var(--space-0-5)] transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`}
         />
       </div>
 
       {expanded && (
-        <div className="space-y-2 mt-2 pt-2">
+        <div className="space-y-[var(--space-2)] mt-[var(--space-2)] pt-[var(--space-2)]">
           <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed" style={{ color: 'var(--color-muted)' }}>
             {issue.description}
           </p>
           <Separator style={{ opacity: 0.3 }} />
           <div>
             <p
-              className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider mb-1"
+              className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider mb-[var(--space-1)]"
               style={{ color: 'var(--color-muted)' }}
             >
               How to fix this
@@ -385,7 +385,7 @@ function IssueCard({
               href={issue.action_link}
               onClick={(e) => e.stopPropagation()}
               data-testid={`issue-action-link-${issue.id}`}
-              className="inline-flex items-center gap-1 text-[length:var(--type-utility-xs-size)] font-medium hover:underline underline-offset-2"
+              className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium hover:underline underline-offset-2"
               style={{ color: config.color }}
             >
               <CaretRight size={10} />

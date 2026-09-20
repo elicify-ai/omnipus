@@ -147,7 +147,7 @@ function SearchableSelect({
           aria-invalid={ariaInvalid}
           aria-required={required || undefined}
           className={cn(
-            'flex w-full items-center justify-between px-3 py-2 text-[length:var(--type-body-compact-size)]',
+            'flex w-full items-center justify-between px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)]',
             'bg-[var(--color-surface-1)] text-[var(--color-secondary)]',
             'ring-offset-[var(--color-primary)] transition-colors motion-reduce:transition-none',
             '',
@@ -162,7 +162,7 @@ function SearchableSelect({
           <span className={cn('line-clamp-1', !selectedLabel ? 'text-[var(--color-muted)]' : undefined)}>
             {selectedLabel ?? placeholder}
           </span>
-          <CaretUpDown size={14} className="ml-2 shrink-0 opacity-50" aria-hidden="true" />
+          <CaretUpDown size={14} className="ml-[var(--space-2)] shrink-0 opacity-50" aria-hidden="true" />
         </Button>
       </PopoverTrigger>
       <PopoverContent
@@ -188,7 +188,7 @@ function SearchableSelect({
                 >
                   <span className="flex-1">{item.label}</span>
                   {item.value === value && (
-                    <Check size={14} style={{ color: 'var(--color-accent)' }} className="ml-2 shrink-0" aria-hidden="true" />
+                    <Check size={14} style={{ color: 'var(--color-accent)' }} className="ml-[var(--space-2)] shrink-0" aria-hidden="true" />
                   )}
                 </CommandItem>
               ))}

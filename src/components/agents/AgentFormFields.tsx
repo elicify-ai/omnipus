@@ -122,7 +122,7 @@ export function UploadMdButton({
         }
         input.click()
       }}
-      className="h-7 px-2 text-[length:var(--type-utility-xs-size)] rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
+      className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-[var(--space-1)]"
     >
       <UploadSimple size={12} />
       Upload .md
@@ -155,17 +155,17 @@ export function BehaviorFields({
   const handleVoice = onVoiceChange ?? setVoice
   const required = (soulRequired ?? isWorker) && !soulReadOnly
   return (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
       {/* SOUL.md / Task prompt — relabelled for workers.
           Workers: now a required task prompt (per the worker form spec).
           Base: empty at create time is also valid (the agent starts in "draft"). */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
+      <div className="space-y-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)]">
           <Scroll size={13} className="text-[var(--color-accent)]" />
           <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
             {isWorker ? 'Task prompt' : 'Personality & instructions'}
             {required && (
-              <span className="text-[var(--color-error)] ml-0.5" aria-label="required">*</span>
+              <span className="text-[var(--color-error)] ml-[var(--space-0-5)]" aria-label="required">*</span>
             )}
           </p>
         </div>
@@ -218,8 +218,8 @@ export function BehaviorFields({
       {!isWorker && (
         <>
           <Separator />
-          <div className="space-y-2" data-testid={voiceWrapperTestId}>
-            <div className="flex items-center gap-2">
+          <div className="space-y-[var(--space-2)]" data-testid={voiceWrapperTestId}>
+            <div className="flex items-center gap-[var(--space-2)]">
               <Microphone size={13} className="text-[var(--color-accent)]" />
               <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                 Voice <span className="text-[var(--color-muted)] font-[var(--font-weight-regular)]">(optional)</span>
@@ -268,7 +268,7 @@ export function AvatarColorPicker({
   className,
 }: AvatarColorPickerProps) {
   return (
-    <div className={className ?? 'flex gap-2'}>
+    <div className={className ?? 'flex gap-[var(--space-2)]'}>
       {AVATAR_COLORS.map((color) => {
         const name = AVATAR_COLORS_BY_NAME[color] ?? color
         const isSelected = value === color
