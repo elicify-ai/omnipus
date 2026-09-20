@@ -98,7 +98,11 @@ func registerEmailToolsForAgent(cfg *config.Config, agentID string, agent *Agent
 	}
 
 	for _, t := range tools.EmailToolset(transports) {
-		agent.Tools.Register(t)
+		// registerSharedTools re-runs during config reload and fast agent
+		// upsert. Replacing this first-party toolset is expected: each fresh
+		// instance carries the current workspace-to-mailbox map. Keep strict
+		// Register for paths where a same-name collision is unexpected.
+		agent.Tools.RegisterReplacing(t)
 	}
 	slog.Info("email tools: registered for agent",
 		"agent_id", agentID, "workspaces", strings.Join(wsIDs, ","), "mailboxes", len(transports))
