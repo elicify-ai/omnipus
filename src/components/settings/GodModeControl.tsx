@@ -161,7 +161,7 @@ export function GodModeControl() {
 
   return (
     <div className="space-y-3">
-      <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+      <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
         Danger zone
       </h3>
 
@@ -196,15 +196,15 @@ export function GodModeControl() {
                 // above: S1 (armed, pending restart) must not render as calm.
                 className={persisted ? 'text-[var(--color-error)]' : 'text-amber-400'}
               />
-              <p className="text-sm font-semibold text-[var(--color-secondary)]">God-mode</p>
+              <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">God-mode</p>
             </div>
             <div id="god-mode-consequence-copy">
-              <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
                 Removes <strong className="text-[var(--color-secondary)]">all permission prompts</strong> and
                 disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.
                 Audit logging, the prompt-guard, and rate limiting stay on.
               </p>
-              <p className="flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+              <p className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
                 Changing this requires re-typing your password.
               </p>
@@ -217,7 +217,7 @@ export function GodModeControl() {
               {isError && (
                 <p
                   data-testid="god-mode-fetch-error-note"
-                  className="text-[11px] text-[var(--color-error)]"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
                 >
                   Could not fetch god-mode status — gateway may be offline. The state shown here may
                   be stale.
@@ -226,7 +226,7 @@ export function GodModeControl() {
               {knownUnsupported && (
                 <p
                   data-testid="god-mode-unavailable-note"
-                  className="text-[11px] text-[var(--color-muted)] italic"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
                 >
                   Not available in this build — god-mode support is compiled out.
                 </p>
@@ -241,7 +241,7 @@ export function GodModeControl() {
                 <div className="space-y-1">
                   <p
                     data-testid="god-mode-restart-note"
-                    className="text-[11px] text-[var(--color-muted)] italic"
+                    className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
                   >
                     Authorized but not yet active — restart the gateway to activate god-mode.
                   </p>
@@ -254,7 +254,7 @@ export function GodModeControl() {
                     data-testid="god-mode-cancel-authorization"
                     disabled={busy || isLoading}
                     onClick={requestDisarm}
-                    className="text-[11px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Cancel authorization
                   </button>
@@ -355,8 +355,8 @@ export function GodModeActiveBanner() {
       >
         <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-amber-400" />
         <div className="space-y-1">
-          <p className="text-sm font-semibold text-amber-400">God-mode status unavailable</p>
-          <p className="text-xs text-amber-400/80">
+          <p className="text-[length:var(--type-body-compact-size)] font-semibold text-amber-400">God-mode status unavailable</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-amber-400/80">
             Could not fetch god-mode status from the gateway — it may be offline. If god-mode was
             previously active, sandboxing may still be disabled right now and this banner cannot
             confirm it either way. Check your connection and reload.
@@ -374,8 +374,8 @@ export function GodModeActiveBanner() {
     >
       <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-[var(--color-error)]" />
       <div className="space-y-1">
-        <p className="text-sm font-semibold text-[var(--color-error)]">God-mode is active</p>
-        <p className="text-xs text-[var(--color-error)]/80">
+        <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">God-mode is active</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/80">
           All permission prompts are bypassed and the kernel sandbox, network restrictions, and shell guard are
           disabled for every agent. Audit logging, the prompt-guard, and rate limiting remain on. Turn god-mode
           off below to restore the previous protections.

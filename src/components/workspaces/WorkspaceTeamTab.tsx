@@ -457,13 +457,13 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
   if (delegationError && !editState) {
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center">
-        <p className="text-sm text-[var(--color-error)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
           Failed to load this workspace's delegation graph.
         </p>
         <button tabIndex={0}
           type="button"
           onClick={() => void refetchDelegation()}
-          className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline underline-offset-2"
         >
           Retry
         </button>
@@ -478,10 +478,10 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <UsersThree size={18} weight="duotone" className="shrink-0 text-[var(--color-accent)]" />
           <div className="min-w-0">
-            <h2 className="font-headline text-sm font-bold text-[var(--color-secondary)]">
+            <h2 className="font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               Team &amp; delegation
             </h2>
-            <p className="hidden truncate text-[11px] text-[var(--color-muted)] sm:block">
+            <p className="hidden truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)] sm:block">
               Add an agent to drop a node · drag the gold dot to delegate · click an edge to tune
               modes &amp; depth
             </p>
@@ -495,7 +495,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
       </div>
 
       {agentsError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]">
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <Info size={12} weight="fill" />
           Agent details failed to load — node names may show as ids.
         </div>
@@ -505,7 +505,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         <div
           role="status"
           data-testid="team-unsaved-members"
-          className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]"
+          className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
         >
           <Info size={12} weight="fill" className="shrink-0" />
           <span>
@@ -522,10 +522,10 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
           <div className="flex h-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-0)] p-8 text-center">
             <UsersThree size={32} weight="duotone" className="text-[var(--color-muted)]" />
             <div>
-              <p className="font-headline text-sm font-bold text-[var(--color-secondary)]">
+              <p className="font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
                 No agents on this team yet
               </p>
-              <p className="mt-1 text-xs text-[var(--color-muted)]">
+              <p className="mt-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Add an agent to drop the first node, then draw delegation edges between them.
               </p>
             </div>

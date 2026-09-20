@@ -113,7 +113,7 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
   // call sites that don't pre-filter the URL the way the markdown path does. Resolves
   // relative URLs so same-origin uploads (/api/v1/uploads/…) are permitted.
   if (!isDisplayableImageSrc(src)) {
-    return alt ? <span className="text-xs text-[var(--color-muted)] italic">[image: {alt}]</span> : null
+    return alt ? <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">[image: {alt}]</span> : null
   }
 
   // The <img> failed to load (404/network error) — degrade to a visible
@@ -138,8 +138,8 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
             <ImageBroken size={20} weight="fill" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-xs font-medium text-[var(--color-secondary)]">{name}</p>
-            <p className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">Image unavailable</p>
+            <p className="truncate text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{name}</p>
+            <p className="text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]">Image unavailable</p>
           </div>
         </div>
         <MediaActionToolbar

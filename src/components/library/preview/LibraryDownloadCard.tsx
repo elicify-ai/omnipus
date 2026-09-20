@@ -41,14 +41,14 @@ export function LibraryDownloadCard({ entry, reason, onDownload }: LibraryDownlo
         <Icon size={32} weight="fill" />
       </div>
       <div>
-        <p className="text-sm font-medium text-[var(--color-secondary)]" title={entry.name}>
+        <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]" title={entry.name}>
           {entry.name}
         </p>
-        <p className="mt-1 text-xs text-[var(--color-muted)]">
+        <p className="mt-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           {label} · {formatLibrarySize(entry.size)} · modified {formatRelative(entry.modified_at)}
         </p>
       </div>
-      <p className="max-w-xs text-xs text-[var(--color-muted)]">{REASON_COPY[reason]}</p>
+      <p className="max-w-xs text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{REASON_COPY[reason]}</p>
       <Button size="sm" onClick={() => onDownload(entry)} data-testid="library-download-card-button" className="gap-1.5">
         <DownloadSimple size={14} /> Download
       </Button>

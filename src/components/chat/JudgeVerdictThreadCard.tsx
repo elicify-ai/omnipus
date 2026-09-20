@@ -21,7 +21,7 @@ export interface JudgeVerdictThreadCardProps {
 export function JudgeVerdictThreadCard({ verdict }: JudgeVerdictThreadCardProps) {
   return (
     <div className="flex justify-center py-2" data-testid="judge-verdict-thread-card">
-      <div className="w-full max-w-md rounded-lg border border-[var(--color-accent)]/30 bg-[var(--color-surface-1)] px-3 py-2.5 text-xs">
+      <div className="w-full max-w-md rounded-lg border border-[var(--color-accent)]/30 bg-[var(--color-surface-1)] px-3 py-2.5 text-[length:var(--type-utility-xs-size)]">
         <div className="flex items-center gap-1.5 mb-1.5">
           <Scales size={13} weight="fill" className="text-[var(--color-accent)]" aria-hidden="true" />
           <span className="font-medium text-[var(--color-secondary)]">
@@ -30,8 +30,8 @@ export function JudgeVerdictThreadCard({ verdict }: JudgeVerdictThreadCardProps)
           <span
             className={
               verdict.met
-                ? 'ml-auto text-[10px] font-semibold text-[color:var(--color-success)]'
-                : 'ml-auto text-[10px] font-semibold text-[color:var(--color-error)]'
+                ? 'ml-auto text-[length:var(--type-caption-size)] font-semibold text-[color:var(--color-success)]'
+                : 'ml-auto text-[length:var(--type-caption-size)] font-semibold text-[color:var(--color-error)]'
             }
           >
             {verdict.met ? 'met' : 'unmet'}
@@ -52,7 +52,7 @@ export function JudgeVerdictThreadCard({ verdict }: JudgeVerdictThreadCardProps)
             </li>
           ))}
         </ul>
-        <p className="text-[10px] text-[var(--color-muted)] mt-1.5">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-1.5">
           {verdict.model} · judged by {verdict.judge_agent_id}
         </p>
       </div>

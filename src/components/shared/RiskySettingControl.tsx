@@ -169,7 +169,7 @@ export function RiskySettingControl<T extends string>({
                 onClick={() => handleOptionClick(opt.value)}
                 data-testid={`risky-option-${opt.value}`}
                 aria-pressed={isActive}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[length:var(--type-caption-size)] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   isActive
                     ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
                     : 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
@@ -178,7 +178,7 @@ export function RiskySettingControl<T extends string>({
                 {opt.label}
                 {isSafe && (
                   <span
-                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
+                    className="px-1.5 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40"
                     data-testid="recommended-pill"
                   >
                     Recommended
@@ -192,7 +192,7 @@ export function RiskySettingControl<T extends string>({
         {/* Standing amber badge — shown while PERSISTED value is risky */}
         {isCurrentRisky && (
           <div
-            className="flex items-center gap-1.5 text-[11px] text-amber-400"
+            className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-amber-400"
             data-testid="risky-standing-badge"
             role="status"
             aria-live="polite"

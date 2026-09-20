@@ -43,13 +43,13 @@ export function AdvancedDisclosure({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+        className="flex items-center justify-between w-full px-3 py-2.5 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
         data-testid="advanced-disclosure-trigger"
       >
         <span className="flex flex-col items-start gap-0.5 text-left">
           <span>{title}</span>
           {summary && !open && (
-            <span className="text-[11px] font-[var(--font-weight-regular)] text-[var(--color-muted)]">{summary}</span>
+            <span className="text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)]">{summary}</span>
           )}
         </span>
         {open ? <CaretUp size={13} /> : <CaretDown size={13} />}

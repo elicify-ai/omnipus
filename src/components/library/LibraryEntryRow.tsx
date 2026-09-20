@@ -209,12 +209,12 @@ export function LibraryEntryRow({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
-          <p className="truncate text-sm text-[var(--color-secondary)]" title={entry.name}>
+          <p className="truncate text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]" title={entry.name}>
             {entry.name}
           </p>
           {entry.is_hidden && (
             <span
-              className="shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-[var(--color-surface-3)] text-[var(--color-muted)]"
+              className="shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-1 py-0.5 rounded bg-[var(--color-surface-3)] text-[var(--color-muted)]"
               data-testid={`library-hidden-badge-${entry.path}`}
             >
               hidden
@@ -223,7 +223,7 @@ export function LibraryEntryRow({
           {mount && (
             <span
               data-testid={`library-mount-badge-${entry.path}`}
-              className={`shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ${
+              className={`shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-1 py-0.5 rounded border ${
                 mount.broad
                   ? 'border-[var(--color-warning)] text-[var(--color-warning)]'
                   : 'border-[var(--color-info)] text-[var(--color-info)]'
@@ -239,14 +239,14 @@ export function LibraryEntryRow({
         {mount ? (
           <p
             data-testid={`library-mount-target-${entry.path}`}
-            className="truncate mt-0.5 text-[11px] font-mono text-[var(--color-muted)]"
+            className="truncate mt-0.5 text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]"
             title={mount.host_path}
           >
             {mount.host_path}
             {mount.broad && ' — covers your entire home folder'}
           </p>
         ) : (
-          <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-[var(--color-muted)]">
+          <div className="flex items-center gap-1.5 mt-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             <span>{entry.is_dir ? '—' : formatLibrarySize(entry.size)}</span>
             <span aria-hidden="true">·</span>
             <span title={entry.modified_at}>{formatRelative(entry.modified_at)}</span>
@@ -309,7 +309,7 @@ export function LibraryEntryRow({
               className="flex items-center gap-2 text-[var(--color-info)]"
             >
               <LinkBreak size={14} /> Unmount
-              <span className="ml-auto text-[11px] text-[var(--color-muted)]">files stay</span>
+              <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)]">files stay</span>
             </DropdownMenuItem>
           ) : (
             <>

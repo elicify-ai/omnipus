@@ -170,7 +170,7 @@ export function PlansFilterBand({
           )}
         >
           <Plus size={16} />
-          <span className="text-xs font-medium">New plan</span>
+          <span className="text-[length:var(--type-utility-xs-size)] font-medium">New plan</span>
         </button>
       )}
     </div>
@@ -208,14 +208,14 @@ function AllTasksTile({
       >
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 text-sm font-medium',
+            'inline-flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] font-medium',
             selected ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]',
           )}
         >
           <ListChecks size={14} weight={selected ? 'fill' : 'regular'} />
           All tasks
         </span>
-        <span className="text-[10px] text-[var(--color-muted)]">
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {totalTasks} task{totalTasks === 1 ? '' : 's'}
         </span>
       </button>
@@ -339,7 +339,7 @@ function PlanFilterTile({
       >
         <span className="flex flex-wrap items-center gap-1">
           <span
-            className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight"
+            className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold leading-tight"
             style={{ color: displayColor, backgroundColor: `${displayColor}1a` }}
           >
             <PlanStateGlyph state={plan.state} cancelled={cancelled} />
@@ -354,7 +354,7 @@ function PlanFilterTile({
             <span
               data-testid={`plan-phase-chip-${plan.id}`}
               className={cn(
-                'flex-shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold leading-none',
+                'flex-shrink-0 rounded border px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none',
                 phaseChip.tone === 'warning'
                   ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                   : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
@@ -374,7 +374,7 @@ function PlanFilterTile({
         {phaseExplanation && (
           <span
             data-testid={`plan-phase-explanation-${plan.id}`}
-            className="text-[10px] leading-snug text-[color:var(--color-warning)]"
+            className="text-[length:var(--type-caption-size)] leading-snug text-[color:var(--color-warning)]"
           >
             {phaseExplanation}
           </span>
@@ -391,7 +391,7 @@ function PlanFilterTile({
             the wrapping mode the spec requires browsers to factor into
             min-content sizing itself, so line-clamp-2 can actually clip
             within the tile instead of overflowing it. */}
-        <span className="line-clamp-2 min-w-0 wrap-anywhere text-sm font-medium leading-snug text-[var(--color-secondary)]">
+        <span className="line-clamp-2 min-w-0 wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>
 
@@ -401,7 +401,7 @@ function PlanFilterTile({
         {failureReason && (
           <span
             data-testid={`plan-failed-reason-${plan.id}`}
-            className="text-[10px] leading-snug text-[var(--color-muted)]"
+            className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
           >
             Why: {failureReason}
           </span>
@@ -409,7 +409,7 @@ function PlanFilterTile({
 
         <span className="flex flex-wrap items-center gap-1.5">
           <span
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             role="img"
             aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}
           >
@@ -421,7 +421,7 @@ function PlanFilterTile({
           {owner && (
             <span
               title={owner.name}
-              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             >
               {owner.name.split('—')[0].trim()}
             </span>

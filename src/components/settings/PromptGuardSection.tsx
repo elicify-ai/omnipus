@@ -87,7 +87,7 @@ export function PromptGuardSection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-sm" style={{ color: 'var(--color-error)' }}>
+      <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }}>
         Failed to load prompt guard settings:{' '}
         {error instanceof Error ? error.message : 'Unknown error'}
       </p>
@@ -97,11 +97,11 @@ export function PromptGuardSection(): React.ReactElement {
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
           <Shield size={14} className="text-[var(--color-muted)]" />
           Prompt Injection Defense
           {restartRequired && (
-            <span className="ml-2 text-[10px] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-1.5 py-0.5">
+            <span className="ml-2 text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-1.5 py-0.5">
               Restart required
             </span>
           )}
@@ -110,7 +110,7 @@ export function PromptGuardSection(): React.ReactElement {
       </div>
 
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Controls how untrusted tool output is sanitised before passing to the agent.
         </p>
 
@@ -145,14 +145,14 @@ export function PromptGuardSection(): React.ReactElement {
                   />
                   <span
                     className={[
-                      'text-sm font-medium',
+                      'text-[length:var(--type-body-compact-size)] font-medium',
                       isActive ? 'text-[var(--color-secondary)]' : 'text-[var(--color-muted)]',
                     ].join(' ')}
                   >
                     {lvl.label}
                   </span>
                 </div>
-                <p className="text-xs text-[var(--color-muted)] mt-1 ml-5 leading-relaxed">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1 ml-5 leading-relaxed">
                   {lvl.subtitle}
                 </p>
               </button>

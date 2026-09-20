@@ -109,7 +109,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
   return (
     // Flat text-line design: no border, no surface fill, no rounded frame —
     // the row is transparent on the thread, matching ToolCallBadge/GenericToolCall.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Collapsed header — FR-H-008 */}
       <button tabIndex={0}
         type="button"
@@ -169,7 +169,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
       {show3pRunningNotice && (
         <p
           data-testid="subagent-3p-running-notice"
-          className="pl-[18px] pb-1 -mt-0.5 text-[10px] text-[var(--color-muted)] font-sans italic"
+          className="pl-[18px] pb-1 -mt-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-sans italic"
         >
           External agent — no live progress; results appear when it finishes.
         </p>
@@ -185,7 +185,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
           style={{ maxHeight: '400px', overflowY: 'auto' }}
         >
           {span.steps.length === 0 && !hasFinalResult && (
-            <p className="text-[var(--color-muted)] text-[11px] py-1">No steps recorded.</p>
+            <p className="text-[var(--color-muted)] text-[length:var(--type-caption-size)] py-1">No steps recorded.</p>
           )}
 
           {/* Steps — in arrival order. W4-5: switch on step.kind */}
@@ -199,7 +199,7 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
             }
             // kind === 'text' — reserved for future subagent-text streaming
             return (
-              <p key={idx} data-testid="subagent-live-step" className="text-[10px] text-[var(--color-secondary)] font-sans py-0.5">
+              <p key={idx} data-testid="subagent-live-step" className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-0.5">
                 {step.text}
               </p>
             )
@@ -210,11 +210,11 @@ export const SubagentBlock = React.memo(function SubagentBlock({ span, agentType
               text-line design used everywhere else. */}
           {hasFinalResult && (
             <div className="mt-2">
-              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide font-sans">
+              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
                 {statusDot('bg-[var(--color-success)]')}
                 Final result
               </div>
-              <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">
+              <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">
                 {terminal?.finalResult}
               </pre>
             </div>

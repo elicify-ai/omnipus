@@ -59,7 +59,7 @@ function ControlledConfirmationFixture() {
 
 function ControlledConfirmationKeyboardFixture() {
   const [open, setOpen] = useState(false)
-  return <><button type="button" data-confirm-dialog-opener onClick={() => setOpen(true)}>Delete record</button><ConfirmDialog open={open} onOpenChange={setOpen} title="Delete?" description="This cannot be undone." cancelLabel="Cancel" confirmLabel="Delete" onConfirm={() => {}} destructive /></>
+  return <><button type="button" tabIndex={0} data-confirm-dialog-opener onClick={() => setOpen(true)}>Delete record</button><ConfirmDialog open={open} onOpenChange={setOpen} title="Delete?" description="This cannot be undone." cancelLabel="Cancel" confirmLabel="Delete" onConfirm={() => {}} destructive /></>
 }
 
 export const ConfirmationContract: Story = {
@@ -78,7 +78,7 @@ export const ConfirmationKeyboard: Story = {
 }
 function PendingConfirmationFixture() {
   const [open, setOpen] = useState(false)
-  return <><button type="button" data-pending-confirmation-opener onClick={() => setOpen(true)}>Open pending confirmation</button><ConfirmDialog open={open} pending onOpenChange={setOpen} title="Deleting record" description="The operation continues if you dismiss this dialog." confirmLabel="Delete" onConfirm={() => {}} /></>
+  return <><button type="button" tabIndex={0} data-pending-confirmation-opener onClick={() => setOpen(true)}>Open pending confirmation</button><ConfirmDialog open={open} pending onOpenChange={setOpen} title="Deleting record" description="The operation continues if you dismiss this dialog." confirmLabel="Delete" onConfirm={() => {}} /></>
 }
 
 export const PendingConfirmationEscape: Story = {

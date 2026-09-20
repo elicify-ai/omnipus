@@ -152,18 +152,18 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
 
           <div className="max-h-[50dvh] overflow-y-auto -mx-1 px-1">
             {isLoading && (
-              <div className="flex items-center justify-center gap-2 py-8 text-sm text-[var(--color-muted)]">
+              <div className="flex items-center justify-center gap-2 py-8 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
                 <SpinnerGap size={16} className="animate-spin" /> Loading library…
               </div>
             )}
             {isError && (
-              <div className="flex flex-col items-center justify-center gap-2 py-8 text-sm text-[var(--color-muted)]">
+              <div className="flex flex-col items-center justify-center gap-2 py-8 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
                 <WarningCircle size={20} className="text-[var(--color-error)]" />
                 Couldn’t load the library.
               </div>
             )}
             {!isLoading && !isError && entries.length === 0 && (
-              <div className="py-8 text-center text-sm text-[var(--color-muted)]">
+              <div className="py-8 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
                 No files in this workspace yet. Upload one in chat first.
               </div>
             )}
@@ -202,10 +202,10 @@ function PickerRow({ entry, busy }: { entry: MediaLibraryEntry; busy: boolean })
         {busy ? <SpinnerGap size={16} className="animate-spin" /> : <Icon size={18} weight="fill" />}
       </div>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-[var(--color-secondary)]" title={entry.filename}>
+        <p className="truncate text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]" title={entry.filename}>
           {entry.filename}
         </p>
-        <p className="text-[11px] text-[var(--color-muted)]">{formatBytes(entry.size)}</p>
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatBytes(entry.size)}</p>
       </div>
       {!busy && <Check size={16} className="shrink-0 text-[var(--color-muted)] opacity-0 group-hover:opacity-100" aria-hidden="true" />}
     </>
@@ -238,7 +238,7 @@ export function LibraryAttachmentChips() {
             >
               <Icon size={16} weight="fill" />
             </div>
-            <span className="truncate text-xs font-medium text-[var(--color-secondary)]">{a.filename}</span>
+            <span className="truncate text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{a.filename}</span>
             <button
               type="button"
               tabIndex={0}

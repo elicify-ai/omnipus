@@ -16,7 +16,7 @@ export function TokenCounter({ className }: { className?: string }) {
 
   return (
     <div
-      className={cn('flex items-center gap-1 text-xs text-[var(--color-muted)] shrink-0', className)}
+      className={cn('flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] shrink-0', className)}
       data-testid="session-token-counter"
       aria-label={`${sessionTokens} tokens used`}
       role="status"

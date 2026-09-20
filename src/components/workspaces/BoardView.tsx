@@ -322,7 +322,7 @@ export function BoardView({
       {orphanTasks.length > 0 && (
         <div
           role="status"
-          className="flex items-center gap-1.5 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)] px-3 py-1 text-[10px] text-[var(--color-warning)] flex-shrink-0"
+          className="flex items-center gap-1.5 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0"
         >
           <Info size={11} weight="fill" className="shrink-0" />
           {orphanTasks.length} task{orphanTasks.length === 1 ? '' : 's'} with an unrecognized status{' '}
@@ -368,7 +368,7 @@ export function BoardView({
 function BoardEmptyState({ filtered }: { filtered: boolean }) {
   return (
     <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
-      <p className="text-sm text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
         {filtered ? 'No tasks match the current filter.' : 'No tasks yet.'}
       </p>
     </div>
@@ -383,10 +383,10 @@ function StatusHeaderRow({ counts }: { counts: Record<TaskStatus, number> }) {
       {COLUMNS.map((col) => (
         // Compact status header: a thin label + count strip.
         <div key={col.status} className="flex-1 min-w-[162px] flex items-center gap-2 px-3 h-[25px]">
-          <span className="text-xs font-semibold leading-none" style={{ color: col.headerColor }}>
+          <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none" style={{ color: col.headerColor }}>
             {col.label}
           </span>
-          <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 text-[10px] font-semibold leading-none text-[var(--color-muted)]">
+          <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-muted)]">
             {counts[col.status] ?? 0}
           </span>
         </div>

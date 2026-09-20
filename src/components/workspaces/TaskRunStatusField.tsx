@@ -133,25 +133,25 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
 
   return (
     <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Run status</p>
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Run status</p>
       {showBadge ? (
         <div className="flex items-center gap-2">
           <Badge
             data-testid="task-run-status-badge"
-            className={cn('h-7 text-xs border-transparent rounded-md px-2 inline-flex items-center', badgeClass)}
+            className={cn('h-7 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-2 inline-flex items-center', badgeClass)}
           >
             {statusLabel(badgeStatus)}
           </Badge>
-          <span className="text-xs text-[var(--color-muted)]">Last updated {formatDateTime(lastUpdatedIso)}</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Last updated {formatDateTime(lastUpdatedIso)}</span>
         </div>
       ) : isFutureOccurrence ? (
         // D1: a future occurrence with no run shows its scheduled status —
         // never "Not yet run" (which implied Run-now was on offer).
-        <p className="text-xs text-[var(--color-muted)]" data-testid="occurrence-scheduled">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="occurrence-scheduled">
           Scheduled.
         </p>
       ) : (
-        <p className="text-xs text-[var(--color-muted)]" data-testid="occurrence-run-now-only">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="occurrence-run-now-only">
           Not yet run.
         </p>
       )}
@@ -159,7 +159,7 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
         <Button
           type="button"
           size="sm"
-          className="gap-2 text-xs h-8"
+          className="gap-2 text-[length:var(--type-utility-xs-size)] h-8"
           onClick={() => doRunNow()}
           disabled={isStarting}
         >

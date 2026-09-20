@@ -121,7 +121,7 @@ function GoalAccordionSection({
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         data-testid={`${testId}-trigger`}
-        className="flex w-full items-center gap-1.5 text-left text-[10px] uppercase tracking-wide text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
+        className="flex w-full items-center gap-1.5 text-left text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
       >
         {open ? (
           <CaretDown size={10} className="shrink-0" aria-hidden="true" />
@@ -207,14 +207,14 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
   return (
     <div
       data-testid="goal-echo-card"
-      className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-xs"
+      className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-[length:var(--type-utility-xs-size)]"
     >
       {/* Header — record banner, flat zone style matching AskUserQuestionCard.
           No "reply to confirm" language (ADR-088 D9 deletes the confirm
           ritual): this is the agent's working assumptions, not a proposal. */}
       <div className="flex items-center gap-2 mb-2">
         <Target size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
-        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+        <span className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
           Goal — working assumptions
         </span>
       </div>
@@ -263,7 +263,7 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
       {showSecondaryCondition && (
         <>
           <p
-            className="mt-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]"
+            className="mt-1.5 font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]"
             data-testid="goal-echo-condition-caption"
           >
             Set as

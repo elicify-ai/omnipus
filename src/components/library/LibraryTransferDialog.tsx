@@ -188,21 +188,21 @@ export function LibraryTransferDialog({
                 if (e.key === 'Enter') handleSubmit()
               }}
             />
-            <p className="text-xs text-[var(--color-muted)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               Workspace-relative path, e.g. "reports/{entry.name}".
             </p>
             {hasLeadingSlash && (
-              <p className="text-xs text-[var(--color-error)]" data-testid="library-transfer-leading-slash">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-transfer-leading-slash">
                 Paths are workspace-relative — remove the leading "/".
               </p>
             )}
             {!hasLeadingSlash && hasTraversal && (
-              <p className="text-xs text-[var(--color-error)]" data-testid="library-transfer-traversal">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-transfer-traversal">
                 A path can't contain "..".
               </p>
             )}
             {!hasLeadingSlash && !hasTraversal && isNoOp && (
-              <p className="text-xs text-[var(--color-error)]" data-testid="library-transfer-noop">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-transfer-noop">
                 That's the same location "{entry.name}" is already at.
               </p>
             )}
@@ -215,7 +215,7 @@ export function LibraryTransferDialog({
               only needs the first half said. */}
           {destWorkspaceId !== sourceWorkspaceId && (
             <p
-              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-transfer-workspace-warning"
             >
               <Warning size={16} className="mt-0.5 shrink-0" />
@@ -228,7 +228,7 @@ export function LibraryTransferDialog({
           )}
           {destMount && (
             <p
-              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-transfer-mount-warning"
             >
               <Warning size={16} className="mt-0.5 shrink-0" />

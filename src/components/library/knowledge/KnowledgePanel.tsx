@@ -243,7 +243,7 @@ export function KnowledgePanel({
         data-testid="knowledge-panel-checking"
         role="status"
         className={cn(
-          'flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-xs text-[var(--color-muted)]',
+          'flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]',
           className,
         )}
       >
@@ -269,7 +269,7 @@ export function KnowledgePanel({
           className,
         )}
       >
-        <div className="min-w-0 flex-1 space-y-1 text-xs leading-relaxed text-[var(--color-error)]">
+        <div className="min-w-0 flex-1 space-y-1 text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-error)]">
           <p>
             Omnipus could not check whether this folder is a knowledge base, so search and linked
             mentions are unavailable here. This is not the same as the folder being an ordinary
@@ -289,7 +289,7 @@ export function KnowledgePanel({
           tabIndex={0}
           data-testid="knowledge-panel-retry"
           onClick={() => void query.refetch()}
-          className="shrink-0 rounded-md border border-[var(--color-error)]/50 px-2 py-1 text-xs font-medium text-[var(--color-error)] transition-colors hover:bg-[var(--color-error)]/15"
+          className="shrink-0 rounded-md border border-[var(--color-error)]/50 px-2 py-1 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-error)] transition-colors hover:bg-[var(--color-error)]/15"
         >
           Check again
         </button>

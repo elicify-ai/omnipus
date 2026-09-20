@@ -182,7 +182,7 @@ export function RemoveProviderDialog({
         {onlyProvider && (
           <p
             data-testid="remove-provider-only-copy"
-            className="text-sm text-[var(--color-warning)]"
+            className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
           >
             {ONLY_PROVIDER_COPY}
           </p>
@@ -192,7 +192,7 @@ export function RemoveProviderDialog({
           <div className="space-y-3" data-testid="remove-provider-dependents">
             {grouped.map(({ role, dependents }) => (
               <div key={role} data-testid={`dependent-group-${role}`} className="space-y-1">
-                <p className="text-xs font-semibold text-[var(--color-secondary)]">
+                <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
                   {dependentGroupHeading(role, displayName)}
                 </p>
                 <ul className="max-h-40 overflow-y-auto space-y-0.5">
@@ -200,7 +200,7 @@ export function RemoveProviderDialog({
                     <li
                       key={`${role}:${dependent.id}`}
                       data-testid={`dependent-${role}-${dependent.id}`}
-                      className="text-xs text-[var(--color-muted)]"
+                      className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
                     >
                       {dependent.name}
                     </li>
@@ -213,8 +213,8 @@ export function RemoveProviderDialog({
 
         {needsNewDefault && !onlyProvider && (
           <div className="space-y-2" data-testid="new-default-section">
-            <p className="text-xs font-semibold text-[var(--color-secondary)]">New default model</p>
-            <p className="text-xs text-[var(--color-muted)]">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">New default model</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {displayName} backs the default model. Choose the model that takes over before
               removing it.
             </p>
@@ -234,7 +234,7 @@ export function RemoveProviderDialog({
                       // carrying it across would submit a pair that does not exist.
                       setModel('')
                     }}
-                    className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs"
+                    className="flex items-center gap-1.5 rounded border px-2 py-1 text-[length:var(--type-utility-xs-size)]"
                     style={{
                       borderColor: pressed ? 'var(--color-accent)' : 'var(--color-border)',
                       color: 'var(--color-secondary)',

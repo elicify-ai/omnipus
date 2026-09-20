@@ -75,7 +75,7 @@ export function AltitudeToggle({ value, onChange }: AltitudeToggleProps) {
             onClick={() => onChange(opt.value)}
             onKeyDown={handleKeyDown}
             className={cn(
-              'px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors',
+              'px-2.5 py-1 text-[length:var(--type-caption-size)] font-medium rounded-md transition-colors',
               checked
                 ? 'bg-[var(--color-surface-1)] text-[var(--color-secondary)] shadow-sm'
                 : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',

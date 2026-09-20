@@ -160,10 +160,10 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             <Warning size={16} weight="fill" />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="block truncate font-headline text-sm font-bold text-[var(--color-warning)]">
+            <span className="block truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-warning)]">
               {model.id}
             </span>
-            <span className="mt-0.5 block text-[9px] font-medium uppercase tracking-wide text-[var(--color-warning)]/80">
+            <span className="mt-0.5 block text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-warning)]/80">
               deleted — dangling edge
             </span>
           </div>
@@ -202,7 +202,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
       >
         <div className="flex items-center gap-2.5">
           <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-[var(--color-secondary)]"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]"
             style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
             aria-hidden="true"
           >
@@ -213,10 +213,10 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <span className="block truncate font-headline text-sm font-bold text-[var(--color-secondary)]">
+            <span className="block truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               {model.name}
             </span>
-            <span className="mt-0.5 block text-[10px] font-medium text-[var(--color-muted)]">
+            <span className="mt-0.5 block text-[length:var(--type-caption-size)] font-medium text-[var(--color-muted)]">
               {model.role}
             </span>
           </div>
@@ -224,7 +224,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         <Badge
           variant="muted"
           data-testid={`team-node-implicit-badge-${model.id}`}
-          className="mt-2 inline-flex w-fit items-center gap-1 whitespace-normal rounded px-1.5 py-0.5 text-[9px] font-medium uppercase leading-tight tracking-wide"
+          className="mt-2 inline-flex w-fit items-center gap-1 whitespace-normal rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-medium uppercase leading-tight tracking-wide"
         >
           <Scales size={9} weight="bold" aria-hidden="true" />
           Verifier — implicit member of every workspace
@@ -343,7 +343,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
 
       <div className="pointer-events-none flex items-center gap-2.5">
         <div
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-[var(--color-secondary)]"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]"
           style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
           aria-hidden="true"
         >
@@ -355,7 +355,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="truncate font-headline text-sm font-bold text-[var(--color-secondary)]">
+            <span className="truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               {model.name}
             </span>
             {model.isDefault && (
@@ -368,12 +368,12 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             )}
           </div>
           <div className="mt-0.5 flex items-center gap-1">
-            <span className="truncate text-[10px] font-medium text-[var(--color-muted)]">
+            <span className="truncate text-[length:var(--type-caption-size)] font-medium text-[var(--color-muted)]">
               {model.role}
             </span>
             {model.isWorker && (
               <span
-                className="inline-flex items-center gap-0.5 rounded border border-[var(--color-info)]/40 bg-[var(--color-info)]/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[var(--color-info)]"
+                className="inline-flex items-center gap-0.5 rounded border border-[var(--color-info)]/40 bg-[var(--color-info)]/10 px-1 py-0.5 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-info)]"
                 title="Worker — a delegation-only agent. It may both receive work and delegate onward (depth is bounded per edge)."
               >
                 <Lightning size={9} weight="fill" /> worker

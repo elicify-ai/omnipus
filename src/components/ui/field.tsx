@@ -53,8 +53,8 @@ const Field = React.forwardRef<HTMLDivElement, FieldProps>(function Field(
         {!resolvedRequired && optionalLabel != null && <> <span>{optionalLabel}</span></>}
       </Label>
       {control}
-      {description && <div id={descriptionId} className="text-sm text-[var(--color-muted)]">{description}</div>}
-      {error && <div id={errorId} role="alert" className="text-sm text-[var(--color-error)]">{error}</div>}
+      {description && <div id={descriptionId} className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">{description}</div>}
+      {error && <div id={errorId} role="alert" className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">{error}</div>}
     </div>
   )
 })

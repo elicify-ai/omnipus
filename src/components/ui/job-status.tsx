@@ -111,12 +111,12 @@ export function JobStatus({
       <span data-job-announcement="polite" className="sr-only" role="status" aria-live="polite" aria-atomic="true">{politeAnnouncement}</span>
       <span data-job-announcement="assertive" className="sr-only" role="alert" aria-atomic="true">{failureAnnouncement}</span>
       <div className="flex items-center justify-between gap-3">
-        <div><p className="text-sm font-medium text-[var(--color-secondary)]">{label}</p><p className="text-xs text-[var(--color-muted)]">{labels[status]}</p></div>
-        {percentage !== null ? <span className="text-xs tabular-nums text-[var(--color-secondary)]">{percentage}%</span> : null}
+        <div><p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{label}</p><p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{labels[status]}</p></div>
+        {percentage !== null ? <span className="text-[length:var(--type-utility-xs-size)] tabular-nums text-[var(--color-secondary)]">{percentage}%</span> : null}
       </div>
       {(status === 'running' || status === 'progress') ? <Progress value={shownProgress} max={max} label={`${label} progress`} /> : null}
-      {message ? <p className="text-sm text-[var(--color-muted)]">{message}</p> : null}
-      {showStalled ? <p className="text-xs text-[var(--color-warning)]">{stalledCopy}</p> : null}
+      {message ? <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">{message}</p> : null}
+      {showStalled ? <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">{stalledCopy}</p> : null}
       {(canCancel || canRetry || canBackground) ? <div className="flex flex-wrap gap-2">
         {canCancel ? <Button variant="outline" size="sm" onClick={onCancel}>Cancel</Button> : null}
         {canRetry ? <Button size="sm" onClick={onRetry}>Retry</Button> : null}

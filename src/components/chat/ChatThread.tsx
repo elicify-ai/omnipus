@@ -26,7 +26,7 @@ export function ChatThread({ sessionId }: ChatThreadProps) {
 
   if (isError) {
     return (
-      <div className="flex justify-center py-4 text-sm text-[var(--color-error)]">
+      <div className="flex justify-center py-4 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
         Could not load messages.
       </div>
     )

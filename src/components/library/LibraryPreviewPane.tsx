@@ -159,7 +159,7 @@ export function LibraryPreviewPane({
   const [headerSlot, setHeaderSlot] = useState<HTMLDivElement | null>(null)
 
   const loadingBody = (
-    <div className="flex flex-1 items-center justify-center gap-2 text-xs text-[var(--color-muted)]">
+    <div className="flex flex-1 items-center justify-center gap-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
       <SpinnerGap size={16} className="animate-spin" /> Loading file…
     </div>
   )
@@ -288,7 +288,7 @@ export function LibraryPreviewPane({
           previewHeaderSlot for why that is a portal and not lifted state. */}
       <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-2">
         <p
-          className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-secondary)]"
+          className="min-w-0 flex-1 truncate text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]"
           title={liveEntry.name}
           data-testid="library-preview-title"
         >
@@ -339,7 +339,7 @@ function UntrustedContentBoundary() {
       className="flex shrink-0 items-center gap-2 border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5"
     >
       <ShieldWarning size={14} weight="fill" className="shrink-0 text-[var(--color-warning)]" />
-      <p className="text-[11px] leading-snug text-[var(--color-warning)]">
+      <p className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]">
         Untrusted content — Omnipus did not write this page. It runs isolated: it cannot read your
         session or reach the network.
       </p>
@@ -533,7 +533,7 @@ function LibraryHtmlFrame({
   if (tokenQuery.isLoading) {
     return (
       <div
-        className="flex flex-1 items-center justify-center gap-2 p-4 text-xs text-[var(--color-muted)]"
+        className="flex flex-1 items-center justify-center gap-2 p-4 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         data-testid="library-html-preview-loading"
       >
         <SpinnerGap size={16} className="animate-spin" /> Preparing preview…
@@ -559,7 +559,7 @@ function LibraryHtmlFrame({
           className="flex shrink-0 items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2"
         >
           <WarningCircle size={14} weight="fill" className="shrink-0 text-[var(--color-warning)]" />
-          <p className="flex-1 text-xs leading-snug text-[var(--color-warning)]">
+          <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
             This preview link has expired. Anything the page loads from now on will fail.
           </p>
           <button
@@ -567,7 +567,7 @@ function LibraryHtmlFrame({
             tabIndex={0}
             onClick={() => void tokenQuery.refetch()}
             data-testid="library-html-preview-reload"
-            className="shrink-0 rounded px-2 py-1 text-xs font-medium text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning)]/20"
+            className="shrink-0 rounded px-2 py-1 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-warning)] transition-colors hover:bg-[var(--color-warning)]/20"
           >
             <ArrowClockwise size={12} className="mr-1 inline" />
             Reload
@@ -608,15 +608,15 @@ function PreviewUnavailable({
       className="flex flex-1 min-h-0 flex-col items-center justify-center gap-3 overflow-auto p-8 text-center"
     >
       <WarningCircle size={28} weight="fill" className="text-[var(--color-warning)]" />
-      <p className="text-sm font-medium text-[var(--color-secondary)]">Preview unavailable</p>
-      <p className="max-w-sm text-xs leading-relaxed text-[var(--color-muted)]">{detail}</p>
+      <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Preview unavailable</p>
+      <p className="max-w-sm text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]">{detail}</p>
       {onRetry && (
         <button
           type="button"
           tabIndex={0}
           onClick={onRetry}
           data-testid="library-html-preview-retry"
-          className="rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          className="rounded border border-[var(--color-border)] px-3 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
         >
           Try again
         </button>

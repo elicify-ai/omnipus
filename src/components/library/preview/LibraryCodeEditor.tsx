@@ -96,7 +96,7 @@ interface LibraryCodeEditorProps {
 function EditorFallback() {
   return (
     <div
-      className="flex h-full min-h-[200px] items-center justify-center text-xs text-[var(--color-muted)]"
+      className="flex h-full min-h-[200px] items-center justify-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       data-testid="library-editor-loading"
     >
       Loading editor…

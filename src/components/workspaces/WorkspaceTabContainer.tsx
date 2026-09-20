@@ -220,15 +220,15 @@ function WorkspaceNotFoundState() {
       className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center"
       data-testid="workspace-not-found"
     >
-      <p className="text-[var(--color-muted)] text-sm">Workspace not found.</p>
-      <p className="text-[var(--color-muted)] text-xs max-w-xs">
+      <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">Workspace not found.</p>
+      <p className="text-[var(--color-muted)] text-[length:var(--type-utility-xs-size)] max-w-xs">
         This workspace may have been deleted or the link may be outdated.
       </p>
       <button tabIndex={0}
         type="button"
         onClick={handleBackToWorkspace}
         data-testid="workspace-not-found-back-btn"
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-sm hover:opacity-90 transition-opacity"
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-[length:var(--type-body-compact-size)] hover:opacity-90 transition-opacity"
       >
         Back to my workspace
       </button>

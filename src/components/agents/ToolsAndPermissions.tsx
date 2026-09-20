@@ -311,7 +311,7 @@ export function ToolsAndPermissions({
 
   if (toolsError) {
     return (
-      <p className="text-xs text-[var(--color-error)] py-4">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] py-4">
         Failed to load tool list. Check that the backend is running.
       </p>
     )
@@ -326,7 +326,7 @@ export function ToolsAndPermissions({
           className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
         >
           <Lock size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             Tool policies for locked core agents are read-only. To change tool access,
             create a custom agent.
           </p>
@@ -342,7 +342,7 @@ export function ToolsAndPermissions({
           className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
         >
           <Info size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             Tool policies do not apply to agents running on an external CLI runner —
             the runner manages its own tool access. Configure per-tool flags on the
             runner instead.
@@ -358,7 +358,7 @@ export function ToolsAndPermissions({
           className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
         >
           <Info size={13} className="text-[var(--color-secondary)] shrink-0 mt-0.5" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             <code className="font-mono text-[var(--color-secondary)]">bash</code>{' '}
             can perform filesystem operations directly. Denying{' '}
             <code className="font-mono text-[var(--color-secondary)]">write_file</code>/
@@ -375,7 +375,7 @@ export function ToolsAndPermissions({
       {!isLocked && !isExternal && (
         <div className="flex items-center gap-3">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
-          <span className="text-[10px] text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {Object.keys(policies).length} tool polic{Object.keys(policies).length !== 1 ? 'ies' : 'y'} configured
           </span>
         </div>

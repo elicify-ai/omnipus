@@ -228,7 +228,7 @@ function downloadLibraryEntry(workspaceId: string, entry: LibraryEntry): void {
 
 function Centered({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex flex-1 items-center justify-center gap-2 p-6 text-center text-xs text-[var(--color-muted)]">
+    <div className="flex flex-1 items-center justify-center gap-2 p-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
       {children}
     </div>
   )
@@ -246,7 +246,7 @@ function UnloadableNotice({
 }) {
   return (
     <div
-      className="flex shrink-0 flex-col gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-warning)]"
+      className="flex shrink-0 flex-col gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
       data-testid="base-preview-unloadable"
     >
       <span className="flex items-center gap-1.5">
@@ -660,7 +660,7 @@ export function BasePreview({
       {embed?.caption !== undefined && (
         <p
           data-testid="base-preview-embed-caption"
-          className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[11px] text-[var(--color-muted)]"
+          className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
         >
           {embed.caption}
         </p>
@@ -711,7 +711,7 @@ export function BasePreview({
                 />
               )}
               {active && result !== undefined && result.refusal === undefined && (
-                <span className="ml-1.5 text-[10px] text-[var(--color-muted)]">{result.rows.length}</span>
+                <span className="ml-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{result.rows.length}</span>
               )}
             </button>
           )
@@ -731,7 +731,7 @@ export function BasePreview({
             onClick={() => setShowRaw((v) => !v)}
             data-testid="base-preview-source-toggle"
             title={showRaw ? 'Back to the views' : 'Open the base file as text'}
-            className={`-mb-px ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap border-b-2 px-2.5 py-2 text-[12px] transition-colors ${
+            className={`-mb-px ml-auto flex shrink-0 items-center gap-1 whitespace-nowrap border-b-2 px-2.5 py-2 text-[length:var(--type-caption-size)] transition-colors ${
               showRaw
                 ? 'border-[var(--color-accent)] text-[var(--color-secondary)]'
                 : 'border-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
@@ -790,7 +790,7 @@ export function BasePreview({
       {failedCollectionLinkQueries > 0 && (
         <div
           data-testid="base-preview-link-graph-degraded"
-          className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
+          className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
         >
           <span>
             Link checking is incomplete for this view — its links show as unverified rather than
@@ -811,7 +811,7 @@ export function BasePreview({
               if (linkGraph.query.isError) void linkGraph.query.refetch()
             }}
             data-testid="base-preview-link-graph-retry"
-            className="shrink-0 rounded border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:opacity-80"
+            className="shrink-0 rounded border border-current px-2 py-0.5 text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
           >
             Retry
           </button>
@@ -880,7 +880,7 @@ export function BasePreview({
             {resultIsBackgroundRefreshFailure && (
               <div
                 data-testid="base-preview-result-refresh-failed"
-                className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
+                className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-3 py-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
               >
                 <span>
                   {resultQuery.error instanceof ApiError && resultQuery.error.isRateLimited()
@@ -892,7 +892,7 @@ export function BasePreview({
                   tabIndex={0}
                   onClick={() => void resultQuery.refetch()}
                   data-testid="base-preview-result-refresh-retry"
-                  className="shrink-0 rounded border border-current px-2 py-0.5 text-[10px] uppercase tracking-wide hover:opacity-80"
+                  className="shrink-0 rounded border border-current px-2 py-0.5 text-[length:var(--type-caption-size)] uppercase tracking-wide hover:opacity-80"
                 >
                   Retry
                 </button>

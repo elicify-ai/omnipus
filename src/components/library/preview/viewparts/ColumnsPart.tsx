@@ -86,7 +86,7 @@ function Card({
         onClick={() => onOpenPath(row.path)}
         aria-label={`Open ${row.title}`}
         data-testid="viewpart-board-card"
-        className="block w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-left text-[12px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-3)]"
+        className="block w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-3)]"
       >
         {content}
       </button>
@@ -94,7 +94,7 @@ function Card({
   }
   return (
     <div
-      className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-[12px] text-[var(--color-secondary)]"
+      className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
       data-testid="viewpart-board-card"
     >
       {content}

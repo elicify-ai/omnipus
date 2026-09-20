@@ -65,13 +65,13 @@ function HistoricalCodeBlock({ code, language }: HistoricalCodeBlockProps) {
   return (
     <div className="my-2 rounded overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] rounded-t">
-        <span className="text-[10px] text-[var(--color-muted)] font-mono uppercase tracking-wide">
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono uppercase tracking-wide">
           {language || 'code'}
         </span>
         <button tabIndex={0}
           type="button"
           onClick={handleCopy}
-          className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+          className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
           aria-label="Copy code to clipboard"
         >
           {copied ? (

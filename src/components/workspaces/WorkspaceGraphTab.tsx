@@ -184,13 +184,13 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
   if (tasksError && tasks.length === 0) {
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center">
-        <p className="text-sm text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           Failed to load the task graph. Check your connection and try again.
         </p>
         <button tabIndex={0}
           type="button"
           onClick={() => void refetchTasks()}
-          className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline underline-offset-2"
         >
           Retry
         </button>
@@ -201,13 +201,13 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
       {agentsError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]">
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <Info size={12} weight="fill" className="shrink-0" />
           Agent details failed to load — task avatars may be missing.
         </div>
       )}
       {plansError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]">
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <Info size={12} weight="fill" className="shrink-0" />
           Plans failed to load — the plan filter may be incomplete.
         </div>
@@ -221,20 +221,20 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
       <div className="flex items-center gap-3 px-4 py-2 flex-shrink-0">
         {!hidePlanSelector && (
           <>
-            <span className="text-xs font-medium text-[var(--color-muted)] flex-shrink-0">By plan</span>
+            <span className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] flex-shrink-0">By plan</span>
             <Select
               value={activePlanId ?? GRAPH_PLAN_ALL}
               onValueChange={(v) => setActivePlanId(v === GRAPH_PLAN_ALL ? null : v)}
             >
-              <SelectTrigger className="h-8 w-56 text-xs" aria-label="Filter the graph by plan">
+              <SelectTrigger className="h-8 w-56 text-[length:var(--type-utility-xs-size)]" aria-label="Filter the graph by plan">
                 <SelectValue placeholder="All tasks" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={GRAPH_PLAN_ALL} className="text-xs">
+                <SelectItem value={GRAPH_PLAN_ALL} className="text-[length:var(--type-utility-xs-size)]">
                   All tasks
                 </SelectItem>
                 {plans.map((p) => (
-                  <SelectItem key={p.id} value={p.id} className="text-xs">
+                  <SelectItem key={p.id} value={p.id} className="text-[length:var(--type-utility-xs-size)]">
                     {p.title}
                   </SelectItem>
                 ))}
@@ -275,7 +275,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                   "Cancelled" (orange), distinct from a genuine "Failed" (red),
                   via the shared planDisplayColor/planDisplayLabel helpers. */}
               <span
-                className="flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold"
+                className="flex-shrink-0 rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold"
                 style={{
                   color: planDisplayColor(activePlan),
                   backgroundColor: `${planDisplayColor(activePlan)}1a`,
@@ -288,7 +288,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                 <span
                   data-testid={`plan-phase-chip-${activePlan.id}`}
                   className={cn(
-                    'flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold leading-none',
+                    'flex-shrink-0 rounded border px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none',
                     chip.tone === 'warning'
                       ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                       : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
@@ -299,7 +299,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
               )}
               {activePlan.goal && (
                 <p
-                  className="flex-1 min-w-0 truncate text-xs text-[var(--color-muted)]"
+                  className="flex-1 min-w-0 truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
                   title={activePlan.goal}
                 >
                   {activePlan.goal}
@@ -320,7 +320,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
                     style={{ width: `${Math.round((activePlan.progress ?? 0) * 100)}%` }}
                   />
                 </div>
-                <span className="flex-shrink-0 text-right text-[10px] text-[var(--color-muted)]">
+                <span className="flex-shrink-0 text-right text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                   {Math.round((activePlan.progress ?? 0) * 100)}% done
                 </span>
               </div>
@@ -334,7 +334,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
             {explanation && (
               <p
                 data-testid={`plan-phase-explanation-${activePlan.id}`}
-                className="text-[11px] leading-snug text-[color:var(--color-warning)]"
+                className="text-[length:var(--type-caption-size)] leading-snug text-[color:var(--color-warning)]"
               >
                 {explanation}
               </p>
@@ -343,7 +343,7 @@ export function WorkspaceGraphTab({ workspaceId, hidePlanSelector = false }: Wor
             {failureReason && (
               <p
                 data-testid={`plan-failed-reason-${activePlan.id}`}
-                className="text-[11px] leading-snug text-[var(--color-muted)]"
+                className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
               >
                 Why: {failureReason}
               </p>

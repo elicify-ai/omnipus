@@ -126,7 +126,7 @@ export function BrowserNavigateBlock({
     // Flat text-line design (ticket "Tool components in chat", P2): no
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header — a row of composed controls (mirrors BrowserToolBlock in
           BrowserTool.tsx): the expand/collapse toggle is its own button so
           "Watch live" can be a separate, independently clickable sibling
@@ -145,11 +145,11 @@ export function BrowserNavigateBlock({
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">browser.navigate</span>
-          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[length:var(--type-caption-size)]">
             {displayUrl(url)}
           </span>
           {pageTitle && !isRunning && (
-            <span className="text-[var(--color-muted)] truncate max-w-[120px] text-[10px] hidden sm:inline">
+            <span className="text-[var(--color-muted)] truncate max-w-[120px] text-[length:var(--type-caption-size)] hidden sm:inline">
               {pageTitle}
             </span>
           )}
@@ -167,7 +167,7 @@ export function BrowserNavigateBlock({
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
+          className="shrink-0 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
         >
           <Broadcast size={13} />
           <span>Watch live</span>
@@ -187,20 +187,20 @@ export function BrowserNavigateBlock({
         <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
           {/* Full URL breadcrumb */}
           <div>
-            <span className="text-[10px] text-[var(--color-muted)] font-mono break-all">{url}</span>
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all">{url}</span>
           </div>
 
           {/* Screenshot indicator (image itself renders in the assistant reply bubble via the media frame). */}
           {screenshotData && (
             <div className="flex items-center gap-1.5">
               <Camera size={11} className="text-[var(--color-muted)]" />
-              <span className="text-[10px] text-[var(--color-muted)]">Screenshot captured</span>
+              <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Screenshot captured</span>
             </div>
           )}
 
           {/* Page content preview */}
           {parsed.content && (
-            <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+            <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {parsed.content.slice(0, 2000)}
               {parsed.content.length > 2000 && (
                 <span className="text-[var(--color-muted)] italic">
@@ -212,7 +212,7 @@ export function BrowserNavigateBlock({
 
           {/* Error */}
           {parsed.error && (
-            <div className="text-[var(--color-error)] text-[10px]">{parsed.error}</div>
+            <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)]">{parsed.error}</div>
           )}
         </div>
       )}

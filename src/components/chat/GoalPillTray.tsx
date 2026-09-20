@@ -193,7 +193,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         aria-expanded={expanded}
         aria-label={`Goal: ${truncateCondition(frame.condition)}, state ${config.label}. Click to ${expanded ? 'collapse' : 'expand'}.`}
         className={cn(
-          'flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-xs shadow-md transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer',
+          'flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[length:var(--type-utility-xs-size)] shadow-md transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer',
           config.accentClass,
         )}
       >
@@ -216,7 +216,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         <p
           data-testid="goal-pill-subtitle"
           title={frame.latest_reason}
-          className="mt-0.5 max-w-[260px] truncate text-[10px] text-[var(--color-muted)]"
+          className="mt-0.5 max-w-[260px] truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
         >
           {frame.latest_reason}
         </p>
@@ -225,7 +225,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
       {expanded && (
         <div
           data-testid="goal-pill-expanded"
-          className="mt-1 w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 text-xs shadow-lg"
+          className="mt-1 w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 text-[length:var(--type-utility-xs-size)] shadow-lg"
         >
           {/* Condition (full, not truncated) */}
           <div className="flex items-start gap-2">
@@ -250,12 +250,12 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
           {/* Latest per-criterion verdict (from judgeActivity, goal-scoped) */}
           {latestVerdict && (
             <div className="mt-2 border-t border-[var(--color-border)] pt-2">
-              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[10px] font-sans mb-1">
+              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[length:var(--type-caption-size)] font-sans mb-1">
                 Latest verdict — {latestVerdict.met ? 'met' : 'not met'} (round {latestVerdict.round})
               </p>
               <ul className="space-y-0.5" data-testid="goal-pill-verdict-criteria">
                 {latestVerdict.per_criterion.map((c) => (
-                  <li key={c.criterion_id} className="flex items-start gap-1.5 text-[11px]">
+                  <li key={c.criterion_id} className="flex items-start gap-1.5 text-[length:var(--type-caption-size)]">
                     {c.met ? (
                       <CheckCircle size={11} className="mt-0.5 shrink-0 text-[color:var(--color-success)]" aria-hidden="true" />
                     ) : (

@@ -47,7 +47,7 @@ export function ManageSignInDialog({
         </DialogHeader>
 
         <div
-          className="flex items-center gap-2 text-sm text-[var(--color-success)]"
+          className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-success)]"
           role="status"
           data-testid="manage-sign-in-status"
         >

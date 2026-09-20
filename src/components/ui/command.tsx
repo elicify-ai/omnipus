@@ -23,7 +23,7 @@ const CommandInput = React.forwardRef<
   <div className="flex items-center border-b px-3" style={{ borderColor: 'var(--color-border)' }}>
     <CommandPrimitive.Input
       ref={ref}
-      className={clsx("flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none [@media(pointer:coarse)]:min-h-[44px] disabled:cursor-not-allowed disabled:opacity-50", className)}
+      className={clsx("flex h-10 w-full rounded-md bg-transparent py-3 text-[length:var(--type-body-compact-size)] outline-none [@media(pointer:coarse)]:min-h-[44px] disabled:cursor-not-allowed disabled:opacity-50", className)}
       style={{ color: 'var(--color-secondary)' }}
       {...props}
     />
@@ -47,7 +47,7 @@ const CommandEmpty = React.forwardRef<
   React.ComponentRef<typeof CommandPrimitive.Empty>,
   React.ComponentPropsWithoutRef<typeof CommandPrimitive.Empty>
 >((props, ref) => (
-  <CommandPrimitive.Empty ref={ref} className="py-6 text-center text-sm" style={{ color: 'var(--color-muted)' }} {...props} />
+  <CommandPrimitive.Empty ref={ref} className="py-6 text-center text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }} {...props} />
 ))
 CommandEmpty.displayName = CommandPrimitive.Empty.displayName
 
@@ -83,7 +83,7 @@ const CommandItem = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <CommandPrimitive.Item
     ref={ref}
-    className={clsx("relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-sm outline-none transition-colors data-[selected=true]:bg-[rgba(212,175,55,0.12)] data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50", className)}
+    className={clsx("relative flex cursor-pointer select-none items-center rounded-sm px-2 py-1.5 text-[length:var(--type-body-compact-size)] outline-none transition-colors data-[selected=true]:bg-[rgba(212,175,55,0.12)] data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50", className)}
     style={{ color: 'var(--color-secondary)' }}
     {...props}
   />

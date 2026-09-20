@@ -121,7 +121,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
               aria-describedby={fieldErrors.name ? 'new-workspace-name-error' : undefined}
             />
             {fieldErrors.name && (
-              <p id="new-workspace-name-error" className="text-xs text-[var(--color-error)]">
+              <p id="new-workspace-name-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                 {fieldErrors.name}
               </p>
             )}
@@ -143,7 +143,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
               aria-describedby={fieldErrors.description ? 'new-workspace-desc-error' : undefined}
             />
             {fieldErrors.description && (
-              <p id="new-workspace-desc-error" className="text-xs text-[var(--color-error)]">
+              <p id="new-workspace-desc-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                 {fieldErrors.description}
               </p>
             )}
@@ -162,7 +162,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
                   return (
                     <span
                       key={agentId}
-                      className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-secondary)]"
+                      className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
                     >
                       {agent?.name ?? agentId}
                       <button tabIndex={0}
@@ -180,7 +180,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
             )}
             {agentsError ? (
               <>
-                <p className="text-xs text-[var(--color-error)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                   Could not load agents — enter agent IDs manually
                 </p>
                 <Input

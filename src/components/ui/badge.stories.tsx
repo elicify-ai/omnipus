@@ -12,5 +12,5 @@ export const Error: Story = { args: { ...base, variant: 'error' } }
 export const Destructive: Story = { args: { ...base, variant: 'destructive' } }
 export const Warning: Story = { args: { ...base, variant: 'warning' } }
 export const Muted: Story = { args: { ...base, variant: 'muted' } }
-export const Dense: Story = { args: base, decorators: [(Story) => <div className="text-xs"><Story /></div>] }
+export const Dense: Story = { args: base, decorators: [(Story) => <div className="text-[length:var(--type-utility-xs-size)]"><Story /></div>] }
 export const NarrowViewport: Story = { args: base, parameters: { viewport: { defaultViewport: 'mobile1' } } }

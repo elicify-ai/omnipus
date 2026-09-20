@@ -167,7 +167,7 @@ export function AppShell() {
       <a
         href="#main-content"
         tabIndex={1}
-        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-3 focus:py-2 focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-sm"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-3 focus:py-2 focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"
       >
         Skip to content
       </a>
@@ -193,13 +193,13 @@ export function AppShell() {
           {connectionError && (
             <div
               role="alert"
-              className="flex items-center justify-between gap-2 px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-xs text-[var(--color-error)] shrink-0"
+              className="flex items-center justify-between gap-2 px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] shrink-0"
             >
               <span>{connectionError}</span>
               <button tabIndex={0}
                 type="button"
                 onClick={reconnect}
-                className="px-2 py-1 rounded text-xs hover:bg-[var(--color-error)]/20 transition-colors"
+                className="px-2 py-1 rounded text-[length:var(--type-utility-xs-size)] hover:bg-[var(--color-error)]/20 transition-colors"
               >
                 Retry
               </button>
@@ -211,7 +211,7 @@ export function AppShell() {
             <div
               data-testid="dev-mode-banner"
               role="alert"
-              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-error)] text-white text-xs font-medium shrink-0"
+              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-error)] text-white text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
             >
               <span>Development mode active — authentication bypass enabled</span>
             </div>
@@ -225,7 +225,7 @@ export function AppShell() {
             <div
               data-testid="app-state-fetch-error-banner"
               role="alert"
-              className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-400 text-xs font-medium shrink-0"
+              className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-400 text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
             >
               <span>
                 Could not fetch gateway state — security status (e.g. development-mode bypass) is

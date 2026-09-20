@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 // the existing subtle shadow and the shared Button focus treatment.
 export const DATE_TRIGGER_CLASSNAME = cn(
   'flex h-11 sm:h-9 w-full items-center gap-2 rounded-md border border-[var(--color-border)]',
-  'bg-[var(--color-surface-1)] px-3 py-1 text-sm text-[var(--color-secondary)] shadow-sm transition-colors',
+  'bg-[var(--color-surface-1)] px-3 py-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] shadow-sm transition-colors',
   'justify-start text-left font-[var(--font-weight-regular)] whitespace-nowrap',
   'hover:bg-[var(--color-surface-1)]',
   'disabled:cursor-not-allowed disabled:opacity-50',

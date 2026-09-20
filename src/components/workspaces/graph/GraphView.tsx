@@ -424,7 +424,7 @@ function GraphUnlinkedNotice({ count }: { count: number }) {
       data-testid="graph-unlinked-notice"
       className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2"
     >
-      <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-3 py-1 text-[11px] text-[var(--color-muted)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur">
+      <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur">
         <Info size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
         <span>
           {count} {count === 1 ? 'task' : 'tasks'} not shown here — not in a plan and not
@@ -464,7 +464,7 @@ function GraphEmptyState({ unlinkedCount = 0 }: { unlinkedCount?: number }) {
         <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
           {hasUnlinked ? 'No dependencies to graph yet' : 'No tasks yet'}
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+        <p className="mt-2 text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-muted)]">
           {hasUnlinked
             ? 'These tasks are not in a plan and not linked by a dependency, so there is nothing to graph yet. Add either on the Board and they will appear here — laid out left to right, with live status colour and a traceable critical path.'
             : 'Create a task on the Board and its dependencies will graph here — laid out left to right, with live status colour and a traceable critical path.'}
@@ -495,7 +495,7 @@ function GraphPlanEmptyState() {
         <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
           This plan has no dependencies yet
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+        <p className="mt-2 text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-muted)]">
           Add a second task to this plan and link it with a dependency to see
           its DAG here — laid out left to right, with live status colour and a
           traceable critical path.

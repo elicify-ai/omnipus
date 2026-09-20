@@ -57,14 +57,14 @@ export function SettingsScreen({ initialTab = 'providers', prefillOverride }: Se
         {/* Header */}
         <div className="mb-6">
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Settings</h1>
-          <p className="text-sm text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-0.5">
             Configure providers, integrations, gateway, security, and data management.
             Personal preferences live under Profile.
           </p>
           {aboutInfoError && (
             <p
               data-testid="settings-about-fetch-error"
-              className="text-xs text-[var(--color-error)] mt-2"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-2"
             >
               Could not fetch gateway build info — gateway may be offline. Feature-flagged tabs
               (e.g. Devices) may be hidden or stale until this loads successfully.

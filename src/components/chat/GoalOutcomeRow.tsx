@@ -37,7 +37,7 @@ export function GoalOutcomeRow({ outcome }: GoalOutcomeRowProps): ReactNode {
       data-testid="goal-outcome-line"
       data-goal-ending={outcome.ending}
       data-goal-tone={copy.tone}
-      className="group w-full max-w-2xl rounded-lg bg-[var(--color-surface-2)] px-3 py-1.5 text-xs"
+      className="group w-full max-w-2xl rounded-lg bg-[var(--color-surface-2)] px-3 py-1.5 text-[length:var(--type-utility-xs-size)]"
     >
       <summary
         tabIndex={0}

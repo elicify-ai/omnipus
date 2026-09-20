@@ -122,7 +122,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
     // instead — matches GenericToolCall.tsx's marshal-error/delegation-denied
     // banners. This is the only frame WebServeUI itself owns; PreviewToolHeader
     // (used above by WebServeBlock) was restyled separately (commit 48325168).
-    <div data-testid="webserve-malformed-block" className="mt-2 border-l-2 border-[var(--color-error)]/40 pl-2.5 py-1 text-xs space-y-1.5">
+    <div data-testid="webserve-malformed-block" className="mt-2 border-l-2 border-[var(--color-error)]/40 pl-2.5 py-1 text-[length:var(--type-utility-xs-size)] space-y-1.5">
       <p className="text-[var(--color-error)]">
         web_serve tool returned a malformed result — cannot render preview.
       </p>
@@ -130,7 +130,7 @@ function MalformedResultBlock({ raw }: { raw: unknown }) {
         <summary tabIndex={0} className="cursor-pointer text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors">
           Show raw result
         </summary>
-        <pre className="mt-1.5 text-[var(--color-muted)] font-mono text-[10px] overflow-auto max-h-40 whitespace-pre-wrap break-all">
+        <pre className="mt-1.5 text-[var(--color-muted)] font-mono text-[length:var(--type-caption-size)] overflow-auto max-h-40 whitespace-pre-wrap break-all">
           {rawJson}
         </pre>
       </details>
@@ -240,7 +240,7 @@ export function WebServeBlock({
     : null
 
   return (
-    <div className="mt-2 text-xs">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)]">
       <PreviewToolHeader
         data-testid="webserve-tool-header"
         // Mode icon (Terminal/Globe) is a fixed, muted glyph — it identifies

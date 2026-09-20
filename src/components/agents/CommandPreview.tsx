@@ -113,7 +113,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
         aria-busy="true"
       >
-        <p className="flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+        <p className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <Spinner size={11} className="animate-spin" />
           Computing the real command line…
         </p>
@@ -139,7 +139,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
       >
         <p
-          className={`text-[11px] leading-snug ${
+          className={`text-[length:var(--type-caption-size)] leading-snug ${
             status.isValidationError ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]'
           }`}
         >
@@ -170,12 +170,12 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         className="space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2.5"
       >
         <div className="flex items-center justify-between gap-2">
-          <p className="text-[11px] font-medium text-[var(--color-secondary)]">Command Omnipus will run</p>
+          <p className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]">Command Omnipus will run</p>
           <button tabIndex={0}
             type="button"
             onClick={() => copyCommand(result.command_line)}
             data-testid={testId ? `${testId}-copy` : undefined}
-            className="flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-accent)]"
+            className="flex shrink-0 items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)]"
           >
             <Copy size={11} />
             Copy
@@ -184,14 +184,14 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
 
         <code
           data-testid={testId ? `${testId}-command-line` : undefined}
-          className="block whitespace-pre-wrap break-all rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-3 py-2 font-mono text-[11px] text-[var(--color-accent)]"
+          className="block whitespace-pre-wrap break-all rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-3 py-2 font-mono text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
         >
           {result.command_line}
         </code>
 
         <p
           data-testid={testId ? `${testId}-prompt-delivery` : undefined}
-          className="text-[11px] text-[var(--color-muted)] leading-snug"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug"
         >
           {promptDeliveryLabel(result.prompt_delivery)}
         </p>
@@ -199,7 +199,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         {result.model_dropped_reason && (
           <p
             data-testid={testId ? `${testId}-model-dropped-reason` : undefined}
-            className="flex items-start gap-1 text-[11px] text-amber-400 leading-snug"
+            className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
           >
             <WarningCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
             <span>
@@ -213,7 +213,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
             {result.dropped_args.map((dropped, i) => (
               <p
                 key={`${dropped.flag}-${i}`}
-                className="flex items-start gap-1 text-[11px] text-amber-400 leading-snug"
+                className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
               >
                 <WarningCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
                 <span>
@@ -225,7 +225,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
           </div>
         )}
 
-        <p className="text-[10px] text-[var(--color-muted)]/70">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
           Computed live from your current settings — nothing here is persisted until you save.
         </p>
       </div>
@@ -310,8 +310,8 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
     >
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 space-y-0.5">
-          <p className="text-[11px] font-medium text-[var(--color-secondary)]">Send a test message</p>
-          <p className="text-[10px] text-[var(--color-muted)] leading-snug">
+          <p className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]">Send a test message</p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
             Runs a real request through this CLI (spends a small amount of usage).
           </p>
         </div>
@@ -320,7 +320,7 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
           onClick={handleClick}
           disabled={isPending}
           data-testid={smokeTestId ? `${smokeTestId}-button` : undefined}
-          className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--color-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isPending ? <Spinner size={12} className="animate-spin" /> : <PaperPlaneTilt size={12} />}
           {isPending ? 'Running…' : 'Send a test message'}
@@ -330,7 +330,7 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
       {isPending && (
         <p
           data-testid={smokeTestId ? `${smokeTestId}-pending` : undefined}
-          className="text-[11px] text-[var(--color-muted)] leading-snug"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug"
         >
           Running a real test — this can take up to 30 seconds…
         </p>
@@ -341,7 +341,7 @@ function SmokeTestSection({ cli, model, cliPath, cliArgs, agentId, testId }: Smo
       {status.kind === 'error' && (
         <p
           data-testid={smokeTestId ? `${smokeTestId}-error` : undefined}
-          className="flex items-start gap-1 text-[11px] text-[var(--color-error)] leading-snug"
+          className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug"
         >
           <XCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
           <span>{status.message}</span>
@@ -368,7 +368,7 @@ function formatSmokeTestDuration(ms: number): string {
 // connection to that feature.
 function WorkspaceProvenanceNote({ usedAgentWorkspace, testId }: { usedAgentWorkspace: boolean; testId?: string }) {
   return (
-    <p data-testid={testId} className="text-[10px] text-[var(--color-muted)] leading-snug">
+    <p data-testid={testId} className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
       {usedAgentWorkspace
         ? "Ran in this agent's own folder — the same place a real delegation to it would run."
         : "Ran in a temporary folder, not this agent's own — save the agent first to test with its real project context."}
@@ -382,7 +382,7 @@ function SmokeTestResult({ result, testId }: { result: ExecutorSmokeTestResponse
       <div data-testid={testId ? `${testId}-failure` : undefined} className="space-y-1.5">
         <p
           data-testid={testId ? `${testId}-error` : undefined}
-          className="flex items-start gap-1 text-[11px] text-[var(--color-error)] leading-snug"
+          className="flex items-start gap-1 text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug"
         >
           <XCircle size={11} weight="fill" className="mt-0.5 shrink-0" />
           <span>{result.error || 'The test run did not succeed.'}</span>
@@ -397,13 +397,13 @@ function SmokeTestResult({ result, testId }: { result: ExecutorSmokeTestResponse
 
   return (
     <div data-testid={testId ? `${testId}-success` : undefined} className="space-y-1.5">
-      <p className="flex items-center gap-1 text-[11px] text-emerald-400">
+      <p className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-emerald-400">
         <CheckCircle size={11} weight="fill" />
         Responded in {formatSmokeTestDuration(result.duration_ms)}
       </p>
       <p
         data-testid={testId ? `${testId}-response-text` : undefined}
-        className="rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-3 py-2 font-mono text-[11px] text-[var(--color-secondary)] whitespace-pre-wrap break-words"
+        className="rounded border border-[var(--color-border)] bg-[var(--color-primary)] px-3 py-2 font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-words"
       >
         {result.response_text}
       </p>

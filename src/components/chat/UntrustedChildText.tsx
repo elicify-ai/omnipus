@@ -47,7 +47,7 @@ export function UntrustedOriginBadge({
       data-testid={testId}
       title={`Text originated from a ${label} — rendered as sanitized text; links are non-clickable.`}
       className={cn(
-        'inline-flex items-center gap-0.5 px-1 py-px rounded text-[9px] font-mono uppercase tracking-wide',
+        'inline-flex items-center gap-0.5 px-1 py-px rounded text-[length:var(--type-caption-size)] font-mono uppercase tracking-wide',
         'text-[var(--color-warning,#D4AF37)] bg-[var(--color-surface-2)] border border-[var(--color-warning,#D4AF37)]/40',
         'shrink-0 select-none',
         className,
@@ -130,12 +130,12 @@ const CHILD_MARKDOWN_COMPONENTS = {
   ),
   em: ({ children }: { children?: React.ReactNode }) => <em className="italic">{children}</em>,
   code: ({ children }: { children?: React.ReactNode }) => (
-    <code className="font-mono text-[10px] px-1 py-px rounded bg-[var(--color-surface-2)] text-[var(--color-accent)]">
+    <code className="font-mono text-[length:var(--type-caption-size)] px-1 py-px rounded bg-[var(--color-surface-2)] text-[var(--color-accent)]">
       {children}
     </code>
   ),
   pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="font-mono text-[10px] whitespace-pre-wrap break-all bg-[var(--color-surface-2)] p-1.5 rounded my-1">
+    <pre className="font-mono text-[length:var(--type-caption-size)] whitespace-pre-wrap break-all bg-[var(--color-surface-2)] p-1.5 rounded my-1">
       {children}
     </pre>
   ),
@@ -189,7 +189,7 @@ export const UntrustedChildText = memo(function UntrustedChildText({
   const sanitized = sanitizeChildText(text ?? '')
   if (sanitized.length === 0) return null
 
-  const textSize = density === 'compact' ? 'text-[10px]' : 'text-xs'
+  const textSize = density === 'compact' ? 'text-[length:var(--type-caption-size)]' : 'text-[length:var(--type-utility-xs-size)]'
 
   // Always render through react-markdown — it handles plain prose (wraps it
   // in a <p>) AND sanctioned markdown identically, and a plain-text fast

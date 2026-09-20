@@ -107,7 +107,7 @@ function WebSearchBlock({
     // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
     // language. The decorative MagnifyingGlass tool-type icon is gone; the
     // leading slot is the status dot/spinner only, same as the other rows.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
@@ -150,13 +150,13 @@ function WebSearchBlock({
                       {item.title}
                     </p>
                     {item.url && (
-                      <p className="text-[var(--color-accent)] font-mono text-[10px] truncate flex items-center gap-1">
+                      <p className="text-[var(--color-accent)] font-mono text-[length:var(--type-caption-size)] truncate flex items-center gap-1">
                         {item.url}
                         <ArrowSquareOut size={9} className="shrink-0" />
                       </p>
                     )}
                     {item.snippet && (
-                      <p className="text-[var(--color-muted)] text-[10px] leading-relaxed mt-0.5 line-clamp-2">
+                      <p className="text-[var(--color-muted)] text-[length:var(--type-caption-size)] leading-relaxed mt-0.5 line-clamp-2">
                         {item.snippet}
                       </p>
                     )}
@@ -165,7 +165,7 @@ function WebSearchBlock({
               ))}
             </div>
           ) : (
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+            <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
               {content}
             </pre>
           )}

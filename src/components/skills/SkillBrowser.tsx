@@ -108,8 +108,8 @@ function FeaturedSkillSuggestions({ onSelect }: { onSelect: (query: string) => v
   return (
     <div className="py-4 space-y-4" data-testid="skill-featured-suggestions">
       <div className="space-y-1">
-        <p className="text-xs font-medium text-[var(--color-secondary)]">Popular categories</p>
-        <p className="text-[11px] text-[var(--color-muted)]">Select a category or type to search the ClawHub registry.</p>
+        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Popular categories</p>
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Select a category or type to search the ClawHub registry.</p>
       </div>
       <div className="grid grid-cols-2 gap-2">
         {FEATURED_SUGGESTIONS.map((s) => (
@@ -120,8 +120,8 @@ function FeaturedSkillSuggestions({ onSelect }: { onSelect: (query: string) => v
             onClick={() => onSelect(s.query)}
             className="flex flex-col items-start gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 text-left hover:bg-[var(--color-surface-2)] hover:border-[var(--color-accent)]/40 transition-colors"
           >
-            <span className="text-xs font-medium text-[var(--color-secondary)]">{s.label}</span>
-            <span className="text-[10px] text-[var(--color-muted)] leading-snug">{s.description}</span>
+            <span className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{s.label}</span>
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">{s.description}</span>
           </button>
         ))}
       </div>
@@ -336,7 +336,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
               data-testid="skill-marketplace-loading"
             >
               <CircleNotch size={26} className="animate-spin text-[var(--color-accent)]" />
-              <p className="text-sm text-[var(--color-muted)]">Checking marketplace…</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Checking marketplace…</p>
             </div>
           ) : marketplaceEnabled ? (
             <>
@@ -371,7 +371,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                 data-testid="skill-search-error"
               >
                 <Warning size={28} weight="fill" className="text-[var(--color-error)]" />
-                <p className="text-sm text-[var(--color-error)]">{searchErrorMessage}</p>
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">{searchErrorMessage}</p>
               </div>
             ) : isSearching ? (
               <div
@@ -379,7 +379,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                 data-testid="skill-search-loading"
               >
                 <CircleNotch size={26} className="animate-spin text-[var(--color-accent)]" />
-                <p className="text-sm text-[var(--color-muted)]">Searching…</p>
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Searching…</p>
               </div>
             ) : results.length === 0 ? (
               <div
@@ -387,7 +387,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                 data-testid="skill-search-empty"
               >
                 <Package size={28} weight="thin" className="text-[var(--color-border)]" />
-                <p className="text-sm text-[var(--color-muted)]">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
                   No skills found for “{debouncedQuery}”.
                 </p>
               </div>
@@ -404,7 +404,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                     >
                       <div className="min-w-0 space-y-1">
                         <div className="flex items-center gap-2">
-                          <p className="font-medium text-sm text-[var(--color-secondary)] truncate">
+                          <p className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                             {r.display_name || r.slug}
                           </p>
                           {r.version && (
@@ -414,12 +414,12 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                           )}
                         </div>
                         {r.summary && (
-                          <p className="text-xs text-[var(--color-muted)] line-clamp-2">
+                          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] line-clamp-2">
                             {r.summary}
                           </p>
                         )}
                         {r.owner_handle && (
-                          <p className="text-[11px] text-[var(--color-muted)]/70">
+                          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                             by {r.owner_handle}
                           </p>
                         )}
@@ -460,7 +460,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
               data-testid="skill-marketplace-disabled"
             >
               <Package size={32} weight="thin" className="text-[var(--color-border)]" />
-              <p className="text-sm text-[var(--color-muted)] max-w-xs">
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] max-w-xs">
                 No skill marketplace is enabled — install a skill from a{' '}
                 <span className="font-mono">SKILL.md</span>/zip file.
               </p>
@@ -471,7 +471,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
               the only option when none is. Hidden during the status check. */}
           {!isStatusLoading && (
             <DialogFooter className="sm:justify-between items-center border-t border-[var(--color-border)] pt-3">
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 {marketplaceEnabled ? (
                   <>
                     Or install a local <span className="font-mono">SKILL.md</span> package.
@@ -530,14 +530,14 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
               data-testid="unverified-notice"
             >
               <ShieldWarning size={15} weight="fill" className="text-amber-400 mt-0.5 shrink-0" />
-              <div className="text-xs text-amber-300 leading-relaxed">
+              <div className="text-[length:var(--type-utility-xs-size)] text-amber-300 leading-relaxed">
                 <span className="font-semibold">Unverified skill.</span> This skill has not been
                 reviewed or signed by the Omnipus team. Only install skills you trust.
               </div>
             </div>
 
             {/* File name */}
-            <div className="text-xs text-[var(--color-muted)]">
+            <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               File:{' '}
               <span className="font-mono text-[var(--color-secondary)]">
                 {pendingInstall?.file.name}
@@ -547,14 +547,14 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
             {/* Capabilities */}
             {pendingInstall && pendingInstall.capabilities.length > 0 ? (
               <div className="space-y-1">
-                <p className="text-xs font-medium text-[var(--color-secondary)]">
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                   Declared capabilities
                 </p>
                 <ul className="space-y-0.5">
                   {pendingInstall.capabilities.map((cap) => (
                     <li
                       key={cap}
-                      className="flex items-center gap-1.5 text-xs text-[var(--color-muted)]"
+                      className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
                     >
                       <Warning size={11} className="text-amber-400 shrink-0" />
                       {cap}
@@ -563,7 +563,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                 </ul>
               </div>
             ) : (
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 No capabilities declared in this skill file.
               </p>
             )}
@@ -600,17 +600,17 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
               value.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2 text-sm">
+          <div className="space-y-2 text-[length:var(--type-body-compact-size)]">
             <p className="text-[var(--color-error)]">
               Hash mismatch — the skill file may have been tampered with or corrupted.
             </p>
             {hashMismatch?.expected && (
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Expected: <span className="font-mono">{hashMismatch.expected}</span>
               </p>
             )}
             {hashMismatch?.got && (
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Got: <span className="font-mono">{hashMismatch.got}</span>
               </p>
             )}

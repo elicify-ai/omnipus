@@ -155,7 +155,7 @@ function LoginScreen() {
           style={{ color: 'var(--color-secondary)' }}>
           Sign in to <Wordmark />
         </h1>
-        <p className="text-sm text-center mb-8" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)] text-center mb-8" style={{ color: 'var(--color-muted)' }}>
           Enter your username and password
         </p>
 
@@ -164,7 +164,7 @@ function LoginScreen() {
             data-testid="logout-notice"
             role="status"
             aria-live="polite"
-            className="mb-6 flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs"
+            className="mb-6 flex items-start gap-2 rounded-lg px-3 py-2.5 text-[length:var(--type-utility-xs-size)]"
             style={{
               backgroundColor: 'rgba(212,175,55,0.08)',
               border: '1px solid rgba(212,175,55,0.25)',
@@ -178,7 +178,7 @@ function LoginScreen() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label htmlFor="login-username" className="text-xs font-medium mb-1.5 block"
+            <label htmlFor="login-username" className="text-[length:var(--type-utility-xs-size)] font-medium mb-1.5 block"
               style={{ color: 'var(--color-muted)' }}>
               Username
             </label>
@@ -198,7 +198,7 @@ function LoginScreen() {
           </div>
 
           <div>
-            <label htmlFor="login-password" className="text-xs font-medium mb-1.5 block"
+            <label htmlFor="login-password" className="text-[length:var(--type-utility-xs-size)] font-medium mb-1.5 block"
               style={{ color: 'var(--color-muted)' }}>
               Password
             </label>
@@ -231,7 +231,7 @@ function LoginScreen() {
               data-testid="login-error"
               role="alert"
               aria-live="assertive"
-              className="text-sm text-center"
+              className="text-[length:var(--type-body-compact-size)] text-center"
               style={{ color: 'var(--color-error)' }}
             >
               {error}

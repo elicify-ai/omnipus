@@ -55,7 +55,7 @@ export function AboutSection() {
         />
         <div className="text-center">
           <h1><Wordmark className="text-xl" /></h1>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">The Sovereign Deep — Agentic Core</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">The Sovereign Deep — Agentic Core</p>
         </div>
       </div>
 
@@ -64,11 +64,11 @@ export function AboutSection() {
       {/* System info */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">System Info</h3>
+          <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">System Info</h3>
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 gap-1 text-xs"
+            className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)]"
             onClick={copySystemInfo}
             disabled={!info}
           >
@@ -79,10 +79,10 @@ export function AboutSection() {
 
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
           {isLoading && (
-            <div className="p-4 text-sm text-[var(--color-muted)]">Loading system info...</div>
+            <div className="p-4 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading system info...</div>
           )}
           {isError && (
-            <div className="p-4 text-sm text-[var(--color-error)]">
+            <div className="p-4 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
               Could not fetch system info — gateway may be offline.
             </div>
           )}
@@ -107,18 +107,18 @@ export function AboutSection() {
 
       {/* Open source */}
       <section className="space-y-3">
-        <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Open Source</h3>
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Open Source</h3>
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 flex items-center justify-between">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">GitHub Repository</p>
-            <p className="text-xs text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">GitHub Repository</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
               Source code, issues, and contributions
             </p>
           </div>
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 text-xs"
+            className="h-8 gap-1.5 text-[length:var(--type-utility-xs-size)]"
             asChild
           >
             <a tabIndex={0} href="https://github.com/elicify-ai/omnipus" target="_blank" rel="noopener noreferrer">
@@ -130,7 +130,7 @@ export function AboutSection() {
         </div>
       </section>
 
-      <div className="text-center text-[10px] text-[var(--color-muted)]">
+      <div className="text-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         Omnipus is released under the MIT License &mdash; omnipus.ai
       </div>
     </div>
@@ -140,8 +140,8 @@ export function AboutSection() {
 function InfoRow({ label, value, mono, testId }: { label: string; value: string; mono?: boolean; testId?: string }) {
   return (
     <div className="flex items-center justify-between px-4 py-2.5">
-      <span className="text-xs text-[var(--color-muted)]">{label}</span>
-      <span data-testid={testId} className={`text-xs text-[var(--color-secondary)] ${mono ? 'font-mono' : ''}`}>{value}</span>
+      <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</span>
+      <span data-testid={testId} className={`text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] ${mono ? 'font-mono' : ''}`}>{value}</span>
     </div>
   )
 }

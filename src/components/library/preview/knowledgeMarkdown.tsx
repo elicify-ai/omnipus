@@ -1318,7 +1318,7 @@ function CollectionLink({
 function EmbedBadge({ reason }: { reason?: string }) {
   return (
     <>
-      <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+      <span className="ml-1 text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]">
         embed shown as a link
       </span>
       {reason ? (
@@ -1328,7 +1328,7 @@ function EmbedBadge({ reason }: { reason?: string }) {
         <span
           data-testid="kb-embed-link-reason"
           title={reason}
-          className="ml-1 text-[10px] tracking-wide text-[var(--color-muted)]"
+          className="ml-1 text-[length:var(--type-caption-size)] tracking-wide text-[var(--color-muted)]"
         >
           ({reason})
         </span>
@@ -1713,7 +1713,7 @@ function KbBaseEmbedContent({
       return (
         <div
           data-testid="kb-base-embed-unloadable-views"
-          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           {count === 1
             ? `The one view imported from ${entry.name} could not be loaded, so this embed cannot be checked against it.`
@@ -1738,7 +1738,7 @@ function KbBaseEmbedContent({
       return (
         <div
           data-testid="kb-base-embed-view-load-failed"
-          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           "{unloadableMatch.name ?? viewFragment}" is declared in {entry.name} but could not be loaded:{' '}
           {unloadableMatch.reason}
@@ -1750,7 +1750,7 @@ function KbBaseEmbedContent({
     return (
       <div
         data-testid="kb-base-embed-missing-view"
-        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
         {viewFragment ? `No view named "${viewFragment}" in ${entry.name}.` : `${entry.name} declares no views.`}
         {labels.length > 0 && <> Views that do exist: {labels.join(', ')}.</>}
@@ -1762,7 +1762,7 @@ function KbBaseEmbedContent({
     return (
       <div
         data-testid="kb-base-embed-ambiguous-view"
-        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
         The view label "{match.label}" matches more than one view in {entry.name} — rename one to make this
         embed unambiguous. Matches: {match.matches.map((v) => v.name).join(', ')}.
@@ -1932,7 +1932,7 @@ function KbTransclusionContent({
     return (
       <div
         data-testid="kb-transclusion-empty"
-        className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]"
+        className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       >
         This note is empty.
       </div>
@@ -1943,7 +1943,7 @@ function KbTransclusionContent({
     return (
       <div
         data-testid="kb-transclusion-not-found"
-        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-4 text-xs text-[var(--color-warning)]"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-4 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
         {block
           ? `No block anchored "${block}" was found in this note.`
@@ -2282,7 +2282,7 @@ function KnowledgeMarkdownCode(props: { children?: ReactNode; className?: string
         <InheritedCode {...props} />
         <p
           data-testid="kb-query-fence-inert-reason"
-          className="mt-1 text-[11px] text-[var(--color-muted)]"
+          className="mt-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
         >
           {ctx.nestedTransclusion === true
             ? 'This query is shown as text — a query inside a transcluded note is not run. Open the note itself to see its results.'

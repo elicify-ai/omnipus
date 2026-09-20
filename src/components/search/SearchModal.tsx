@@ -204,7 +204,7 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
       <button tabIndex={0}
         type="button"
         onClick={onToggle}
-        className="min-w-0 flex-1 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
+        className="min-w-0 flex-1 flex items-center gap-1.5 px-3 py-1.5 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
         aria-expanded={!isCollapsed}
         aria-controls={panelId}
       >
@@ -212,7 +212,7 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
         <Folder size={14} className="shrink-0" />
         <span className="flex-1 text-left truncate">{name}</span>
         {isHighlighted && (
-          <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-[var(--font-weight-regular)] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
+          <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
         )}
       </button>
       {onSwitch && (
@@ -242,13 +242,13 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
     <button tabIndex={0}
       type="button"
       onClick={onToggle}
-      className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+      className="w-full flex items-center gap-1.5 px-2 py-1 text-[length:var(--type-caption-size)] font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
       aria-expanded={!isCollapsed}
       aria-controls={panelId}
     >
       {isCollapsed ? <CaretRight size={9} className="shrink-0" /> : <CaretDown size={9} className="shrink-0" />}
       <span
-        className="w-4 h-4 rounded-full border border-[var(--color-primary)] flex items-center justify-center text-[7px] shrink-0"
+        className="w-4 h-4 rounded-full border border-[var(--color-primary)] flex items-center justify-center text-[length:var(--type-caption-size)] shrink-0"
         style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
         aria-hidden="true"
       >
@@ -322,7 +322,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
             // onEditingChange.
             if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setVal(session.title || '') }
           }}
-          className="h-7 flex-1 text-sm" />
+          className="h-7 flex-1 text-[length:var(--type-body-compact-size)]" />
         <button tabIndex={0} onClick={commit} className="shrink-0 rounded p-1.5 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></button>
         <button tabIndex={0} onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></button>
       </div>
@@ -332,20 +332,20 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
   // Destructive action requires explicit confirmation — mistakes must be cheap.
   if (confirmDelete) {
     return (
-      <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)] mx-2 text-sm">
+      <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)] mx-2 text-[length:var(--type-body-compact-size)]">
         <span className="flex-1 truncate text-[var(--color-secondary)]">Delete "{session.title || 'Untitled session'}"?</span>
         <button tabIndex={0}
           type="button"
           onClick={() => { setConfirmDelete(false); onDelete() }}
           disabled={deleting}
-          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-error)] hover:bg-[var(--color-error)]/10 disabled:opacity-50"
+          className="shrink-0 rounded px-2 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10 disabled:opacity-50"
         >
           Delete
         </button>
         <button tabIndex={0}
           type="button"
           onClick={() => setConfirmDelete(false)}
-          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+          className="shrink-0 rounded px-2 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
         >
           Cancel
         </button>
@@ -360,14 +360,14 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
       isHighlighted && 'bg-[var(--color-surface-2)]',
     )}>
       <button tabIndex={0} type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <div className={cn('truncate text-sm font-medium flex items-center gap-1.5', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
+        <div className={cn('truncate text-[length:var(--type-body-compact-size)] font-medium flex items-center gap-1.5', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
           <span className="truncate">{session.title || 'Untitled session'}</span>
           {isHighlighted && (
-            <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-[var(--font-weight-regular)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
           )}
         </div>
         {/* flex-wrap + hiding the token count under 400px keeps the metadata legible on phones */}
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0 text-[11px] text-[var(--color-muted)]">
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {/* formatRelative returns '' for an unparseable date (documented
               contract in src/lib/formatRelative.ts) — fall back to an em
               dash here rather than rendering a dangling "Started ". */}
@@ -375,7 +375,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
           <span aria-hidden>·</span>
           <span>Active {formatRelative(session.updated_at) || '—'}</span>
           {session.total_tokens ? (<span className="hidden min-[400px]:inline"><span aria-hidden>· </span><span className="font-mono">{formatTokens(session.total_tokens)}</span></span>) : null}
-          {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[9px]">HB</span></>)}
+          {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[length:var(--type-caption-size)]">HB</span></>)}
         </div>
       </button>
       {/* Hover-revealed on pointer devices; always visible on touch ([@media(hover:none)]). */}
@@ -834,7 +834,7 @@ export function SearchModal() {
             <MagnifyingGlass size={16} className="text-[var(--color-accent)]" />
             {mode === 'workspaces' ? 'Switch workspace' : 'Search sessions'}
             {mode === 'sessions' && wsFilter && (
-              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-[var(--font-weight-regular)] text-[var(--color-secondary)]">
+              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-secondary)]">
                 {workspaces.find((w) => w.id === wsFilter)?.name ?? 'Filtered'}
                 <button tabIndex={0} type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
                   <X size={10} />
@@ -888,9 +888,9 @@ export function SearchModal() {
           {mode === 'sessions' && showDateFilter && (
             <div className="mt-2 flex items-center gap-2">
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="max-w-[180px]" aria-label="From date" />
-              <span className="text-xs text-[var(--color-muted)]">to</span>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">to</span>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="max-w-[180px]" aria-label="To date" />
-              {(fromDate || toDate) && <button tabIndex={0} type="button" onClick={() => { setFromDate(''); setToDate('') }} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:underline">Clear</button>}
+              {(fromDate || toDate) && <button tabIndex={0} type="button" onClick={() => { setFromDate(''); setToDate('') }} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:underline">Clear</button>}
             </div>
           )}
         </DialogHeader>
@@ -901,13 +901,13 @@ export function SearchModal() {
             // Do not fall through to the grouped list on a workspaces-fetch
             // failure — that would silently bucket everything under "Unfiled"
             // and present a transient outage as if no session had a workspace.
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>
+            <div className="px-3 py-10 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load sessions — try again</div>
           ) : loading ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
+            <div className="px-3 py-10 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               {mode === 'workspaces' ? 'Loading workspaces...' : 'Loading sessions...'}
             </div>
           ) : total === 0 ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
+            <div className="px-3 py-10 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               {mode === 'workspaces' ? (
                 <p>No workspaces found{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
               ) : (
@@ -918,7 +918,7 @@ export function SearchModal() {
                   <button tabIndex={0}
                     type="button"
                     onClick={() => setSearchText('')}
-                    className="mt-2 text-xs text-[var(--color-accent)] hover:underline"
+                    className="mt-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
                   >
                     Clear filter
                   </button>
@@ -927,7 +927,7 @@ export function SearchModal() {
                 <button tabIndex={0}
                   type="button"
                   onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); useUiStore.setState({ searchModalWorkspaceFilter: null }) }}
-                  className="mt-2 text-xs text-[var(--color-accent)] hover:underline"
+                  className="mt-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
                 >
                   Clear all filters
                 </button>

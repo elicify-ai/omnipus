@@ -164,14 +164,6 @@
     },
     {
       "ruleId": "spacing/extension-boundary",
-      "path": "src/components/library/preview/viewparts/TablePart.tsx",
-      "syntax": "RowOpenButton#className",
-      "category": "caller pass-through",
-      "owner": "caller pass-through exception registry",
-      "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: RowOpenButton's own destructured prop `className` is declared at src/components/library/preview/viewparts/TablePart.tsx:43:3 and flows unmodified to 1 sink(s) — src/components/library/preview/viewparts/TablePart.tsx:60:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between."
-    },
-    {
-      "ruleId": "spacing/extension-boundary",
       "path": "src/components/library/search/LibrarySearchBar.tsx",
       "syntax": "LibrarySearchBar#className",
       "category": "caller pass-through",

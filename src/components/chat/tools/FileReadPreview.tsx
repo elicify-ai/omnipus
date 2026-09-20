@@ -73,7 +73,7 @@ function FileReadBlock({
     // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
     // language. The decorative FileText tool-type icon is gone; the leading
     // slot is the status dot/spinner only.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
@@ -100,8 +100,8 @@ function FileReadBlock({
           content pane keeps its dark code-block styling (bg-[#0d1117]). */}
       {expanded && !isRunning && content && (
         <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
-          <div className="text-[10px] text-[var(--color-muted)] font-mono break-all mb-1">{path}</div>
-          <pre className="p-2 text-[10px] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[#0d1117]">
+          <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-1">{path}</div>
+          <pre className="p-2 text-[length:var(--type-caption-size)] leading-5 font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-72 overflow-auto bg-[#0d1117]">
             {preview}
             {isTruncated && (
               <span className="text-[var(--color-muted)] italic">

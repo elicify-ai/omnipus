@@ -1299,7 +1299,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         onOpenAutoFocus={handleOpenAutoFocus}
         contentRef={sheetContentRef}
       >
-        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
+        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
           Loading agent...
         </div>
       </ProfileSheet>
@@ -1329,8 +1329,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         contentRef={sheetContentRef}
       >
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-          <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
-          <p className="text-xs text-[var(--color-muted)] max-w-sm">{detail}</p>
+          <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{title}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] max-w-sm">{detail}</p>
           <div className="flex gap-2">
             {!isNotFound && (
               <Button variant="outline" size="sm" onClick={() => refetchAgent()}>
@@ -1387,7 +1387,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
           {/* Identity — always rendered; read-only for locked (core) agents */}
           <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Identity</p>
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Identity</p>
             <div className="space-y-3">
               <div className="space-y-2">
                 <Input
@@ -1397,7 +1397,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   readOnly={isLocked}
                   onChange={isLocked ? undefined : (e) => { markDirty(); setName(e.target.value) }}
                   placeholder="Agent name"
-                  className="text-sm"
+                  className="text-[length:var(--type-body-compact-size)]"
                 />
                 {/* Operator decision 2026-07-03: description becomes visible
                     READ-ONLY for locked core agents (previously hidden
@@ -1411,7 +1411,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   onChange={isLocked ? undefined : (e) => { markDirty(); setDescription(e.target.value) }}
                   placeholder="Short description of this agent's purpose"
                   rows={2}
-                  className="text-sm resize-none"
+                  className="text-[length:var(--type-body-compact-size)] resize-none"
                 />
               </div>
               {/* W6-B4 / G3: Default agent toggle. Locked core agents keep
@@ -1434,8 +1434,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       aria-hidden="true"
                     />
                     <div className="min-w-0">
-                      <p className="text-sm text-[var(--color-secondary)]">Default agent</p>
-                      <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Default agent</p>
+                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                         Handles inbound messages with no more-specific routing rule. Only one agent is default at a time.
                       </p>
                     </div>
@@ -1460,7 +1460,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   entirely) — a static swatch/icon+label, not the
                   interactive picker (which has no readOnly mode). */}
               <div className="space-y-1.5">
-                <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar color</p>
                 {isLocked ? (
                   <div className="flex items-center gap-2" data-testid="avatar-color-readonly">
                     <span
@@ -1468,7 +1468,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       style={{ backgroundColor: selectedColor || 'var(--color-surface-3)' }}
                       aria-hidden="true"
                     />
-                    <span className="text-xs text-[var(--color-secondary)]">
+                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
                       {avatarColorName(selectedColor)}
                     </span>
                   </div>
@@ -1481,14 +1481,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 )}
               </div>
               <div className="space-y-1.5">
-                <p className="text-xs text-[var(--color-muted)]">Avatar icon</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
                 {isLocked ? (
                   <div className="flex items-center gap-2" data-testid="avatar-icon-readonly">
                     {(() => {
                       const ReadOnlyIcon = getIconComponent(selectedIcon)
                       return <ReadOnlyIcon size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
                     })()}
-                    <span className="text-xs text-[var(--color-secondary)]">{selectedIcon}</span>
+                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
                   </div>
                 ) : (
                   <IconPicker
@@ -1505,9 +1505,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
           {/* Model Configuration — picker, unresolved-slug indicator, fallback editor */}
           <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Model</p>
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Model</p>
             {providersError && !isExternalAgent && (
-              <p className="text-xs text-[var(--color-warning)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">
                 Could not load providers. You can still enter a model slug manually.
               </p>
             )}
@@ -1523,9 +1523,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   value={model}
                   onChange={(e) => { markDirty(); setModel(e.target.value) }}
                   placeholder="claude-sonnet-4-6"
-                  className="text-sm font-mono"
+                  className="text-[length:var(--type-body-compact-size)] font-mono"
                 />
-                <p className="text-xs text-[var(--color-muted)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   Passed to the external CLI as its model flag. The runner uses its
                   own provider and authentication — enter any model slug the CLI
                   supports, independent of the providers connected here.
@@ -1568,7 +1568,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <button tabIndex={0}
                 type="button"
                 onClick={() => setAdvancedOpen((o) => !o)}
-                className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                className="flex items-center justify-between w-full px-3 py-2.5 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
                 aria-expanded={advancedOpen}
               >
                 <span>Sampling parameters</span>
@@ -1612,8 +1612,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               `-basics` suffix since this is now the only surface. */}
           {!isExternalAgent && (
           <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
-            <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Fallback models</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
             {isLocked ? (
               <div
                 data-testid="fallback-summary-locked-basics"
@@ -1621,23 +1621,23 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               >
                 <div className="flex items-center gap-2 text-[var(--color-muted)]">
                   <Lock size={12} weight="fill" aria-hidden="true" />
-                  <p className="text-[11px]">
+                  <p className="text-[length:var(--type-caption-size)]">
                     Locked: fallback models are inherited from the locked core config.
                   </p>
                 </div>
                 {fallbackModels.length === 0 ? (
-                  <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No fallback chain configured.</p>
                 ) : (
                   <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
                     {fallbackModels.map((entry, idx) => (
                       <li
                         key={entry.model}
-                        className="flex items-center gap-2 text-xs font-mono text-[var(--color-secondary)]"
+                        className="flex items-center gap-2 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"
                       >
                         <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
                         <span
                           data-testid={`fallback-summary-provider-${entry.model}`}
-                          className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold"
+                          className="inline-flex items-center px-1.5 rounded text-[length:var(--type-caption-size)] font-semibold"
                           style={{
                             backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                             color: 'var(--color-accent)',
@@ -1665,11 +1665,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     <span
                       key={entry.model}
                       data-testid={`fallback-chip-model-${entry.model}`}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[length:var(--type-caption-size)] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
                     >
                       <span
                         data-testid={`fallback-chip-provider-${entry.model}`}
-                        className="inline-flex items-center px-1 rounded text-[9px] font-semibold"
+                        className="inline-flex items-center px-1 rounded text-[length:var(--type-caption-size)] font-semibold"
                         style={{
                           backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                           color: 'var(--color-accent)',
@@ -1684,7 +1684,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           aria-label={`Provider for fallback ${entry.model}`}
                           value={entry.provider}
                           onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
-                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
+                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[length:var(--type-caption-size)] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
                         >
                           <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
                           {connectedProviders.map((p) => (
@@ -1797,8 +1797,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 aria-hidden="true"
               />
               <div className="min-w-0">
-                <p className="text-sm text-[var(--color-secondary)]">Memory</p>
-                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Memory</p>
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                   {isSystemAgent
                     ? 'Verifier agents always run with memory off — the same evidence must always yield the same verdict.'
                     : "Lets this agent recall its workspace's shared memory across sessions. Off starts every turn from a clean slate."}
@@ -1862,12 +1862,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           {!isExternalAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Tools &amp; Permissions</p>
+                <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Tools &amp; Permissions</p>
                 {(() => {
                   const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
                   if (overrideCount === 0) return null
                   return (
-                    <span className="text-xs text-[var(--color-muted)] font-[var(--font-weight-regular)]">
+                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] font-[var(--font-weight-regular)]">
                       {overrideCount} overrides
                     </span>
                   )
@@ -1900,20 +1900,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           {!isExternalAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Skills</p>
+                <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Skills</p>
                 {agentSkills.length > 0 && (
-                  <span className="text-xs text-[var(--color-muted)] font-[var(--font-weight-regular)]">
+                  <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] font-[var(--font-weight-regular)]">
                     {agentSkills.length} granted
                   </span>
                 )}
               </div>
               <div className="space-y-3">
                 {isLocked ? (
-                  <p className="text-xs text-[var(--color-muted)]">
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                     Skill assignment is read-only for locked core agents.
                   </p>
                 ) : (
-                  <p className="text-xs text-[var(--color-muted)]">
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                     Grant specific installed skills to this agent. Only skills listed here
                     are available during this agent's runs. Empty means no skills.
                   </p>
@@ -1921,8 +1921,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {availableSkills.length === 0 ? (
                   <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-4 text-center">
                     <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-1.5" />
-                    <p className="text-xs text-[var(--color-muted)]">No skills installed.</p>
-                    <p className="text-xs text-[var(--color-muted)]/70 mt-0.5">
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No skills installed.</p>
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/70 mt-0.5">
                       Install skills from the Skills &amp; Tools screen.
                     </p>
                   </div>
@@ -1951,20 +1951,20 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                             data-testid={`skill-checkbox-${skill.id}`}
                           />
                           <div className="min-w-0">
-                            <p className="text-sm font-medium text-[var(--color-secondary)] leading-tight">
+                            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-tight">
                               {skill.name}
                             </p>
                             {skill.description && (
-                              <p className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-snug">
+                              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-0.5 leading-snug">
                                 {skill.description}
                               </p>
                             )}
                             <div className="flex items-center gap-2 mt-1">
-                              <span className="text-[10px] font-mono text-[var(--color-muted)]/70">
+                              <span className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]/70">
                                 {skill.id}
                               </span>
                               {skill.verified && (
-                                <span className="text-[9px] px-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                <span className="text-[length:var(--type-caption-size)] px-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
                                   verified
                                 </span>
                               )}
@@ -1987,7 +1987,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     <div className="space-y-5">
 
             <section className="space-y-3">
-              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Runtime</p>
+              <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Runtime</p>
               {/* CLI — read-only badge. The kind+cli tuple is the agent's
                   defining property; the operator can change which CLI is
                   used by recreating the agent (post v0.3 the wizard will
@@ -1996,18 +1996,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 data-testid="profile-cli-locked"
                 className="flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
-                <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)]">CLI</span>
-                <span className="font-mono text-xs text-[var(--color-secondary)]">
+                <span className="text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)]">CLI</span>
+                <span className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
                   {executor?.cli ?? 'claude-code'}
                 </span>
-                <span className="text-[10px] text-[var(--color-muted)]">(locked)</span>
+                <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">(locked)</span>
               </div>
               <div
                 data-testid="profile-cli-path"
                 className="space-y-1.5"
               >
                 <div className="flex items-center gap-3">
-                  <label htmlFor="profile-cli-path-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
+                  <label htmlFor="profile-cli-path-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
                   <Input
                     id="profile-cli-path-input"
                     value={executor?.cli_path ?? offeredCliPath ?? ''}
@@ -2035,7 +2035,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       cliValidation.validate(cli, e.target.value)
                     }}
                     placeholder="/usr/local/bin/claude"
-                    className="text-xs h-8 font-mono"
+                    className="text-[length:var(--type-utility-xs-size)] h-8 font-mono"
                     disabled={isLocked}
                   />
                 </div>
@@ -2046,8 +2046,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 />
               </div>
               <div data-testid="profile-env-overrides" className="space-y-2">
-                <label className="text-xs text-[var(--color-muted)]">Environment overrides</label>
-                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                <label className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Environment overrides</label>
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                   KEY=value pairs passed to the CLI process. Empty means no overrides.
                 </p>
                 <EnvironmentOverridesEditor
@@ -2064,7 +2064,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
               <div data-testid="profile-cli-args" className="space-y-1.5">
                 <div className="flex items-center gap-3">
-                  <label htmlFor="profile-cli-args-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
+                  <label htmlFor="profile-cli-args-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
                   <Input
                     id="profile-cli-args-input"
                     value={executor?.cli_args ?? ''}
@@ -2073,11 +2073,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
                     }}
                     placeholder="e.g. --add-dir /extra/path"
-                    className="text-xs h-8 font-mono"
+                    className="text-[length:var(--type-utility-xs-size)] h-8 font-mono"
                     disabled={isLocked}
                   />
                 </div>
-                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                   In addition to the flags Omnipus applies automatically when this agent runs — see the live command preview below. Any argument that would be silently ignored is called out there before you save.
                 </p>
               </div>
@@ -2096,12 +2096,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               the backend for locked agents — only identity/soul/skills are
               403'd). */}
           <section className="space-y-3">
-              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Rate Limits</p>
+              <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Rate Limits</p>
               <div className="space-y-3">
                 <div className="flex items-center justify-between py-1">
                   <div>
-                    <p className="text-sm text-[var(--color-secondary)]">Use global defaults</p>
-                    <p className="text-xs text-[var(--color-muted)]">Inherit rate limits from global settings</p>
+                    <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Use global defaults</p>
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Inherit rate limits from global settings</p>
                   </div>
                   <Switch
                     checked={useGlobalRateLimits}
@@ -2112,7 +2112,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {!useGlobalRateLimits && (
                   <div className="space-y-2">
                     <div className="flex items-center gap-3">
-                      <label htmlFor="profile-rate-limit-llm-calls" className="text-xs text-[var(--color-muted)] w-44 shrink-0">LLM calls / hour</label>
+                      <label htmlFor="profile-rate-limit-llm-calls" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">LLM calls / hour</label>
                       <Input
                         id="profile-rate-limit-llm-calls"
                         type="number"
@@ -2120,11 +2120,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         value={maxLlmCallsPerHour}
                         onChange={(e) => { markDirty(); setMaxLlmCallsPerHour(e.target.value === '' ? '' : Number(e.target.value)) }}
                         placeholder="Unlimited"
-                        className="text-xs h-8"
+                        className="text-[length:var(--type-utility-xs-size)] h-8"
                       />
                     </div>
                     <div className="flex items-center gap-3">
-                      <label htmlFor="profile-rate-limit-tool-calls" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Tool calls / minute</label>
+                      <label htmlFor="profile-rate-limit-tool-calls" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Tool calls / minute</label>
                       <Input
                         id="profile-rate-limit-tool-calls"
                         type="number"
@@ -2132,11 +2132,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         value={maxToolCallsPerMinute}
                         onChange={(e) => { markDirty(); setMaxToolCallsPerMinute(e.target.value === '' ? '' : Number(e.target.value)) }}
                         placeholder="Unlimited"
-                        className="text-xs h-8"
+                        className="text-[length:var(--type-utility-xs-size)] h-8"
                       />
                     </div>
                     <div className="flex items-center gap-3">
-                      <label htmlFor="profile-rate-limit-max-cost" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Max cost / day ($)</label>
+                      <label htmlFor="profile-rate-limit-max-cost" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Max cost / day ($)</label>
                       <Input
                         id="profile-rate-limit-max-cost"
                         type="number"
@@ -2145,7 +2145,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         value={maxCostPerDay}
                         onChange={(e) => { markDirty(); setMaxCostPerDay(e.target.value === '' ? '' : Number(e.target.value)) }}
                         placeholder="Unlimited"
-                        className="text-xs h-8"
+                        className="text-[length:var(--type-utility-xs-size)] h-8"
                       />
                     </div>
                   </div>
@@ -2158,12 +2158,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               mutable on the backend for locked agents). Max tool calls
               is further hidden for subagent_3p (see below). */}
           <section className="space-y-3">
-              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Execution</p>
+              <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Execution</p>
               <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
                 <div className="flex items-center gap-3">
-                  <label htmlFor="agent-timeout-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                  <label htmlFor="agent-timeout-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
                     Turn timeout
-                    <span className="block text-[10px] text-[var(--color-muted)]/70">
+                    <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                       Max seconds per turn. 0 = no limit.
                     </span>
                   </label>
@@ -2194,7 +2194,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       }
                     }}
                     onBlur={() => setTimeoutDraft(String(timeoutSeconds))}
-                    className="text-xs h-8"
+                    className="text-[length:var(--type-utility-xs-size)] h-8"
                   />
                 </div>
                 {/* Max tool calls per turn — excluded for subagent_3p
@@ -2204,9 +2204,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     this type. */}
                 {!isExternalAgent && (
                   <div className="flex items-center gap-3">
-                    <label htmlFor="agent-max-tool-calls-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                    <label htmlFor="agent-max-tool-calls-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
                       Max tool calls per turn
-                      <span className="block text-[10px] text-[var(--color-muted)]/70">
+                      <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                         Per single turn (one message, task, or heartbeat run) — the
                         turn pauses at the limit and can be continued. Default: 200.
                       </span>
@@ -2232,7 +2232,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         }
                       }}
                       onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
-                      className="text-xs h-8"
+                      className="text-[length:var(--type-utility-xs-size)] h-8"
                     />
                   </div>
                 )}
@@ -2246,9 +2246,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {!isExternalAgent && (
                   <div className="space-y-1">
                     <div className="flex items-center gap-3">
-                      <label htmlFor="agent-context-window-override-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                      <label htmlFor="agent-context-window-override-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
                         Context window override
-                        <span className="block text-[10px] text-[var(--color-muted)]/70">
+                        <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                           Tokens. Lower-only — never above the model's own limit. Empty = use the model's window.
                         </span>
                       </label>
@@ -2279,13 +2279,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         onBlur={() => setContextWindowOverrideDraft(
                           contextWindowOverride != null ? String(contextWindowOverride) : '',
                         )}
-                        className="text-xs h-8"
+                        className="text-[length:var(--type-utility-xs-size)] h-8"
                       />
                     </div>
                     {agent?.context_window_effective !== undefined && (
                       <p
                         data-testid="agent-context-window-effective"
-                        className="pl-[11.75rem] text-[11px] text-[var(--color-muted)]"
+                        className="pl-[11.75rem] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       >
                         Effective window: {formatWindowTokens(agent.context_window_effective)} tokens
                         {agent.context_window_source
@@ -2297,7 +2297,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       <p
                         data-testid="agent-context-window-clamped"
                         role="status"
-                        className="pl-[11.75rem] text-[11px] text-[var(--color-warning,#D4AF37)]"
+                        className="pl-[11.75rem] text-[length:var(--type-caption-size)] text-[var(--color-warning,#D4AF37)]"
                       >
                         Override clamped to the model's limit
                         {agent.context_window_effective !== undefined
@@ -2324,10 +2324,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <button tabIndex={0}
                   type="button"
                   onClick={() => setShellAdvancedOpen((o) => !o)}
-                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+                  className="flex items-center justify-between w-full px-3 py-2.5 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
                   aria-expanded={shellAdvancedOpen}
                 >
-                  <span className="font-headline font-semibold text-[14px]">Shell deny patterns</span>
+                  <span className="font-headline font-semibold text-[length:var(--type-body-size)]">Shell deny patterns</span>
                   {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
                 </button>
                 {shellAdvancedOpen && (
@@ -2352,16 +2352,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           {isNativeWorkerAgent && (
             <section className="space-y-3">
               <div className="flex items-center gap-2">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Executor</p>
+                <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Executor</p>
                 {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
+                  <span className="px-1.5 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
                     {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
                   </span>
                 )}
                 {(!executor || executor.kind === 'native') && (
                   <span
                     data-testid="executor-native-badge"
-                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]"
+                    className="px-1.5 py-0.5 rounded text-[length:var(--type-caption-size)] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]"
                   >
                     Native (in-process)
                   </span>
@@ -2378,7 +2378,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
           {/* Activity */}
           <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Activity</p>
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Activity</p>
             {agent.stats && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <StatCard label="Sessions" value={agent.stats.total_sessions.toString()} />
@@ -2408,15 +2408,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 role="alert"
               >
                 <Warning size={14} weight="fill" className="text-[var(--color-warning)] shrink-0 mt-0.5" aria-hidden="true" />
-                <p className="text-xs text-[var(--color-warning)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">
                   Showing partial activity — {allActivityResp.warning}
                 </p>
               </div>
             )}
             {activityError ? (
-              <p className="text-sm text-[var(--color-error)]">Failed to load activity</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load activity</p>
             ) : recentActivity.length === 0 ? (
-              <p className="text-xs text-[var(--color-muted)]">No recent activity for this agent.</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No recent activity for this agent.</p>
             ) : (
               <div className="space-y-1">
                 {recentActivity.map((event) => (
@@ -2447,11 +2447,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         >
           <WarningCircle size={16} weight="fill" className="text-[var(--color-error)] shrink-0 mt-0.5" aria-hidden="true" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-[var(--color-error)]">
+            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-error)]">
               {isWorkspaceLoading ? 'Loading workspace…' : 'Failed to load workspace'}
             </p>
             {isWorkspaceError && (
-              <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-0.5">
                 Heartbeat settings cannot be saved until the workspace reloads. Check your connection and retry.
               </p>
             )}
@@ -2459,10 +2459,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </div>
       )}
       <section className="space-y-3">
-        <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">
+        <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">
           Heartbeat for this workspace
         </p>
-        <p className="text-xs text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Configure a recurring heartbeat prompt for this agent in this workspace.
           The heartbeat runs on the schedule you set and uses the body below as its
           prompt — independent of any other workspace this agent belongs to.
@@ -2474,8 +2474,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
         >
           <div className="min-w-0">
-            <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
-            <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Enable heartbeat</p>
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
               Runs the agent on the interval below using the body as its prompt.
             </p>
           </div>
@@ -2491,10 +2491,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <div className="flex items-center gap-3">
           <label
             htmlFor="heartbeat-interval"
-            className="text-xs text-[var(--color-muted)] w-44 shrink-0"
+            className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0"
           >
             Interval (minutes)
-            <span className="block text-[10px] text-[var(--color-muted)]/70">
+            <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
               Minimum 5 minutes
             </span>
           </label>
@@ -2519,7 +2519,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               }
             }}
             onBlur={() => setHbIntervalDraft(String(hbIntervalMinutes))}
-            className="text-xs h-8"
+            className="text-[length:var(--type-utility-xs-size)] h-8"
           />
         </div>
 
@@ -2528,7 +2528,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <div className="flex items-center justify-between">
             <label
               htmlFor="heartbeat-body"
-              className="text-xs text-[var(--color-muted)]"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               Heartbeat body
               {hbEnabled && (
@@ -2546,7 +2546,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             onChange={(e) => { markHbDirty(); setHbBody(e.target.value) }}
             rows={6}
             placeholder="Periodic instruction prompt — e.g. 'Summarise overnight CI results and update the project board.'"
-            className="text-sm resize-none"
+            className="text-[length:var(--type-body-compact-size)] resize-none"
             aria-required={hbEnabled}
             aria-describedby={hbEnabled && hbBody.trim() === '' ? 'heartbeat-body-required-hint' : undefined}
             maxLength={16384}
@@ -2555,7 +2555,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <p
               id="heartbeat-body-required-hint"
               data-testid="heartbeat-body-required-hint"
-              className="text-xs text-[var(--color-error)]"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
             >
               Body is required when heartbeat is enabled.
             </p>
@@ -2604,7 +2604,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             color={selectedColor}
             className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 [&>svg]:!w-3.5 [&>svg]:!h-3.5"
           />
-          <h1 className="font-headline text-sm font-semibold text-[var(--color-secondary)] truncate">
+          <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}
           </h1>
         </div>
@@ -2619,7 +2619,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </Badge>
         )}
         {agent.description && (
-          <span className="text-xs text-[var(--color-muted)] truncate">{agent.description}</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">{agent.description}</span>
         )}
       </div>
 
@@ -2648,7 +2648,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
         >
           <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
-          <div className="text-sm">
+          <div className="text-[length:var(--type-body-compact-size)]">
             <div className="font-semibold text-[var(--color-error)]">This is a built-in core agent</div>
             <div className="text-[var(--color-muted)] mt-1">
               Most fields are read-only. To create your own chat colleague, use the + Add Main button.
@@ -2663,7 +2663,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
         >
           <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
-          <div className="text-sm">
+          <div className="text-[length:var(--type-body-compact-size)]">
             <div className="font-semibold text-[var(--color-error)]">System agent</div>
             <div className="text-[var(--color-muted)] mt-1">
               Identity (name, description, color, icon, skills) is locked.
@@ -2711,10 +2711,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             aria-hidden="true"
           />
           <div className="min-w-0">
-            <p className="text-sm font-medium text-[var(--color-secondary)]">
+            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
               This is a delegation-only worker
             </p>
-            <p className="text-[12px] text-[var(--color-muted)] leading-snug mt-0.5">
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug mt-0.5">
               Never a chat target — this agent only runs when another agent
               delegates a task to it. Tools and Skills below may be
               set explicitly or left to inherit from the delegating caller at
@@ -2868,7 +2868,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               take effect in every chat / workspace / delegation it is used in. */}
           <p
             data-testid="autosave-scope-cue"
-            className="text-[11px] text-[var(--color-muted)] leading-snug"
+            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug"
           >
             Changes save automatically and apply everywhere this agent is used.
           </p>
@@ -2974,7 +2974,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 text-center">
       <div className="font-headline font-bold text-base text-[var(--color-secondary)]">{value}</div>
-      <div className="text-xs text-[var(--color-muted)] mt-0.5">{label}</div>
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">{label}</div>
     </div>
   )
 }
@@ -2996,12 +2996,12 @@ function RangeField({ label, caption, value, min, max, step, onChange, format }:
     <div className="space-y-1 pt-3">
       <div className="flex items-center justify-between">
         <div>
-          <span className="text-xs text-[var(--color-muted)]">{label}</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</span>
           {caption && (
-            <p className="text-[10px] text-[var(--color-muted)]/70 leading-snug mt-0.5">{caption}</p>
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70 leading-snug mt-0.5">{caption}</p>
           )}
         </div>
-        <span className="text-xs font-mono text-[var(--color-secondary)]">{format(value)}</span>
+        <span className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{format(value)}</span>
       </div>
       <input tabIndex={0}
         type="range"
@@ -3024,10 +3024,10 @@ function ActivityRow({ event }: { event: ActivityEvent }) {
   const date = new Date(event.timestamp)
   return (
     <div className="flex items-start gap-3 px-3 py-2 rounded-md hover:bg-[var(--color-surface-1)] transition-colors">
-      <span className="text-xs text-[var(--color-secondary)] flex-1 min-w-0 truncate">
+      <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 min-w-0 truncate">
         {event.summary}
       </span>
-      <span className="text-[10px] text-[var(--color-muted)] shrink-0 mt-0.5">
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] shrink-0 mt-0.5">
         {date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
       </span>
     </div>
@@ -3148,7 +3148,7 @@ function EnvironmentOverridesEditor({
   return (
     <div className="space-y-1.5">
       {rows.length === 0 ? (
-        <p className="text-[11px] text-[var(--color-muted)] italic">No overrides configured.</p>
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No overrides configured.</p>
       ) : (
         rows.map((row, idx) => {
           const isDuplicate = row.key !== '' && duplicateKeys.has(row.key)
@@ -3160,7 +3160,7 @@ function EnvironmentOverridesEditor({
                   onChange={(e) => updateKeyDraft(row.id, e.target.value)}
                   onBlur={commitKey}
                   placeholder="KEY"
-                  className="text-xs h-8 font-mono flex-1"
+                  className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable name"
                   aria-invalid={isDuplicate || undefined}
                   disabled={disabled}
@@ -3170,7 +3170,7 @@ function EnvironmentOverridesEditor({
                   value={row.value}
                   onChange={(e) => updateValue(row.id, e.target.value)}
                   placeholder="value"
-                  className="text-xs h-8 font-mono flex-1"
+                  className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable value"
                   disabled={disabled}
                 />
@@ -3186,7 +3186,7 @@ function EnvironmentOverridesEditor({
               </div>
               {isDuplicate && (
                 <p
-                  className="text-[10px] text-[var(--color-error)]"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
                   data-testid={`profile-env-duplicate-${idx}`}
                 >
                   Duplicate key "{row.key}" — rename it before this change is saved.
@@ -3201,7 +3201,7 @@ function EnvironmentOverridesEditor({
           type="button"
           data-testid="profile-env-add"
           onClick={addRow}
-          className="text-[10px] text-[var(--color-accent)] hover:underline"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline"
         >
           + Add override
         </button>

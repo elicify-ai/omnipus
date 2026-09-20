@@ -560,7 +560,7 @@ export function CalendarEventSlideOver({
               }
             />
             {teamError && (
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Team list unavailable — showing all agents
               </p>
             )}
@@ -585,7 +585,7 @@ export function CalendarEventSlideOver({
               placeholder="Describe what the agent should do each time this runs…"
               rows={4}
               maxLength={10000}
-              className="text-xs font-mono resize-none"
+              className="text-[length:var(--type-utility-xs-size)] font-mono resize-none"
               aria-invalid={promptEmpty}
               aria-describedby={promptEmpty ? 'ces-prompt-error' : undefined}
             />
@@ -607,9 +607,9 @@ export function CalendarEventSlideOver({
               onChange={(next) => { setCriteria(next); setCriteriaError('') }}
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
             />
-            <p className="text-xs text-[var(--color-muted)]">Add at least one.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Add at least one.</p>
             {criteriaError && (
-              <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{criteriaError}</p>
             )}
           </div>
 
@@ -624,7 +624,7 @@ export function CalendarEventSlideOver({
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
             />
             {dodError && (
-              <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{dodError}</p>
             )}
           </div>
 
@@ -645,7 +645,7 @@ export function CalendarEventSlideOver({
           {isLegacy && (
             <div
               data-testid="legacy-trigger-note"
-              className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 p-3 text-xs text-[var(--color-secondary)] space-y-1"
+              className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 p-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] space-y-1"
             >
               <p className="font-medium">This task uses an old schedule format.</p>
               <p>
@@ -672,7 +672,7 @@ export function CalendarEventSlideOver({
               onValidityChange={setRecurrenceValid}
             />
             {isEditingExistingRrule && scheduleTouched && (
-              <p data-testid="reanchor-notice" className="text-xs text-[color:var(--color-warning)]">
+              <p data-testid="reanchor-notice" className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-warning)]">
                 Changing the schedule restarts the occurrence count, starting from now.
               </p>
             )}
@@ -681,16 +681,16 @@ export function CalendarEventSlideOver({
 
           {/* FR-020: upcoming fires preview, server-sourced (edit mode, active RRULE only) */}
           {isEditingExistingRrule && previewError && (
-            <p className="text-xs text-[var(--color-muted)]" data-testid="upcoming-preview-error">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="upcoming-preview-error">
               Couldn't load upcoming run times.
             </p>
           )}
           {isEditingExistingRrule && !previewError && upcomingPreview.length > 0 && (
             <div className="flex flex-col gap-1" data-testid="upcoming-occurrences-preview">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+              <span className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Upcoming
               </span>
-              <ul className="text-xs text-[var(--color-secondary)] space-y-0.5">
+              <ul className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] space-y-0.5">
                 {upcomingPreview.map((ms) => (
                   <li key={ms}>{formatDateTime(ms)}</li>
                 ))}
@@ -727,7 +727,7 @@ export function CalendarEventSlideOver({
                 <>
                   {hasOccurrenceContext && runsForOccurrenceQuery.isError && (
                     <p
-                      className="text-xs text-[color:var(--color-error)]"
+                      className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-error)]"
                       data-testid="occurrence-run-resolve-error"
                     >
                       Couldn't load this occurrence's run status.

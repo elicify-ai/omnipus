@@ -98,7 +98,7 @@ export function CriteriaVerdictList({
   return (
     <div className="flex flex-col gap-1.5">
       {typeof displayedAttempt === 'number' && (
-        <p className="text-xs text-[var(--color-muted)]" data-testid="attempt-counter">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="attempt-counter">
           attempt {displayedAttempt} of {effectiveMax}
         </p>
       )}
@@ -118,7 +118,7 @@ export function CriteriaVerdictList({
       )}
       {dod.length > 0 && (
         <div className="mt-1" data-testid="criteria-verdict-dod">
-          <p className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
+          <p className="text-[var(--color-muted)] mb-1 text-[length:var(--type-caption-size)] uppercase tracking-wide">
             Definition of Done
           </p>
           <ul className="space-y-1.5">
@@ -149,7 +149,7 @@ interface CriterionRowProps {
 
 function CriterionRow({ criterion: c, verdict, evidenceRecord: ev, isExpanded, onToggleExpand }: CriterionRowProps) {
   return (
-    <li className="rounded-md bg-[var(--color-surface-2)] text-xs p-2">
+    <li className="rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] p-2">
       <div className="flex items-start gap-2">
         <CriterionStatusIcon status={c.status} />
         <div className="flex-1 min-w-0">

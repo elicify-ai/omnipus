@@ -162,12 +162,12 @@ const DateTimePicker = React.forwardRef<HTMLButtonElement, DateTimePickerProps>(
         <div className="flex items-center gap-2 border-t border-[var(--color-border)] p-3">
           <Clock size={14} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
           <Select value={value ? pad2(value.getHours()) : undefined} onValueChange={handleHourChange} disabled={blocked}>
-            <SelectTrigger aria-label="Hour" className="h-8 w-[4.5rem] text-xs">
+            <SelectTrigger aria-label="Hour" className="h-8 w-[4.5rem] text-[length:var(--type-utility-xs-size)]">
               <SelectValue placeholder="HH" />
             </SelectTrigger>
             <SelectContent>
               {HOURS.map((h) => (
-                <SelectItem key={h} value={h} className="text-xs">
+                <SelectItem key={h} value={h} className="text-[length:var(--type-utility-xs-size)]">
                   {h}
                 </SelectItem>
               ))}
@@ -175,12 +175,12 @@ const DateTimePicker = React.forwardRef<HTMLButtonElement, DateTimePickerProps>(
           </Select>
           <span className="text-[var(--color-muted)]">:</span>
           <Select value={value ? pad2(value.getMinutes()) : undefined} onValueChange={handleMinuteChange} disabled={blocked}>
-            <SelectTrigger aria-label="Minute" className="h-8 w-[4.5rem] text-xs">
+            <SelectTrigger aria-label="Minute" className="h-8 w-[4.5rem] text-[length:var(--type-utility-xs-size)]">
               <SelectValue placeholder="MM" />
             </SelectTrigger>
             <SelectContent>
               {minutes.map((m) => (
-                <SelectItem key={m} value={m} className="text-xs">
+                <SelectItem key={m} value={m} className="text-[length:var(--type-utility-xs-size)]">
                   {m}
                 </SelectItem>
               ))}

@@ -256,7 +256,7 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
       </div>
       <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">
         <Warning size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
-        <p className="text-xs text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           WhatsApp native mode stores sessions locally. The gateway must keep running for the session
           to stay active.
         </p>

@@ -61,7 +61,7 @@ export function ActivityAvatar({ item, size = 'md' }: ActivityAvatarProps) {
     case '3p':
       return (
         <Avatar size={size} className="border border-[var(--color-border)]">
-          <AvatarFallback className="bg-[var(--color-surface-1)] text-[var(--color-secondary)] font-mono text-[10px] tracking-tight">
+          <AvatarFallback className="bg-[var(--color-surface-1)] text-[var(--color-secondary)] font-mono text-[length:var(--type-caption-size)] tracking-tight">
             {initials(item.agentName)}
           </AvatarFallback>
         </Avatar>

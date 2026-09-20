@@ -189,7 +189,7 @@ export function LibrarySignaturePad({
         />
 
         <div className="flex items-center gap-3">
-          <Label htmlFor="library-pdf-signature-page" className="shrink-0 text-xs">
+          <Label htmlFor="library-pdf-signature-page" className="shrink-0 text-[length:var(--type-utility-xs-size)]">
             Place on page
           </Label>
           <Input
@@ -202,7 +202,7 @@ export function LibrarySignaturePad({
             onChange={(e) => handlePageNumberChange(e.target.value)}
             className="h-8 w-20"
           />
-          <span className="text-xs text-[var(--color-muted)]">of {clampedPageCount}</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">of {clampedPageCount}</span>
         </div>
 
         <DialogFooter>

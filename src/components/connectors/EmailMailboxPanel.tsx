@@ -153,7 +153,7 @@ function PasswordField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={hasStoredCredential ? '(stored — enter a new value to rotate)' : 'App password or IMAP password'}
-        className="pr-9 font-mono text-xs"
+        className="pr-9 font-mono text-[length:var(--type-utility-xs-size)]"
         autoComplete="new-password"
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid || undefined}
@@ -204,16 +204,16 @@ function FieldRow({
 }) {
   return (
     <div className="space-y-1.5" id={`fieldrow-${id}`}>
-      <Label htmlFor={id} className="text-xs font-medium text-[var(--color-secondary)]">
+      <Label htmlFor={id} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
         {label}
         {required && <span className="text-[var(--color-error)] ml-0.5">*</span>}
       </Label>
       {children}
       {error && (
-        <p id={fieldRowErrorId(id)} role="alert" className="text-[10px] text-[var(--color-error)]">{error}</p>
+        <p id={fieldRowErrorId(id)} role="alert" className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">{error}</p>
       )}
       {!error && helpText && (
-        <p id={helpId} className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+        <p id={helpId} className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           {helpText}
         </p>
       )}
@@ -541,7 +541,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
         </SheetHeader>
         <SheetDescription
           id="mailbox-panel-desc"
-          className="text-xs text-[var(--color-muted)] leading-relaxed px-6 pt-3"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-6 pt-3"
         >
           Configure an IMAP/SMTP mailbox for the owning agent. The agent reads
           its inbox on heartbeat and routes unhandled mail to Board tasks.
@@ -555,7 +555,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
             aria-label="How the email mailbox works"
           >
             <Info size={13} className="text-[var(--color-accent)] shrink-0 mt-0.5" />
-            <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
               The agent works this inbox on heartbeat. Mail it cannot fully handle
               becomes a Board task. A dedicated Email tab (inbox view) arrives in v0.2.
             </p>
@@ -563,7 +563,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
 
           {/* Ownership */}
           <div className="space-y-4 pb-3 border-b border-[var(--color-border)]">
-            <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+            <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
               Ownership
             </h3>
 
@@ -579,7 +579,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
               helpText="The workspace this mailbox belongs to. Unhandled mail becomes Board tasks in that workspace."
             >
               {workspacesError ? (
-                <p className="text-xs text-[var(--color-error)]">Could not load workspaces.</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">Could not load workspaces.</p>
               ) : (
                 <SmartSelect
                   value={form.workspace_id || '__none__'}
@@ -600,7 +600,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
               helpText="The agent whose email identity this mailbox represents — only the selected workspace’s team members are listed (a mailbox’s unhandled mail becomes Board tasks in its workspace). Every (agent, workspace) pair can have its own mailbox."
             >
               {agentsError ? (
-                <p className="text-xs text-[var(--color-error)]">Could not load agents.</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">Could not load agents.</p>
               ) : (
                 <SmartSelect
                   value={form.agent_id || '__none__'}
@@ -615,7 +615,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
 
           {/* Credentials */}
           <div className="space-y-4">
-            <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+            <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
               Credentials
             </h3>
 
@@ -634,7 +634,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 value={form.username}
                 onChange={(e) => setField('username', e.target.value)}
                 placeholder="bot@example.com"
-                className="text-xs"
+                className="text-[length:var(--type-utility-xs-size)]"
                 autoComplete="email"
                 aria-describedby={describedByFor('mailbox-username', 'mailbox-username-help', fieldErrors.username)}
                 aria-invalid={fieldErrors.username ? true : undefined}
@@ -672,7 +672,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 value={form.imap_host}
                 onChange={(e) => setField('imap_host', e.target.value)}
                 placeholder="imap.gmail.com"
-                className="text-xs"
+                className="text-[length:var(--type-utility-xs-size)]"
                 aria-describedby={describedByFor('mailbox-imap-host', 'mailbox-imap-host-help', fieldErrors.imap_host)}
                 aria-invalid={fieldErrors.imap_host ? true : undefined}
               />
@@ -693,7 +693,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                 value={form.smtp_host}
                 onChange={(e) => setField('smtp_host', e.target.value)}
                 placeholder="smtp.gmail.com"
-                className="text-xs"
+                className="text-[length:var(--type-utility-xs-size)]"
                 aria-describedby={describedByFor('mailbox-smtp-host', 'mailbox-smtp-host-help', fieldErrors.smtp_host)}
                 aria-invalid={fieldErrors.smtp_host ? true : undefined}
               />
@@ -715,7 +715,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                   value={form.imap_port}
                   onChange={(e) => setField('imap_port', e.target.value)}
                   placeholder="993"
-                  className="text-xs"
+                  className="text-[length:var(--type-utility-xs-size)]"
                   aria-describedby="mailbox-imap-port-help"
                 />
               </FieldRow>
@@ -732,7 +732,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
                   value={form.smtp_port}
                   onChange={(e) => setField('smtp_port', e.target.value)}
                   placeholder="587"
-                  className="text-xs"
+                  className="text-[length:var(--type-utility-xs-size)]"
                   aria-describedby="mailbox-smtp-port-help"
                 />
               </FieldRow>
@@ -782,9 +782,9 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
             <AlertDialogTitle className="font-headline text-[var(--color-secondary)]">
               Remove mailbox
             </AlertDialogTitle>
-            <AlertDialogDescription className="text-sm text-[var(--color-muted)]">
+            <AlertDialogDescription className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               This will permanently remove the mailbox for{' '}
-              <span className="font-mono text-xs font-semibold text-[var(--color-secondary)]">
+              <span className="font-mono text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
                 {form.username || (mailbox?.username ?? 'this agent')}
               </span>{' '}
               including its stored IMAP/SMTP credentials. This cannot be undone.
@@ -798,7 +798,7 @@ export function EmailMailboxPanel({ open, onOpenChange, mailbox, mailboxes = [] 
               role="alert"
             >
               <Warning size={14} className="text-red-400 mt-0.5 shrink-0" />
-              <p className="text-xs text-red-400">{deleteError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-red-400">{deleteError}</p>
             </div>
           )}
 

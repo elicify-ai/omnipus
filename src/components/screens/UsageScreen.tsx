@@ -28,12 +28,12 @@ function StatCard({ label, value, hero = false, unit }: StatCardProps) {
       >
         {value}
         {unit && (
-          <span className={`font-sans font-[var(--font-weight-regular)]${hero ? ' text-sm ml-1 text-[var(--color-muted)]' : ' text-xs ml-1 text-[var(--color-muted)]'}`}>
+          <span className={`font-sans font-[var(--font-weight-regular)]${hero ? ' text-[length:var(--type-body-compact-size)] ml-1 text-[var(--color-muted)]' : ' text-[length:var(--type-utility-xs-size)] ml-1 text-[var(--color-muted)]'}`}>
             {unit}
           </span>
         )}
       </div>
-      <div className="text-xs text-[var(--color-muted)]">{label}</div>
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</div>
     </div>
   )
 }
@@ -77,7 +77,7 @@ interface BarItem {
 function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) {
   if (items.length === 0) {
     return (
-      <p className="text-sm text-[var(--color-muted)] py-4 text-center">No data for this period.</p>
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-4 text-center">No data for this period.</p>
     )
   }
   return (
@@ -88,7 +88,7 @@ function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) 
         return (
           <div key={item.name} className="flex items-center gap-3" role="listitem">
             {/* Name */}
-            <div className="w-28 sm:w-36 shrink-0 truncate text-xs text-[var(--color-secondary)]" title={item.name}>
+            <div className="w-28 sm:w-36 shrink-0 truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]" title={item.name}>
               {item.href ? (
                 <Link to={item.href} tabIndex={0} className="hover:text-[var(--color-accent)] transition-colors">
                   {item.name}
@@ -107,7 +107,7 @@ function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) 
             </div>
             {/* Count */}
             <div
-              className="w-14 text-right text-xs font-mono tabular-nums text-[var(--color-muted)] shrink-0"
+              className="w-14 text-right text-[length:var(--type-utility-xs-size)] font-mono tabular-nums text-[var(--color-muted)] shrink-0"
               aria-label={`${item.tokens} tokens`}
             >
               {formattedTokens}
@@ -155,7 +155,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
   })
 
   if (sorted.length === 0) {
-    return <p className="text-sm text-[var(--color-muted)] py-4 text-center">No session data.</p>
+    return <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-4 text-center">No session data.</p>
   }
 
   const titleSortIcon = sortKey === 'title' ? (sortDir === 'asc' ? <CaretUp size={10} weight="bold" aria-hidden="true" /> : <CaretDown size={10} weight="bold" aria-hidden="true" />) : null
@@ -163,7 +163,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-xs" data-testid="sessions-table">
+      <table className="w-full text-[length:var(--type-utility-xs-size)]" data-testid="sessions-table">
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-muted)]">
             <th
@@ -213,7 +213,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
                     <Badge
                       variant="muted"
                       data-testid="session-verifier-tag"
-                      className="shrink-0 gap-0.5 px-1.5 py-0 text-[9px] font-medium uppercase tracking-wider"
+                      className="shrink-0 gap-0.5 px-1.5 py-0 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wider"
                     >
                       <Scales size={9} weight="bold" aria-hidden="true" />
                       Verifier
@@ -358,7 +358,7 @@ export function UsageScreen() {
               {/* ScreenHeader above already renders "Usage" as the page's h2 —
                   this is a decorative restatement, not a second heading. */}
               <div className="font-headline text-xl font-bold text-[var(--color-secondary)]">Usage</div>
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">Token usage by agent, model, and session</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">Token usage by agent, model, and session</p>
             </div>
           </div>
 
@@ -375,7 +375,7 @@ export function UsageScreen() {
                 onClick={() => setPeriod(value)}
                 data-testid={`period-${value}`}
                 aria-pressed={period === value}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors${
+                className={`px-3 py-1 rounded-md text-[length:var(--type-utility-xs-size)] font-medium transition-colors${
                   period === value
                     ? ' bg-[var(--color-surface-2)] text-[var(--color-accent)]'
                     : ' text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
@@ -392,7 +392,7 @@ export function UsageScreen() {
 
         {/* Error state */}
         {!isLoading && statsError && (
-          <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">
+          <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
             Could not load usage data. Check your connection and try again.
           </div>
         )}
@@ -400,7 +400,7 @@ export function UsageScreen() {
         {/* Partial-data warning — some session stores failed to load, so totals may under-count. */}
         {!isLoading && !statsError && summary?.partial && (
           <div
-            className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-4 py-3 text-sm text-[var(--color-secondary)]"
+            className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-4 py-3 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
             data-testid="usage-partial-warning"
             role="status"
           >
@@ -416,13 +416,13 @@ export function UsageScreen() {
           >
             <ChatCircle size={48} className="text-[var(--color-border)]" aria-hidden="true" />
             <div>
-              <p className="text-sm font-medium text-[var(--color-secondary)]">No usage yet</p>
-              <p className="text-xs text-[var(--color-muted)] mt-1">Start a chat to see token usage here.</p>
+              <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">No usage yet</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1">Start a chat to see token usage here.</p>
             </div>
             <Link
               to="/"
               tabIndex={0}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-primary)] text-sm font-medium hover:opacity-90 transition-opacity"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-primary)] text-[length:var(--type-body-compact-size)] font-medium hover:opacity-90 transition-opacity"
             >
               Start a chat
             </Link>
@@ -495,7 +495,7 @@ export function UsageScreen() {
                   // state ("No session data.") is indistinguishable from an
                   // HTTP failure unless this branch intercepts it first.
                   <div
-                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
                     data-testid="usage-session-error"
                     role="alert"
                   >

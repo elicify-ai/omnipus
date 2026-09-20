@@ -80,7 +80,7 @@ function MountVaultState({ workspaceId, path }: { workspaceId: string | null; pa
       <p
         data-testid="library-mounts-vault-checking"
         role="status"
-        className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]"
+        className="mt-1.5 flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
       >
         <SpinnerGap size={12} aria-hidden="true" className="animate-spin" />
         Checking whether this mount is a knowledge base
@@ -96,7 +96,7 @@ function MountVaultState({ workspaceId, path }: { workspaceId: string | null; pa
       <p
         data-testid="library-mounts-vault-error"
         role="alert"
-        className="mt-1.5 text-[11px] text-[var(--color-error)]"
+        className="mt-1.5 text-[length:var(--type-caption-size)] text-[var(--color-error)]"
       >
         Could not check whether this mount is a knowledge base.
       </p>
@@ -139,7 +139,7 @@ export function LibraryMountsDialog({
 
         <div className="flex flex-col gap-2">
           {mounts.length === 0 && (
-            <p className="py-6 text-center text-sm text-[var(--color-muted)]">
+            <p className="py-6 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               No folders are mounted.
             </p>
           )}
@@ -163,9 +163,9 @@ export function LibraryMountsDialog({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium">{mount.name}</span>
+                      <span className="text-[length:var(--type-body-compact-size)] font-medium">{mount.name}</span>
                       {mount.broad && (
-                        <span className="flex items-center gap-1 text-[11px] text-[var(--color-warning)]">
+                        <span className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
                           <Warning size={12} /> Broad grant
                         </span>
                       )}
@@ -173,7 +173,7 @@ export function LibraryMountsDialog({
                     {/* The real path, because the name alone does not tell you
                         what you granted. */}
                     <p
-                      className="truncate font-mono text-[11px] text-[var(--color-muted)]"
+                      className="truncate font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       title={mount.host_path}
                     >
                       {mount.host_path}
@@ -195,7 +195,7 @@ export function LibraryMountsDialog({
           })}
         </div>
 
-        <p className="text-xs text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Unmounting removes access only. Your files stay exactly where they are.
         </p>
 

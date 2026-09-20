@@ -93,7 +93,7 @@ export function AgentDelegatePicker({
         <DropdownMenuLabel>Delegate to…</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {candidates.length === 0 ? (
-          <p className="px-2 py-1.5 text-xs text-[var(--color-muted)]">
+          <p className="px-2 py-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             No eligible agents — every other team member already has an edge from{' '}
             {source.name}, or the team has only this one agent.
           </p>
@@ -106,7 +106,7 @@ export function AgentDelegatePicker({
               className="cursor-pointer"
             >
               {n.name}
-              <span className="ml-auto text-[10px] text-[var(--color-muted)]">{n.role}</span>
+              <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{n.role}</span>
             </DropdownMenuItem>
           ))
         )}

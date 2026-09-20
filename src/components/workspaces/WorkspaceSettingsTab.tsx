@@ -426,7 +426,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             className="bg-[var(--color-surface-2)]"
           />
           {name.trim().length === 0 && (
-            <span className="text-xs text-[var(--color-error)]">Name is required.</span>
+            <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">Name is required.</span>
           )}
         </div>
 
@@ -454,12 +454,12 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               <AutoSaveIndicator status={instructionsSaveStatus} error={instructionsSaveError} />
             )}
           </div>
-          <p className="text-xs text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Applied to every agent working in this workspace, on top of their persona. Like a project CLAUDE.md.
           </p>
           {instructionsError ? (
             <div className="flex flex-col items-center gap-3 py-4 text-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
-              <p className="text-sm text-[var(--color-error)]">Could not load project instructions.</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load project instructions.</p>
               <Button
                 size="sm"
                 variant="outline"
@@ -477,7 +477,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               onChange={(e) => { markInstructionsDirty(); setInstructionsContent(e.target.value) }}
               placeholder={"# Project Instructions\n\nDescribe conventions, tech stack, coding standards, and team preferences that every agent should follow in this workspace."}
               rows={10}
-              className="bg-[var(--color-surface-2)] text-xs font-mono resize-none"
+              className="bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] font-mono resize-none"
               // D3 fix: inert until hydrated — closes the race where a very
               // fast edit lands before `fetchWorkspaceInstructions` resolves
               // and gets silently adopted as useAutoSave's "already saved"
@@ -490,7 +490,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
 
         {/* Danger zone */}
         <div className="mt-2 flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
-          <span className="text-xs font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
             Manage
           </span>
           <div className="flex flex-wrap items-center gap-2">
@@ -520,7 +520,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             )}
           </div>
           {isDefault && (
-            <span className="text-xs text-[var(--color-muted)]">
+            <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               The default workspace cannot be archived or deleted.
             </span>
           )}

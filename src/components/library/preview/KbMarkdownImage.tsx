@@ -86,7 +86,7 @@ export function KbMarkdownImage(props: KbMarkdownImageProps) {
   // An unsafe scheme never becomes an <img> at all — the same render-boundary
   // gate ChatImage applies (defense in depth alongside the URL sanitiser).
   if (src !== undefined && !isDisplayableImageSrc(src)) {
-    return alt ? <span className="text-xs italic text-[var(--color-muted)]">[image: {alt}]</span> : null
+    return alt ? <span className="text-[length:var(--type-utility-xs-size)] italic text-[var(--color-muted)]">[image: {alt}]</span> : null
   }
 
   return (
@@ -164,7 +164,7 @@ function KbMarkdownImageContent({
     return (
       <span
         data-testid="kb-markdown-image-unavailable"
-        className="text-xs italic leading-snug text-[var(--color-muted)]"
+        className="text-[length:var(--type-utility-xs-size)] italic leading-snug text-[var(--color-muted)]"
       >
         {alt !== undefined && alt !== '' ? `“${alt}” could not be loaded.` : 'This image could not be loaded.'}
       </span>
@@ -178,7 +178,7 @@ function KbMarkdownImageContent({
     return (
       <span
         data-testid="kb-markdown-image-queued"
-        className="inline-flex items-center text-xs italic leading-snug text-[var(--color-muted)]"
+        className="inline-flex items-center text-[length:var(--type-utility-xs-size)] italic leading-snug text-[var(--color-muted)]"
         style={{ minHeight: KB_INLINE_IMAGE_RESERVED_HEIGHT_PX }}
       >
         Only {KB_IMAGE_DOWNLOAD_POOL_CEILING} images download at once on this page. This one will

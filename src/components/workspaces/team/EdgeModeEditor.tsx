@@ -69,7 +69,7 @@ export function EdgeModeEditor({
       className="w-56 rounded-lg border border-[var(--color-accent)]/60 bg-[var(--color-surface-1)] p-2.5 shadow-lg"
     >
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+        <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
           Delegation modes
         </span>
         <button tabIndex={0}
@@ -111,7 +111,7 @@ export function EdgeModeEditor({
                 onToggleMode(model.from, model.to, m)
               }}
               className={cn(
-                'rounded border px-1.5 py-0.5 font-mono text-[10px] lowercase transition-opacity',
+                'rounded border px-1.5 py-0.5 font-mono text-[length:var(--type-caption-size)] lowercase transition-opacity',
                 on
                   ? MODE_CHIP_CLASS[m]
                   : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] opacity-60 hover:opacity-100',
@@ -125,7 +125,7 @@ export function EdgeModeEditor({
       </div>
       <div className="mt-2 flex items-center gap-1.5">
         <Stack size={12} weight="bold" className="text-[var(--color-muted)]" />
-        <span className="text-[10px] text-[var(--color-muted)]">depth</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">depth</span>
         <input tabIndex={0}
           type="number"
           min={0}
@@ -146,13 +146,13 @@ export function EdgeModeEditor({
               }
             }
           }}
-          className="h-6 w-14 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 text-[11px] text-[var(--color-secondary)] focus:border-[var(--color-accent)] focus:outline-none"
+          className="h-6 w-14 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)] focus:border-[var(--color-accent)] focus:outline-none"
         />
         <Button
           size="sm"
           variant="ghost"
           data-testid={`team-edge-delete-${model.from}-${model.to}`}
-          className="ml-auto h-6 gap-1 px-1.5 text-[10px] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
+          className="ml-auto h-6 gap-1 px-1.5 text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
           onClick={() => onDelete(model.from, model.to)}
         >
           <Trash size={11} weight="bold" /> delete
@@ -190,13 +190,13 @@ export const EdgeLabelChip = forwardRef<HTMLButtonElement, EdgeLabelChipProps>(f
       className="flex cursor-pointer items-center gap-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-1.5 py-0.5 shadow-sm hover:border-[var(--color-accent)]/50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
     >
       {model.modes.length === 0 ? (
-        <span className="text-[9px] italic text-[var(--color-muted)]">all modes</span>
+        <span className="text-[length:var(--type-caption-size)] italic text-[var(--color-muted)]">all modes</span>
       ) : (
         model.modes.map((m) => (
           <span
             key={m}
             className={cn(
-              'rounded border px-1 py-0 font-mono text-[9px] lowercase',
+              'rounded border px-1 py-0 font-mono text-[length:var(--type-caption-size)] lowercase',
               MODE_CHIP_CLASS[m],
             )}
           >
@@ -207,7 +207,7 @@ export const EdgeLabelChip = forwardRef<HTMLButtonElement, EdgeLabelChipProps>(f
       {/* Depth is always a concrete number now — no more conditional "only
           when set" rendering; an edge whose own depth is unset shows the
           workspace's resolved default instead of hiding the badge. */}
-      <span className="ml-0.5 inline-flex items-center gap-0.5 text-[9px] text-[var(--color-muted)]">
+      <span className="ml-0.5 inline-flex items-center gap-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         <Stack size={9} weight="bold" />
         {model.depth ?? defaultDepth}
       </span>

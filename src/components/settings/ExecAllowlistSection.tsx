@@ -97,7 +97,7 @@ export function ExecAllowlistSection(): React.ReactElement {
 
   if (isLoading) {
     return (
-      <div className="text-sm text-[var(--color-muted)] py-2">
+      <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-2">
         Loading allowlist...
       </div>
     )
@@ -105,7 +105,7 @@ export function ExecAllowlistSection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-sm text-red-400">
+      <p className="text-[length:var(--type-body-compact-size)] text-red-400">
         Failed to load exec allowlist. Please try again.
       </p>
     )
@@ -115,16 +115,16 @@ export function ExecAllowlistSection(): React.ReactElement {
     <section className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+          <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
             <Terminal size={14} className="text-[var(--color-muted)]" />
             Command Binary Allowlist
             {restartRequired && (
-              <span className="ml-2 text-[10px] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-1.5 py-0.5">
+              <span className="ml-2 text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-1.5 py-0.5">
                 Restart required
               </span>
             )}
           </h3>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
             Glob patterns for binaries that bash may run.
             E.g. <span className="font-mono">git *</span>,{' '}
             <span className="font-mono">npm run *</span>. When non-empty, bash
@@ -136,7 +136,7 @@ export function ExecAllowlistSection(): React.ReactElement {
 
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
         {patterns.length === 0 ? (
-          <p className="text-xs text-[var(--color-muted)] italic">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">
             No patterns configured. Bash runs without the binary allowlist restriction
             (existing deny-pattern safety checks still apply).
           </p>
@@ -149,7 +149,7 @@ export function ExecAllowlistSection(): React.ReactElement {
               >
                 <Badge
                   variant="secondary"
-                  className="font-mono text-xs px-0 py-0 bg-transparent border-0 text-[var(--color-secondary)]"
+                  className="font-mono text-[length:var(--type-utility-xs-size)] px-0 py-0 bg-transparent border-0 text-[var(--color-secondary)]"
                 >
                   {pattern}
                 </Badge>
@@ -175,21 +175,21 @@ export function ExecAllowlistSection(): React.ReactElement {
             }}
             onKeyDown={handleKeyDown}
             placeholder="e.g. git or npm run *"
-            className="h-7 text-xs font-mono flex-1"
+            className="h-7 text-[length:var(--type-utility-xs-size)] font-mono flex-1"
             aria-label="New binary pattern"
           />
           <Button
             size="sm"
             variant="outline"
             onClick={handleAdd}
-            className="h-7 px-2 gap-1 text-xs shrink-0"
+            className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)] shrink-0"
           >
             <Plus size={11} weight="bold" />
             Add
           </Button>
         </div>
         {addError && (
-          <p className="text-xs text-[var(--color-error)]">{addError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{addError}</p>
         )}
       </div>
     </section>

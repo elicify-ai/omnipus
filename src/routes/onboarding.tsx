@@ -564,7 +564,7 @@ function OnboardingWizard() {
       {appStateBannerMessage && (
         <div
           role="alert"
-          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-400"
+          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-[length:var(--type-body-compact-size)] text-red-400"
         >
           {appStateBannerMessage}
         </div>
@@ -589,7 +589,7 @@ function OnboardingWizard() {
           {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
           <span
             aria-hidden
-            className="text-xs font-medium tracking-wide"
+            className="text-[length:var(--type-utility-xs-size)] font-medium tracking-wide"
             style={{ color: 'var(--color-muted)' }}
           >
             Step {step} of 3
@@ -785,7 +785,7 @@ function NameStep({
           style={{ color: 'var(--color-secondary)' }}>
           What should I call you?
         </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           Choose a username — this is the one account for your Omnipus
         </p>
       </motion.div>
@@ -797,7 +797,7 @@ function NameStep({
         className="w-full space-y-4"
       >
         <div>
-          <label htmlFor="admin-username" className="text-xs font-medium mb-1.5 block"
+          <label htmlFor="admin-username" className="text-[length:var(--type-utility-xs-size)] font-medium mb-1.5 block"
             style={{ color: 'var(--color-muted)' }}>
             Username
           </label>
@@ -818,7 +818,7 @@ function NameStep({
             data-testid="onboarding-error"
             role="alert"
             aria-live="assertive"
-            className="flex items-start gap-2 text-sm"
+            className="flex items-start gap-2 text-[length:var(--type-body-compact-size)]"
             style={{ color: 'var(--color-error)' }}
           >
             <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
@@ -908,7 +908,7 @@ function PasswordStep({
           style={{ color: 'var(--color-secondary)' }}>
           Set your password
         </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           This unlocks your Omnipus — store it somewhere safe
         </p>
       </motion.div>
@@ -921,7 +921,7 @@ function PasswordStep({
       >
         {/* Password */}
         <div>
-          <label htmlFor="admin-password" className="text-xs font-medium mb-1.5 block"
+          <label htmlFor="admin-password" className="text-[length:var(--type-utility-xs-size)] font-medium mb-1.5 block"
             style={{ color: 'var(--color-muted)' }}>
             Password
           </label>
@@ -969,7 +969,7 @@ function PasswordStep({
                   />
                 ))}
               </div>
-              <p className="text-xs mt-1 font-medium" style={{ color: strength.color }}>
+              <p className="text-[length:var(--type-utility-xs-size)] mt-1 font-medium" style={{ color: strength.color }}>
                 {strength.label}
               </p>
             </div>
@@ -978,7 +978,7 @@ function PasswordStep({
 
         {/* Confirm Password */}
         <div>
-          <label htmlFor="admin-password-confirm" className="text-xs font-medium mb-1.5 block"
+          <label htmlFor="admin-password-confirm" className="text-[length:var(--type-utility-xs-size)] font-medium mb-1.5 block"
             style={{ color: 'var(--color-muted)' }}>
             Confirm Password
           </label>
@@ -1010,7 +1010,7 @@ function PasswordStep({
             data-testid="onboarding-error"
             role="alert"
             aria-live="assertive"
-            className="flex items-start gap-2 text-sm"
+            className="flex items-start gap-2 text-[length:var(--type-body-compact-size)]"
             style={{ color: 'var(--color-error)' }}
           >
             <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
@@ -1154,10 +1154,10 @@ function ProviderStep({
         >
           Add a model key
         </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           Omnipus needs an AI provider to power your agents.
         </p>
-        <p className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-utility-xs-size)] mt-1" style={{ color: 'var(--color-muted)' }}>
           Not sure? OpenAI or OpenRouter are good starting points.
         </p>
       </div>
@@ -1188,26 +1188,26 @@ function ProviderStep({
               <BrandIcon slug={catalogLogoSlug(entry)} size={18} decorative className="shrink-0" />
             )}
             <div className="min-w-0">
-              <p className="text-sm font-medium truncate" style={{ color: 'var(--color-secondary)' }}>
+              <p className="text-[length:var(--type-body-compact-size)] font-medium truncate" style={{ color: 'var(--color-secondary)' }}>
                 {selection.displayName}
               </p>
               {/* US-7 parity: the same catalogDisplay derivation Settings uses. */}
               {entry && (
                 <>
-                  <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                  <p className="text-[length:var(--type-utility-xs-size)] truncate" style={{ color: 'var(--color-muted)' }}>
                     {catalogSubtitle(entry)}
                   </p>
-                  <p className="text-xs font-mono truncate" style={{ color: 'var(--color-muted)' }}>
+                  <p className="text-[length:var(--type-utility-xs-size)] font-mono truncate" style={{ color: 'var(--color-muted)' }}>
                     → {catalogEndpointHint(entry)}
                   </p>
                 </>
               )}
               {selection.apiBase && (
-                <p className="text-xs font-mono truncate" style={{ color: 'var(--color-muted)' }}>
+                <p className="text-[length:var(--type-utility-xs-size)] font-mono truncate" style={{ color: 'var(--color-muted)' }}>
                   → {selection.apiBase}
                 </p>
               )}
-              <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+              <p className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
                 {signIn ? 'Signed in with the provider' : isLocal ? 'No key needed — runs locally' : 'API key'}
               </p>
               {/* FR-045: the sign-in path has nothing to type — the dialog is
@@ -1219,7 +1219,7 @@ function ProviderStep({
                   tabIndex={0}
                   data-testid="onboarding-sign-in-btn"
                   onClick={() => onSignIn(selection.providerId, selection.displayName)}
-                  className="mt-1 text-xs font-medium px-2 py-1 rounded border"
+                  className="mt-1 text-[length:var(--type-utility-xs-size)] font-medium px-2 py-1 rounded border"
                   style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
                 >
                   Sign in
@@ -1231,7 +1231,7 @@ function ProviderStep({
             type="button"
             tabIndex={0}
             onClick={onChangeProvider}
-            className="shrink-0 text-xs font-medium px-2.5 py-1.5 rounded transition-colors"
+            className="shrink-0 text-[length:var(--type-utility-xs-size)] font-medium px-2.5 py-1.5 rounded transition-colors"
             style={{ color: 'var(--color-accent)' }}
           >
             Change
@@ -1245,7 +1245,7 @@ function ProviderStep({
       {needsCustomEndpoint && (
         <p
           data-testid="onboarding-needs-endpoint"
-          className="text-xs"
+          className="text-[length:var(--type-utility-xs-size)]"
           style={{ color: 'var(--color-warning)' }}
         >
           {selection?.displayName} needs a per-resource endpoint. Go back and use{' '}
@@ -1268,7 +1268,7 @@ function ProviderStep({
               constrainToCatalog={hasCatalogModels}
               allowFreeTextWhenEmpty
             />
-            <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
               {hasCatalogModels
                 ? 'Your first agent starts on this model. You can change it later.'
                 : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
@@ -1280,7 +1280,7 @@ function ProviderStep({
             <p
               data-testid="onboarding-probe-status"
               role="status"
-              className="flex items-center gap-2 text-sm"
+              className="flex items-center gap-2 text-[length:var(--type-body-compact-size)]"
               style={{ color: 'var(--color-muted)' }}
             >
               <SpinnerGap size={13} className="animate-spin" />
@@ -1292,7 +1292,7 @@ function ProviderStep({
             <p
               data-testid="onboarding-probe-status"
               role="status"
-              className="flex items-center gap-2 text-sm"
+              className="flex items-center gap-2 text-[length:var(--type-body-compact-size)]"
               style={{ color: 'var(--color-success)' }}
             >
               <CheckCircle size={14} weight="fill" />
@@ -1307,7 +1307,7 @@ function ProviderStep({
               data-testid="onboarding-error"
               role="alert"
               aria-live="assertive"
-              className="flex items-start gap-2 text-sm"
+              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)]"
               style={{ color: 'var(--color-error)' }}
             >
               <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
@@ -1324,7 +1324,7 @@ function ProviderStep({
                   )}
                 </span>
                 {probeError && (
-                  <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                  <details className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
                     <summary tabIndex={0} className="cursor-pointer select-none">
                       Technical details
                     </summary>
@@ -1363,7 +1363,7 @@ function ProviderStep({
           {keyMissing && (
             <p
               data-testid="onboarding-key-missing"
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
               style={{ color: 'var(--color-muted)' }}
             >
               Add an API key for {providerDisplayName} — use <strong>Change</strong> to go back to
@@ -1388,7 +1388,7 @@ function ProviderStep({
         <div
           role="alert"
           data-testid="onboarding-error"
-          className="flex items-start gap-2 text-sm text-left"
+          className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-left"
           style={{ color: 'var(--color-error)' }}
         >
           <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
@@ -1488,7 +1488,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
             aria-label="Default agent"
           />
         </div>
-        <p className="font-headline text-sm font-bold tracking-wide"
+        <p className="font-headline text-[length:var(--type-body-compact-size)] font-bold tracking-wide"
           style={{ color: 'var(--color-accent)' }}>
           Your personal Assistant
         </p>
@@ -1509,7 +1509,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         >
           <User size={17} weight="duotone" className="shrink-0 mt-0.5"
             style={{ color: 'var(--color-accent)' }} />
-          <p className="text-sm leading-snug" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-[length:var(--type-body-compact-size)] leading-snug" style={{ color: 'var(--color-muted)' }}>
             Your personal Assistant — memory-rich, cross-workspace recall, runs your
             tasks, email, and calendar.
           </p>
@@ -1522,7 +1522,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         transition={{ delay: 0.38, duration: 0.38 }}
         className="w-full"
       >
-        <p className="text-sm leading-relaxed mb-6" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)] leading-relaxed mb-6" style={{ color: 'var(--color-muted)' }}>
           Mia is your default agent. She&apos;s bound to My Workspace and knows you
           across all your workspaces. Start chatting to begin.
         </p>

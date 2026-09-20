@@ -143,7 +143,7 @@ describe('LibraryCodePreview view (D-118, D-38, D-103)', () => {
     renderPreview('data.csv', 'a,b\n1,2\n')
     const view = await screen.findByTestId('library-code-view')
     expect(view.className).toContain('[&_[data-slot=language-label]]:!text-[var(--color-muted)]')
-    expect(view.className).toContain('[&_[data-slot=language-label]]:!text-[11px]')
+    expect(view.className).toContain('[&_[data-slot=language-label]]:!text-[length:var(--type-caption-size)]')
     // The badge this targets really is rendered inside the wrapper.
     await waitFor(() => expect(view.querySelector('[data-slot="language-label"]')).not.toBeNull())
   })

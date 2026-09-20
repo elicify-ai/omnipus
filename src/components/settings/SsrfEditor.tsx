@@ -71,7 +71,7 @@ export function SsrfEditor({
 
   return (
     <div className="space-y-2 border-t border-[var(--color-border)] pt-3">
-      <p className="text-xs font-semibold text-[var(--color-secondary)]">
+      <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
         SSRF internal-network policy
       </p>
 
@@ -82,7 +82,7 @@ export function SsrfEditor({
             type="button"
             onClick={() => onPresetClick(idx)}
             className={[
-              'rounded border px-3 py-1 text-xs transition-colors focus:outline-none cursor-pointer',
+              'rounded border px-3 py-1 text-[length:var(--type-utility-xs-size)] transition-colors focus:outline-none cursor-pointer',
               activePreset === idx
                 ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
                 : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50',
@@ -97,7 +97,7 @@ export function SsrfEditor({
       <button tabIndex={0}
         type="button"
         onClick={onAdvancedToggle}
-        className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
+        className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
         aria-expanded={advancedOpen}
       >
         {advancedOpen ? <CaretUp size={10} /> : <CaretDown size={10} />}
@@ -107,14 +107,14 @@ export function SsrfEditor({
       {advancedOpen && (
         <div className="space-y-1 pl-3 border-l border-[var(--color-border)]">
           {list.length === 0 && (
-            <p className="text-xs text-[var(--color-muted)] italic">Empty — all internal traffic blocked.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">Empty — all internal traffic blocked.</p>
           )}
           {list.map((entry, i) => {
             const entryErrorId = advancedErrors[i] ? `ssrf-entry-error-${i}` : undefined
             return (
               <div key={i} className="flex flex-col gap-0.5">
                 <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1">
-                  <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
+                  <span className="flex-1 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] break-all">
                     {entry}
                   </span>
                   <button tabIndex={0}
@@ -129,7 +129,7 @@ export function SsrfEditor({
                   </button>
                 </div>
                 {entryErrorId && (
-                  <p id={entryErrorId} className="text-[10px] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
+                  <p id={entryErrorId} className="text-[length:var(--type-caption-size)] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
                 )}
               </div>
             )
@@ -142,7 +142,7 @@ export function SsrfEditor({
                 value={newSsrfEntry}
                 onChange={(e) => onNewSsrfEntryChange(e.target.value)}
                 placeholder="10.0.0.0/8 or internal.corp"
-                className="h-7 text-xs font-mono flex-1"
+                className="h-7 text-[length:var(--type-utility-xs-size)] font-mono flex-1"
                 aria-label="New SSRF allow entry"
                 aria-invalid={ssrfAddError ? true : undefined}
                 aria-describedby={ssrfAddError ? addErrorId : undefined}
@@ -154,7 +154,7 @@ export function SsrfEditor({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 gap-1 text-xs shrink-0"
+                className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)] shrink-0"
                 onClick={onAddSsrfEntry}
                 aria-label="Add SSRF entry"
               >
@@ -163,7 +163,7 @@ export function SsrfEditor({
               </Button>
             </div>
             {ssrfAddError && (
-              <p id={addErrorId} className="text-[10px] text-[var(--color-error)]">{ssrfAddError}</p>
+              <p id={addErrorId} className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">{ssrfAddError}</p>
             )}
           </div>
         </div>

@@ -216,7 +216,7 @@ export function CalendarToolbar({
           className={cn(
             'flex items-center gap-1.5 shrink-0',
             'h-8 px-2.5 rounded-md',
-            'text-xs font-medium text-[var(--color-muted)]',
+            'text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]',
             'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
             'transition-colors',
             touchTarget,
@@ -243,7 +243,7 @@ export function CalendarToolbar({
           data-testid="calendar-title"
           className={cn(
             'ml-1 flex-1 min-w-0',
-            'text-sm font-headline font-semibold',
+            'text-[length:var(--type-body-compact-size)] font-headline font-semibold',
             'text-[var(--color-secondary)] truncate',
           )}
         >
@@ -285,7 +285,7 @@ export function CalendarToolbar({
                 data-testid={`calendar-view-${view}`}
                 onClick={() => handleViewChange(view)}
                 className={cn(
-                  'flex items-center gap-1 px-2.5 h-7 rounded text-xs font-medium whitespace-nowrap',
+                  'flex items-center gap-1 px-2.5 h-7 rounded text-[length:var(--type-utility-xs-size)] font-medium whitespace-nowrap',
                   'transition-colors',
                   touchTarget,
                   'pointer-coarse:h-9 pointer-coarse:px-3',
@@ -327,7 +327,7 @@ export function CalendarToolbar({
                 data-testid="calendar-agent-filter"
                 aria-label="Filter by agent"
                 className={cn(
-                  'h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)]',
+                  'h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-surface-2)] border-[var(--color-border)]',
                   'text-[var(--color-secondary)] w-auto min-w-[8rem]',
                   touchTarget,
                 )}
@@ -335,14 +335,14 @@ export function CalendarToolbar({
                 <SelectValue placeholder="All agents" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={AGENT_FILTER_ALL} className="text-xs">
+                <SelectItem value={AGENT_FILTER_ALL} className="text-[length:var(--type-utility-xs-size)]">
                   All agents
                 </SelectItem>
-                <SelectItem value={AGENT_FILTER_UNASSIGNED} className="text-xs">
+                <SelectItem value={AGENT_FILTER_UNASSIGNED} className="text-[length:var(--type-utility-xs-size)]">
                   Unassigned
                 </SelectItem>
                 {(agentOptions ?? []).map((a) => (
-                  <SelectItem key={a.value} value={a.value} className="text-xs">
+                  <SelectItem key={a.value} value={a.value} className="text-[length:var(--type-utility-xs-size)]">
                     {a.label}
                   </SelectItem>
                 ))}
@@ -352,7 +352,7 @@ export function CalendarToolbar({
                 CreateTaskSlideOver/TaskDetailPanel's team-roster fallback so
                 the same failure reads identically everywhere in the app. */}
             {agentRosterError && (
-              <p className="text-[10px] text-[var(--color-muted)] whitespace-nowrap">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] whitespace-nowrap">
                 Team list unavailable — showing all agents
               </p>
             )}

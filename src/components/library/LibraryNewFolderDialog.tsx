@@ -97,17 +97,17 @@ export function LibraryNewFolderDialog({
               state — the slash rule alone would label an escape attempt as
               a spelling nit. */}
           {hasTraversal && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-folder-traversal">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-folder-traversal">
               A folder name can't contain "..".
             </p>
           )}
           {!hasTraversal && hasSlash && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-folder-slash">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-folder-slash">
               A folder name can't contain "/".
             </p>
           )}
           {!hasSlash && !hasTraversal && collides && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-folder-collision">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-folder-collision">
               An entry named "{trimmed}" already exists here.
             </p>
           )}

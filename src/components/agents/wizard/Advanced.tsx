@@ -86,7 +86,7 @@ function ExternalAdvancedFields({ payload, setField }: ExternalAdvancedFieldsPro
   return (
     <>
       <div className="space-y-2">
-        <p className="text-xs font-medium text-[var(--color-secondary)]">Runtime</p>
+        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <TimeoutField payload={payload} setField={setField} />
       </div>
       <RateLimitsFields payload={payload} setField={setField} />
@@ -125,7 +125,7 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
     <>
       {/* Model parameters */}
       <div className="space-y-2">
-        <p className="text-xs font-medium text-[var(--color-secondary)]">Model parameters</p>
+        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Model parameters</p>
         <div className="space-y-2">
           <RangeRow
             label="Temperature"
@@ -149,7 +149,7 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
 
       {/* Shell deny patterns */}
       <div className="space-y-2">
-        <p className="text-xs font-medium text-[var(--color-secondary)]">Shell deny patterns</p>
+        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Shell deny patterns</p>
         <ShellDenyPatternsEditor
           value={shellPolicy.custom_deny_patterns ?? []}
           onChange={(deny) =>
@@ -168,7 +168,7 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
 
       {/* Runtime knobs */}
       <div className="space-y-2">
-        <p className="text-xs font-medium text-[var(--color-secondary)]">Runtime</p>
+        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Runtime</p>
         <div className="space-y-1.5">
           <TimeoutField payload={payload} setField={setField} />
           <NumberRow
@@ -238,8 +238,8 @@ function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-medium text-[var(--color-secondary)]">Rate limits</p>
-      <label className="flex items-center gap-2 text-xs text-[var(--color-secondary)]">
+      <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Rate limits</p>
+      <label className="flex items-center gap-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
         <input tabIndex={0}
           type="checkbox"
           checked={rateLimits.use_global_defaults ?? true}
@@ -297,8 +297,8 @@ function RangeRow({ label, caption, value, min, max, step, onChange }: RangeRowP
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
-        <label className="text-xs text-[var(--color-secondary)]">{label}</label>
-        <span className="text-[11px] font-mono text-[var(--color-muted)]">{display}</span>
+        <label className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{label}</label>
+        <span className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]">{display}</span>
       </div>
       <input tabIndex={0}
         type="range"
@@ -311,7 +311,7 @@ function RangeRow({ label, caption, value, min, max, step, onChange }: RangeRowP
         aria-label={label}
         title={caption}
       />
-      <p className="text-[10px] text-[var(--color-muted)]">{caption}</p>
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{caption}</p>
     </div>
   )
 }
@@ -328,7 +328,7 @@ interface NumberRowProps {
 function NumberRow({ label, caption, value, min, step, onChange }: NumberRowProps) {
   return (
     <div className="space-y-1">
-      <label className="text-[11px] text-[var(--color-secondary)]">{label}</label>
+      <label className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">{label}</label>
       <Input
         type="number"
         min={min}
@@ -345,10 +345,10 @@ function NumberRow({ label, caption, value, min, step, onChange }: NumberRowProp
           onChange(n)
         }}
         placeholder="—"
-        className="h-7 text-xs"
+        className="h-7 text-[length:var(--type-utility-xs-size)]"
         aria-label={label}
       />
-      <p className="text-[10px] text-[var(--color-muted)]">{caption}</p>
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{caption}</p>
     </div>
   )
 }

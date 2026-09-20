@@ -24,7 +24,7 @@ export function EmbedMountPlaceholder() {
     <div
       data-testid="kb-embed-mount-loading"
       aria-hidden="true"
-      className="flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-6 text-xs text-[var(--color-muted)]"
+      className="flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-6 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
     >
       <SpinnerGap size={14} className="animate-spin" /> Loading…
     </div>
@@ -41,13 +41,13 @@ export function EmbedMountMissing({ workspacePath, parentDir }: { workspacePath:
   return (
     <div
       data-testid="kb-embed-mount-missing"
-      className="flex flex-col items-center gap-1 rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+      className="flex flex-col items-center gap-1 rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <Warning size={16} />
       <span>
         “{name}” is no longer in {parentDir === '' ? 'this workspace’s root folder' : parentDir}.
       </span>
-      <span className="text-[11px] text-[var(--color-muted)]">The embed’s link needs updating.</span>
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">The embed’s link needs updating.</span>
     </div>
   )
 }
@@ -56,7 +56,7 @@ export function EmbedMountError({ message, onRetry }: { message: string; onRetry
   return (
     <div
       data-testid="kb-embed-mount-error"
-      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <Warning size={16} />
       <span>{message}</span>
@@ -65,7 +65,7 @@ export function EmbedMountError({ message, onRetry }: { message: string; onRetry
           type="button"
           tabIndex={0}
           onClick={onRetry}
-          className="text-[11px] underline underline-offset-2"
+          className="text-[length:var(--type-caption-size)] underline underline-offset-2"
         >
           Retry
         </button>

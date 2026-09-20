@@ -127,7 +127,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread. Separation comes from `mt-2`
     // spacing and the status dot, not a card frame.
-    <div data-testid="tool-call-badge" data-tool={toolCall.tool} className="mt-2 text-xs font-mono">
+    <div data-testid="tool-call-badge" data-tool={toolCall.tool} className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       <div className="flex w-full items-center gap-2">
         {/* Toggle button. Mirrors GenericToolCall.tsx's `disabled={!hasDetail}`
             gate: while running, there is nothing to expand — a focusable
@@ -172,7 +172,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
         <div className="ml-[3px] space-y-2 border-l-2 border-[var(--color-border)] py-1 pl-3">
           <div>
             <div className="text-[var(--color-muted)] mb-1">Tool</div>
-            <code className="text-[10px] text-[var(--color-secondary)] break-all">
+            <code className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] break-all">
               {toolCall.tool}
             </code>
           </div>
@@ -182,7 +182,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
                 are now retained post-completion (see chat.ts's params-survive
                 -merge fix), so an uncapped write_file/edit content param can
                 render arbitrarily tall. */}
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+            <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {JSON.stringify(toolCall.params, null, 2)}
             </pre>
           </div>
@@ -197,7 +197,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
                 tabIndex={0}
                 role="region"
                 aria-label="Tool output"
-                className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
               >
                 {typeof toolCall.result === 'string'
                   ? toolCall.result
@@ -206,7 +206,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
             </div>
           )}
           {toolCall.error && (
-            <div className="text-[var(--color-error)] text-[10px]">{toolCall.error}</div>
+            <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)]">{toolCall.error}</div>
           )}
         </div>
       )}

@@ -57,7 +57,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
             e.stopPropagation()
             refetch()
           }}
-          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] transition-colors"
+          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] transition-colors"
         >
           <ArrowsClockwise size={11} />
           Couldn&apos;t load subtasks — Retry
@@ -70,7 +70,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
 
   const resolvedClassName = cn(
               'w-full flex items-center gap-1.5 rounded px-1.5 py-1 text-left',
-              'text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+              'text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
               'hover:bg-[var(--color-surface-2)] transition-colors',
             )
   return (
@@ -104,7 +104,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
             />
             <span className="flex-1 truncate leading-tight">{child.title}</span>
             <span
-              className="flex-shrink-0 text-[10px] font-medium"
+              className="flex-shrink-0 text-[length:var(--type-caption-size)] font-medium"
               style={{ color: STATUS_DOT[child.status] }}
             >
               {STATUS_LABEL[child.status]}

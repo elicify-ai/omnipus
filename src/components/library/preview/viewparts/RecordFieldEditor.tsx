@@ -515,7 +515,7 @@ function EditableValueCell({
     return (
       <span className="inline-flex flex-wrap items-center gap-1.5" data-testid="viewpart-cell-conflict">
         <span className="min-w-0 truncate">{renderValue(value)}</span>
-        <span className="inline-flex items-center gap-1 text-[11px] text-[var(--color-warning)]">
+        <span className="inline-flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <WarningCircle size={12} weight="fill" />
           {conflictMessage}
         </span>
@@ -530,7 +530,7 @@ function EditableValueCell({
             setEditing(true)
           }}
           data-testid="viewpart-cell-conflict-retry"
-          className="text-[11px] font-medium text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] underline underline-offset-2"
         >
           Retry
         </button>
@@ -554,7 +554,7 @@ function EditableValueCell({
           }}
           data-testid="viewpart-cell-editor-enum"
           aria-label={`Edit ${cell.property}`}
-          className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px] text-[var(--color-secondary)] disabled:opacity-60"
+          className="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
         >
           {/* UAT D-71 (2026-09-13): a blank entry, so a value can be TAKEN
               AWAY as well as set. Choosing it sends `values: []` — the same
@@ -575,7 +575,7 @@ function EditableValueCell({
         </select>
         {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
         {error !== undefined && (
-          <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+          <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             {error}
           </span>
         )}
@@ -607,7 +607,7 @@ function EditableValueCell({
         />
         {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
         {error !== undefined && (
-          <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+          <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             {error}
           </span>
         )}
@@ -646,7 +646,7 @@ function EditableValueCell({
           />
         </button>
         {error !== undefined && (
-          <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+          <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             {error}
           </span>
         )}
@@ -682,11 +682,11 @@ function EditableValueCell({
         }}
         data-testid={`viewpart-cell-editor-${cell.type}`}
         aria-label={`Edit ${cell.property}`}
-        className="min-w-0 max-w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px] text-[var(--color-secondary)] disabled:opacity-60"
+        className="min-w-0 max-w-full rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
       />
       {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
       {error !== undefined && (
-        <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+        <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           {error}
         </span>
       )}
@@ -873,7 +873,7 @@ function RelationCellEditor({
           />
         </button>
         {error !== undefined && (
-          <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+          <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             {error}
           </span>
         )}
@@ -898,7 +898,7 @@ function RelationCellEditor({
             <span
               key={stored}
               data-testid={`viewpart-relation-chip-${label}`}
-              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px]"
+              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)]"
             >
               {label}
               <button
@@ -916,7 +916,7 @@ function RelationCellEditor({
           )
         })}
       {!loading && values.length === 0 && (
-        <span className="text-[11px] text-[var(--color-muted)]">None yet.</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">None yet.</span>
       )}
 
       <input
@@ -937,7 +937,7 @@ function RelationCellEditor({
         }}
         data-testid="viewpart-relation-search"
         aria-label={`Search targets for ${cell.property}`}
-        className="min-w-0 w-36 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[12px] text-[var(--color-secondary)] disabled:opacity-60"
+        className="min-w-0 w-36 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)] disabled:opacity-60"
       />
       {saving && <SpinnerGap size={12} className="animate-spin text-[var(--color-muted)]" />}
 
@@ -956,7 +956,7 @@ function RelationCellEditor({
                 disabled={saving}
                 data-testid={`viewpart-relation-option-${label}`}
                 onClick={() => void commit(scalarFilled ? 'replace' : 'add', [label])}
-                className="text-left text-[12px] text-[var(--color-secondary)] hover:text-[var(--color-accent)] disabled:opacity-50"
+                className="text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] disabled:opacity-50"
               >
                 {label}
               </button>
@@ -970,14 +970,14 @@ function RelationCellEditor({
         type="button"
         onClick={() => setOpen(false)}
         data-testid="viewpart-relation-close"
-        className="text-[11px] font-medium text-[var(--color-accent)] underline underline-offset-2"
+        className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] underline underline-offset-2"
       >
         Done
       </button>
 
       {conflictMessage !== undefined && (
         <span
-          className="inline-flex items-center gap-1 text-[11px] text-[var(--color-warning)]"
+          className="inline-flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
           data-testid="viewpart-relation-conflict"
         >
           <WarningCircle size={12} weight="fill" />
@@ -997,7 +997,7 @@ function RelationCellEditor({
         </span>
       )}
       {error !== undefined && (
-        <span role="alert" data-testid="viewpart-cell-error" className="text-[11px] text-[var(--color-warning)]">
+        <span role="alert" data-testid="viewpart-cell-error" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           {error}
         </span>
       )}

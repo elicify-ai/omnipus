@@ -262,7 +262,7 @@ export function KnowledgeBacklinks({
             // Indeterminate. No bar, no ratio — there is no denominator here.
             <p
               data-testid="knowledge-backlinks-loading"
-              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               Looking for notes that link here…
             </p>
@@ -282,7 +282,7 @@ export function KnowledgeBacklinks({
           {query.data?.truncated && (
             <p
               data-testid="knowledge-backlinks-truncated"
-              className="flex items-start gap-2 px-3 py-2 text-xs text-[var(--color-warning)]"
+              className="flex items-start gap-2 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
             >
               <WarningCircle
                 size={14}
@@ -305,7 +305,7 @@ export function KnowledgeBacklinks({
           {query.isSuccess && edges.length === 0 && (
             <p
               data-testid="knowledge-backlinks-empty"
-              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               No other note links to this one.
             </p>
@@ -330,13 +330,13 @@ export function KnowledgeBacklinks({
 
                 const context = (
                   <>
-                    <span className="block truncate text-[11px] text-[var(--color-muted)]">
+                    <span className="block truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                       {edge.from_path}
                     </span>
                     {edge.alias !== undefined && edge.alias !== "" && (
                       <span
                         data-testid="knowledge-backlink-alias"
-                        className="block text-[11px] text-[var(--color-muted)]"
+                        className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       >
                         Refers to this note as “{edge.alias}”
                       </span>
@@ -344,7 +344,7 @@ export function KnowledgeBacklinks({
                     {edge.heading !== undefined && edge.heading !== "" && (
                       <span
                         data-testid="knowledge-backlink-heading"
-                        className="block text-[11px] text-[var(--color-muted)]"
+                        className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       >
                         Links to the heading “{edge.heading}”
                       </span>
@@ -354,7 +354,7 @@ export function KnowledgeBacklinks({
                     {edge.block !== undefined && edge.block !== "" && (
                       <span
                         data-testid="knowledge-backlink-block"
-                        className="block text-[11px] text-[var(--color-muted)]"
+                        className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       >
                         Links to the block “^{edge.block}”
                       </span>
@@ -362,7 +362,7 @@ export function KnowledgeBacklinks({
                     {edge.embed === true && (
                       <span
                         data-testid="knowledge-backlink-embed"
-                        className="block text-[11px] text-[var(--color-muted)]"
+                        className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       >
                         Embedded, not just linked
                       </span>
@@ -370,7 +370,7 @@ export function KnowledgeBacklinks({
                     {edge.ambiguous && (
                       <span
                         data-testid="knowledge-backlink-ambiguous"
-                        className="mt-1 block text-[11px] text-[var(--color-warning)]"
+                        className="mt-1 block text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                       >
                         Ambiguous link
                         {edge.link_text !== undefined && edge.link_text !== ""
@@ -387,7 +387,7 @@ export function KnowledgeBacklinks({
                     {unresolved && (
                       <span
                         data-testid="knowledge-backlink-unresolved"
-                        className="mt-1 flex items-center gap-1 text-[11px] text-[var(--color-warning)]"
+                        className="mt-1 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                       >
                         <LinkBreak size={12} aria-hidden="true" />
                         Unresolved — this note is not on disk, so it cannot be
@@ -397,7 +397,7 @@ export function KnowledgeBacklinks({
                   </>
                 );
 
-                const rowClass = "block w-full px-3 py-1.5 text-left text-xs";
+                const rowClass = "block w-full px-3 py-1.5 text-left text-[length:var(--type-utility-xs-size)]";
 
                 return (
                   <li key={`${edge.from_path}-${edge.to_path}-${i}`}>
@@ -455,7 +455,7 @@ export function KnowledgeBacklinks({
               data-testid="knowledge-backlinks-skipped"
               className="border-t border-[var(--color-border)] px-3 py-2"
             >
-              <p className="text-[11px] text-[var(--color-warning)]">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
                 {skipped.length === 1
                   ? "1 path was skipped"
                   : `${skipped.length} paths were skipped`}{" "}
@@ -467,7 +467,7 @@ export function KnowledgeBacklinks({
                     key={`${skip.path}-${i}`}
                     data-testid="knowledge-backlinks-skip"
                     data-reason={skip.reason}
-                    className="text-[11px] text-[var(--color-muted)]"
+                    className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                   >
                     <span className="block truncate text-[var(--color-secondary)]">
                       {skip.path}

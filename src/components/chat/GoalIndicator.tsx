@@ -210,7 +210,7 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
       data-testid="goal-indicator"
       role="status"
       aria-live="polite"
-      className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs"
+      className="flex flex-col gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)]"
     >
       {showGoal && goalStatus && goalStatus.state !== 'queued' && (
         <div className="flex items-start gap-2">

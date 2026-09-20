@@ -26,14 +26,14 @@ function RetryableState({
     <div className="flex flex-col items-center gap-3">
       <div className={`flex items-center gap-2 ${iconProps?.className ?? ''}`}>
         <IconComponent size={14} {...iconProps} className={undefined} />
-        <p className="text-xs">{message}</p>
+        <p className="text-[length:var(--type-utility-xs-size)]">{message}</p>
       </div>
       {onRetry && (
         <button tabIndex={0}
           type="button"
           onClick={onRetry}
           data-testid="whatsapp-retry"
-          className="flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
+          className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
         >
           <ArrowsClockwise size={13} />
           Retry
@@ -58,7 +58,7 @@ export function WhatsAppPairingBody({
   const generatingSpinner = (
     <div className="flex items-center gap-2 text-[var(--color-muted)]">
       <Spinner size={14} className="animate-spin" />
-      <p className="text-xs">Generating your QR code&hellip;</p>
+      <p className="text-[length:var(--type-utility-xs-size)]">Generating your QR code&hellip;</p>
     </div>
   )
 
@@ -75,7 +75,7 @@ export function WhatsAppPairingBody({
         <div data-testid="whatsapp-qr" className="rounded-md bg-white p-3">
           <QRCodeSVG value={pairing.qr} size={184} level="L" title="WhatsApp pairing QR code" />
         </div>
-        <p className="text-xs text-[var(--color-secondary)] text-center">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] text-center">
           Open <span className="font-medium">WhatsApp</span> on your phone, go to{' '}
           <span className="font-medium">Settings &rarr; Linked Devices &rarr; Link a Device</span>,
           then scan this code. It refreshes every 20s.
@@ -89,7 +89,7 @@ export function WhatsAppPairingBody({
       return (
         <div className="flex items-center gap-2 text-[var(--color-success)]">
           <CheckCircle size={16} weight="fill" />
-          <p className="text-xs font-medium">Linked successfully.</p>
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium">Linked successfully.</p>
         </div>
       )
     case 'timeout':

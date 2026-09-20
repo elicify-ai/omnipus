@@ -195,7 +195,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
     return (
       <div
         data-testid="ask-user-collapsed"
-        className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-xs"
+        className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-[length:var(--type-utility-xs-size)]"
       >
         <div className="flex items-center gap-2 mb-1.5">
           {card.status === 'answered' ? (
@@ -203,7 +203,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           ) : (
             <X size={12} weight="bold" className="text-[var(--color-muted)]" aria-hidden="true" />
           )}
-          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+          <span className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
             {card.status === 'answered' ? 'Answered' : 'Cancelled'} · {card.agent_id}&apos;s questions
           </span>
         </div>
@@ -238,11 +238,11 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
       data-testid="ask-user-question-card"
       role="group"
       aria-label={`Questions from ${card.agent_id}`}
-      className="my-2 border-y border-[var(--color-border)] py-2.5 text-xs"
+      className="my-2 border-y border-[var(--color-border)] py-2.5 text-[length:var(--type-utility-xs-size)]"
     >
       {/* Header: label + tabs */}
       <div className="flex items-center gap-2.5 mb-3">
-        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+        <span className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
           <b className="text-[var(--color-accent)] font-medium">{card.agent_id}</b> needs your input
         </span>
         <div className="flex gap-1.5 ml-auto" role="tablist">
@@ -278,7 +278,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
 
       {/* Active question panel */}
       <div role="tabpanel" data-testid="ask-user-panel">
-        <p className="text-sm font-medium text-[var(--color-secondary)] mb-3">{q.question}</p>
+        <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] mb-3">{q.question}</p>
 
         {q.context && (
           <div
@@ -320,7 +320,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                     {o.label}
                     {q.recommended === o.label && (
                       <span
-                        className="font-mono text-[9px] uppercase tracking-wider text-[var(--color-accent)]"
+                        className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-accent)]"
                         data-testid="ask-user-recommended-badge"
                       >
                         Recommended
@@ -328,7 +328,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                     )}
                     {autoResolved.has(q.header) && q.recommended === o.label && (
                       <span
-                        className="font-mono text-[9px] uppercase tracking-wider text-[var(--color-muted)]"
+                        className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)]"
                         data-testid="ask-user-auto-resolved"
                       >
                         auto-selected
@@ -357,7 +357,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
 
         {q.default_safe && q.recommended && card.default_safe_at && !autoResolved.has(q.header) && (
           <div
-            className="flex items-center gap-1.5 mt-2.5 font-mono text-[11px] text-[var(--color-muted)]"
+            className="flex items-center gap-1.5 mt-2.5 font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             data-testid="ask-user-countdown"
           >
             <span className="w-1 h-1 rounded-full bg-[var(--color-accent)]" aria-hidden="true" />
@@ -386,7 +386,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
           Cancel
         </button>
         <span
-          className="ml-auto font-mono text-[11px] text-[var(--color-muted)]"
+          className="ml-auto font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="ask-user-progress"
         >
           {answeredCount} / {questions.length} answered
@@ -413,7 +413,7 @@ export function AskUserQuestionThreadTail() {
     <div className="w-full max-w-3xl mx-auto px-4" data-testid="ask-user-thread-tail">
       <AskUserQuestionCard card={pendingAsk} />
       <p
-        className="text-center font-mono text-[11px] text-[var(--color-muted)] mt-1.5"
+        className="text-center font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-1.5"
         data-testid="ask-user-composer-note"
       >
         chat input is locked while questions are pending — Cancel to unlock

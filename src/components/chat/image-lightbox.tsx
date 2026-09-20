@@ -174,7 +174,7 @@ export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageL
         {/* Title / toolbar slot */}
         <div className="flex items-center gap-3 min-w-0 flex-1">
           {title && (
-            <span className="text-sm font-medium text-[var(--color-secondary)] truncate">
+            <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] truncate">
               {title}
             </span>
           )}
@@ -231,7 +231,7 @@ export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageL
       {/* ── Zoom indicator (shown when not at 1×) ──────────────────────── */}
       {scale !== 1 && (
         <div
-          className="absolute bottom-10 right-4 text-[10px] text-[var(--color-muted)] bg-[var(--color-surface-2)]/80 px-2 py-0.5 rounded-full pointer-events-none"
+          className="absolute bottom-10 right-4 text-[length:var(--type-caption-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)]/80 px-2 py-0.5 rounded-full pointer-events-none"
           onClick={(e) => e.stopPropagation()}
         >
           {Math.round(scale * 100)}%
@@ -241,7 +241,7 @@ export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageL
       {/* ── Alt caption ────────────────────────────────────────────────── */}
       {alt && (
         <p
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)]/80 px-3 py-1.5 rounded-full pointer-events-none"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)]/80 px-3 py-1.5 rounded-full pointer-events-none"
           onClick={(e) => e.stopPropagation()}
         >
           {alt}

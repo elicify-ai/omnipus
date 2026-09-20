@@ -140,25 +140,25 @@ export function GatewayRestartModal({ open, onClose }: GatewayRestartModalProps)
         </DialogHeader>
 
         {phase === 'waiting' && (
-          <div className="flex items-center gap-2 text-sm text-[var(--color-muted)] py-2">
+          <div className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-2">
             <ArrowsClockwise size={15} className="animate-spin shrink-0 text-[var(--color-accent)]" />
             Restarting — waiting for gateway to come back online…
           </div>
         )}
         {phase === 'restarting' && (
-          <div className="flex items-center gap-2 text-sm text-[var(--color-muted)] py-2">
+          <div className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-2">
             <ArrowsClockwise size={15} className="animate-spin shrink-0 text-[var(--color-accent)]" />
             Sending restart signal…
           </div>
         )}
         {phase === 'success' && (
-          <div className="flex items-center gap-2 text-sm text-[var(--color-success)] py-2">
+          <div className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-success)] py-2">
             <CheckCircle size={15} weight="fill" className="shrink-0" />
             Gateway restarted successfully.
           </div>
         )}
         {phase === 'error' && errorMsg && (
-          <p className="text-sm text-[var(--color-error)] py-2">{errorMsg}</p>
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)] py-2">{errorMsg}</p>
         )}
 
         <DialogFooter>

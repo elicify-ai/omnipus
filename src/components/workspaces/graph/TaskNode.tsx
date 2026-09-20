@@ -133,7 +133,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         {/* Top row: status chip + priority. */}
         <div className="flex items-center justify-between gap-2">
           <span
-            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold leading-none"
+            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none"
             style={{
               color: visual.color,
               backgroundColor: `${visual.color}1f`, // ~12% alpha tint
@@ -152,7 +152,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
 
           <span
             className={cn(
-              'flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold leading-none',
+              'flex-shrink-0 rounded border px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold leading-none',
               PRIORITY_CLASS[priority] ?? PRIORITY_CLASS[3],
             )}
           >
@@ -174,7 +174,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
           <div className="flex flex-col gap-1" data-testid={`task-node-planmeta-${task.id}`}>
             {isJoin && (
               <span
-                className="inline-flex w-fit items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--color-accent)]"
+                className="inline-flex w-fit items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-accent)]"
                 title="Join member — converges one or more parallel streams into a single artifact"
               >
                 <GitMerge size={10} weight="bold" />
@@ -183,7 +183,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
             )}
             {writeSetLabel && (
               <span
-                className="inline-flex w-fit max-w-full items-center gap-1 text-[10px] leading-none text-[var(--color-muted)]"
+                className="inline-flex w-fit max-w-full items-center gap-1 text-[length:var(--type-caption-size)] leading-none text-[var(--color-muted)]"
                 title={`Writes: ${writeSetLabel}`}
               >
                 <FolderSimple size={10} weight="fill" className="flex-shrink-0" />
@@ -202,7 +202,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
             >
               <AgentIcon size={10} weight="bold" style={{ color: avatarColor }} />
             </span>
-            <span className="truncate text-[11px] text-[var(--color-muted)]">
+            <span className="truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               {agentName}
             </span>
           </div>

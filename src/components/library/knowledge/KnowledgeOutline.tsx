@@ -195,7 +195,7 @@ export function KnowledgeOutline({
           {query.data?.frontmatter_malformed && (
             <p
               data-testid="knowledge-outline-frontmatter-malformed"
-              className="flex items-start gap-2 px-3 py-2 text-xs text-[var(--color-warning)]"
+              className="flex items-start gap-2 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
             >
               <WarningCircle
                 size={14}
@@ -215,7 +215,7 @@ export function KnowledgeOutline({
             // KnowledgeBacklinks.
             <p
               data-testid="knowledge-outline-loading"
-              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               Reading this note&apos;s headings…
             </p>
@@ -233,7 +233,7 @@ export function KnowledgeOutline({
           {query.isSuccess && headings.length === 0 && (
             <p
               data-testid="knowledge-outline-empty"
-              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               This note has no headings.
             </p>
@@ -276,7 +276,7 @@ export function KnowledgeOutline({
                           states the real level. */}
                       <span
                         aria-hidden="true"
-                        className="shrink-0 font-mono text-[10px] leading-4 text-[var(--color-muted)]"
+                        className="shrink-0 font-mono text-[length:var(--type-caption-size)] leading-4 text-[var(--color-muted)]"
                       >
                         H{heading.level}
                       </span>

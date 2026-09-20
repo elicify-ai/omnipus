@@ -63,7 +63,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
         <div className="flex items-start gap-3">
           {/* Avatar */}
           <div
-            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold"
+            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
             style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
           >
             {agent.icon ? (
@@ -76,12 +76,12 @@ export function WorkerCard({ agent }: WorkerCardProps) {
           {/* Info */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-              <span className="font-headline font-bold text-sm text-[var(--color-secondary)] truncate">
+              <span className="font-headline font-bold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {agent.name}
               </span>
               {/* NB: no heartbeat indicator and no default-★ — workers never have them. */}
             </div>
-            <p className="text-sm text-[var(--color-muted)] line-clamp-2 mb-2">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-2">
               {agent.description || 'No description'}
             </p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -103,7 +103,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
                 // "Test run" affordance. min-w-0 + shrink lets it give way in
                 // the flex row, and the max-width cap truncates the remainder.
                 <span
-                  className="text-xs font-mono text-[var(--color-muted)] truncate min-w-0 shrink max-w-[140px]"
+                  className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] truncate min-w-0 shrink max-w-[140px]"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
@@ -137,7 +137,7 @@ function WorkerTestRun({ agentId, agentName, isExternalCli }: { agentId: string;
         disabled
         data-testid={`worker-test-run-${agentId}`}
         title="Native runners have no external connection to test."
-        className="absolute bottom-3 right-4 flex items-center gap-1 text-xs text-[var(--color-muted)]/50 cursor-not-allowed"
+        className="absolute bottom-3 right-4 flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/50 cursor-not-allowed"
         aria-label={`Test run for ${agentName} (unavailable for native runtime)`}
       >
         <Lightning size={12} />
@@ -156,14 +156,14 @@ function WorkerTestRun({ agentId, agentName, isExternalCli }: { agentId: string;
           reset()
           mutate()
         }}
-        className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-60"
+        className="flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-60"
         aria-label={`Test run for ${agentName}`}
       >
         {isPending ? <Spinner size={12} className="animate-spin" /> : <Lightning size={12} />}
         {isPending ? 'Testing…' : 'Test run'}
       </button>
       {error && (
-        <span className="text-xs text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
           Test failed
         </span>
       )}
@@ -186,7 +186,7 @@ function WorkerTestResultPill({ result }: { result: RunnerTestResponse }) {
       : 'text-[var(--color-error)]'
   return (
     <span
-      className={`flex items-center gap-1 text-xs ${tone} max-w-[200px]`}
+      className={`flex items-center gap-1 text-[length:var(--type-utility-xs-size)] ${tone} max-w-[200px]`}
       data-testid={`worker-test-result-${result.cli || 'cli'}`}
       data-reason={result.reason || 'ok'}
       title={result.message}

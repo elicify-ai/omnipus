@@ -99,7 +99,7 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
 
   return (
     <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         {/* GOAL-FR-057 — relabelled Todos (visible text only; the three
             aria-labels below stay byte-identical, C-62/C-79). */}
         {`Todos${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}
@@ -108,7 +108,7 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
         {todos.map((todo: Todo, idx: number) => (
           <div
             key={idx}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
+            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
           >
             <button tabIndex={0}
               type="button"
@@ -162,7 +162,7 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
           placeholder="Add a todo…"
           maxLength={500}
           disabled={disabled}
-          className="text-xs flex-1 h-8"
+          className="text-[length:var(--type-utility-xs-size)] flex-1 h-8"
         />
         <Button
           type="button"

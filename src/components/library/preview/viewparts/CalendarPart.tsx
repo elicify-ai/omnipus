@@ -137,7 +137,7 @@ export function CalendarPart({
     <div className="flex min-h-0 flex-col" data-testid="viewpart-calendar">
       {!hasDateSource && (
         <p
-          className="border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-warning)]"
+          className="border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
           data-testid="viewpart-calendar-no-date"
         >
           This calendar names no date property to place records on, so the grid is empty. Every record is
@@ -154,7 +154,7 @@ export function CalendarPart({
         >
           <CaretLeft size={13} />
         </button>
-        <span className="text-[12px] font-medium text-[var(--color-secondary)]" data-testid="viewpart-calendar-month">
+        <span className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-secondary)]" data-testid="viewpart-calendar-month">
           {monthLabel}
         </span>
         <button
@@ -171,7 +171,7 @@ export function CalendarPart({
         {DAY_HEADERS.map((h, i) => (
           <div
             key={`${h}${i}`}
-            className="bg-[var(--color-surface-1)] px-1.5 py-1 text-center text-[10px] uppercase text-[var(--color-muted)]"
+            className="bg-[var(--color-surface-1)] px-1.5 py-1 text-center text-[length:var(--type-caption-size)] uppercase text-[var(--color-muted)]"
           >
             {h}
           </div>
@@ -179,7 +179,7 @@ export function CalendarPart({
         {cells.map((cell) => (
           <div
             key={cell.iso}
-            className={`min-h-[3.5rem] bg-[var(--color-surface-0)] p-1 text-[10px] ${
+            className={`min-h-[3.5rem] bg-[var(--color-surface-0)] p-1 text-[length:var(--type-caption-size)] ${
               cell.inMonth ? '' : 'opacity-40'
             }`}
             data-testid={cell.inMonth ? 'viewpart-calendar-day' : 'viewpart-calendar-day-outside'}
@@ -195,14 +195,14 @@ export function CalendarPart({
                   title={row.title}
                   aria-label={`Open ${row.title}`}
                   data-testid="viewpart-calendar-event"
-                  className="mt-0.5 block w-full truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-left text-[10px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="mt-0.5 block w-full truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
                 >
                   {row.title}
                 </button>
               ) : (
                 <div
                   key={row.path}
-                  className="mt-0.5 truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                  className="mt-0.5 truncate rounded bg-[var(--color-surface-3)] px-1 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                   title={row.title}
                   data-testid="viewpart-calendar-event"
                 >
@@ -218,7 +218,7 @@ export function CalendarPart({
           className="flex flex-col gap-1 border-t border-[var(--color-border)] px-3 py-2"
           data-testid="viewpart-calendar-unscheduled"
         >
-          <p className="text-[11px] text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {unscheduled.length === 1
               ? `1 record has no ${dateProperty ?? 'date'} and is not on the calendar:`
               : `${unscheduled.length} records have no ${dateProperty ?? 'date'} and are not on the calendar:`}
@@ -234,7 +234,7 @@ export function CalendarPart({
                   title={row.title}
                   aria-label={`Open ${row.title}`}
                   data-testid="viewpart-calendar-unscheduled-row"
-                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-left text-[10px] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
                 >
                   {row.title}
                 </button>
@@ -243,7 +243,7 @@ export function CalendarPart({
                   key={row.path}
                   title={row.title}
                   data-testid="viewpart-calendar-unscheduled-row"
-                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                  className="max-w-[16rem] truncate rounded bg-[var(--color-surface-3)] px-1.5 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                 >
                   {row.title}
                 </span>

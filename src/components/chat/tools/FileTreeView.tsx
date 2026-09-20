@@ -94,7 +94,7 @@ function FileTreeBlock({
     // slot is the status dot/spinner only, like the other rows); each tree
     // entry below keeps its own Folder/File icon and indentation — that's
     // the file tree's identity, preserved per the flat-redesign spec.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
       <button tabIndex={0}
         type="button"
@@ -125,7 +125,7 @@ function FileTreeBlock({
             entries.map((entry, i) => (
               <div
                 key={i}
-                className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--color-secondary)]"
+                className="flex items-center gap-1.5 font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                 style={{ '--file-tree-view-indent-depth-px': entry.indent * 12, paddingLeft: 'calc(var(--file-tree-view-indent-depth-px) * 1px)' } as import('react').CSSProperties}
               >
                 {entry.isDir
@@ -136,7 +136,7 @@ function FileTreeBlock({
               </div>
             ))
           ) : (
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all">
+            <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all">
               {content}
             </pre>
           )}

@@ -13,7 +13,7 @@ export function ProfileScreen() {
         <div className="max-w-3xl mx-auto px-4 py-6">
           <div className="mb-6">
             <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Profile</h1>
-            <p className="text-sm text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-0.5">
               Your personal preferences, password, and shared workspace context.
             </p>
           </div>

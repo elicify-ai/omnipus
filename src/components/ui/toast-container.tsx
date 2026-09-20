@@ -42,7 +42,7 @@ export function ToastContainer() {
           {toast.variant === 'warning' && (
             <Warning size={16} className="text-[var(--color-accent)] shrink-0 mt-0.5" weight="fill" />
           )}
-          <p className="flex-1 text-sm">{toast.message}</p>
+          <p className="flex-1 text-[length:var(--type-body-compact-size)]">{toast.message}</p>
           {toast.action && (
             <button tabIndex={0}
               type="button"
@@ -50,7 +50,7 @@ export function ToastContainer() {
                 toast.action!.onClick()
                 removeToast(toast.id)
               }}
-              className="text-xs font-medium text-[var(--color-accent)] hover:underline shrink-0"
+              className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:underline shrink-0"
             >
               {toast.action.label}
             </button>

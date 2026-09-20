@@ -165,7 +165,7 @@ export function SkillsScreen() {
     <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
     <div className="max-w-4xl mx-auto px-4 py-6">
       <div className="mb-6">
-        <p className="text-sm text-[var(--color-muted)] mt-0.5">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-0.5">
           Manage agent capabilities — skills, MCP servers, and built-in tools.
         </p>
       </div>
@@ -195,8 +195,8 @@ export function SkillsScreen() {
                 <PuzzlePiece size={40} weight="thin" />
               </div>
               <div className="space-y-1">
-                <p className="text-sm text-[var(--color-muted)]">No skills installed.</p>
-                <p className="text-xs text-[var(--color-muted)]/70">Browse the skill registry to add capabilities to your agents.</p>
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No skills installed.</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/70">Browse the skill registry to add capabilities to your agents.</p>
               </div>
               <Button size="sm" className="gap-1.5 mt-1" onClick={() => setSkillBrowserOpen(true)}>
                 <MagnifyingGlass size={13} /> Browse Skills
@@ -217,34 +217,34 @@ export function SkillsScreen() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm text-[var(--color-secondary)]">{skill.name}</span>
+                      <span className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{skill.name}</span>
                       {skill.version && skill.version !== '0.0.0' && (
-                        <span className="font-mono text-[10px] text-[var(--color-muted)]">v{skill.version}</span>
+                        <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">v{skill.version}</span>
                       )}
                       {skill.source === 'builtin' && (
-                        <Badge variant="secondary" className="text-[10px]">
+                        <Badge variant="secondary" className="text-[length:var(--type-caption-size)]">
                           Built-in
                         </Badge>
                       )}
                       {(skill.source === 'global' || skill.source === 'workspace') && (
-                        <Badge variant="secondary" className="text-[10px]">
+                        <Badge variant="secondary" className="text-[length:var(--type-caption-size)]">
                           Community
                         </Badge>
                       )}
                       {skill.verified && (
-                        <Badge variant="success" className="gap-1 text-[10px]">
+                        <Badge variant="success" className="gap-1 text-[length:var(--type-caption-size)]">
                           <Shield size={9} weight="fill" /> Verified
                         </Badge>
                       )}
                       <Badge
                         variant={skill.status === 'active' ? 'success' : skill.status === 'error' ? 'error' : 'muted'}
-                        className="text-[10px]"
+                        className="text-[length:var(--type-caption-size)]"
                       >
                         {skill.status}
                       </Badge>
                     </div>
-                    <p className="text-xs text-[var(--color-muted)] mt-1">{skill.description}</p>
-                    <div className="flex items-center gap-3 mt-1.5 text-[10px] text-[var(--color-muted)]">
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1">{skill.description}</p>
+                    <div className="flex items-center gap-3 mt-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                       {skill.author && <span>by {skill.author}</span>}
                       {skill.agent_assignment && <span>→ {skill.agent_assignment}</span>}
                     </div>
@@ -258,7 +258,7 @@ export function SkillsScreen() {
                         rather than omitting the line entirely when there is
                         no timestamp. */}
                     <div
-                      className="flex items-center gap-1 mt-1.5 text-[10px] text-[var(--color-muted)]"
+                      className="flex items-center gap-1 mt-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                       data-testid={`skill-last-invoked-${skill.id}`}
                     >
                       <Clock size={11} />
@@ -311,18 +311,18 @@ export function SkillsScreen() {
                     <div className="flex items-center gap-3 p-4">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="font-medium text-sm text-[var(--color-secondary)]">{server.name}</span>
-                          <Badge variant="outline" className="text-[10px] font-mono">{server.transport}</Badge>
+                          <span className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{server.name}</span>
+                          <Badge variant="outline" className="text-[length:var(--type-caption-size)] font-mono">{server.transport}</Badge>
                           <Badge
                             variant={server.status === 'connected' ? 'success' : 'error'}
-                            className="text-[10px]"
+                            className="text-[length:var(--type-caption-size)]"
                           >
                             {server.status}
                           </Badge>
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        <span className="text-xs text-[var(--color-muted)]">
+                        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                           {server.tool_count} tools
                         </span>
                         {/* Enable/disable toggle (G8) */}
@@ -383,14 +383,14 @@ export function SkillsScreen() {
                             {server.tools.map((tool) => (
                               <span
                                 key={tool}
-                                className="font-mono text-[10px] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
+                                className="font-mono text-[length:var(--type-caption-size)] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
                               >
                                 {tool}
                               </span>
                             ))}
                           </div>
                         ) : (
-                          <p className="pt-3 text-xs text-[var(--color-muted)]">No tool details available.</p>
+                          <p className="pt-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No tool details available.</p>
                         )}
                       </div>
                     )}
@@ -550,7 +550,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         What your agents can do — grouped by capability area. Click a category to see the individual tools.
         Permissions are managed in{' '}
         <a tabIndex={0}
@@ -593,15 +593,15 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                   data-testid={`tool-category-toggle-${cat}`}
                 >
                   <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium text-[var(--color-secondary)]">
+                    <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
                       {CATEGORY_LABELS[cat] ?? cat}
                     </span>
-                    <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
                       {description}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant="muted" className="text-[10px]">
+                    <Badge variant="muted" className="text-[length:var(--type-caption-size)]">
                       {catTools.length} tool{catTools.length !== 1 ? 's' : ''}
                     </Badge>
                     {isExpanded
@@ -621,7 +621,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                       {catTools.map((tool) => (
                         <span
                           key={tool.name}
-                          className="font-mono text-[10px] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
+                          className="font-mono text-[length:var(--type-caption-size)] px-2 py-0.5 rounded bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-muted)]"
                           title={tool.description ?? tool.name}
                           aria-label={tool.description ? `${tool.name} — ${tool.description}` : tool.name}
                         >

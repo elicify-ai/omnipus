@@ -31,7 +31,7 @@ export function UnitValue({ value, unit }: { value: string; unit?: string | unde
     <span className="whitespace-nowrap font-mono text-[13px] tabular-nums text-[var(--color-secondary)]">
       {formatNumberText(value)}
       {unit !== undefined && unit !== '' && (
-        <span className="ml-1 text-[11px] text-[var(--color-muted)]">{unit}</span>
+        <span className="ml-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{unit}</span>
       )}
     </span>
   )
@@ -43,7 +43,7 @@ export function ExcludedRowMark() {
     <span
       title="No unit value set, so this row is excluded from every total."
       data-testid="viewpart-excluded-mark"
-      className="ml-1 inline-flex h-[15px] w-[15px] shrink-0 cursor-help items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[10px] font-semibold text-[var(--color-warning)]"
+      className="ml-1 inline-flex h-[15px] w-[15px] shrink-0 cursor-help items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[length:var(--type-caption-size)] font-semibold text-[var(--color-warning)]"
     >
       !
     </span>
@@ -54,7 +54,7 @@ export function ExcludedRowMark() {
 function TotalEntry({ total }: { total: ViewUnitTotal }) {
   return (
     <span className="inline-flex items-baseline gap-1.5" data-testid="viewpart-total">
-      <span className="text-[11px] text-[var(--color-muted)]">
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         {aggregateLabel(total.op)} {total.property}
         {total.unit !== undefined && ` · ${total.unit}`}
         {` · ${total.count}`}
@@ -92,7 +92,7 @@ export function TotalsFooter({
       )}
       {needsNoGrandTotalReason(totals, excluded) && (
         <p
-          className="flex items-start gap-1.5 border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] leading-snug text-[var(--color-muted)]"
+          className="flex items-start gap-1.5 border-t border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
           data-testid="viewpart-no-grand-total"
         >
           <span className="shrink-0 font-medium text-[var(--color-warning)]">No grand total.</span>
@@ -109,7 +109,7 @@ export function ExcludedLine({ count, reason }: { count: number; reason?: string
   if (count <= 0) return null
   return (
     <p
-      className="flex items-start gap-1.5 border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] leading-snug text-[var(--color-warning)]"
+      className="flex items-start gap-1.5 border-t border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
       data-testid="viewpart-excluded-line"
     >
       <WarningCircle size={13} weight="fill" className="mt-px shrink-0" />
@@ -122,7 +122,7 @@ export function ExcludedLine({ count, reason }: { count: number; reason?: string
  *  column headers: small caps, muted, count alongside. */
 export function GroupHeaderLabel({ label, count, absent }: { label: string; count: number; absent?: boolean | undefined }) {
   return (
-    <span className="text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
+    <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
       {absent ? 'Not set' : label === '' ? '(empty)' : label}
       <span className="ml-1.5 normal-case text-[var(--color-muted)]/70">{count}</span>
     </span>

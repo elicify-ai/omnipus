@@ -167,7 +167,7 @@ export function ChatControls({ className }: ChatControlsProps) {
         className={cn(
           'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
           'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
-          'transition-colors text-xs whitespace-nowrap',
+          'transition-colors text-[length:var(--type-utility-xs-size)] whitespace-nowrap',
           'disabled:cursor-not-allowed disabled:opacity-50',
           'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
         )}
@@ -190,7 +190,7 @@ export function ChatControls({ className }: ChatControlsProps) {
         className={cn(
           'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
           'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
-          'transition-colors text-xs whitespace-nowrap',
+          'transition-colors text-[length:var(--type-utility-xs-size)] whitespace-nowrap',
           'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
         )}
       >

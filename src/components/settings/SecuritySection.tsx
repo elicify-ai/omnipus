@@ -128,7 +128,7 @@ function GlobalToolPoliciesSection() {
 
   if (toolsError || policiesError) {
     return (
-      <p className="text-xs text-red-400 py-4">
+      <p className="text-[length:var(--type-utility-xs-size)] text-red-400 py-4">
         Failed to load tool policies. Check that the backend is running.
       </p>
     )
@@ -136,7 +136,7 @@ function GlobalToolPoliciesSection() {
 
   return (
     <div className="space-y-4">
-      <p className="text-xs text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         These policies apply globally across all agents. Per-agent policies cannot override a global
         "Deny". Tools blocked here are greyed out in each agent's tool list.
       </p>
@@ -148,7 +148,7 @@ function GlobalToolPoliciesSection() {
       />
       <div className="pt-2 flex items-center gap-3">
         <AutoSaveIndicator status={saveStatus} error={saveError} />
-        <span className="text-[10px] text-[var(--color-muted)]">
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {Object.keys(toolPolicyValue.policies).length} tool polic{Object.keys(toolPolicyValue.policies).length !== 1 ? 'ies' : 'y'} configured
         </span>
       </div>
@@ -315,11 +315,11 @@ export function SecuritySection() {
   })
 
   if (isLoading) {
-    return <div className="text-sm text-[var(--color-muted)]">Loading...</div>
+    return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
   }
 
   if (configError) {
-    return <p className="text-sm text-red-400">Failed to load security settings. Please try again.</p>
+    return <p className="text-[length:var(--type-body-compact-size)] text-red-400">Failed to load security settings. Please try again.</p>
   }
 
   // ADR-053 D12 retired the "Daily spending limit" UI block.
@@ -333,7 +333,7 @@ export function SecuritySection() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Security & Policy</h2>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
             Control how protected your setup is and adjust agent boundaries.
           </p>
         </div>
@@ -353,15 +353,15 @@ export function SecuritySection() {
 
       {/* Plain outcome toggles (US-B1: 3-4 toggles without jargon) */}
       <section className="space-y-3" data-testid="plain-toggles">
-        <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+        <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
           Protection settings
         </p>
 
         {/* 1. Default policy mode — wraps risky "Allow" (US-B2) */}
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">Agent tool access</p>
-            <p className="text-xs text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Agent tool access</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
               Whether agents must ask your permission before running tools or can run freely.
             </p>
           </div>
@@ -389,8 +389,8 @@ export function SecuritySection() {
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-[var(--color-secondary)]">Shell command approval</p>
-              <p className="text-xs text-[var(--color-muted)]">How shell commands are handled when an agent wants to run them</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Shell command approval</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">How shell commands are handled when an agent wants to run them</p>
             </div>
             <SmartSelect
               value={execApproval}
@@ -420,7 +420,7 @@ export function SecuritySection() {
 
           {/* Tool Access — Global Policies (US-B3) */}
           <section>
-            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
               Tool Access — Global Policies
             </p>
             <GlobalToolPoliciesSection />
@@ -430,14 +430,14 @@ export function SecuritySection() {
 
           {/* Command Execution Internals */}
           <section>
-            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
               Command Execution
             </p>
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="exec-timeout-seconds" className="text-sm text-[var(--color-secondary)]">Exec timeout (seconds)</label>
-                  <p className="text-xs text-[var(--color-muted)]">Max time for a single command, 0 = no limit</p>
+                  <label htmlFor="exec-timeout-seconds" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Exec timeout (seconds)</label>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Max time for a single command, 0 = no limit</p>
                 </div>
                 <Input
                   id="exec-timeout-seconds"
@@ -445,7 +445,7 @@ export function SecuritySection() {
                   min="0"
                   value={execTimeoutSecs}
                   onChange={(e) => { markDirty(); setExecTimeoutSecs(e.target.value) }}
-                  className="w-24 h-7 text-xs font-mono"
+                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
                   placeholder="0"
                 />
               </div>
@@ -454,8 +454,8 @@ export function SecuritySection() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="max-background-seconds" className="text-sm text-[var(--color-secondary)]">Background timeout (seconds)</label>
-                  <p className="text-xs text-[var(--color-muted)]">Max time for background processes, 0 = no limit</p>
+                  <label htmlFor="max-background-seconds" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Background timeout (seconds)</label>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Max time for background processes, 0 = no limit</p>
                 </div>
                 <Input
                   id="max-background-seconds"
@@ -463,7 +463,7 @@ export function SecuritySection() {
                   min="0"
                   value={maxBackgroundSecs}
                   onChange={(e) => { markDirty(); setMaxBackgroundSecs(e.target.value) }}
-                  className="w-24 h-7 text-xs font-mono"
+                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
                   placeholder="0"
                 />
               </div>
@@ -472,8 +472,8 @@ export function SecuritySection() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-sm text-[var(--color-secondary)]">Enable deny patterns</p>
-                  <p className="text-xs text-[var(--color-muted)]">Block commands matching configured deny patterns</p>
+                  <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Enable deny patterns</p>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Block commands matching configured deny patterns</p>
                 </div>
                 <Switch
                   checked={enableDenyPatterns}
@@ -483,7 +483,7 @@ export function SecuritySection() {
               </div>
             </div>
 
-            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-4 mb-2">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-4 mb-2">
               Binary Allowlist
             </p>
             <ExecAllowlistSection />
@@ -493,7 +493,7 @@ export function SecuritySection() {
 
           {/* SSRF Proxy */}
           <section>
-            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
               SSRF Proxy
             </p>
             <ExecProxyStatusCard />
@@ -503,7 +503,7 @@ export function SecuritySection() {
 
           {/* Prompt Guard */}
           <section>
-            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
               Prompt Injection Defense
             </p>
             <PromptGuardSection />
@@ -513,7 +513,7 @@ export function SecuritySection() {
 
           {/* Process Sandbox */}
           <section>
-            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
               Process Sandbox (Landlock / seccomp)
             </p>
             <SandboxSection />
@@ -523,7 +523,7 @@ export function SecuritySection() {
                 as "this is not yours to change". What is actually detected is
                 the kernel's capabilities, which decide which modes will work.
                 (UAT defect 002 / ADR-068 §6.) */}
-            <p className="text-xs text-[var(--color-muted)] pt-1">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] pt-1">
               What your kernel supports is detected when the gateway starts, and that decides which
               modes will actually work — the mode itself is yours to choose above. The sandbox is
               only one of the boundaries on what an agent may touch: the shell workspace limit is a
@@ -535,14 +535,14 @@ export function SecuritySection() {
 
           {/* Per-Agent Rate Limits */}
           <section>
-            <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-3">
               Per-Agent Rate Limits
             </p>
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="agent-llm-calls-per-hour" className="text-sm text-[var(--color-secondary)]">LLM calls / hour</label>
-                  <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
+                  <label htmlFor="agent-llm-calls-per-hour" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">LLM calls / hour</label>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
                 </div>
                 <Input
                   id="agent-llm-calls-per-hour"
@@ -550,14 +550,14 @@ export function SecuritySection() {
                   min="0"
                   value={agentLlmCallsPerHour}
                   onChange={(e) => { markDirty(); setAgentLlmCallsPerHour(e.target.value) }}
-                  className="w-24 h-7 text-xs font-mono"
+                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
                   placeholder="Unlimited"
                 />
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="agent-tool-calls-per-minute" className="text-sm text-[var(--color-secondary)]">Tool calls / minute</label>
-                  <p className="text-xs text-[var(--color-muted)]">Default limit per agent</p>
+                  <label htmlFor="agent-tool-calls-per-minute" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Tool calls / minute</label>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
                 </div>
                 <Input
                   id="agent-tool-calls-per-minute"
@@ -565,7 +565,7 @@ export function SecuritySection() {
                   min="0"
                   value={agentToolCallsPerMin}
                   onChange={(e) => { markDirty(); setAgentToolCallsPerMin(e.target.value) }}
-                  className="w-24 h-7 text-xs font-mono"
+                  className="w-24 h-7 text-[length:var(--type-utility-xs-size)] font-mono"
                   placeholder="Unlimited"
                 />
               </div>
@@ -577,19 +577,19 @@ export function SecuritySection() {
           {/* Audit Log */}
           <section>
             <div className="flex items-center justify-between mb-3">
-              <p className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+              <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
                 Audit Log
               </p>
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 px-2 text-xs"
+                className="h-7 px-2 text-[length:var(--type-utility-xs-size)]"
                 onClick={() => setAuditLogOpen(true)}
               >
                 View Log
               </Button>
             </div>
-            <p className="text-xs text-[var(--color-muted)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               Security events, policy decisions, and tool executions.
             </p>
           </section>
@@ -602,9 +602,9 @@ export function SecuritySection() {
         <div className="flex items-center justify-between mb-3">
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Credential Vault</h3>
+              <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Credential Vault</h3>
             </div>
-            <p className="text-xs text-[var(--color-muted)] mt-0.5 flex items-center gap-1">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5 flex items-center gap-1">
               <Lock size={11} />
               Your keys are encrypted and stored only on this server — never sent anywhere.
             </p>
@@ -613,7 +613,7 @@ export function SecuritySection() {
             <Button
               size="sm"
               variant="outline"
-              className="h-7 px-2 gap-1 text-xs"
+              className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)]"
               onClick={() => setRotateModalOpen(true)}
               data-testid="rotate-master-key"
             >
@@ -623,7 +623,7 @@ export function SecuritySection() {
             <Button
               size="sm"
               variant="outline"
-              className="h-7 px-2 gap-1 text-xs"
+              className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)]"
               onClick={() => setCredModalOpen(true)}
             >
               <Plus size={11} weight="bold" />
@@ -634,10 +634,10 @@ export function SecuritySection() {
 
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
           {credentialsError && (
-            <div className="p-4 text-sm text-red-400">Failed to load credentials. Please try again.</div>
+            <div className="p-4 text-[length:var(--type-body-compact-size)] text-red-400">Failed to load credentials. Please try again.</div>
           )}
           {!credentialsError && credentials.length === 0 && (
-            <div className="p-4 text-sm text-[var(--color-muted)] flex items-center gap-2">
+            <div className="p-4 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] flex items-center gap-2">
               <Key size={14} />
               No credentials stored. Add your first key above.
             </div>
@@ -645,8 +645,8 @@ export function SecuritySection() {
           {credentials.map((cred) => (
             <div key={cred.key} className="flex items-center justify-between px-4 py-2.5">
               <div>
-                <p className="text-sm font-mono text-[var(--color-secondary)]">{cred.key}</p>
-                <p className="text-[10px] text-[var(--color-muted)] font-mono">••••••••••••</p>
+                <p className="text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]">{cred.key}</p>
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono">••••••••••••</p>
               </div>
               <Button
                 variant="ghost"
@@ -675,19 +675,19 @@ export function SecuritySection() {
             <DialogTitle className="font-headline text-base">Rotate master key</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
-            <p className="text-xs text-[var(--color-muted)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               Re-encrypts the entire credential vault under a new passphrase. Back up the new
               passphrase — it&apos;s required to unlock the vault next time.
             </p>
             <div className="space-y-1">
-              <label htmlFor="rotate-passphrase" className="text-xs text-[var(--color-muted)]">New passphrase</label>
+              <label htmlFor="rotate-passphrase" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">New passphrase</label>
               <Input
                 id="rotate-passphrase"
                 type="password"
                 value={rotatePassphrase}
                 onChange={(e) => setRotatePassphrase(e.target.value)}
                 placeholder="Enter a new passphrase"
-                className="h-8 text-xs font-mono"
+                className="h-8 text-[length:var(--type-utility-xs-size)] font-mono"
                 data-testid="rotate-passphrase-input"
                 autoFocus
               />
@@ -715,25 +715,25 @@ export function SecuritySection() {
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="space-y-1">
-              <label htmlFor="cred-key" className="text-xs text-[var(--color-muted)]">Key name</label>
+              <label htmlFor="cred-key" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Key name</label>
               <Input
                 id="cred-key"
                 value={credKey}
                 onChange={(e) => setCredKey(e.target.value)}
                 placeholder="e.g. OPENAI_API_KEY"
-                className="h-8 text-xs font-mono"
+                className="h-8 text-[length:var(--type-utility-xs-size)] font-mono"
                 autoFocus
               />
             </div>
             <div className="space-y-1">
-              <label htmlFor="cred-value" className="text-xs text-[var(--color-muted)]">Value</label>
+              <label htmlFor="cred-value" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Value</label>
               <Input
                 id="cred-value"
                 type="password"
                 value={credValue}
                 onChange={(e) => setCredValue(e.target.value)}
                 placeholder="sk-..."
-                className="h-8 text-xs font-mono"
+                className="h-8 text-[length:var(--type-utility-xs-size)] font-mono"
               />
             </div>
           </div>
@@ -756,7 +756,7 @@ export function SecuritySection() {
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Remove credential?</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-[var(--color-muted)] py-2">
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-2">
             This will permanently remove <span className="font-mono text-[var(--color-secondary)]">{deletingKey}</span> from the vault. This cannot be undone.
           </p>
           <DialogFooter>

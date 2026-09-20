@@ -67,7 +67,7 @@ function ListRow({
           no editContext, or an empty NON-editable detail, renders exactly as
           before: nothing at all. */}
       {(detailValue !== '' || (detailCell !== undefined && canEditCell(editContext, row, detailCell))) && (
-        <span className="min-w-0 truncate text-[12px] text-[var(--color-muted)]">
+        <span className="min-w-0 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           ·{' '}
           {detailCell !== undefined ? (
             <EditableCell context={editContext} row={row} cell={detailCell} renderValue={renderDetailValue} />

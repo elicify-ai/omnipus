@@ -88,7 +88,7 @@ function WebFetchBlock({
     // is the status dot/spinner only. The "open fetched URL" action link is a
     // separate sibling control (mirrors GenericToolCall's "Watch live"), not
     // nested inside the toggle button, so it stays independently clickable.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       <div className="flex w-full items-center gap-2">
         {/* Header */}
         <button tabIndex={0}
@@ -104,7 +104,7 @@ function WebFetchBlock({
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">web_fetch</span>
-          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[length:var(--type-caption-size)]">
             {displayUrl(url)}
           </span>
           <span className={cn('text-[var(--color-muted)] shrink-0')}>
@@ -118,7 +118,7 @@ function WebFetchBlock({
             rel="noopener noreferrer"
             aria-label="Open fetched URL"
             title="Open in new tab"
-            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
+            className="shrink-0 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
           >
             <ArrowSquareOut size={12} />
           </a>
@@ -135,8 +135,8 @@ function WebFetchBlock({
           bordered/backgrounded breadcrumb row. */}
       {expanded && hasDetail && (
         <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
-          <div className="text-[10px] text-[var(--color-muted)] font-mono break-all mb-1">{url}</div>
-          <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+          <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-1">{url}</div>
+          <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
             {preview}
             {truncated && (
               <span className="text-[var(--color-muted)] italic">{'\n'}... (content truncated)</span>

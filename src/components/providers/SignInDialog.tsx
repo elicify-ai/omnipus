@@ -388,7 +388,7 @@ export function SignInDialog({
 
         <div className="space-y-4">
           {phase.kind === 'starting' && (
-            <div className="flex items-center gap-2 text-sm text-[var(--color-muted)]" data-testid="sign-in-starting">
+            <div className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="sign-in-starting">
               <SpinnerGap size={14} className="animate-spin" />
               Starting sign-in…
             </div>
@@ -397,17 +397,17 @@ export function SignInDialog({
           {phase.kind === 'cli_login' && (
             <div className="space-y-3">
               <div>
-                <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">Run in a terminal</p>
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5">Run in a terminal</p>
                 <code
-                  className="block rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-sm font-mono text-[var(--color-secondary)]"
+                  className="block rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]"
                   data-testid="cli-login-command"
                 >
                   {phase.command}
                 </code>
-                <p className="text-xs text-[var(--color-muted)] mt-1.5">{phase.instructions}</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1.5">{phase.instructions}</p>
               </div>
               {phase.checkResult === 'not_yet' && (
-                <p className="text-sm text-[var(--color-warning)] flex items-center gap-1.5" role="alert" aria-live="assertive">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-center gap-1.5" role="alert" aria-live="assertive">
                   <Warning size={13} weight="fill" />{' '}
                   {phase.checkReason
                     ? `Not signed in yet — ${phase.checkReason}.`
@@ -416,7 +416,7 @@ export function SignInDialog({
               )}
               {phase.checkResult === 'expired' && (
                 <p
-                  className="text-sm text-[var(--color-warning)] flex items-start gap-1.5"
+                  className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)] flex items-start gap-1.5"
                   role="alert"
                   aria-live="assertive"
                   data-testid="cli-login-expired"
@@ -439,12 +439,12 @@ export function SignInDialog({
           {phase.kind === 'device_code' && (
             <div className="space-y-3">
               <div>
-                <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">1. Open the sign-in page</p>
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5">1. Open the sign-in page</p>
                 <a tabIndex={0}
                   href={phase.verificationUrl}
                   target="_blank"
                   rel="noopener"
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-accent)] hover:underline"
+                  className="inline-flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-accent)] hover:underline"
                   data-testid="verification-link"
                 >
                   {phase.verificationUrl}
@@ -452,7 +452,7 @@ export function SignInDialog({
                 </a>
               </div>
               <div>
-                <p className="text-xs font-medium text-[var(--color-muted)] mb-1.5">2. Enter this code</p>
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-1.5">2. Enter this code</p>
                 <div className="flex items-center gap-2">
                   <output
                     className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2.5 text-center text-lg font-mono font-bold tracking-[0.2em] text-[var(--color-secondary)]"
@@ -478,7 +478,7 @@ export function SignInDialog({
                   accessibility tree so a screen reader announces it once, not
                   twice, while sighted operators still see the spinner + copy. */}
               <div
-                className="flex items-center gap-2 text-sm text-[var(--color-muted)]"
+                className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
                 data-testid="device-code-waiting"
                 aria-hidden="true"
               >
@@ -491,13 +491,13 @@ export function SignInDialog({
                     type="button"
                     onClick={handleImportCodexLogin}
                     disabled={importing}
-                    className="text-xs font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 mt-2"
+                    className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 mt-2"
                     data-testid="import-codex-login-btn"
                   >
                     {importing ? 'Checking…' : 'Use my existing Codex login'}
                   </button>
                   {importError && (
-                    <p className="text-xs text-[var(--color-error)] mt-1" role="alert" aria-live="assertive">
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-1" role="alert" aria-live="assertive">
                       {importError}
                     </p>
                   )}
@@ -508,7 +508,7 @@ export function SignInDialog({
 
           {phase.kind === 'signed_in' && (
             <div
-              className="flex items-center gap-2 text-sm text-[var(--color-success)]"
+              className="flex items-center gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-success)]"
               role="status"
               data-testid="sign-in-success"
             >
@@ -520,7 +520,7 @@ export function SignInDialog({
           {(phase.kind === 'expired' || phase.kind === 'denied' || phase.kind === 'error') && (
             <div className="space-y-3">
               <div
-                className="flex items-start gap-2 text-sm text-[var(--color-error)]"
+                className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
                 role="alert"
                 aria-live="assertive"
                 data-testid="sign-in-failure"

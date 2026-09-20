@@ -160,8 +160,8 @@ export function AttachmentCard({ filename, contentType, imageUrl, isImage, remov
         <Icon size={20} weight="fill" />
       </div>
       <div className="min-w-0">
-        <p className="truncate text-xs font-medium text-[var(--color-secondary)]">{filename}</p>
-        <p className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">{label}</p>
+        <p className="truncate text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{filename}</p>
+        <p className="text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]">{label}</p>
       </div>
       {removeButton}
     </div>

@@ -122,7 +122,7 @@ export function KnowledgeViewsList({
           tabIndex={0}
           onClick={() => void viewsQuery.refetch()}
           data-testid="knowledge-views-retry"
-          className="self-start rounded border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          className="self-start rounded border border-[var(--color-border)] px-2 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
         >
           Try again
         </button>
@@ -143,7 +143,7 @@ export function KnowledgeViewsList({
       data-testid="knowledge-views-list"
       className="flex max-h-[min(384px,45vh)] flex-col gap-1 overflow-y-auto"
     >
-      <p className="px-2 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+      <p className="px-2 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
         Saved views
       </p>
       <ul className="flex flex-col gap-1">
@@ -166,11 +166,11 @@ export function KnowledgeViewsList({
                     : 'hover:bg-[var(--color-surface-2)]',
                 )}
               >
-                <span className="flex w-full items-center gap-1.5 text-sm text-[var(--color-secondary)]">
+                <span className="flex w-full items-center gap-1.5 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
                   <SquaresFour size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
                   <span className="flex-1 truncate">{v.label}</span>
                   {v.kind !== undefined && (
-                    <Badge variant="outline" className="px-1.5 py-0 text-[10px] leading-4">
+                    <Badge variant="outline" className="px-1.5 py-0 text-[length:var(--type-caption-size)] leading-4">
                       {v.kind}
                     </Badge>
                   )}
@@ -178,13 +178,13 @@ export function KnowledgeViewsList({
                 {/* Provenance, when there is any: an imported view names the
                     `.base` it came from; an authored view belongs to the
                     collection itself (D-13's whole point). */}
-                <span className="w-full truncate text-[11px] text-[var(--color-muted)]">
+                <span className="w-full truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                   {v.source !== undefined ? `from ${v.source}` : 'authored in this knowledge base'}
                 </span>
                 {unservable && (
                   <span
                     data-testid="knowledge-views-unservable"
-                    className="text-left text-[11px] leading-snug text-[var(--color-warning)]"
+                    className="text-left text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
                   >
                     {v.unservable_reason ?? "This view can't be served."}
                   </span>
@@ -197,7 +197,7 @@ export function KnowledgeViewsList({
       {(viewsQuery.data?.unloadable_count ?? 0) > 0 && viewsQuery.data?.unloadable && (
         <p
           data-testid="knowledge-views-unloadable"
-          className="flex items-start gap-1.5 px-2 text-[11px] leading-snug text-[var(--color-warning)]"
+          className="flex items-start gap-1.5 px-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
         >
           <Warning size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
           <span>
@@ -280,7 +280,7 @@ function KnowledgeViewDialog({
           <DialogDescription>Saved view</DialogDescription>
         </DialogHeader>
         {viewResultQuery.isPending && (
-          <div role="status" className="flex items-center gap-2 py-6 text-sm text-[var(--color-muted)]">
+          <div role="status" className="flex items-center gap-2 py-6 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             <CircleNotch size={16} aria-hidden="true" className="animate-spin" />
             Loading view…
           </div>

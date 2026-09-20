@@ -134,17 +134,17 @@ export function renderSkillAwareContent(
   if (matchedSkill && skillMatch) {
     // R2: compact skill indicator — show message text + chip, or chip alone
     return (
-      <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-1">
+      <div className="rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-1">
         {skillMatch[2] ? (
           <>
             <p className="whitespace-pre-wrap break-words">{skillMatch[2]}</p>
-            <span className="flex items-center gap-1 text-[10px] text-[var(--color-muted)]">
+            <span className="flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               <Lightning size={10} weight="fill" className="text-[var(--color-accent)]" />
               skill: {matchedSkill.name}
             </span>
           </>
         ) : (
-          <span className="flex items-center gap-1 text-xs">
+          <span className="flex items-center gap-1 text-[length:var(--type-utility-xs-size)]">
             <Lightning size={12} weight="fill" className="text-[var(--color-accent)]" />
             {matchedSkill.name}
           </span>
@@ -222,7 +222,7 @@ export function UserMessage() {
       <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
         {setsGoal && <GoalCommandMarker />}
         {renderSkillAwareContent(content, skills, commandLabels, () => (
-          <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
+          <div className="rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
             <MessagePrimitive.Parts>
               {({ part }) => {
                 if (part.type !== 'text') return null
@@ -269,7 +269,7 @@ function SystemMessage() {
       className="flex justify-center py-2"
       data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
     >
-      <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type !== 'text') return null
@@ -514,7 +514,7 @@ function ThinkingIndicator({ label }: { label?: string | null } = {}) {
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
       </span>
-      <span className="text-xs transition-opacity duration-300">{displayText}</span>
+      <span className="text-[length:var(--type-utility-xs-size)] transition-opacity duration-300">{displayText}</span>
     </span>
   )
 }
@@ -698,7 +698,7 @@ function AssistantMessageRetryButton() {
       type="button"
       onClick={handleRetry}
       aria-label="Retry — resend the last user message"
-      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
       title="Retry — resend the last user message"
     >
       <ArrowCounterClockwise size={11} />
@@ -729,7 +729,7 @@ function InlineMedia() {
               filename={m.filename}
             />
             {m.caption && (
-              <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
             )}
           </div>
         ) : (
@@ -737,7 +737,7 @@ function InlineMedia() {
             key={`${m.url}-${i}`}
             href={m.url}
             download={m.filename}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
           >
             <File size={14} />
             {m.filename}
@@ -1002,7 +1002,7 @@ function InterruptedMessageMarkers() {
           key={m.id}
           data-testid="interrupted-marker"
           data-message-id={m.id}
-          className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-1"
         >
           (interrupted)
         </div>
@@ -1012,7 +1012,7 @@ function InterruptedMessageMarkers() {
           key={m.id}
           data-testid="truncated-marker"
           data-message-id={m.id}
-          className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-1"
         >
           (cut off at the output limit)
         </div>
@@ -1038,13 +1038,13 @@ function UserMessageRetryButton({ message }: { message: ChatMessage }) {
 
   return (
     <div className="flex items-center justify-end gap-2 mt-1">
-      <span className="text-[10px] text-[var(--color-error)]">Send failed</span>
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">Send failed</span>
       <button tabIndex={0}
         type="button"
         data-testid="user-message-retry"
         onClick={handleRetry}
         aria-label="Retry — resend this message"
-        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+        className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
         title="Retry — resend this message"
       >
         <ArrowCounterClockwise size={11} />
@@ -1129,7 +1129,7 @@ export function VirtualUserMessageRow({
             commandLabels,
             () => (
               <div className={cn(
-                "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
+                "rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed rounded-tr-sm",
                 isError
                   ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
                   : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
@@ -1169,7 +1169,7 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
       data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
       className="flex justify-center py-2"
     >
-      <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
         <span>{message.content}</span>
       </div>
     </div>
@@ -1190,7 +1190,7 @@ function StaticCopyButton({ text }: { text: string }) {
       type="button"
       aria-label="Copy message"
       onClick={handleCopy}
-      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
       title="Copy message"
     >
       {copied ? (
@@ -1367,11 +1367,11 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
       </div>
       <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">
+          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {agentDisplayName}
           </span>
         )}
-        <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
+        <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
@@ -1385,7 +1385,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                       filename={m.filename}
                     />
                     {m.caption && (
-                      <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
                     )}
                   </div>
                 ) : (
@@ -1393,7 +1393,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                     key={`${m.url}-${i}`}
                     href={m.url}
                     download={m.filename}
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
                   >
                     <File size={14} />
                     {m.filename}
@@ -1580,7 +1580,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             "(cut off at the output limit)"; getMessageStatusSuffix decides
             which (or neither), never both. */}
         {statusSuffix && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
         )}
 
         {/* ADR-051 — verbose-only "Technical details" disclosure for typed
@@ -1601,7 +1601,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             <summary
               tabIndex={0}
               className={cn(
-                'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
+                'text-[length:var(--type-caption-size)] text-[var(--color-muted)] cursor-pointer select-none',
                 'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
               )}
             >
@@ -1611,7 +1611,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               className={cn(
                 'mt-1 px-2 py-1.5 rounded-md',
                 'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
-                'font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all',
+                'font-mono text-[length:var(--type-caption-size)] leading-relaxed whitespace-pre-wrap break-all',
                 'max-h-40 overflow-y-auto',
               )}
             >
@@ -1959,9 +1959,9 @@ function AssistantMessage() {
       <AssistantMessageAvatar agent={agent} />
       <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">{agentDisplayName}</span>
+          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{agentDisplayName}</span>
         )}
-        <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
+        <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {showEmptyPlaceholder ? (
             // Nothing has streamed in yet — show only the thinking indicator,
             // not an empty text bubble + Copy affordance (D-fix).
@@ -2014,7 +2014,7 @@ function AssistantMessage() {
               <button tabIndex={0}
                 type="button"
                 aria-label="Copy message"
-                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
                 title="Copy message"
               >
                 <AuiIf condition={(s) => s.message.isCopied}>
@@ -2034,7 +2034,7 @@ function AssistantMessage() {
             cancelled ("(interrupted)") or cut off at the provider's
             output-token limit ("(cut off at the output limit)"). */}
         {statusSuffix && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
         )}
       </div>
     </MessagePrimitive.Root>
@@ -2568,13 +2568,13 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           className="mb-2 rounded-lg px-3 py-2 bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 flex items-center gap-2"
         >
           <WifiSlash size={14} className="text-[var(--color-error)] shrink-0" />
-          <span className="text-xs text-[var(--color-error)] flex-1">
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
             Connection lost after all retry attempts.
           </span>
           <button tabIndex={0}
             type="button"
             onClick={reconnect}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
+            className="flex items-center gap-1 px-2 py-1 rounded text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
             aria-label="Reconnect now"
           >
             <ArrowClockwise size={12} weight="bold" />
@@ -2585,7 +2585,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {showTransientDisconnect && (reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
         <div
           data-testid="reconnect-banner"
-          className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
+          className="mb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-1.5"
         >
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] inline-block animate-pulse" />
           {reconnectPhase === 'slow'
@@ -2594,7 +2594,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
       {showTransientDisconnect && !isConnected && reconnectPhase === null && (
-        <div data-testid="reconnect-banner" className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
+        <div data-testid="reconnect-banner" className="mb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
           Disconnected — reconnecting...
         </div>
@@ -2615,7 +2615,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
       {(outboundQueue.length > 0 || pendingDrainQueue.length > 0) && (
         <div
           data-testid="outbound-queue-indicator"
-          className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
+          className="mb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-1.5"
         >
           <Clock size={12} className="shrink-0" />
           {(() => {
@@ -2699,7 +2699,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             <div
               data-testid="slash-commands-error"
               role="presentation"
-              className="px-3 py-2 text-xs text-[var(--color-error)] italic"
+              className="px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] italic"
             >
               Commands unavailable
             </div>
@@ -2723,7 +2723,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   <div
                     role="presentation"
                     className={cn(
-                      'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
+                      'px-3 py-1 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
                       globalIndex === 0
                         ? 'border-b border-[var(--color-border)]'
                         : 'border-t border-[var(--color-border)]',
@@ -2792,7 +2792,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   {item.section === 'agents' && (
                     <div
                       aria-hidden="true"
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
                       style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
                     >
                       {item.agentIcon
@@ -2803,18 +2803,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   {/* Fixed-width label column so descriptions align across rows
                       (a two-column table, not per-row flow). 9.5rem fits the
                       longest current label; truncate guards outliers. */}
-                  <span className="w-[9.5rem] shrink-0 truncate font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
-                  <span className="text-[11px] flex-1 min-w-0 truncate">{item.description}</span>
+                  <span className="w-[9.5rem] shrink-0 truncate font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)]">{item.label}</span>
+                  <span className="text-[length:var(--type-caption-size)] flex-1 min-w-0 truncate">{item.description}</span>
                   {/* FR-014/R3: show argument_hint as muted help text for skills;
                       SD-C7 extends this to `delivery: agent` commands (e.g. /goal, /loop). */}
                   {(item.section === 'skills' || item.section === 'commands') && item.argumentHint && (
-                    <span className="ml-auto text-[10px] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
+                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
                       {item.argumentHint}
                     </span>
                   )}
                   {/* Mirrors AgentPicker's "active" marker (composer/AgentPicker.tsx) */}
                   {item.section === 'agents' && item.isActiveAgent && (
-                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
+                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[length:var(--type-caption-size)]">active</span>
                   )}
                 </button>
                 {/* Deferred item 3: "+N more" footer — rendered right after
@@ -2830,7 +2830,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   <div
                     data-testid="slash-menu-footer"
                     role="presentation"
-                    className="px-3 py-1.5 text-[10px] text-[var(--color-muted)] italic"
+                    className="px-3 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
                   >
                     {/* Cap-footer copy fix (gate 2 LOW): `footerCopy` (declared
                         above, alongside `menuIsRendered`) already accounts for
@@ -2990,7 +2990,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 // ~6px descender line-box gap below the element inside its block
                 // wrapper — the wrapper (not the textarea) is what items-end
                 // aligns, so the gap read as send sitting below the input.
-                'block w-full resize-none bg-transparent px-3 py-2 text-sm text-[var(--color-secondary)] outline-none',
+                'block w-full resize-none bg-transparent px-3 py-2 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none',
                 'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
                 'focus:outline-none focus:ring-0',
                 (!inputEnabled || isStreaming) ? 'opacity-60 cursor-not-allowed' : undefined,
@@ -3048,7 +3048,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             {slashMenu.showGhostText && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 px-3 py-2.5 text-sm leading-6 flex items-start"
+                className="pointer-events-none absolute inset-0 px-3 py-2.5 text-[length:var(--type-body-compact-size)] leading-6 flex items-start"
                 data-testid="ghost-text"
               >
                 <span className="invisible whitespace-pre">{slashMenu.inputValue}</span>
@@ -3087,7 +3087,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   // mid-stream (keeps the row from jumping on morph).
                   'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
                   cancelState.stopLabel === 'stopping'
-                    ? 'px-3 h-9 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
+                    ? 'px-3 h-9 gap-1.5 text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
                     : 'w-9 h-9',
                   isStreaming
                     ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
@@ -3219,7 +3219,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <div
             id="mid-stream-send-hint"
             data-testid="mid-stream-send-hint"
-            className="px-3 pb-1.5 -mt-1 text-[10px] text-[var(--color-muted)]"
+            className="px-3 pb-1.5 -mt-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           >
             Send into the running response
           </div>
@@ -3319,7 +3319,7 @@ function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
           <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)] mb-2">
             Welcome to <Wordmark className="text-2xl" />
           </h1>
-          <p className="text-[var(--color-muted)] text-sm">
+          <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
             {hasAgent
               ? 'Your agent is ready. Start a conversation below.'
               : 'Select an agent in the session bar to get started.'}
@@ -3484,7 +3484,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           data-testid="agent-removed-banner"
           className="px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-2"
         >
-          <span className="text-xs text-[var(--color-error)] flex-1">
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
             Agent removed — this session is read-only
           </span>
         </div>
@@ -3494,7 +3494,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       {attachedSessionType === 'task' && (
         <div className="px-4 py-2 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-2">
           <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-          <span className="text-xs text-[var(--color-secondary)] flex-1 truncate">
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
             Task: {attachedTaskTitle ?? 'Task Execution'}
           </span>
         </div>
@@ -3502,7 +3502,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
 
       {/* History fetch error */}
       {historyError ? (
-        <div className="flex flex-col items-center justify-center flex-1 gap-3 text-sm text-[var(--color-muted)]">
+        <div className="flex flex-col items-center justify-center flex-1 gap-3 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           <p>Could not load messages.</p>
           <Button variant="outline" size="sm" onClick={() => refetchHistory()}>
             <ArrowCounterClockwise size={14} /> Retry

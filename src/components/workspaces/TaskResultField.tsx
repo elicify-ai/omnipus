@@ -48,18 +48,18 @@ export function TaskResultField({ task, occurrence }: TaskResultFieldProps) {
 
   return (
     <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Result</p>
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Result</p>
       <div className={cn('relative', isFailed ? 'ring-1 ring-[var(--color-error)]/30 rounded-md' : undefined)}>
         <pre
           data-testid="task-result-text"
-          className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed"
+          className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed"
         >
           {result}
         </pre>
         <button tabIndex={0}
           type="button"
           onClick={handleCopyResult}
-          className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
+          className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 text-[length:var(--type-caption-size)] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
           aria-label="Copy result"
         >
           <Copy size={11} /> Copy

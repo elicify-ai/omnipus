@@ -81,7 +81,7 @@ function ActivityRow({
     <div
       data-testid="activity-row"
       data-status={item.status}
-      className="text-xs"
+      className="text-[length:var(--type-utility-xs-size)]"
     >
       {/* Mirrors GenericToolCall.tsx's `disabled={!hasDetail}` gate: a
           non-expandable row (bash calls, 3p-agent rows, or a native row with
@@ -132,7 +132,7 @@ function ActivityRow({
               (see JudgeActivityItem's doc comment). */}
           <ul className="space-y-1">
             {item.criterionVerdicts.map((cv, idx) => (
-              <li key={idx} className="flex items-start gap-1.5 text-[10px]">
+              <li key={idx} className="flex items-start gap-1.5 text-[length:var(--type-caption-size)]">
                 {cv.met ? (
                   <Check size={11} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-success)]" aria-hidden="true" />
                 ) : (
@@ -145,14 +145,14 @@ function ActivityRow({
               </li>
             ))}
             {item.criterionVerdicts.length === 0 && (
-              <li className="text-[10px] text-[var(--color-muted)] italic">No per-criterion detail recorded.</li>
+              <li className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No per-criterion detail recorded.</li>
             )}
           </ul>
           {/* Model + agent + spend footer — NFR-5 transparency. Spend is
               deliberately omitted: JudgeVerdictFrame carries no tokens/cost
               field on the wire today (contract gap flagged in this wave's
               report; only the persisted Message twin carries tokens/cost). */}
-          <p className="text-[10px] text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {item.model} · judged by {item.judgeAgentId}
           </p>
         </div>
@@ -170,7 +170,7 @@ function ActivityRow({
             step.kind === 'tool' ? (
               <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} surface="panel" />
             ) : (
-              <p key={idx} className="text-[10px] text-[var(--color-secondary)] font-sans py-0.5">
+              <p key={idx} className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-sans py-0.5">
                 {step.text}
               </p>
             ),
@@ -181,11 +181,11 @@ function ActivityRow({
               treatment (the thread card this replaces at idle/default). */}
           {finalResult && (
             <div className="mt-1">
-              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide font-sans">
+              <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[length:var(--type-caption-size)] uppercase tracking-wide font-sans">
                 {statusDot('bg-[var(--color-success)]')}
                 Final result
               </div>
-              <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">
+              <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">
                 {finalResult}
               </pre>
             </div>
@@ -195,7 +195,7 @@ function ActivityRow({
 
       {show3pNotice && (
         <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1">
-          <p className="text-[10px] text-[var(--color-muted)] italic">No live step detail yet</p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No live step detail yet</p>
         </div>
       )}
     </div>
@@ -220,12 +220,12 @@ export function ActivityPanel({
 
         <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
           {isEmpty && (
-            <p className="text-xs text-[var(--color-muted)] text-center py-6">No background activity yet.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] text-center py-6">No background activity yet.</p>
           )}
 
           {running.length > 0 && (
             <div className="space-y-2">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
+              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
                 Running now
               </h3>
               <div className="space-y-1">
@@ -238,7 +238,7 @@ export function ActivityPanel({
 
           {recentlyFinished.length > 0 && (
             <div className="space-y-2">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
+              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
                 Recently finished
               </h3>
               <div className="space-y-1">

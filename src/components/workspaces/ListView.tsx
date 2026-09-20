@@ -247,7 +247,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
             columns) instead — content can no longer drive column width, so
             the unwidthed Title column always gets exactly "whatever's left"
             and its own `truncate` (see TaskRow below) finally has effect. */}
-        <table className="w-full table-fixed text-sm">
+        <table className="w-full table-fixed text-[length:var(--type-body-compact-size)]">
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
               <th className="w-12 px-4 py-2 text-left" aria-sort={ariaSort('priority')}>
@@ -279,7 +279,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-xs text-[var(--color-muted)]">
+                <td colSpan={7} className="px-4 py-8 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   {anyFilterActive ? 'No tasks match the column filters' : 'No tasks to show'}
                 </td>
               </tr>
@@ -363,7 +363,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
           type="button"
           aria-label={`${label} column — ${affordance}`}
           className={cn(
-            'flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider transition-colors',
+            'flex items-center gap-1 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider transition-colors',
             isSorted || isFiltered
               ? 'text-[var(--color-secondary)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -381,12 +381,12 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
       <DropdownMenuContent align={align === 'right' ? 'end' : 'start'} className="w-48">
         {sort != null && (
           <>
-            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'asc')} className="text-xs">
+            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'asc')} className="text-[length:var(--type-utility-xs-size)]">
               <ArrowUp size={12} className="mr-2 opacity-70" />
               Sort ascending
               {isSorted && sort.activeDir === 'asc' && <Check size={12} className="ml-auto" />}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'desc')} className="text-xs">
+            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'desc')} className="text-[length:var(--type-utility-xs-size)]">
               <ArrowDown size={12} className="mr-2 opacity-70" />
               Sort descending
               {isSorted && sort.activeDir === 'desc' && <Check size={12} className="ml-auto" />}
@@ -398,7 +398,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
           <>
             <div className="max-h-56 overflow-y-auto">
               {filter.values.length === 0 ? (
-                <div className="px-2 py-1.5 text-[11px] text-[var(--color-muted)]">No values</div>
+                <div className="px-2 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No values</div>
               ) : (
                 filter.values.map((v) => (
                   <DropdownMenuCheckboxItem
@@ -408,7 +408,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
                     // Keep the menu open while toggling several values (Radix
                     // closes a checkbox item's menu on select by default).
                     onSelect={(e) => e.preventDefault()}
-                    className="text-xs"
+                    className="text-[length:var(--type-utility-xs-size)]"
                   >
                     {v.label}
                   </DropdownMenuCheckboxItem>
@@ -418,7 +418,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
             {isFiltered && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={filter.onClear} className="text-xs text-[var(--color-muted)]">
+                <DropdownMenuItem onClick={filter.onClear} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   Clear filter
                 </DropdownMenuItem>
               </>
@@ -450,7 +450,7 @@ function TaskRow({
     // actionable). Borderless — separation is padding + hover, not a rule.
     <tr onClick={onClick} className="cursor-pointer transition-colors hover:bg-[var(--color-surface-2)]/40">
       <td className="px-4 py-2.5">
-        <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-bold', badge.className)}>{badge.label}</span>
+        <span className={cn('rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold', badge.className)}>{badge.label}</span>
       </td>
       <td className="px-2 py-2.5">
         <button
@@ -477,7 +477,7 @@ function TaskRow({
           // instead of one that grows to fit the very content it's meant to
           // truncate.
           title={task.title}
-          className="block w-full truncate text-left text-sm text-[var(--color-secondary)]"
+          className="block w-full truncate text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
         >
           {task.title}
         </button>
@@ -486,7 +486,7 @@ function TaskRow({
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"
             (orange), distinct from a genuine "Failed" (red), via the shared
             taskDisplayColor/taskDisplayLabel helpers (statusColors.ts). */}
-        <span className="text-xs font-medium" style={{ color: taskDisplayColor(task) }}>
+        <span className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: taskDisplayColor(task) }}>
           {taskDisplayLabel(task)}
         </span>
       </td>
@@ -497,26 +497,26 @@ function TaskRow({
               <span
                 key={tag}
                 title={tag}
-                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-1 py-0.5 text-[10px] text-[var(--color-accent)]"
+                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-1 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
               >
                 {tag}
               </span>
             ))}
-            {tags.length > 2 && <span className="text-[10px] text-[var(--color-muted)]">+{tags.length - 2}</span>}
+            {tags.length > 2 && <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{tags.length - 2}</span>}
           </div>
         ) : (
-          <span className="text-xs text-[var(--color-muted)]">—</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">—</span>
         )}
       </td>
       <td className="px-2 py-2.5">
         {agentName ? (
-          <span className="block max-w-[5rem] truncate text-xs text-[var(--color-secondary)]">{agentName}</span>
+          <span className="block max-w-[5rem] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{agentName}</span>
         ) : (
-          <span className="text-xs text-[var(--color-muted)]">—</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">—</span>
         )}
       </td>
       <td className="px-4 py-2.5 text-right">
-        <span className="text-[10px] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
       </td>
       {/* ADR-052 §6.8 row action (▶ Play / ■ Stop per task state) — always
           visible (not hover-gated) so it's reachable on touch devices, which

@@ -110,12 +110,12 @@ export function DiagnosticsSection() {
     <section className="space-y-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-wider"
+          <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wider"
             style={{ color: 'var(--color-muted)' }}>
             Security health
           </h3>
           {result && (
-            <p className="text-[10px] mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-[length:var(--type-caption-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>
               Last checked:{' '}
               {new Date(result.checked_at).toLocaleString(undefined, {
                 month: 'short',
@@ -129,7 +129,7 @@ export function DiagnosticsSection() {
         <Button
           size="sm"
           variant="outline"
-          className="h-7 px-3 text-xs gap-1.5 shrink-0"
+          className="h-7 px-3 text-[length:var(--type-utility-xs-size)] gap-1.5 shrink-0"
           onClick={() => doRun()}
           disabled={isRunning}
         >
@@ -164,7 +164,7 @@ export function DiagnosticsSection() {
           }}
         >
           <XCircle size={16} weight="fill" style={{ color: 'var(--color-error)' }} />
-          <p className="text-sm" style={{ color: 'var(--color-error)' }}>
+          <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }}>
             Could not load diagnostics. Click "Check now" to run a security scan.
           </p>
         </div>
@@ -184,7 +184,7 @@ export function DiagnosticsSection() {
                 ) : (
                   <ShieldWarning size={15} weight="fill" style={{ color: securityColor }} />
                 )}
-                <span className="text-sm font-medium" style={{ color: 'var(--color-secondary)' }}>
+                <span className="text-[length:var(--type-body-compact-size)] font-medium" style={{ color: 'var(--color-secondary)' }}>
                   Security Score
                 </span>
               </div>
@@ -192,8 +192,8 @@ export function DiagnosticsSection() {
                 <span className="text-2xl font-headline font-bold" style={{ color: securityColor }}>
                   {result.score}
                 </span>
-                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>/100</span>
-                <span className="text-xs font-semibold ml-1.5" style={{ color: securityColor }}>
+                <span className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>/100</span>
+                <span className="text-[length:var(--type-utility-xs-size)] font-semibold ml-1.5" style={{ color: securityColor }}>
                   {getSecurityLabel(result.score)}
                 </span>
               </div>
@@ -214,10 +214,10 @@ export function DiagnosticsSection() {
                 />
               </div>
               <div className="flex justify-between mt-1">
-                <span className="text-[10px]" style={{ color: 'var(--color-muted)' }}>
+                <span className="text-[length:var(--type-caption-size)]" style={{ color: 'var(--color-muted)' }}>
                   0
                 </span>
-                <span className="text-[10px]" style={{ color: 'var(--color-muted)' }}>
+                <span className="text-[length:var(--type-caption-size)]" style={{ color: 'var(--color-muted)' }}>
                   100
                 </span>
               </div>
@@ -225,7 +225,7 @@ export function DiagnosticsSection() {
 
             {/* US-B4: reassurance message */}
             <p
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
               data-testid="score-reassurance"
               style={{ color: result.score >= 67 ? 'var(--color-success)' : 'var(--color-warning)' }}
             >
@@ -234,17 +234,17 @@ export function DiagnosticsSection() {
 
             {issuesByGroup && (
               <div className="flex items-center gap-4 pt-0.5">
-                <div className="flex items-center gap-1.5 text-xs"
+                <div className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)]"
                   style={{ color: 'var(--color-error)' }}>
                   <XCircle size={11} weight="fill" />
                   {issuesByGroup.high.length} high
                 </div>
-                <div className="flex items-center gap-1.5 text-xs"
+                <div className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)]"
                   style={{ color: 'var(--color-warning)' }}>
                   <Warning size={11} weight="fill" />
                   {issuesByGroup.medium.length} medium
                 </div>
-                <div className="flex items-center gap-1.5 text-xs"
+                <div className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)]"
                   style={{ color: 'var(--color-info)' }}>
                   <Info size={11} weight="fill" />
                   {issuesByGroup.low.length} low
@@ -264,7 +264,7 @@ export function DiagnosticsSection() {
               }}
             >
               <ShieldCheck size={16} weight="fill" style={{ color: 'var(--color-success)' }} />
-              <p className="text-sm" style={{ color: 'var(--color-success)' }}>
+              <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-success)' }}>
                 You're protected — no issues found.
               </p>
             </div>
@@ -281,7 +281,7 @@ export function DiagnosticsSection() {
                       <div className="flex items-center gap-1.5">
                         <cfg.Icon size={11} weight="fill" style={{ color: cfg.color }} />
                         <span
-                          className="text-[10px] font-semibold uppercase tracking-wider"
+                          className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
                           style={{ color: cfg.color }}
                         >
                           {cfg.label} — {sev.length} issue{sev.length !== 1 ? 's' : ''}
@@ -312,10 +312,10 @@ export function DiagnosticsSection() {
         >
           <ShieldWarning size={28} weight="duotone" style={{ color: 'var(--color-muted)' }} />
           <div>
-            <p className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+            <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
               No security scan yet
             </p>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-[length:var(--type-utility-xs-size)] mt-0.5" style={{ color: 'var(--color-muted)' }}>
               Click "Check now" to see your security posture
             </p>
           </div>
@@ -352,7 +352,7 @@ function IssueCard({
       }}
     >
       <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-medium" style={{ color: 'var(--color-secondary)' }}>
+        <p className="text-[length:var(--type-body-compact-size)] font-medium" style={{ color: 'var(--color-secondary)' }}>
           {issue.title}
         </p>
         <CaretRight
@@ -364,18 +364,18 @@ function IssueCard({
 
       {expanded && (
         <div className="space-y-2 mt-2 pt-2">
-          <p className="text-xs leading-relaxed" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed" style={{ color: 'var(--color-muted)' }}>
             {issue.description}
           </p>
           <Separator style={{ opacity: 0.3 }} />
           <div>
             <p
-              className="text-[10px] font-semibold uppercase tracking-wider mb-1"
+              className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider mb-1"
               style={{ color: 'var(--color-muted)' }}
             >
               How to fix this
             </p>
-            <p className="text-xs leading-relaxed" style={{ color: 'var(--color-secondary)' }}>
+            <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed" style={{ color: 'var(--color-secondary)' }}>
               {issue.recommendation}
             </p>
           </div>
@@ -385,7 +385,7 @@ function IssueCard({
               href={issue.action_link}
               onClick={(e) => e.stopPropagation()}
               data-testid={`issue-action-link-${issue.id}`}
-              className="inline-flex items-center gap-1 text-xs font-medium hover:underline underline-offset-2"
+              className="inline-flex items-center gap-1 text-[length:var(--type-utility-xs-size)] font-medium hover:underline underline-offset-2"
               style={{ color: config.color }}
             >
               <CaretRight size={10} />

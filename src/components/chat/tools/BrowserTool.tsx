@@ -169,7 +169,7 @@ export function BrowserToolBlock({
     // Flat text-line design (ticket "Tool components in chat", P2): no
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header — a row of composed controls (mirrors GenericToolCall.tsx):
           the expand/collapse toggle is its own button so "Watch live" can be a
           separate, independently clickable sibling rather than nested inside it. */}
@@ -187,7 +187,7 @@ export function BrowserToolBlock({
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{toolName}</span>
-          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[length:var(--type-caption-size)]">
             {summary}
           </span>
           <span className={cn('text-[var(--color-muted)] shrink-0')}>
@@ -204,7 +204,7 @@ export function BrowserToolBlock({
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
+          className="shrink-0 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
         >
           <Broadcast size={13} />
           <span>Watch live</span>
@@ -225,8 +225,8 @@ export function BrowserToolBlock({
           {/* Args row */}
           {Object.keys(args).length > 0 && (
             <div>
-              <p className="text-[10px] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Args</p>
-              <pre className="text-[10px] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Args</p>
+              <pre className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all">
                 {JSON.stringify(args, null, 2)}
               </pre>
             </div>
@@ -236,13 +236,13 @@ export function BrowserToolBlock({
           {parsed.screenshot && (
             <div className="flex items-center gap-1.5">
               <Camera size={11} className="text-[var(--color-muted)]" />
-              <span className="text-[10px] text-[var(--color-muted)]">Screenshot captured</span>
+              <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Screenshot captured</span>
             </div>
           )}
 
           {/* Text output (browser.get_text) */}
           {parsed.text && !parsed.screenshot && (
-            <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+            <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {String(parsed.text).slice(0, 4000)}
               {String(parsed.text).length > 4000 && (
                 <span className="text-[var(--color-muted)] italic">
@@ -255,8 +255,8 @@ export function BrowserToolBlock({
           {/* JS evaluate result (browser.evaluate) */}
           {parsed.result !== undefined && (
             <div>
-              <p className="text-[10px] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Result</p>
-              <pre className="text-[10px] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-40 overflow-auto">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Result</p>
+              <pre className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-40 overflow-auto">
                 {JSON.stringify(parsed.result, null, 2)}
               </pre>
             </div>
@@ -264,12 +264,12 @@ export function BrowserToolBlock({
 
           {/* Error */}
           {parsed.error && (
-            <div className="text-[var(--color-error)] text-[10px]">{parsed.error}</div>
+            <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)]">{parsed.error}</div>
           )}
 
           {/* Simple OK for click/type/wait when no rich payload */}
           {!parsed.screenshot && !parsed.text && parsed.result === undefined && !parsed.error && (
-            <div className="text-[10px] text-[var(--color-muted)]">
+            <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               {isCancelled ? 'Cancelled' : isError ? 'Failed' : 'OK'}
             </div>
           )}

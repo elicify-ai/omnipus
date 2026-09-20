@@ -34,14 +34,14 @@ const markdownComponents = {
     const isInline = !className
     if (isInline) {
       return (
-        <code className="font-mono text-[11px] bg-[var(--color-surface-2)] px-1.5 py-0.5 rounded text-[var(--color-accent)]">
+        <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-1.5 py-0.5 rounded text-[var(--color-accent)]">
           {children}
         </code>
       )
     }
     return (
       <pre className="bg-[var(--color-surface-2)] rounded-md p-3 overflow-x-auto my-2">
-        <code className="font-mono text-[11px] text-[var(--color-secondary)] block">
+        <code className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)] block">
           {children}
         </code>
       </pre>
@@ -81,7 +81,7 @@ function MessageBubble({ text, isUser }: { text: string; isUser: boolean }) {
   return (
     <div
       className={cn(
-        'rounded-xl px-4 py-3 text-sm leading-relaxed',
+        'rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed',
         isUser
           ? 'bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm'
           : 'bg-transparent text-[var(--color-secondary)] rounded-tl-sm'
@@ -152,7 +152,7 @@ export function MessageItem({ message }: MessageItemProps) {
     }
     return (
       <div className="flex justify-center py-2">
-        <span className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
           {message.content}
         </span>
       </div>
@@ -189,7 +189,7 @@ export function MessageItem({ message }: MessageItemProps) {
           This fixes the "icon misattribution" finding where every assistant
           message showed the same Robot regardless of which agent spoke. */}
       <div
-        className={cn('shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs')}
+        className={cn('shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[length:var(--type-utility-xs-size)]')}
         style={avatarStyle(isUser, agent?.color)}
       >
         {isUser ? (
@@ -207,7 +207,7 @@ export function MessageItem({ message }: MessageItemProps) {
         {!isUser && agentName && (
           <span
             data-testid="agent-label"
-            className="text-[10px] font-medium text-[var(--color-accent)] px-1 capitalize"
+            className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] px-1 capitalize"
           >
             {agentName}
           </span>
@@ -217,7 +217,7 @@ export function MessageItem({ message }: MessageItemProps) {
             text part) — matches the old behavior where "Thinking…" could
             show above already-baked tool call badges. */}
         {showThinking && (
-          <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-transparent text-[var(--color-secondary)] rounded-tl-sm">
+          <div className="rounded-xl px-4 py-3 text-[length:var(--type-body-compact-size)] leading-relaxed bg-transparent text-[var(--color-secondary)] rounded-tl-sm">
             <span className="text-[var(--color-muted)] italic flex items-center gap-2">
               <span className="inline-block w-2 h-2 rounded-full bg-[var(--color-accent)] animate-pulse" />
               Thinking...
@@ -252,14 +252,14 @@ export function MessageItem({ message }: MessageItemProps) {
 
         {/* Footer */}
         <div className="flex items-center gap-3 px-1">
-          <span className="text-[10px] text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {formatTimestamp(message.timestamp)}
           </span>
           {statusSuffix && (
-            <span className="text-[10px] text-[var(--color-muted)] italic">{statusSuffix}</span>
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">{statusSuffix}</span>
           )}
           {message.status === 'error' && (
-            <span className="text-[10px] text-[var(--color-error)]">Error</span>
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">Error</span>
           )}
           {message.role === 'assistant' && <ModelFooter model={message.model} />}
         </div>
@@ -283,7 +283,7 @@ export function MessageItem({ message }: MessageItemProps) {
             <summary
               tabIndex={0}
               className={cn(
-                'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
+                'text-[length:var(--type-caption-size)] text-[var(--color-muted)] cursor-pointer select-none',
                 'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
               )}
             >
@@ -293,7 +293,7 @@ export function MessageItem({ message }: MessageItemProps) {
               className={cn(
                 'mt-1 px-2 py-1.5 rounded-md',
                 'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
-                'font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all',
+                'font-mono text-[length:var(--type-caption-size)] leading-relaxed whitespace-pre-wrap break-all',
                 'max-h-40 overflow-y-auto',
               )}
             >

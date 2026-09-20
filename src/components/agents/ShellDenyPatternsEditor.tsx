@@ -53,7 +53,7 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
     <div className="space-y-2">
       {/* Info banner */}
       <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2">
-        <span className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Patterns matching command text will be blocked. Empty list = no enforcement.
         </span>
       </div>
@@ -66,7 +66,7 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
         rows={6}
         data-testid="shell-deny-patterns-textarea"
         className={[
-          'w-full rounded-md border bg-[var(--color-surface-1)] px-3 py-2 text-xs font-mono',
+          'w-full rounded-md border bg-[var(--color-surface-1)] px-3 py-2 text-[length:var(--type-utility-xs-size)] font-mono',
           'text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]',
           'resize-y focus:outline-none',
           'transition-colors',
@@ -86,7 +86,7 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
           {errorLines.map((l, idx) => (
             <p
               key={idx}
-              className="text-[10px] text-[var(--color-error)] font-mono"
+              className="text-[length:var(--type-caption-size)] text-[var(--color-error)] font-mono"
               data-testid="shell-deny-pattern-error"
             >
               Line &ldquo;{l.raw}&rdquo;: {l.error}

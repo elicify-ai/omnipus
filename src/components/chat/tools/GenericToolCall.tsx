@@ -135,7 +135,7 @@ function ToolResultRefDisplay({
     <div data-testid="result-tool-ref">
       {/* Banner — flat: a warning-tinted left accent stands in for the old
           amber box (ticket "Tool components in chat"); text stays amber. */}
-      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400">
+      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[length:var(--type-caption-size)] text-amber-400">
         <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
         <span>
           Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
@@ -144,21 +144,21 @@ function ToolResultRefDisplay({
 
       {/* Preview */}
       {!data && (
-        <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto mb-1">
+        <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto mb-1">
           {sentinel.preview}
         </pre>
       )}
 
       {/* Full result once fetched */}
       {data !== undefined && (
-        <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-96 overflow-auto mb-1">
+        <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-96 overflow-auto mb-1">
           {safeJson(data)}
         </pre>
       )}
 
       {/* Fetch error */}
       {isError && (
-        <div className="text-[var(--color-error)] text-[10px] font-sans mb-1">
+        <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)] font-sans mb-1">
           Failed to load: {error?.message ?? 'unknown error'}
         </div>
       )}
@@ -169,7 +169,7 @@ function ToolResultRefDisplay({
           type="button"
           onClick={() => setFetchEnabled(true)}
           disabled={isFetching}
-          className="flex items-center gap-1.5 text-[10px] font-sans text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:cursor-wait"
+          className="flex items-center gap-1.5 text-[length:var(--type-caption-size)] font-sans text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:cursor-wait"
         >
           {isFetching ? (
             <ArrowsClockwise size={11} className="animate-spin" />
@@ -192,14 +192,14 @@ function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult 
   return (
     <div data-testid="result-client-truncated">
       {/* Flat: warning-tinted left accent instead of the old amber box; text stays amber. */}
-      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400">
+      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[length:var(--type-caption-size)] text-amber-400">
         <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
         <span>
           Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
           The full result is preserved in the server transcript.
         </span>
       </div>
-      <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+      <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
         {sentinel.preview}
       </pre>
     </div>
@@ -219,7 +219,7 @@ function DelegationFailureDisplay({ failure }: { failure: DelegationFailure }) {
     // box (ticket "Tool components in chat") — icon/label text stay warning-colored.
     <div
       data-testid="result-delegation-denied"
-      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px]"
+      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[length:var(--type-caption-size)]"
       style={{
         borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
       }}
@@ -268,7 +268,7 @@ function PermissionDeniedDisplay({ failure }: { failure: PermissionDenied }) {
   return (
     <div
       data-testid="result-permission-denied"
-      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px]"
+      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[length:var(--type-caption-size)]"
       style={{
         borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
       }}
@@ -457,7 +457,7 @@ export function GenericToolCall({
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread. Separation comes from `mt-2`
     // spacing and the status dot, not a card frame.
-    <div data-testid="tool-call-badge" data-tool={toolName} className="mt-2 text-xs font-mono">
+    <div data-testid="tool-call-badge" data-tool={toolName} className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header row — the toggle button spans the row (flex-1) and owns the
           caret as its last child (ml-auto pushes it to the toggle's own
           right edge), so the caret is inside the clickable toggle and
@@ -504,7 +504,7 @@ export function GenericToolCall({
             onClick={handleWatchLive}
             aria-label="Watch live"
             title="Watch this agent's browser live"
-            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
+            className="shrink-0 flex items-center gap-1 text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
           >
             <Broadcast size={13} />
             <span>Watch live</span>
@@ -519,7 +519,7 @@ export function GenericToolCall({
         <div className="ml-[3px] space-y-2 border-l-2 border-[var(--color-border)] py-1 pl-3">
           <div>
             <div className="text-[var(--color-muted)] mb-1 font-sans">Tool</div>
-            <code className="text-[10px] text-[var(--color-secondary)] break-all">{toolName}</code>
+            <code className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] break-all">{toolName}</code>
           </div>
           {args !== undefined && (
             <div>
@@ -532,7 +532,7 @@ export function GenericToolCall({
                 tabIndex={0}
                 role="region"
                 aria-label="Tool output"
-                className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
               >
                 {safeJson(args)}
               </pre>
@@ -549,7 +549,7 @@ export function GenericToolCall({
               {marshalErr && (
                 <div
                   data-testid="result-marshal-error"
-                  className="flex items-start gap-2 border-l-2 border-[var(--color-error)]/40 pl-2 py-1 mb-1 font-sans text-[10px] text-[var(--color-error)]"
+                  className="flex items-start gap-2 border-l-2 border-[var(--color-error)]/40 pl-2 py-1 mb-1 font-sans text-[length:var(--type-caption-size)] text-[var(--color-error)]"
                 >
                   <XCircle size={12} weight="fill" className="shrink-0 mt-0.5" />
                   <span>Result serialization failed: {marshalErr._marshal_error}</span>
@@ -562,7 +562,7 @@ export function GenericToolCall({
                 <>
                   <div
                     data-testid="result-truncated-banner"
-                    className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400"
+                    className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[length:var(--type-caption-size)] text-amber-400"
                   >
                     <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
                     <span>
@@ -573,7 +573,7 @@ export function GenericToolCall({
                     tabIndex={0}
                     role="region"
                     aria-label="Tool output"
-                    className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                    className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
                   >
                     {truncated.preview}
                   </pre>
@@ -592,7 +592,7 @@ export function GenericToolCall({
               {fileExistsRefusal && (
                 <div
                   data-testid="result-file-exists"
-                  className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px] text-[var(--color-secondary)]"
+                  className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                   style={{ borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)' }}
                 >
                   {fileExistsRefusal.reason}
@@ -606,7 +606,7 @@ export function GenericToolCall({
                   tabIndex={0}
                   role="region"
                   aria-label="Tool output"
-                  className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
                 >
                   {safeJson(plainResult)}
                 </pre>
@@ -615,7 +615,7 @@ export function GenericToolCall({
           )}
 
           {error && (
-            <div className="text-[var(--color-error)] text-[10px] font-sans">{error}</div>
+            <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)] font-sans">{error}</div>
           )}
         </div>
       )}

@@ -253,7 +253,7 @@ function Skeleton() {
 function FieldError({ id, message }: { id: string; message?: string }) {
   if (!message) return null
   return (
-    <p id={id} data-testid={`context-error-${id.replace(/^context-error-/, '')}`} role="alert" className="text-xs mt-1" style={{ color: 'var(--color-error)' }}>
+    <p id={id} data-testid={`context-error-${id.replace(/^context-error-/, '')}`} role="alert" className="text-[length:var(--type-utility-xs-size)] mt-1" style={{ color: 'var(--color-error)' }}>
       {message}
     </p>
   )
@@ -324,7 +324,7 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
   if (isLoading || !form) return <Skeleton />
   if (isError) {
     return (
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 text-sm" style={{ color: 'var(--color-error)' }} role="alert">
+      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }} role="alert">
         <Warning size={14} className="inline mr-1" weight="fill" />
         Could not load context settings: {getErrorMessage(error, 'unknown error')}
       </div>
@@ -385,7 +385,7 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
   }
 
   const inputCls =
-    'w-40 rounded border bg-[var(--color-surface-2)] px-2 py-1 text-sm text-[var(--color-secondary)] focus:outline-none'
+    'w-40 rounded border bg-[var(--color-surface-2)] px-2 py-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] focus:outline-none'
   const borderFor = (key: string) =>
     errors[key] ? 'border-[var(--color-error)]' : 'border-[var(--color-border)]'
 
@@ -396,7 +396,7 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
           <h2 className="font-headline text-lg font-semibold text-[var(--color-secondary)] flex items-center gap-2">
             <Sliders size={18} /> Models
           </h2>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5 leading-relaxed">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5 leading-relaxed">
             Context-window budget: how much of each tool result stays in the conversation, when the window is
             re-checked mid-turn, and which context length each model is assumed to have. Changes apply on the next
             turn — no restart.
@@ -405,23 +405,23 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
       </div>
 
       {bannerError && (
-        <div role="alert" data-testid="context-error-banner" className="rounded border border-[var(--color-error)] px-3 py-2 text-xs" style={{ color: 'var(--color-error)' }}>
+        <div role="alert" data-testid="context-error-banner" className="rounded border border-[var(--color-error)] px-3 py-2 text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-error)' }}>
           {bannerError}
         </div>
       )}
 
       {/* Caps, trigger, ingest bound */}
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-        <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Tool results and limits</h3>
+        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tool results and limits</h3>
         {NUMERIC_FIELDS.map((f) => {
           const id = `context-${f.key.replace(/_/g, '-')}`
           const err = errors[f.key]
           return (
             <div key={f.key} className="space-y-1">
-              <label htmlFor={id} className="text-sm font-medium text-[var(--color-secondary)]">
+              <label htmlFor={id} className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
                 {f.label}
               </label>
-              <p className="text-xs text-[var(--color-muted)] leading-relaxed">{f.description}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">{f.description}</p>
               <div className="flex items-center gap-2">
                 <Input
                   id={id}
@@ -437,7 +437,7 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
                   onChange={(e) => setNumeric(f.key, e.target.value)}
                   className={`${inputCls} ${borderFor(f.key)}`}
                 />
-                <span className="text-xs text-[var(--color-muted)]">{f.unit}</span>
+                <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{f.unit}</span>
               </div>
               <FieldError id={`context-error-${f.key}`} message={err} />
             </div>
@@ -447,8 +447,8 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
 
       {/* Global default window */}
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
-        <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Default context window</h3>
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Default context window</h3>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Used when neither the agent nor a model override sets a context length. It is clamped to what the model
           actually supports. Leave empty to let the provider catalog decide.
         </p>
@@ -467,8 +467,8 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
             onChange={(e) => setNumeric('default_context_window', e.target.value)}
             className={`${inputCls} ${borderFor('default_context_window')}`}
           />
-          <span className="text-xs text-[var(--color-muted)]">tokens</span>
-          <span data-testid="context-default-window-source" className="text-xs text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">tokens</span>
+          <span data-testid="context-default-window-source" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Source: {effectiveSource ? CONTEXT_WINDOW_SOURCE_LABEL[effectiveSource] : 'not set (catalog, live or floor per model)'}
           </span>
         </div>
@@ -479,8 +479,8 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
       <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3" id="model-overrides">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Model overrides</h3>
-            <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Model overrides</h3>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
               Set the context length for a specific provider and model — for endpoints that do not report one, or to
               keep a model below its advertised limit. An override can only lower the effective window, never raise it.
             </p>
@@ -491,7 +491,7 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
         </div>
 
         {form.model_overrides.length === 0 ? (
-          <p data-testid="context-overrides-empty" className="text-xs text-[var(--color-muted)]">
+          <p data-testid="context-overrides-empty" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             No overrides. Every model uses its catalog or live context length.
           </p>
         ) : (

@@ -914,7 +914,7 @@ export function LibraryExplorer({
     <div className={cn('flex h-full flex-col', className)} data-testid="library-explorer">
       {/* Toolbar / breadcrumb row */}
       <div className="flex items-center gap-2 px-3 h-chrome-header min-h-chrome-header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
-        <nav aria-label="Library breadcrumb" className="flex items-center gap-1 min-w-0 flex-1 text-sm overflow-hidden">
+        <nav aria-label="Library breadcrumb" className="flex items-center gap-1 min-w-0 flex-1 text-[length:var(--type-body-compact-size)] overflow-hidden">
           <button
             type="button"
             tabIndex={0}
@@ -973,7 +973,7 @@ export function LibraryExplorer({
           {workspaceId !== null && (
             <label
               htmlFor="library-show-hidden"
-              className="flex items-center gap-1.5 text-xs text-[var(--color-muted)] mr-1 select-none cursor-pointer"
+              className="flex items-center gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mr-1 select-none cursor-pointer"
             >
               <Switch
                 id="library-show-hidden"
@@ -994,7 +994,7 @@ export function LibraryExplorer({
             <span
               title="Folders on your Mac mounted into this workspace"
               data-testid="library-mounts-count"
-              className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-[var(--color-muted)]"
+              className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
@@ -1131,7 +1131,7 @@ export function LibraryExplorer({
               <div
                 role="status"
                 data-testid="library-obsidian-not-imported"
-                className="mt-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-3 py-2 text-xs leading-relaxed text-[var(--color-muted)]"
+                className="mt-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-3 py-2 text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]"
               >
                 This is an Obsidian vault that has not been imported into Omnipus yet. Its notes are
                 indexed and searchable, but record types, records and views stay at zero until the
@@ -1197,8 +1197,8 @@ export function LibraryExplorer({
                       longer wears three different glyphs depending on where
                       it is shown. */}
                   <Buildings size={18} className="text-[var(--color-accent)] shrink-0" />
-                  <span className="flex-1 truncate text-sm text-[var(--color-secondary)]">{node.name}</span>
-                  <span className="text-xs text-[var(--color-muted)] shrink-0">
+                  <span className="flex-1 truncate text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{node.name}</span>
+                  <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] shrink-0">
                     {node.entry_count} item{node.entry_count === 1 ? '' : 's'}
                   </span>
                 </button>
@@ -1560,7 +1560,7 @@ function EmptyState({ icon, message }: { icon: React.ReactNode; message: string 
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-8 text-center text-[var(--color-muted)]">
       {icon}
-      <p className="text-sm">{message}</p>
+      <p className="text-[length:var(--type-body-compact-size)]">{message}</p>
     </div>
   )
 }

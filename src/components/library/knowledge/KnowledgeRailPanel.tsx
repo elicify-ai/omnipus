@@ -78,7 +78,7 @@ export function KnowledgeRailPanelHeader({
           key={q.label}
           data-testid={`${testId}-qualifier`}
           data-qualifier={q.label}
-          className="text-[10px] uppercase tracking-wide text-[var(--color-warning)]"
+          className="text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-warning)]"
         >
           {q.label}
           <span className="sr-only"> — {q.detail}</span>
@@ -88,7 +88,7 @@ export function KnowledgeRailPanelHeader({
   );
 
   const className =
-    "flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-[var(--color-secondary)]";
+    "flex w-full items-center gap-2 px-3 py-2 text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)]";
 
   if (!collapsible) return <h3 className={className}>{body}</h3>;
 

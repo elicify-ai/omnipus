@@ -75,7 +75,7 @@ export const PendingBlocksAction: Story = {
   },
 }
 export const DisabledLinkBlocksAction: Story = {
-  args: { asChild: true, disabled: true, children: <a href="#settings">Settings</a>, onClick: fn() },
+  args: { asChild: true, disabled: true, children: <a href="#settings" tabIndex={0}>Settings</a>, onClick: fn() },
   play: async ({ args, canvasElement }) => {
     const link = within(canvasElement).getByRole('link', { name: 'Settings' })
     await userEvent.click(link)
@@ -123,8 +123,8 @@ function ComposedFormExample() {
   const [resets, setResets] = useState(0)
   return (
     <form aria-label="Composed actions" onSubmit={(event) => { event.preventDefault(); setSubmissions((count) => count + 1) }} onReset={() => setResets((count) => count + 1)}>
-      <input aria-label="Name" defaultValue="Initial" />
-      <Button asChild type="button"><button>Cancel</button></Button>
+      <input aria-label="Name" defaultValue="Initial" tabIndex={0} />
+      <Button asChild type="button"><button tabIndex={0}>Cancel</button></Button>
       <Button asChild type="reset"><button>Reset</button></Button>
       <Button asChild type="submit"><button>Save</button></Button>
       <p data-testid="form-counts">Submissions: {submissions}; Resets: {resets}</p>

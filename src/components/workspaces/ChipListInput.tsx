@@ -74,7 +74,7 @@ export interface ChipListInputProps {
 }
 
 /** Layout shared by every chip variant; appearance comes from `chipClassName`. */
-const CHIP_BASE_CLASS = 'inline-flex items-center gap-1 px-2 py-0.5 text-[10px]'
+const CHIP_BASE_CLASS = 'inline-flex items-center gap-1 px-2 py-0.5 text-[length:var(--type-caption-size)]'
 
 function classes(...parts: (string | undefined)[]): string {
   return parts.filter(Boolean).join(' ')
@@ -145,7 +145,7 @@ export function ChipListInput({
           placeholder={placeholder}
           maxLength={maxLength}
           aria-invalid={!!error}
-          className={classes('text-xs flex-1', inputClassName)}
+          className={classes('text-[length:var(--type-utility-xs-size)] flex-1', inputClassName)}
         />
         <Button
           type="button"
@@ -159,7 +159,7 @@ export function ChipListInput({
           <Plus size={13} />
         </Button>
       </div>
-      {error && <p className="text-xs text-[var(--color-error)]">{error}</p>}
+      {error && <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{error}</p>}
       {values.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-1">
           {values.map((value, index) => (

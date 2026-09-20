@@ -83,7 +83,7 @@ function NoRecordIdMark() {
       data-testid="viewpart-row-no-id"
       title={NO_RECORD_ID_REASON}
       aria-label={NO_RECORD_ID_REASON}
-      className="ml-1.5 rounded border border-[var(--color-border)] px-1 text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
+      className="ml-1.5 rounded border border-[var(--color-border)] px-1 text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]"
     >
       no id
     </span>
@@ -292,7 +292,7 @@ export function TablePart({
               {columns.map((property) => (
                 <th
                   key={property}
-                  className={`border-b border-[var(--color-border)] px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] ${
+                  className={`border-b border-[var(--color-border)] px-3 py-1.5 text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] ${
                     numeric.has(property) ? 'text-right' : 'text-left'
                   }`}
                 >
@@ -395,7 +395,7 @@ function FragmentRows({
             // its own column, so the label claims one anyway rather than an
             // invalid 0.
             colSpan={Math.max(columns.length - 1, 1)}
-            className="border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[11px] text-[var(--color-muted)]"
+            className="border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           >
             Subtotal · {s.property}
             {s.unit !== undefined && ` · ${s.unit}`} · {s.count} {s.count === 1 ? 'row' : 'rows'}
@@ -411,7 +411,7 @@ function FragmentRows({
         <tr data-testid="viewpart-group-excluded">
           <td
             colSpan={columns.length}
-            className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[11px] text-[var(--color-warning)]"
+            className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
           >
             {group.excluded_reason ?? `${group.excluded_count} excluded from this subtotal.`}
           </td>

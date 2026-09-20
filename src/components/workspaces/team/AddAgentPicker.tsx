@@ -102,7 +102,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
         <div
           role="note"
           data-testid="team-add-agent-disclosure"
-          className="flex items-start gap-2 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-2.5 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
+          className="flex items-start gap-2 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-2.5 py-2 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
         >
           <Warning size={13} weight="fill" className="mt-px shrink-0" aria-hidden="true" />
           <span>
@@ -119,12 +119,12 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search agents…"
             data-testid="team-add-agent-search"
-            className="w-full bg-transparent text-sm text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none"
+            className="w-full bg-transparent text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none"
           />
         </div>
         <div className="max-h-64 overflow-y-auto py-1">
           {candidates.length === 0 ? (
-            <p className="px-3 py-4 text-center text-xs text-[var(--color-muted)]">
+            <p className="px-3 py-4 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {query.trim()
                 ? 'No matching agents.'
                 : 'Every agent is already on this team.'}
@@ -143,7 +143,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                 className={resolvedClassName}
               >
                 <div
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-[var(--color-secondary)]"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[length:var(--type-caption-size)] font-bold text-[var(--color-secondary)]"
                   style={{ backgroundColor: a.color ?? 'var(--color-surface-3)' }}
                   aria-hidden="true"
                 >
@@ -155,14 +155,14 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1">
-                    <span className="truncate text-sm font-medium text-[var(--color-secondary)]">
+                    <span className="truncate text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
                       {a.name}
                     </span>
                     {a.default && (
                       <Star size={10} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
                     )}
                   </div>
-                  <span className="block truncate text-[11px] text-[var(--color-muted)]">
+                  <span className="block truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                     {roleLabel(a)}
                     {isWorker(a) ? ' · leaf' : ''}
                   </span>

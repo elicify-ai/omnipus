@@ -132,7 +132,7 @@ function BashOutputBlock({
   )
 
   return (
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-2 text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header row — a single toggle button; there is no sibling action on
           this row (unlike BrowserTool/BrowserNavigate's "Watch live"), so
           the caret lives INSIDE the button and the whole row is one click
@@ -168,7 +168,7 @@ function BashOutputBlock({
                 {isBackground ? 'Running in background...' : 'Executing...'}
               </div>
             ) : (
-              <pre className="px-3 py-2 text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+              <pre className="px-3 py-2 text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
                 {output || <span className="text-[var(--color-muted)] italic">(no output)</span>}
               </pre>
             )}

@@ -62,7 +62,7 @@ export function PhosphorEmojiSpan({
 export function MarkdownImage({ src, alt }: ComponentPropsWithoutRef<'img'>) {
   if (!src || typeof src !== 'string') return null
   if (!isSafeHref(src)) {
-    return alt ? <span className="text-xs text-[var(--color-muted)] italic">[image: {alt}]</span> : null
+    return alt ? <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">[image: {alt}]</span> : null
   }
   return <ChatImage src={src} alt={alt} />
 }
@@ -104,7 +104,7 @@ export function createLinkRenderer(effectivePreview: EffectivePreview) {
 // ── Inline code ───────────────────────────────────────────────────────────────
 export function InlineCode({ children }: { children?: ReactNode }) {
   return (
-    <code className="font-mono text-[11px] bg-[var(--color-surface-2)] px-1.5 py-0.5 rounded text-[var(--color-accent)]">
+    <code className="font-mono text-[length:var(--type-caption-size)] bg-[var(--color-surface-2)] px-1.5 py-0.5 rounded text-[var(--color-accent)]">
       {children}
     </code>
   )
@@ -253,7 +253,7 @@ export const commonMarkdownComponents = {
   // LLM output is frequently hard-wrapped mid-paragraph; preserving that intent reads
   // better than reflowing into one run-on line. Applied to BOTH paths for parity.
   p: ({ children }: { children?: ReactNode }) => (
-    <p className="text-sm leading-relaxed text-[var(--color-secondary)] my-1.5 whitespace-pre-wrap">{children}</p>
+    <p className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)] my-1.5 whitespace-pre-wrap">{children}</p>
   ),
 
   h1: ({ children }: { children?: ReactNode }) => (
@@ -282,7 +282,7 @@ export const commonMarkdownComponents = {
     </ol>
   ),
   li: ({ children }: { children?: ReactNode }) => (
-    <li style={{ display: 'list-item' }} className="text-sm leading-relaxed">
+    <li style={{ display: 'list-item' }} className="text-[length:var(--type-body-compact-size)] leading-relaxed">
       {children}
     </li>
   ),
@@ -300,7 +300,7 @@ export const commonMarkdownComponents = {
 
   table: ({ children }: { children?: ReactNode }) => (
     <div className="overflow-x-auto my-2">
-      <table className="min-w-full text-xs border-collapse">{children}</table>
+      <table className="min-w-full text-[length:var(--type-utility-xs-size)] border-collapse">{children}</table>
     </div>
   ),
   // `style` is forwarded on table cells: remark-gfm encodes column alignment

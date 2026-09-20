@@ -41,13 +41,13 @@ export function TilesPart({
                 <img src={url} alt="" className="h-20 w-full rounded object-cover" loading="lazy" />
               ) : (
                 <div
-                  className="flex h-20 w-full items-center justify-center rounded bg-[var(--color-surface-3)] px-2 text-center text-[10px] text-[var(--color-muted)]"
+                  className="flex h-20 w-full items-center justify-center rounded bg-[var(--color-surface-3)] px-2 text-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                   data-testid="viewpart-tile-placeholder"
                 >
                   {imagePath === '' ? 'No image' : imagePath.split('/').pop()}
                 </div>
               )}
-              <span className="flex items-baseline truncate text-[12px] text-[var(--color-secondary)]">
+              <span className="flex items-baseline truncate text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
                 {row.title}
                 {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
               </span>

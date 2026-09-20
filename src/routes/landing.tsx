@@ -111,7 +111,7 @@ function LandingPage() {
               <CardContent className="flex flex-col gap-4 pt-6">
                 <Icon size={32} weight="duotone" className="text-[var(--color-accent)]" />
                 <h3 className="font-headline text-lg font-bold">{title}</h3>
-                <p className="text-[var(--color-muted)] text-sm leading-relaxed">{description}</p>
+                <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)] leading-relaxed">{description}</p>
               </CardContent>
             </Card>
           ))}
@@ -125,7 +125,7 @@ function LandingPage() {
             <img src={OmnipusAvatar} alt="Omnipus" className="h-8 w-8" />
             <Wordmark />
           </div>
-          <div className="flex items-center gap-6 text-sm text-[var(--color-muted)]">
+          <div className="flex items-center gap-6 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             <a tabIndex={0}
               href="https://github.com/omnipus-ai/omnipus"
               target="_blank"
@@ -144,7 +144,7 @@ function LandingPage() {
               Documentation
             </a>
           </div>
-          <p className="text-sm text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             &copy; {new Date().getFullYear()} Omnipus. MIT License.
           </p>
         </div>

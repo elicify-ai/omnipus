@@ -52,7 +52,7 @@ const DECISION_STYLES: Record<string, string> = {
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 const BADGE_FALLBACK = 'border-zinc-700 bg-zinc-800 text-zinc-400'
-const BADGE_BASE = 'inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium'
+const BADGE_BASE = 'inline-flex items-center rounded-full border px-2 py-0.5 text-[length:var(--type-utility-xs-size)] font-medium'
 
 function EventBadge({ event }: { event: string }) {
   const eventStyle = EVENT_STYLES[event] ?? BADGE_FALLBACK
@@ -60,7 +60,7 @@ function EventBadge({ event }: { event: string }) {
 }
 
 function DecisionBadge({ decision }: { decision?: string }) {
-  if (!decision) return <span className="text-xs text-[var(--color-muted)]">&mdash;</span>
+  if (!decision) return <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">&mdash;</span>
   const decisionStyle = DECISION_STYLES[decision] ?? BADGE_FALLBACK
   return <span className={`${BADGE_BASE} ${decisionStyle}`}>{decision}</span>
 }
@@ -88,10 +88,10 @@ function hasNonEmpty(obj?: Record<string, unknown>): boolean {
 function JsonBlock({ label, value }: { label: string; value: Record<string, unknown> }) {
   return (
     <div className="space-y-1">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         {label}
       </p>
-      <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-[11px] font-mono text-[var(--color-secondary)] overflow-auto max-h-32 whitespace-pre-wrap break-all">
+      <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] overflow-auto max-h-32 whitespace-pre-wrap break-all">
         {JSON.stringify(value, null, 2)}
       </pre>
     </div>
@@ -127,7 +127,7 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
   return (
     <>
       <TableRow>
-        <TableCell className="whitespace-nowrap text-xs font-mono text-[var(--color-muted)]">
+        <TableCell className="whitespace-nowrap text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)]">
           <div className="flex items-center gap-1.5">
             {hasDetail ? (
               <button tabIndex={0}
@@ -151,16 +151,16 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
         <TableCell>
           <EventBadge event={entry.event} />
         </TableCell>
-        <TableCell className="text-xs font-mono text-[var(--color-secondary)] max-w-[120px] truncate">
+        <TableCell className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] max-w-[120px] truncate">
           {entry.agent_id ?? <span className="text-[var(--color-muted)]">—</span>}
         </TableCell>
-        <TableCell className="text-xs font-mono text-[var(--color-secondary)] max-w-[140px] truncate">
+        <TableCell className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] max-w-[140px] truncate">
           {entry.tool ?? <span className="text-[var(--color-muted)]">—</span>}
         </TableCell>
         <TableCell>
           <DecisionBadge decision={entry.decision} />
         </TableCell>
-        <TableCell className="text-xs text-[var(--color-muted)] max-w-[140px] truncate">
+        <TableCell className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] max-w-[140px] truncate">
           {entry.policy_rule ?? <span className="text-[var(--color-muted)]">—</span>}
         </TableCell>
       </TableRow>
@@ -170,16 +170,16 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
             <div className="space-y-3 pl-4 border-l-2 border-[var(--color-border)]">
               {entry.command && (
                 <div className="space-y-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Command</p>
-                  <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-[11px] font-mono text-[var(--color-secondary)] overflow-auto max-h-20 whitespace-pre-wrap break-all">
+                  <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Command</p>
+                  <pre className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] overflow-auto max-h-20 whitespace-pre-wrap break-all">
                     {entry.command}
                   </pre>
                 </div>
               )}
               {entry.policy_rule && (
                 <div className="space-y-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Policy Rule</p>
-                  <p className="text-xs font-mono text-[var(--color-secondary)]">{entry.policy_rule}</p>
+                  <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Policy Rule</p>
+                  <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{entry.policy_rule}</p>
                 </div>
               )}
               {/* D20: security_setting_change shape (pkg/audit.SecurityChangeRecord) —
@@ -187,14 +187,14 @@ function AuditRow({ entry }: { entry: AuditEntry }) {
                   tool-call shape above. */}
               {entry.actor && (
                 <div className="space-y-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Actor</p>
-                  <p className="text-xs font-mono text-[var(--color-secondary)]">{entry.actor}</p>
+                  <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Actor</p>
+                  <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{entry.actor}</p>
                 </div>
               )}
               {entry.resource && (
                 <div className="space-y-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Resource</p>
-                  <p className="text-xs font-mono text-[var(--color-secondary)]">{entry.resource}</p>
+                  <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Resource</p>
+                  <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{entry.resource}</p>
                 </div>
               )}
               {hasNonEmpty(entry.parameters) && (
@@ -308,7 +308,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
             <DialogTitle className="font-headline text-base">Audit Log</DialogTitle>
             <ChainStatusBadge status={auditLog?.chain_status} brokenIndex={auditLog?.chain_broken_index ?? undefined} />
             {isFetching && !isLoading && (
-              <span className="text-xs text-[var(--color-muted)] ml-1">Refreshing...</span>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] ml-1">Refreshing...</span>
             )}
           </div>
         </DialogHeader>
@@ -333,7 +333,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 gap-1.5 text-xs ml-auto"
+            className="h-7 px-2 gap-1.5 text-[length:var(--type-utility-xs-size)] ml-auto"
             onClick={handleRefresh}
             disabled={isFetching}
           >
@@ -356,7 +356,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
             </div>
           ) : isError ? (
             <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-              <p className="text-sm text-red-400">
+              <p className="text-[length:var(--type-body-compact-size)] text-red-400">
                 Failed to load audit log{error instanceof Error ? `: ${error.message}` : '.'}
               </p>
               <Button variant="outline" size="sm" onClick={handleRefresh}>
@@ -367,8 +367,8 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
               <ListBullets size={28} weight="duotone" style={{ color: 'var(--color-muted)' }} />
-              <p className="text-sm text-[var(--color-secondary)]">No audit entries found</p>
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">No audit entries found</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 {entries.length > 0
                   ? 'Try adjusting your filters'
                   : 'Audit events will appear here as agents run'}
@@ -397,7 +397,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
 
         {/* Footer — entry count */}
         {!isLoading && !isError && entries.length > 0 && (
-          <div className="flex-none px-5 py-2.5 border-t border-[var(--color-border)] text-[10px] text-[var(--color-muted)]">
+          <div className="flex-none px-5 py-2.5 border-t border-[var(--color-border)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             Showing {filtered.length} of {entries.length} {entries.length === 1 ? 'entry' : 'entries'} — auto-refreshes every 30s
           </div>
         )}

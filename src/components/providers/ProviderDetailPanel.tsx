@@ -280,7 +280,7 @@ export function ProviderDetailPanel({
       className="flex flex-col gap-3 rounded-md border p-3"
       style={{ borderColor: 'var(--color-border)' }}
     >
-      <h3 className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+      <h3 className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
         {company.company}
       </h3>
 
@@ -289,7 +289,7 @@ export function ProviderDetailPanel({
         <div className="flex flex-col gap-1">
           <span
             id={planGroupLabelId}
-            className="text-xs uppercase"
+            className="text-[length:var(--type-utility-xs-size)] uppercase"
             style={{ color: 'var(--color-muted)' }}
           >
             Plan
@@ -308,7 +308,7 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-plan-${value || 'standard'}`}
                 aria-pressed={plan === value}
                 onClick={() => setPlan(value)}
-                className="min-h-[32px] rounded border px-3 text-sm"
+                className="min-h-[32px] rounded border px-3 text-[length:var(--type-body-compact-size)]"
                 style={{
                   borderColor: 'var(--color-border)',
                   color: 'var(--color-secondary)',
@@ -328,7 +328,7 @@ export function ProviderDetailPanel({
           <span
             id={regionGroupLabelId}
             data-testid={`${testId}-region-copy`}
-            className="text-xs"
+            className="text-[length:var(--type-utility-xs-size)]"
             style={{ color: 'var(--color-muted)' }}
           >
             {inference.copy}
@@ -347,7 +347,7 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-region-${value}`}
                 aria-pressed={region === value}
                 onClick={() => setRegion(value)}
-                className="min-h-[32px] rounded border px-3 text-sm"
+                className="min-h-[32px] rounded border px-3 text-[length:var(--type-body-compact-size)]"
                 style={{
                   borderColor: 'var(--color-border)',
                   color: 'var(--color-secondary)',
@@ -379,13 +379,13 @@ export function ProviderDetailPanel({
             // LOCAL_PROVIDER_CREDENTIAL stands in on `selection.apiKey`.
             <p
               data-testid={`${testId}-no-key-needed`}
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
               style={{ color: 'var(--color-muted)' }}
             >
               Runs on your machine — no API key needed.
             </p>
           ) : (
-            <label className="flex flex-col gap-1 text-xs" htmlFor={`${testId}-api-key-input`}>
+            <label className="flex flex-col gap-1 text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-key-input`}>
               API key
               <input
                 id={`${testId}-api-key-input`}
@@ -394,7 +394,7 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-api-key-input`}
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                className="min-h-[32px] rounded border px-2 text-sm"
+                className="min-h-[32px] rounded border px-2 text-[length:var(--type-body-compact-size)]"
                 style={{ borderColor: 'var(--color-border)' }}
               />
             </label>
@@ -408,7 +408,7 @@ export function ProviderDetailPanel({
           tabIndex={0}
           data-testid={`${testId}-continue`}
           onClick={() => onConfirm?.(selection)}
-          className="min-h-[32px] rounded border px-3 text-sm"
+          className="min-h-[32px] rounded border px-3 text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
         >
           Continue
@@ -419,7 +419,7 @@ export function ProviderDetailPanel({
             tabIndex={0}
             data-testid={`${testId}-cancel`}
             onClick={onCancel}
-            className="min-h-[32px] rounded px-3 text-sm"
+            className="min-h-[32px] rounded px-3 text-[length:var(--type-body-compact-size)]"
           >
             Cancel
           </button>

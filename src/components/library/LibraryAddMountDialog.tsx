@@ -246,7 +246,7 @@ export function LibraryAddMountDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
-          <label htmlFor="mount-path" className="text-xs uppercase tracking-wide text-[var(--color-muted)]">
+          <label htmlFor="mount-path" className="text-[length:var(--type-utility-xs-size)] uppercase tracking-wide text-[var(--color-muted)]">
             Folder on your Mac
           </label>
           <Input
@@ -258,13 +258,13 @@ export function LibraryAddMountDialog({
               setBroadAcknowledged(false)
             }}
             placeholder="/Users/you/Documents/projects/my-repo"
-            className="font-mono text-sm"
+            className="font-mono text-[length:var(--type-body-compact-size)]"
             data-testid="library-add-mount-path"
           />
 
           {selected?.mountable === false && (
             <p
-              className="flex items-start gap-2 text-sm text-[var(--color-error)]"
+              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
               data-testid="library-add-mount-refused"
             >
               <Prohibit size={16} className="mt-0.5 shrink-0" />
@@ -273,7 +273,7 @@ export function LibraryAddMountDialog({
           )}
           {selected?.broad && selected.mountable !== false && (
             <p
-              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-add-mount-broad"
             >
               <Warning size={16} className="mt-0.5 shrink-0" />
@@ -281,7 +281,7 @@ export function LibraryAddMountDialog({
             </p>
           )}
           {selected && selected.mountable && !selected.broad && (
-            <p className="flex items-start gap-2 text-sm text-[var(--color-success)]">
+            <p className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-success)]">
               <CheckCircle size={16} className="mt-0.5 shrink-0" />
               Scoped to this folder and what is inside it.
             </p>
@@ -293,7 +293,7 @@ export function LibraryAddMountDialog({
               answers that must never live in a toast. */}
           {showRefusal && (
             <p
-              className="flex items-start gap-2 text-sm text-[var(--color-error)]"
+              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
               data-testid="library-add-mount-dialog-refused"
             >
               <Prohibit size={16} className="mt-0.5 shrink-0" />
@@ -302,7 +302,7 @@ export function LibraryAddMountDialog({
           )}
           {showingCreatedWarning && (
             <p
-              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
               data-testid="library-add-mount-dialog-broad"
             >
               <Warning size={16} className="mt-0.5 shrink-0" />
@@ -314,7 +314,7 @@ export function LibraryAddMountDialog({
             <Button type="button" variant="outline" size="sm" onClick={toggleBrowse}>
               {browsing ? 'Hide browser' : 'Browse…'}
             </Button>
-            <span className="text-xs text-[var(--color-muted)]">
+            <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               A web page cannot open the Mac folder picker, so Omnipus lists your folders instead.
             </span>
           </div>
@@ -332,16 +332,16 @@ export function LibraryAddMountDialog({
                 >
                   <CaretUp size={14} />
                 </Button>
-                <span className="truncate font-mono text-xs text-[var(--color-muted)]">
+                <span className="truncate font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   {listing?.path ?? '…'}
                 </span>
                 {loading && <SpinnerGap size={14} className="animate-spin ml-auto" />}
               </div>
 
               <div className="max-h-56 overflow-y-auto" data-testid="library-add-mount-browser">
-                {listError && <p className="p-3 text-sm text-[var(--color-error)]">{listError}</p>}
+                {listError && <p className="p-3 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">{listError}</p>}
                 {!listError && listing?.entries.length === 0 && (
-                  <p className="p-3 text-sm text-[var(--color-muted)]">No folders here.</p>
+                  <p className="p-3 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No folders here.</p>
                 )}
                 {listing?.entries.map((entry) => (
                   <button
@@ -354,7 +354,7 @@ export function LibraryAddMountDialog({
                       if (entry.mountable) void load(entry.path)
                     }}
                     data-testid={`library-add-mount-row-${entry.name}`}
-                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-2)] ${
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[length:var(--type-body-compact-size)] border-b border-[var(--color-border)] last:border-b-0 hover:bg-[var(--color-surface-2)] ${
                       path === entry.path ? 'bg-[var(--color-surface-3)]' : ''
                     }`}
                   >
@@ -371,12 +371,12 @@ export function LibraryAddMountDialog({
                       {entry.name}
                     </span>
                     {entry.mountable === false && (
-                      <span className="ml-auto text-[11px] text-[var(--color-error)]">
+                      <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-error)]">
                         Omnipus data — cannot mount
                       </span>
                     )}
                     {entry.mountable !== false && entry.broad && (
-                      <span className="ml-auto text-[11px] text-[var(--color-warning)]">broad</span>
+                      <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-warning)]">broad</span>
                     )}
                   </button>
                 ))}
@@ -385,7 +385,7 @@ export function LibraryAddMountDialog({
           )}
 
           {showServerError && (
-            <p className="text-sm text-[var(--color-error)]" data-testid="library-add-mount-error">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]" data-testid="library-add-mount-error">
               {error}
             </p>
           )}

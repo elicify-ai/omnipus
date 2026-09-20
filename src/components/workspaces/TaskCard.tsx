@@ -255,7 +255,7 @@ export function TaskCard({
       <div className="flex items-start gap-2">
         <span
           className={cn(
-            'flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight mt-0.5',
+            'flex-shrink-0 rounded px-1.5 py-0.5 text-[length:var(--type-caption-size)] font-bold leading-tight mt-0.5',
             badge.className,
           )}
         >
@@ -280,7 +280,7 @@ export function TaskCard({
             tooltip below carrying the full text) — wrap-anywhere just makes
             sure that clamp actually happens within the card's own width. */}
         <p
-          className="min-w-0 flex-1 text-sm font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-6"
+          className="min-w-0 flex-1 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-6"
           title={task.title}
         >
           {task.title}
@@ -294,7 +294,7 @@ export function TaskCard({
       {task.status === 'failed' && (
         <div className="mt-2 flex items-center gap-1.5">
           <span
-            className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+            className="rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-semibold"
             style={{ color: taskDisplayColor(task), backgroundColor: `${taskDisplayColor(task)}1a` }}
           >
             {taskDisplayLabel(task)}
@@ -304,7 +304,7 @@ export function TaskCard({
 
       {/* Todos checklist progress */}
       {todos.length > 0 && (
-        <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-muted)]">
+        <div className="mt-2 flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <CheckSquare size={11} />
           <span>{doneTodos}/{todos.length}</span>
         </div>
@@ -318,7 +318,7 @@ export function TaskCard({
       {/* Bottom row: agent badge */}
       {(task.agent_name || task.agent_id) && (
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-          <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]">
+          <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {task.agent_name ?? task.agent_id}
           </span>
         </div>
@@ -330,7 +330,7 @@ export function TaskCard({
       {task.assignee_warning && (
         <p
           data-testid="task-assignee-warning"
-          className="mt-2 flex items-start gap-1.5 text-[10px] leading-snug text-[color:var(--color-warning)]"
+          className="mt-2 flex items-start gap-1.5 text-[length:var(--type-caption-size)] leading-snug text-[color:var(--color-warning)]"
         >
           <WarningCircle size={11} weight="bold" className="mt-px flex-shrink-0" aria-hidden="true" />
           <span>{task.assignee_warning.message}</span>
@@ -345,13 +345,13 @@ export function TaskCard({
             <span
               key={tag}
               title={tag}
-              className="max-w-[100px] truncate rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 px-2 py-0.5 text-[10px] text-[var(--color-accent)]"
+              className="max-w-[100px] truncate rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 px-2 py-0.5 text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
             >
               {tag}
             </span>
           ))}
           {overflowTagCount > 0 && (
-            <span className="text-[10px] text-[var(--color-muted)]">+{overflowTagCount}</span>
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{overflowTagCount}</span>
           )}
         </div>
       )}
@@ -362,7 +362,7 @@ export function TaskCard({
         <div className="mt-2 flex items-center gap-1.5">
           <span
             className={cn(
-              'rounded-full px-2 py-0.5 text-[10px] font-medium',
+              'rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium',
               planPaused
                 ? 'bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                 : 'bg-[var(--color-surface-2)] text-[var(--color-muted)]',

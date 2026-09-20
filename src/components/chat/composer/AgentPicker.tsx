@@ -200,11 +200,11 @@ export function AgentPicker({
   if (hasHardError) {
     return (
       <div className={cn('flex items-center gap-2 px-2 min-w-0', className)}>
-        <span className="text-xs text-[var(--color-error)] truncate">Could not load agents</span>
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] truncate">Could not load agents</span>
         <Button
           variant="ghost"
           size="sm"
-          className="h-6 px-2 text-[10px] shrink-0"
+          className="h-6 px-2 text-[length:var(--type-caption-size)] shrink-0"
           onClick={() => refetch()}
         >
           Retry
@@ -235,7 +235,7 @@ export function AgentPicker({
         disabled
         tabIndex={tabIndex}
         className={cn(
-          'flex items-center gap-1.5 h-7 px-1.5 text-xs font-medium max-w-[200px] min-w-0',
+          'flex items-center gap-1.5 h-7 px-1.5 text-[length:var(--type-utility-xs-size)] font-medium max-w-[200px] min-w-0',
           className,
         )}
         title={`This session belongs to ${lockedWorkerAgent.name} — the agent cannot be changed for a worker session.`}
@@ -247,7 +247,7 @@ export function AgentPicker({
             readers' browse mode from reading out a stray character. */}
         <div
           aria-hidden="true"
-          className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+          className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
           style={{ backgroundColor: lockedWorkerAgent.color ?? 'var(--color-surface-3)' }}
         >
           {lockedWorkerAgent.icon
@@ -263,7 +263,7 @@ export function AgentPicker({
   if (isDraftOnly) {
     return (
       <div className={cn('flex items-center gap-2 px-2 min-w-0', className)}>
-        <span className="text-xs text-[var(--color-muted)] truncate">
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">
           All agents are in draft status. Configure an agent to start chatting.
         </span>
       </div>
@@ -302,7 +302,7 @@ export function AgentPicker({
             // Compact everywhere — deliberately NO pointer-coarse:min-h-[44px]:
             // on touch devices the 44px floor inflated the control (operator
             // wants the composer context row genuinely compact).
-            'flex items-center gap-1.5 h-7 px-1.5 text-xs font-medium max-w-[200px] min-w-0',
+            'flex items-center gap-1.5 h-7 px-1.5 text-[length:var(--type-utility-xs-size)] font-medium max-w-[200px] min-w-0',
             className,
           )}
           title={activeAgent?.description || activeAgent?.name || 'Select agent'}
@@ -323,7 +323,7 @@ export function AgentPicker({
               "Select agent (current: X)" label. */}
           <div
             aria-hidden="true"
-            className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+            className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
             style={{ backgroundColor: activeAgent?.color ?? 'var(--color-surface-3)' }}
           >
             {activeAgent
@@ -351,7 +351,7 @@ export function AgentPicker({
                 the agent name text next to it, not the decorative initial. */}
             <div
               aria-hidden="true"
-              className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+              className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
               style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
             >
               {agent.icon
@@ -360,7 +360,7 @@ export function AgentPicker({
             </div>
             <span className="truncate">{agent.name}</span>
             {agent.id === effectiveAgentId && (
-              <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
+              <span className="ml-auto shrink-0 text-[var(--color-success)] text-[length:var(--type-caption-size)]">active</span>
             )}
           </DropdownMenuItem>
         ))}

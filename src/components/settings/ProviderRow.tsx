@@ -143,7 +143,7 @@ function ModelLimitLine({ providerId, row }: { providerId: string; row: ModelLim
       data-testid={`model-limit-row-${providerId}-${row.id}`}
     >
       <span
-        className="text-xs font-mono text-[var(--color-secondary)] min-w-0 truncate"
+        className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] min-w-0 truncate"
         data-testid={`model-limit-id-${providerId}-${row.id}`}
       >
         {row.name ?? row.id}
@@ -161,7 +161,7 @@ function ModelLimitLine({ providerId, row }: { providerId: string; row: ModelLim
           limits unknown
         </Badge>
       )}
-      <div className="flex flex-wrap items-center gap-x-2 text-xs text-[var(--color-muted)]">
+      <div className="flex flex-wrap items-center gap-x-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         {row.windowUnknown ? (
           <>
             <span data-testid={`model-limit-window-${providerId}-${row.id}`}>{NO_CONTEXT_LENGTH_COPY}</span>
@@ -422,7 +422,7 @@ export function ProviderRow({
               onClick={() => setExpanded((v) => !v)}
               aria-expanded={expanded}
               aria-controls={`model-limits-${provider.id}`}
-              className="flex items-center gap-1 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+              className="flex items-center gap-1 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
               data-testid={`provider-row-expand-toggle-${provider.id}`}
             >
               <CaretDown
@@ -452,17 +452,17 @@ export function ProviderRow({
             )}
           </div>
           {subtitle && (
-            <p className="text-xs text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
               {subtitle}
             </p>
           )}
           {provider.models && provider.models.length > 0 && (
-            <p className="text-xs text-[var(--color-muted)] mt-0.5 font-mono">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5 font-mono">
               {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}
             </p>
           )}
           {provider.error && (
-            <p className="text-xs text-[var(--color-error)] mt-0.5">{provider.error}</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-0.5">{provider.error}</p>
           )}
         </div>
 
@@ -473,7 +473,7 @@ export function ProviderRow({
               type="button"
               onClick={onCheckEntitlement}
               disabled={checkingEntitlement}
-              className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
+              className="flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
               data-testid={`check-entitlement-btn-${provider.id}`}
             >
               {checkingEntitlement ? (
@@ -486,7 +486,7 @@ export function ProviderRow({
             <button tabIndex={0}
               type="button"
               onClick={onSetAsDefault}
-              className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
               data-testid={`set-default-btn-${provider.id}`}
             >
               Set as default model…
@@ -498,7 +498,7 @@ export function ProviderRow({
               variant={signInActionLabel(provider.status) === 'Manage' ? 'outline' : 'default'}
               onClick={handleSignInAction}
               disabled={signingIn}
-              className="h-7 px-3 text-xs"
+              className="h-7 px-3 text-[length:var(--type-utility-xs-size)]"
               data-testid={
                 signInActionLabel(provider.status) === 'Manage'
                   ? `manage-btn-${provider.id}`
@@ -511,7 +511,7 @@ export function ProviderRow({
             <Button
               size="sm"
               onClick={onConfigure}
-              className="h-7 px-3 text-xs"
+              className="h-7 px-3 text-[length:var(--type-utility-xs-size)]"
               data-testid={`configure-btn-${provider.id}`}
             >
               {connected ? 'Edit' : (
@@ -528,7 +528,7 @@ export function ProviderRow({
         <p
           role="alert"
           aria-live="assertive"
-          className="px-4 pb-2 text-xs text-[var(--color-error)]"
+          className="px-4 pb-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
           data-testid={`entitlement-error-${provider.id}`}
         >
           {entitlementError}
@@ -549,7 +549,7 @@ export function ProviderRow({
               <ModelLimitLine key={row.id} providerId={provider.id} row={row} />
             ))
           ) : (
-            <p className="text-xs text-[var(--color-muted)] py-1.5" data-testid={`model-limits-empty-${provider.id}`}>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] py-1.5" data-testid={`model-limits-empty-${provider.id}`}>
               No catalog data available for this provider.
             </p>
           )}

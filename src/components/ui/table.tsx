@@ -34,7 +34,7 @@ const Table = React.forwardRef<HTMLTableElement, TableProps>(
       >
         <table
           ref={ref}
-          className={cn('w-full caption-bottom text-sm', className)}
+          className={cn('w-full caption-bottom text-[length:var(--type-body-compact-size)]', className)}
           {...props}
         />
       </div>
@@ -76,7 +76,7 @@ const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttributes<
     <th
       ref={ref}
       className={cn(
-        'h-10 px-4 text-left align-middle text-xs font-medium text-[var(--color-muted)] [&:has([role=checkbox])]:pr-0',
+        'h-10 px-4 text-left align-middle text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] [&:has([role=checkbox])]:pr-0',
         className
       )}
       {...props}

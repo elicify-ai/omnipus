@@ -130,7 +130,7 @@ export interface VideoEmbedProps {
 }
 
 const PANEL_BASE =
-  'flex w-full flex-col items-center justify-center gap-2 rounded-md border p-6 text-center text-xs'
+  'flex w-full flex-col items-center justify-center gap-2 rounded-md border p-6 text-center text-[length:var(--type-utility-xs-size)]'
 
 /** UAT D-41: the plain link an author wrote, restored when its host is not
  *  permitted for playback here — with the reason beside it, never hidden. */
@@ -147,7 +147,7 @@ function RefusedLinkFallback({ url, title, note }: { url: string; title?: string
       >
         {title && title.trim() !== '' ? title : url}
       </a>
-      <span className="ml-1 text-[11px] text-[var(--color-muted)]">({note})</span>
+      <span className="ml-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">({note})</span>
     </span>
   )
 }
@@ -192,7 +192,7 @@ export function VideoEmbed({ url, title, authoredAsLink = false }: VideoEmbedPro
           tabIndex={0}
           type="button"
           onClick={() => void appStateQuery.refetch()}
-          className="text-[11px] underline underline-offset-2"
+          className="text-[length:var(--type-caption-size)] underline underline-offset-2"
         >
           Retry
         </button>
@@ -295,7 +295,7 @@ export function VideoEmbed({ url, title, authoredAsLink = false }: VideoEmbedPro
           <PlayCircle size={56} weight="fill" />
         </button>
         {title !== undefined && title !== '' && (
-          <span className="absolute bottom-2 left-1/2 max-w-[90%] -translate-x-1/2 truncate text-[11px] text-[var(--color-muted)]">
+          <span className="absolute bottom-2 left-1/2 max-w-[90%] -translate-x-1/2 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {title}
           </span>
         )}

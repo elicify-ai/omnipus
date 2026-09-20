@@ -149,7 +149,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           aria-selected={settingsActive}
           data-testid="workspace-name-button"
           className={cn(
-            'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-sm font-headline whitespace-nowrap outline-none transition-colors',
+            'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors',
             ' rounded-t-sm',
             settingsActive
               ? 'text-[var(--color-accent)]'
@@ -187,7 +187,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 // root to 14px), leaving the underline ~5px high. NOT h-full either:
                 // the parent header uses items-center, so height:100% resolves to
                 // auto (no-op) and the underline would float mid-header.
-                'group relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header text-sm font-headline whitespace-nowrap outline-none transition-colors',
+                'group relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors',
                 ' rounded-t-sm',
                 isActive
                   ? 'text-[var(--color-accent)]'
@@ -217,7 +217,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               data-testid="workspace-view-switcher"
               aria-label={`Switch view, currently ${SEGMENT_LABELS[activeSegment]}`}
               className={cn(
-                'flex items-center gap-1.5 px-3 h-11 text-sm font-headline whitespace-nowrap rounded-md',
+                'flex items-center gap-1.5 px-3 h-11 text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap rounded-md',
                 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors',
                 ' outline-none',
                 'pointer-coarse:min-h-[44px]',
@@ -251,7 +251,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               <Buildings size={15} weight={settingsActive ? 'fill' : 'regular'} />
               <span>{SEGMENT_LABELS.settings}</span>
               {settingsActive && (
-                <span className="ml-auto text-[10px] text-[var(--color-accent)]" aria-hidden="true">
+                <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">
                   ●
                 </span>
               )}
@@ -276,7 +276,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                   <Icon size={15} weight={isActive ? 'fill' : 'regular'} />
                   <span>{label}</span>
                   {isActive && (
-                    <span className="ml-auto text-[10px] text-[var(--color-accent)]" aria-hidden="true">
+                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">
                       ●
                     </span>
                   )}

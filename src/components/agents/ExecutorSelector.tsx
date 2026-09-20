@@ -112,7 +112,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
   return (
     <div className="space-y-3" data-testid="executor-selector">
       <div className="space-y-1.5">
-        <label htmlFor="executor-kind" className="text-xs text-[var(--color-muted)]">
+        <label htmlFor="executor-kind" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Runtime
         </label>
         <Select
@@ -150,7 +150,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
             })}
           </SelectContent>
         </Select>
-        <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
           {kind === 'native'
             ? 'Runs the sub-agent inside the Omnipus agent loop. The default and only fully-wired runtime.'
             : kind === 'external-cli'
@@ -161,7 +161,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
 
       {kind === 'external-cli' && (
         <div className="space-y-1.5" data-testid="executor-cli-block">
-          <label htmlFor="executor-cli" className="text-xs text-[var(--color-muted)]">
+          <label htmlFor="executor-cli" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             CLI tool
           </label>
           <Select
@@ -192,7 +192,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
           className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
         >
           <Info size={14} className="text-[var(--color-muted)] shrink-0 mt-0.5" weight="fill" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
             Remote (A2A) executors are <strong className="text-[var(--color-secondary)]">reserved — not available in v0.1.0</strong>.
             Selecting this will cause delegated sub-turns to fail with an error until A2A resolution ships.
           </p>
@@ -248,7 +248,7 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
           className="flex items-start gap-2 rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2"
         >
           <XCircle size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
-          <p className="text-[11px] text-[var(--color-error)] leading-snug">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug">
             Test request failed: {getErrorMessage(error, 'Test request failed')}
           </p>
         </div>
@@ -277,10 +277,10 @@ function RunnerTestResult({ result }: { result: RunnerTestResponse }) {
     >
       <Icon size={15} className="shrink-0 mt-0.5" weight="fill" />
       <div className="min-w-0 space-y-0.5">
-        <p className="text-xs font-medium leading-tight">{status.title}</p>
-        <p className="text-[11px] opacity-90 leading-snug break-words">{result.message}</p>
+        <p className="text-[length:var(--type-utility-xs-size)] font-medium leading-tight">{status.title}</p>
+        <p className="text-[length:var(--type-caption-size)] opacity-90 leading-snug break-words">{result.message}</p>
         {result.cli_version && (
-          <p className="text-[10px] font-mono opacity-75">
+          <p className="text-[length:var(--type-caption-size)] font-mono opacity-75">
             {result.cli}
             {result.cli_version ? ` · v${result.cli_version}` : ''}
           </p>

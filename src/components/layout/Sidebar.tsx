@@ -394,7 +394,7 @@ export function Sidebar() {
         <div className="mb-1" role="group" aria-label="Workspaces">
           {/* Section header */}
           <div className="flex items-center justify-between px-4 py-1">
-            <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+            <span className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
               Workspaces
             </span>
             <button tabIndex={0}
@@ -434,7 +434,7 @@ export function Sidebar() {
                 placeholder="Workspace name…"
                 aria-label="New workspace name"
                 disabled={createWorkspaceMut.isPending}
-                className="flex-1 min-w-0 rounded border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-sm text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)] disabled:opacity-50"
+                className="flex-1 min-w-0 rounded border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-2 py-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)] disabled:opacity-50"
               />
             </div>
           )}
@@ -443,7 +443,7 @@ export function Sidebar() {
           {projectsError && (
             <div className="px-4 py-1.5 flex items-center gap-1.5">
               <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
-              <span className="text-xs text-[var(--color-error)] flex-1">Could not load workspaces</span>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">Could not load workspaces</span>
               <button tabIndex={0}
                 type="button"
                 onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
@@ -471,11 +471,11 @@ export function Sidebar() {
           {/* Empty state */}
           {!projectsLoading && !projectsError && projects.length === 0 && (
             <div className="px-4 py-1.5">
-              <span className="text-xs text-[var(--color-muted)]">No workspaces yet — </span>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No workspaces yet — </span>
               <button tabIndex={0}
                 type="button"
                 onClick={() => setCreatingWorkspace(true)}
-                className="text-xs text-[var(--color-accent)] hover:underline"
+                className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
               >
                 New workspace
               </button>
@@ -523,7 +523,7 @@ export function Sidebar() {
               <div key={project.id}>
                 <div
                   className={cn(
-                    'flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left',
+                    'flex items-center gap-2 w-full px-4 py-2 mx-0 text-[length:var(--type-body-compact-size)] transition-colors text-left',
                     isActive
                       ? 'text-[var(--color-accent)] font-medium'
                       : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
@@ -618,7 +618,7 @@ export function Sidebar() {
             <button tabIndex={0}
               type="button"
               onClick={() => setProjectsExpanded((v) => !v)}
-              className="flex items-center gap-2 w-full px-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              className="flex items-center gap-2 w-full px-4 py-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
             >
               {projectsExpanded
                 ? 'Show fewer'
@@ -630,7 +630,7 @@ export function Sidebar() {
           <button tabIndex={0}
             type="button"
             onClick={() => setArchiveOpen((v) => !v)}
-            className="flex items-center gap-1.5 w-full px-4 py-1.5 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-1"
+            className="flex items-center gap-1.5 w-full px-4 py-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-1"
             aria-expanded={archiveOpen}
           >
             {archiveOpen ? <CaretDown size={10} /> : <CaretRight size={10} />}
@@ -638,7 +638,7 @@ export function Sidebar() {
           </button>
 
           {archiveOpen && archivedError && (
-            <div className="flex items-center justify-between gap-2 px-4 py-2 text-xs text-[var(--color-error)]">
+            <div className="flex items-center justify-between gap-2 px-4 py-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
               <span>Could not load archived workspaces</span>
               <button tabIndex={0}
                 type="button"
@@ -660,7 +660,7 @@ export function Sidebar() {
                   navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
-                className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
+                className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-[length:var(--type-body-compact-size)] transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
                 <Buildings size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 <span className="flex-1 truncate">{project.name}</span>
@@ -682,7 +682,7 @@ export function Sidebar() {
       <div className="shrink-0 py-2" role="group" aria-label="Assets">
         <div className="flex items-center gap-1.5 px-4 py-1 mb-0.5">
           <Files size={12} className="text-[var(--color-muted)]" aria-hidden="true" />
-          <span className="text-[10px] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
             Assets
           </span>
         </div>
@@ -699,7 +699,7 @@ export function Sidebar() {
                 if (!effectivelyPinned) close()
               }}
               className={cn(
-                'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors',
+                'flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-[length:var(--type-body-compact-size)] transition-colors',
                 isActive
                   ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] font-medium'
                   : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
@@ -727,7 +727,7 @@ export function Sidebar() {
             useUiStore.getState().openLibraryPanel()
             if (!effectivelyPinned) close()
           }}
-          className="flex items-center gap-3 w-[calc(100%-16px)] px-4 py-2.5 mx-2 rounded-lg text-sm transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          className="flex items-center gap-3 w-[calc(100%-16px)] px-4 py-2.5 mx-2 rounded-lg text-[length:var(--type-body-compact-size)] transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
         >
           <FolderOpen size={18} />
           <span className="flex-1 text-left">Library</span>
@@ -741,14 +741,14 @@ export function Sidebar() {
             type="button"
             aria-label="Open user menu"
             data-testid="sidebar-profile-trigger"
-            className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-sm text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
+            className="flex items-center gap-3 px-4 py-2.5 mx-2 rounded-lg text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
           >
             <UserCircle size={18} weight="regular" />
             <span className="flex-1 text-left truncate">{username ?? 'User'}</span>
             {unreadCount > 0 && (
               <span
                 data-testid="sidebar-notification-badge"
-                className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white"
+                className="flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[length:var(--type-caption-size)] font-medium leading-none bg-[var(--color-error)] text-white"
               >
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
@@ -760,7 +760,7 @@ export function Sidebar() {
           align="start"
           className="min-w-[180px] bg-[var(--color-surface-1)] border border-[var(--color-border)]"
         >
-          <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+          <DropdownMenuLabel className="text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
             {username ?? 'Account'}
           </DropdownMenuLabel>
           <DropdownMenuSeparator className="bg-[var(--color-border)]" />
@@ -772,7 +772,7 @@ export function Sidebar() {
             <Tray size={14} />
             Notifications
             {unreadCount > 0 && (
-              <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium leading-none bg-[var(--color-error)] text-white">
+              <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[length:var(--type-caption-size)] font-medium leading-none bg-[var(--color-error)] text-white">
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
@@ -981,10 +981,10 @@ function SidebarSessionRow({
           {isActive && <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] flex-shrink-0" />}
           <span className="flex-1 truncate">{title}</span>
           {session.type === 'heartbeat' && (
-            <span className="text-[9px] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
+            <span className="text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)] flex-shrink-0">HB</span>
           )}
           {hasChildren && (
-            <span className="text-[9px] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] flex-shrink-0" aria-hidden="true">
               {session.child_count}
             </span>
           )}
@@ -996,7 +996,7 @@ function SidebarSessionRow({
           explanation. */}
       {childrenEmpty && (
         <p
-          className="py-1 text-[12px] text-[var(--color-muted)] opacity-70"
+          className="py-1 text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70"
           style={{ '--sidebar-indent-depth-px': indent + 18, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}
         >
           No delegated sessions found
@@ -1013,7 +1013,7 @@ function SidebarSessionRow({
           onClick={onLoadMore}
           disabled={isLoading}
           style={{ '--sidebar-indent-depth-px': indent + 18, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}
-          className="flex items-center gap-1 py-1 pr-4 text-[12px] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
+          className="flex items-center gap-1 py-1 pr-4 text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
         >
           {isLoading ? 'Loading…' : 'Load more'}
         </button>

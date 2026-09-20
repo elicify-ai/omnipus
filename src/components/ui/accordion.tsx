@@ -30,7 +30,7 @@ const AccordionTrigger = React.forwardRef<
       // Before {...props} so a caller-supplied tabIndex wins.
       tabIndex={0}
       className={cn(
-        'flex flex-1 items-center justify-between py-3 text-sm font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
+        'flex flex-1 items-center justify-between py-3 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
         className
       )}
       {...props}
@@ -49,7 +49,7 @@ const AccordionContent = React.forwardRef<
   <AccordionPrimitive.Content
     ref={ref}
     className={cn(
-      'overflow-hidden text-sm',
+      'overflow-hidden text-[length:var(--type-body-compact-size)]',
       'data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down motion-reduce:animate-none',
       className
     )}

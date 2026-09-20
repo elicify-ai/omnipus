@@ -104,13 +104,13 @@ function RefusalState({ refusal }: { refusal: NonNullable<ViewResult['refusal']>
     >
       <Prohibit size={24} className="text-[var(--color-warning)]" />
       <p className="text-[13px] font-medium text-[var(--color-secondary)]">This view can’t answer.</p>
-      <p className="max-w-md text-[12px] leading-relaxed text-[var(--color-muted)]">{refusal.reason}</p>
+      <p className="max-w-md text-[length:var(--type-caption-size)] leading-relaxed text-[var(--color-muted)]">{refusal.reason}</p>
       {refusal.remedy !== '' && (
-        <p className="max-w-md text-[12px] leading-relaxed text-[var(--color-muted)]" data-testid="view-refusal-remedy">
+        <p className="max-w-md text-[length:var(--type-caption-size)] leading-relaxed text-[var(--color-muted)]" data-testid="view-refusal-remedy">
           {refusal.remedy}
         </p>
       )}
-      <p className="font-mono text-[10px] text-[var(--color-muted)]/60">{refusal.code}</p>
+      <p className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]/60">{refusal.code}</p>
     </div>
   )
 }
@@ -129,13 +129,13 @@ function EmptyState({ result }: { result: ViewResult }) {
       <p className="text-[13px] text-[var(--color-secondary)]">
         {result.complete ? 'Nothing matches this view.' : 'Nothing to show yet.'}
       </p>
-      <p className="text-[11px] text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         {result.type !== undefined && result.type !== ''
           ? `This view shows every ${result.type} record its filter admits; none matched.`
           : 'This view declares no filter the preview can show; the collection simply has no matching records.'}
       </p>
       {!result.complete && result.complete_reason !== undefined && result.complete_reason !== '' && (
-        <p className="text-[11px] text-[var(--color-warning)]" data-testid="view-empty-incomplete">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]" data-testid="view-empty-incomplete">
           {result.complete_reason}
         </p>
       )}
@@ -207,7 +207,7 @@ export function ViewPartsRenderer({
     <div className="flex flex-col" data-testid="view-parts">
       {result.rows_truncated === true && (
         <p
-          className="flex items-start gap-1.5 border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5 text-[11px] leading-snug text-[var(--color-warning)]"
+          className="flex items-start gap-1.5 border-b border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-1.5 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
           data-testid="view-truncated"
         >
           <WarningCircle size={13} weight="fill" className="mt-px shrink-0" />
@@ -239,10 +239,10 @@ export function ViewPartsRenderer({
           {result.aggregates.map((t, i) => (
             <p
               key={`${t.label}|${t.unit ?? ' '}|${i}`}
-              className="text-[11px] leading-snug text-[var(--color-secondary)]"
+              className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-secondary)]"
               data-testid="view-aggregate"
             >
-              <span className="text-[10px] uppercase tracking-[0.07em] text-[var(--color-muted)]">{t.label}</span>{' '}
+              <span className="text-[length:var(--type-caption-size)] uppercase tracking-[0.07em] text-[var(--color-muted)]">{t.label}</span>{' '}
               <span className="font-mono tabular-nums">{t.value}</span>
               {t.unit !== undefined && <span className="ml-1 text-[var(--color-muted)]">{t.unit}</span>}
               <span className="ml-1.5 text-[var(--color-muted)]">{t.scope}</span>
@@ -253,7 +253,7 @@ export function ViewPartsRenderer({
       {result.problems.length > 0 && (
         <div className="px-3 py-1.5" data-testid="view-problems">
           {result.problems.map((p, i) => (
-            <p key={`${p.code}-${i}`} className="text-[11px] leading-snug text-[var(--color-warning)]">
+            <p key={`${p.code}-${i}`} className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]">
               {p.reason}
             </p>
           ))}

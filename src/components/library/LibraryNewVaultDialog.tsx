@@ -134,17 +134,17 @@ export function LibraryNewVaultDialog({
             }}
           />
           {hasSlash && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-slash">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-vault-name-slash">
               A knowledge base name can't contain "/" or "\".
             </p>
           )}
           {!hasSlash && isDotName && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
               "{trimmedName}" isn't a valid knowledge base name.
             </p>
           )}
           {!hasSlash && isHiddenName && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-hidden">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-vault-name-hidden">
               A name starting with "." would make this a hidden folder — it wouldn't show in the
               list unless "Show hidden" is on. Choose a name without the leading dot.
             </p>

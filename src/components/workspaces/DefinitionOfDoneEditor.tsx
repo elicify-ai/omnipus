@@ -36,7 +36,7 @@ export function DefinitionOfDoneEditor({ dod, onChange, currentAuthor }: Definit
         currentAuthor={currentAuthor}
         inputAriaLabel="Definition of Done item"
       />
-      <p className="text-xs text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         Standing gates, judged on every attempt. Add at least one.
       </p>
     </div>

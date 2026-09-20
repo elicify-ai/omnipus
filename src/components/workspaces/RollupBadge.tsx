@@ -73,7 +73,7 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
     >
       {/* Chevron indicator + count */}
       <span
-        className="text-[10px] font-semibold leading-none"
+        className="text-[length:var(--type-caption-size)] font-semibold leading-none"
         style={{ color: isAnyLive ? STATUS_COLORS.in_progress : STATUS_COLORS.inbox }}
       >
         &#9658; {countLabel} sub-agent{countLabel !== 1 ? 's' : ''} {isAnyLive ? 'running' : 'delegated'}
@@ -88,7 +88,7 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
         ))}
         {rollup.length > 5 && (
           <span
-            className="text-[10px] text-[var(--color-muted)] ml-0.5"
+            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] ml-0.5"
             aria-label={`and ${rollup.length - 5} more`}
           >
             +{rollup.length - 5}

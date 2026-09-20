@@ -48,7 +48,7 @@ function Skeleton() {
       data-testid="performance-loading"
       className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3"
     >
-      <p className="text-xs text-[var(--color-muted)]">Loading performance settings…</p>
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Loading performance settings…</p>
       <div className="space-y-3 animate-pulse" aria-hidden="true">
         <div className="h-4 w-48 rounded bg-[var(--color-border)]" />
         <div className="h-3 w-full rounded bg-[var(--color-border)]" />
@@ -384,7 +384,7 @@ export function PerformanceSection(): React.ReactElement {
         data-testid="performance-load-error"
         className="rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 p-4 space-y-2"
       >
-        <div className="flex items-start gap-2 text-sm text-[var(--color-error)]">
+        <div className="flex items-start gap-2 text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
           <Warning size={16} className="mt-0.5 shrink-0" />
           <span>
             Failed to load performance settings: {getErrorMessage(error, 'Unknown error')}
@@ -396,7 +396,7 @@ export function PerformanceSection(): React.ReactElement {
           data-testid="performance-retry-btn"
           onClick={() => void refetch()}
           disabled={isFetching}
-          className="text-xs font-medium underline text-[var(--color-secondary)] disabled:opacity-50"
+          className="text-[length:var(--type-utility-xs-size)] font-medium underline text-[var(--color-secondary)] disabled:opacity-50"
         >
           {isFetching ? 'Retrying…' : 'Retry'}
         </button>
@@ -448,7 +448,7 @@ export function PerformanceSection(): React.ReactElement {
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Cpu size={18} className="text-[var(--color-secondary)]" />
-          <h2 className="text-sm font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
+          <h2 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
         </div>
         <AutoSaveIndicator status={saveStatus} />
       </div>
@@ -457,10 +457,10 @@ export function PerformanceSection(): React.ReactElement {
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 flex items-start gap-2">
         <Info size={14} className="text-[var(--color-accent)] mt-0.5 shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-xs text-[var(--color-secondary)] leading-relaxed">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] leading-relaxed">
             {recommendationText}
           </p>
-          <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-0.5">
             {isConfigured
               ? 'An explicit value has no ceiling — it is always honored exactly as set. Agent turns are still admitted only while the host has memory to spare.'
               : 'Nothing is configured, so concurrency is bounded by this host\u2019s available memory at the moment each agent turn starts. Set a value below to cap it explicitly instead.'}
@@ -471,11 +471,11 @@ export function PerformanceSection(): React.ReactElement {
       {/* Concurrency card */}
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
         <div className="space-y-1">
-          <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
             Controls how many tasks and subagents may run concurrently across all agents.
             Leave blank for no explicit cap — concurrency is then bounded by available memory. Changes apply after re-authentication.
           </p>
-          <div className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
+          <div className="flex items-center gap-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             <Info size={12} />
             <span>
               Effective value in use:{' '}
@@ -487,7 +487,7 @@ export function PerformanceSection(): React.ReactElement {
         </div>
 
         <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-[var(--color-secondary)] w-44 shrink-0">
+          <label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] w-44 shrink-0">
             Max parallel agents
           </label>
           <Input
@@ -496,7 +496,7 @@ export function PerformanceSection(): React.ReactElement {
             placeholder="auto"
             value={inputValue}
             onChange={(e) => handleInputChange(e.target.value)}
-            className="w-24 h-7 text-sm"
+            className="w-24 h-7 text-[length:var(--type-body-compact-size)]"
             aria-label="Max parallel agents"
             data-testid="performance-max-agents-input"
           />
@@ -511,7 +511,7 @@ export function PerformanceSection(): React.ReactElement {
         {exceedsPhysicalCeiling && (
           <div
             data-testid="performance-high-value-warning"
-            className="flex items-start gap-2 p-2.5 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-xs text-[var(--color-warning)]"
+            className="flex items-start gap-2 p-2.5 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
           >
             <Warning size={14} className="mt-0.5 shrink-0" />
             <span>
@@ -528,7 +528,7 @@ export function PerformanceSection(): React.ReactElement {
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
         {/* Section heading */}
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Tool loading</h3>
+          <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tool loading</h3>
         </div>
 
         {/* Toggle row */}
@@ -536,15 +536,15 @@ export function PerformanceSection(): React.ReactElement {
           <div className="flex-1 min-w-0">
             {toolsOnDemand ? (
               <>
-                <p className="text-sm text-[var(--color-secondary)]">Load tools on demand</p>
-                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Load tools on demand</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
                   Smaller messages, lower token use. Recommended.
                 </p>
               </>
             ) : (
               <>
-                <p className="text-sm text-[var(--color-secondary)]">Keep all tools loaded</p>
-                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Keep all tools loaded</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-0.5">
                   Every tool is always available — no loading step, but larger messages.
                 </p>
               </>
@@ -560,7 +560,7 @@ export function PerformanceSection(): React.ReactElement {
         </div>
 
         {/* Helper text */}
-        <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Applies to all agents. Takes effect on the next message — no restart required.
           Changes apply after re-authentication.
         </p>
@@ -574,16 +574,16 @@ export function PerformanceSection(): React.ReactElement {
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
         <div className="flex items-center gap-2">
           <Target size={16} className="text-[var(--color-secondary)]" />
-          <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Goal completion budget</h3>
+          <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Goal completion budget</h3>
         </div>
 
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           How many times an agent may try to finish a goal before it stops and reports the
           goal as not met. This applies to goals set in chat and to goals on tasks.
         </p>
 
         <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-[var(--color-secondary)] w-44 shrink-0">
+          <label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] w-44 shrink-0">
             Tries per goal
           </label>
           <Input
@@ -591,13 +591,13 @@ export function PerformanceSection(): React.ReactElement {
             min={1}
             value={goalMaxRoundsInput}
             onChange={(e) => handleGoalInputChange(e.target.value)}
-            className="w-24 h-7 text-sm"
+            className="w-24 h-7 text-[length:var(--type-body-compact-size)]"
             aria-label="Tries per goal"
             data-testid="performance-goal-max-rounds-input"
           />
         </div>
 
-        <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Goals already running keep the limit they started with. Saving asks you to
           re-enter your password to confirm it's really you.
         </p>
@@ -631,7 +631,7 @@ export function PerformanceSection(): React.ReactElement {
           type="button"
           data-testid="performance-save-btn"
           onClick={triggerSave}
-          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-xs text-[var(--color-secondary)]"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
         >
           Save changes
         </button>
@@ -641,7 +641,7 @@ export function PerformanceSection(): React.ReactElement {
           type="button"
           data-testid="performance-goal-save-btn"
           onClick={triggerGoalSave}
-          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-xs text-[var(--color-secondary)]"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
         >
           Save changes
         </button>

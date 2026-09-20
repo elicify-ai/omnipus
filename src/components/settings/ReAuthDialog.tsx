@@ -87,7 +87,7 @@ export function ReAuthDialog({
         </DialogHeader>
 
         <div className="space-y-2">
-          <Label htmlFor="reauth-password" className="text-xs text-[var(--color-muted)]">
+          <Label htmlFor="reauth-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Password
           </Label>
           <div className="relative">
@@ -124,7 +124,7 @@ export function ReAuthDialog({
             <div
               role="alert"
               data-testid="reauth-error"
-              className="flex items-start gap-1.5 text-xs text-[var(--color-error)]"
+              className="flex items-start gap-1.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
             >
               <XCircle size={13} weight="fill" className="shrink-0 mt-0.5" />
               <span>{error}</span>

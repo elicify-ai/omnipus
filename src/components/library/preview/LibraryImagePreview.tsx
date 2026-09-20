@@ -60,7 +60,7 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
         <div
           role="status"
           data-testid="library-image-unavailable"
-          className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+          className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           <WarningCircle size={16} weight="fill" />
           <span>
@@ -75,7 +75,7 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
               setAttempt((n) => n + 1)
             }}
             data-testid="library-image-retry"
-            className="inline-flex items-center gap-1 rounded border border-[var(--color-warning)]/60 px-2 py-0.5 text-[11px] font-medium hover:bg-[var(--color-warning)]/10"
+            className="inline-flex items-center gap-1 rounded border border-[var(--color-warning)]/60 px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
           >
             <ArrowClockwise size={12} /> Try again
           </button>

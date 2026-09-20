@@ -102,7 +102,7 @@ export function SkillTrustSection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-sm" style={{ color: 'var(--color-error)' }}>
+      <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }}>
         Failed to load skill trust settings: {error instanceof Error ? error.message : 'Unknown error'}
       </p>
     )
@@ -111,7 +111,7 @@ export function SkillTrustSection(): React.ReactElement {
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
           <Package size={14} className="text-[var(--color-muted)]" />
           Skill Trust
         </h3>
@@ -119,7 +119,7 @@ export function SkillTrustSection(): React.ReactElement {
       </div>
 
       <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Controls how unverified community skills are handled during installation and execution.
         </p>
 
@@ -154,14 +154,14 @@ export function SkillTrustSection(): React.ReactElement {
                   />
                   <span
                     className={[
-                      'text-sm font-medium',
+                      'text-[length:var(--type-body-compact-size)] font-medium',
                       isActive ? 'text-[var(--color-secondary)]' : 'text-[var(--color-muted)]',
                     ].join(' ')}
                   >
                     {lvl.label}
                   </span>
                 </div>
-                <p className="text-xs text-[var(--color-muted)] mt-1 ml-5 leading-relaxed">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-1 ml-5 leading-relaxed">
                   {lvl.subtitle}
                 </p>
               </button>
@@ -176,7 +176,7 @@ export function SkillTrustSection(): React.ReactElement {
             className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/8 p-3"
           >
             <Warning size={14} weight="fill" className="mt-0.5 shrink-0" style={{ color: 'var(--color-warning)' }} />
-            <p className="text-xs leading-relaxed" style={{ color: 'var(--color-warning)' }}>
+            <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed" style={{ color: 'var(--color-warning)' }}>
               This disables one of your key supply-chain protections. Prefer{' '}
               <span className="font-mono">warn_unverified</span> for normal operation.
             </p>

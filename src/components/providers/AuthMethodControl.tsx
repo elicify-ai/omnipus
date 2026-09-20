@@ -176,7 +176,7 @@ export function AuthMethodControl({
             data-testid={`${testId}-segment-sign_in`}
             aria-pressed={method === 'sign_in'}
             onClick={() => chooseMethod('sign_in')}
-            className="flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded px-3 text-sm"
+            className="flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded px-3 text-[length:var(--type-body-compact-size)]"
             style={{
               color: 'var(--color-secondary)',
               background: method === 'sign_in' ? 'var(--color-surface-2)' : 'transparent',
@@ -191,7 +191,7 @@ export function AuthMethodControl({
             data-testid={`${testId}-segment-api_key`}
             aria-pressed={method === 'api_key'}
             onClick={() => chooseMethod('api_key')}
-            className="flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded px-3 text-sm"
+            className="flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded px-3 text-[length:var(--type-body-compact-size)]"
             style={{
               color: 'var(--color-secondary)',
               background: method === 'api_key' ? 'var(--color-surface-2)' : 'transparent',
@@ -210,7 +210,7 @@ export function AuthMethodControl({
             <>
               <span
                 id={radioGroupLabelId}
-                className="text-xs uppercase"
+                className="text-[length:var(--type-utility-xs-size)] uppercase"
                 style={{ color: 'var(--color-muted)' }}
               >
                 Sign-in method
@@ -230,7 +230,7 @@ export function AuthMethodControl({
                       key={option.providerId}
                       htmlFor={inputId}
                       data-testid={`${testId}-signin-option-${option.providerId}`}
-                      className="flex cursor-pointer items-start gap-2 rounded border p-2 text-sm"
+                      className="flex cursor-pointer items-start gap-2 rounded border p-2 text-[length:var(--type-body-compact-size)]"
                       style={{ borderColor: 'var(--color-border)' }}
                     >
                       <input
@@ -249,7 +249,7 @@ export function AuthMethodControl({
                         {helper && (
                           <span
                             id={helperId}
-                            className="text-xs"
+                            className="text-[length:var(--type-utility-xs-size)]"
                             style={{ color: 'var(--color-muted)' }}
                           >
                             {helper}
@@ -264,7 +264,7 @@ export function AuthMethodControl({
           )}
 
           {options.length === 1 && options[0] && (
-            <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
+            <span className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
               {options[0].helper ?? signInHelperCopy(options[0].providerId) ?? options[0].label}
             </span>
           )}
@@ -274,7 +274,7 @@ export function AuthMethodControl({
             tabIndex={0}
             data-testid={`${testId}-signin-start`}
             onClick={() => onSignIn?.(providerId)}
-            className="flex min-h-[32px] items-center justify-center gap-1 rounded border px-3 text-sm"
+            className="flex min-h-[32px] items-center justify-center gap-1 rounded border px-3 text-[length:var(--type-body-compact-size)]"
             style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
           >
             <SignIn size={14} aria-hidden="true" />

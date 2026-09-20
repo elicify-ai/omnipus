@@ -168,13 +168,13 @@ function Shell({
       <div className="min-w-0 flex-1">
         <h3
           className={cn(
-            'text-sm font-semibold',
+            'text-[length:var(--type-body-compact-size)] font-semibold',
             tone === 'error' ? 'text-[var(--color-error)]' : 'text-[var(--color-secondary)]',
           )}
         >
           {title}
         </h3>
-        <div className="mt-1 space-y-2 text-xs leading-relaxed text-[var(--color-muted)]">
+        <div className="mt-1 space-y-2 text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]">
           {children}
         </div>
       </div>
@@ -232,10 +232,10 @@ export function KnowledgeEmptyState({
             className="mt-0.5 shrink-0 text-[var(--color-error)]"
           />
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold text-[var(--color-error)]">
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">
               Omnipus could not check this folder
             </h3>
-            <div className="mt-1 space-y-2 text-xs leading-relaxed text-[var(--color-error)]/90">
+            <div className="mt-1 space-y-2 text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-error)]/90">
               <p>{DETECTION_ERROR_REASON[state.code]}</p>
               <p data-testid="knowledge-detection-error-message" className="font-mono break-all">
                 {state.message}
@@ -288,7 +288,7 @@ export function KnowledgeEmptyState({
             tabIndex={0}
             data-testid="knowledge-create-collection"
             onClick={onCreateCollection}
-            className="inline-flex h-8 items-center gap-2 rounded-md bg-[var(--color-accent)] px-3 text-xs font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
+            className="inline-flex h-8 items-center gap-2 rounded-md bg-[var(--color-accent)] px-3 text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
           >
             <Books size={14} weight="fill" aria-hidden="true" />
             Create a collection here
@@ -381,10 +381,10 @@ export function KnowledgeEmptyState({
             className="mt-0.5 shrink-0 text-[var(--color-error)]"
           />
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold text-[var(--color-error)]">
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">
               Indexing {state.name} stopped
             </h3>
-            <div className="mt-1 space-y-2 text-xs leading-relaxed text-[var(--color-error)]/90">
+            <div className="mt-1 space-y-2 text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-error)]/90">
               <p data-testid="knowledge-index-failed-message" className="font-mono break-all">
                 {state.message}
               </p>
@@ -434,7 +434,7 @@ export function KnowledgeEmptyState({
               tabIndex={0}
               data-testid="knowledge-create-note"
               onClick={onCreateNote}
-              className="inline-flex h-8 items-center gap-2 rounded-md bg-[var(--color-accent)] px-3 text-xs font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
+              className="inline-flex h-8 items-center gap-2 rounded-md bg-[var(--color-accent)] px-3 text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
             >
               <FileText size={14} weight="fill" aria-hidden="true" />
               Write the first note

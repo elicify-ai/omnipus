@@ -176,7 +176,7 @@ const SheetTitle = React.forwardRef<
       // text-sm / semibold keeps the title inside the 44px chrome row without
       // forcing the panel header taller than the workspace top bar. min-w-0 lets
       // the flex item shrink so truncate actually ellipses long titles.
-      'font-headline text-sm font-semibold text-[var(--color-secondary)] truncate min-w-0',
+      'font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate min-w-0',
       className,
     )}
     {...props}
@@ -190,7 +190,7 @@ const SheetDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-sm text-[var(--color-muted)]', className)}
+    className={cn('text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]', className)}
     {...props}
   />
 ))

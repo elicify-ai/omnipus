@@ -131,7 +131,7 @@ export function DefaultModelCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-wide text-[var(--color-muted)]">
             Default model
           </p>
 
@@ -141,25 +141,25 @@ export function DefaultModelCard({
               data-testid="default-model-loading"
             />
           ) : status === 'error' ? (
-            <p className="mt-1 text-sm text-red-400" data-testid="default-model-error">
+            <p className="mt-1 text-[length:var(--type-body-compact-size)] text-red-400" data-testid="default-model-error">
               Could not load the default model. Please try again.
             </p>
           ) : defaultModel ? (
-            <p className="mt-1 text-sm text-[var(--color-secondary)]">
+            <p className="mt-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
               <span data-testid="default-model-provider">{providerLabel}</span>
               {' · '}
-              <span className="font-mono text-xs" data-testid="default-model-model">
+              <span className="font-mono text-[length:var(--type-utility-xs-size)]" data-testid="default-model-model">
                 {defaultModel.model}
               </span>
             </p>
           ) : (
-            <p className="mt-1 text-sm text-[var(--color-muted)]" data-testid="default-model-unset">
+            <p className="mt-1 text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid="default-model-unset">
               No default model yet — pick one so new agents have somewhere to run.
             </p>
           )}
 
           {status !== 'loading' && defaultModel && (
-            <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+            <p className="mt-0.5 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {windowUnknown ? (
                 <>
                   <span data-testid="default-model-window">{NO_CONTEXT_LENGTH_COPY}</span>{' '}
@@ -187,7 +187,7 @@ export function DefaultModelCard({
         <Button
           size="sm"
           variant="outline"
-          className="h-7 shrink-0 px-3 text-xs"
+          className="h-7 shrink-0 px-3 text-[length:var(--type-utility-xs-size)]"
           onClick={() => setOpen(!open)}
           disabled={isSaving}
           data-testid="default-model-change-btn"

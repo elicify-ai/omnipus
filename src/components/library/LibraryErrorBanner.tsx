@@ -34,7 +34,7 @@ export function LibraryErrorBanner({ message, onDismiss, testId, className }: Li
       )}
     >
       <WarningCircle size={14} className="mt-0.5 shrink-0 text-[var(--color-error)]" weight="fill" />
-      <p className="flex-1 text-xs leading-snug text-[var(--color-error)]">{message}</p>
+      <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-error)]">{message}</p>
       {onDismiss && (
         <button
           type="button"

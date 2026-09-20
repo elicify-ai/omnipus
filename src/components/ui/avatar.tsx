@@ -6,8 +6,8 @@ interface AvatarProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 const sizeClasses = {
-  sm: 'h-7 w-7 text-xs',
-  md: 'h-9 w-9 text-sm',
+  sm: 'h-7 w-7 text-[length:var(--type-utility-xs-size)]',
+  md: 'h-9 w-9 text-[length:var(--type-body-compact-size)]',
   lg: 'h-12 w-12 text-base',
 }
 

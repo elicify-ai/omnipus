@@ -147,7 +147,7 @@ function SearchableSelect({
           aria-invalid={ariaInvalid}
           aria-required={required || undefined}
           className={cn(
-            'flex w-full items-center justify-between px-3 py-2 text-sm',
+            'flex w-full items-center justify-between px-3 py-2 text-[length:var(--type-body-compact-size)]',
             'bg-[var(--color-surface-1)] text-[var(--color-secondary)]',
             'ring-offset-[var(--color-primary)] transition-colors motion-reduce:transition-none',
             '',

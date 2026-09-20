@@ -46,7 +46,7 @@ function ChatRestoreSkeleton() {
         className="h-8 w-8 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin"
         aria-hidden="true"
       />
-      <p className="text-xs text-[var(--color-muted)]">Restoring your conversation…</p>
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Restoring your conversation…</p>
     </div>
   )
 }

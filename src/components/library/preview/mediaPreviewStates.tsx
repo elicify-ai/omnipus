@@ -57,7 +57,7 @@ export function MediaUnplayableNotice({
     <div
       data-testid={`library-${kind}-unplayable`}
       role="status"
-      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <Warning size={16} />
       <span>This browser could not play “{basename}”.</span>
@@ -65,7 +65,7 @@ export function MediaUnplayableNotice({
         tabIndex={0}
         href={href}
         download
-        className="inline-flex items-center gap-1 text-[11px] underline underline-offset-2"
+        className="inline-flex items-center gap-1 text-[length:var(--type-caption-size)] underline underline-offset-2"
       >
         <DownloadSimple size={12} /> Download it instead
       </a>

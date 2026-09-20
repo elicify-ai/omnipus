@@ -70,7 +70,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
 
   if (allKeys.length === 0) {
     return (
-      <div className="px-3 py-3 text-[12px] text-[var(--color-muted)]" data-testid="viewpart-chart">
+      <div className="px-3 py-3 text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="viewpart-chart">
         No points to draw — the series is empty.
       </div>
     )
@@ -257,7 +257,7 @@ export function ChartPart({ part }: { part: ViewResultPart }) {
       {/* Legend: one entry per series, unit named — never merged (G2). */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 px-3 pb-2" data-testid="viewpart-chart-legend">
         {series.map((s, si) => (
-          <span key={s.unit ?? `series-${si}`} className="inline-flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+          <span key={s.unit ?? `series-${si}`} className="inline-flex items-center gap-1.5 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             <span
               className="inline-block h-2 w-2 rounded-sm"
               style={{ backgroundColor: SERIES_COLORS[si % SERIES_COLORS.length] }}

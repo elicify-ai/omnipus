@@ -66,7 +66,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
             />
             <Button
               size="sm"
-              className="h-7 px-2 gap-1 text-xs"
+              className="h-7 px-2 gap-1 text-[length:var(--type-utility-xs-size)]"
               onClick={handleSaveName}
               disabled={updateMutation.isPending}
             >
@@ -76,7 +76,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 px-2 text-xs"
+              className="h-7 px-2 text-[length:var(--type-utility-xs-size)]"
               onClick={handleCancelEdit}
             >
               <X size={12} />
@@ -105,12 +105,12 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
       {/* Description */}
       <div className="flex items-center gap-4 flex-wrap mb-2">
         {workspace.description && (
-          <p className="text-xs text-[var(--color-muted)] flex-shrink-0 max-w-xl">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] flex-shrink-0 max-w-xl">
             {workspace.description}
           </p>
         )}
         <span className={cn(
-          'text-xs text-[var(--color-muted)] flex-shrink-0',
+          'text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] flex-shrink-0',
           workspace.task_count === 0 ? 'hidden' : undefined,
         )}>
           {workspace.task_count} task{workspace.task_count !== 1 ? 's' : ''}

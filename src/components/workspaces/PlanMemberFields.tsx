@@ -67,7 +67,7 @@ export function WriteSetField({
       {labelStyle === 'section' ? (
         <label
           htmlFor={id}
-          className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]"
+          className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]"
         >
           {WRITE_SET_LABEL}
         </label>
@@ -110,7 +110,7 @@ export function WriteSetField({
         testId="write-set-input"
         chipTestId="write-set-chip"
       />
-      <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
     </div>
   )
 }
@@ -141,11 +141,11 @@ export function JoinMemberCheckbox({
           onCheckedChange={(v) => onCheckedChange(v === true)}
           className="mt-[1px]"
         />
-        <label htmlFor={id} className="text-xs text-[var(--color-secondary)] cursor-pointer">
+        <label htmlFor={id} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] cursor-pointer">
           {JOIN_LABEL}
         </label>
       </div>
-      <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{JOIN_HELP}</p>
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">{JOIN_HELP}</p>
     </div>
   )
 }

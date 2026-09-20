@@ -122,7 +122,7 @@ export function UploadMdButton({
         }
         input.click()
       }}
-      className="h-7 px-2 text-xs rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
+      className="h-7 px-2 text-[length:var(--type-utility-xs-size)] rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
     >
       <UploadSimple size={12} />
       Upload .md
@@ -162,30 +162,30 @@ export function BehaviorFields({
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Scroll size={13} className="text-[var(--color-accent)]" />
-          <p className="text-xs font-medium text-[var(--color-secondary)]">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
             {isWorker ? 'Task prompt' : 'Personality & instructions'}
             {required && (
               <span className="text-[var(--color-error)] ml-0.5" aria-label="required">*</span>
             )}
           </p>
         </div>
-        <p className="text-xs text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           {isWorker ? (
             <>
               System prompt for the worker&apos;s runner. Composed with any
               caller-supplied task prompt at run time. Stored as{' '}
-              <span className="font-mono text-[11px]">SOUL.md</span>.
+              <span className="font-mono text-[length:var(--type-caption-size)]">SOUL.md</span>.
             </>
           ) : (
             <>
               Defines this agent&apos;s character, expertise, and behavioural
-              guidelines. Stored as <span className="font-mono text-[11px]">SOUL.md</span>{' '}
+              guidelines. Stored as <span className="font-mono text-[length:var(--type-caption-size)]">SOUL.md</span>{' '}
               in the agent workspace.
             </>
           )}
         </p>
         {required && (
-          <p className="text-[11px] text-[var(--color-muted)]" data-testid="soul-minlength-hint">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="soul-minlength-hint">
             Required — minimum 1 character; whitespace-only is rejected.
           </p>
         )}
@@ -201,7 +201,7 @@ export function BehaviorFields({
               : "# Soul\n\nDefine this agent's personality, expertise, and behavioural guidelines..."
           }
           rows={6}
-          className="text-xs font-mono resize-none"
+          className="text-[length:var(--type-utility-xs-size)] font-mono resize-none"
           required={required}
           aria-required={required ? 'true' : 'false'}
         />
@@ -221,12 +221,12 @@ export function BehaviorFields({
           <div className="space-y-2" data-testid={voiceWrapperTestId}>
             <div className="flex items-center gap-2">
               <Microphone size={13} className="text-[var(--color-accent)]" />
-              <p className="text-xs font-medium text-[var(--color-secondary)]">
+              <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                 Voice <span className="text-[var(--color-muted)] font-[var(--font-weight-regular)]">(optional)</span>
               </p>
             </div>
-            <p className="text-xs text-[var(--color-muted)]">
-              Per-agent persona voice identifier (e.g. <span className="font-mono text-[11px]">alloy</span>).
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+              Per-agent persona voice identifier (e.g. <span className="font-mono text-[length:var(--type-caption-size)]">alloy</span>).
               Used by v0.2.0 TTS to pick a voice when this agent speaks. Leave empty for the engine default.
             </p>
             <VoiceProviderSub

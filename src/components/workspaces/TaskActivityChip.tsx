@@ -114,7 +114,7 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
     const waitingChip = (
       <span
         data-testid="task-awaiting-approval"
-        className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]"
+        className="rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]"
       >
         {variant === 'card'
           ? `In progress · waiting for your approval to use ${waiting.toolName}`
@@ -133,7 +133,7 @@ export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipPro
       data-testid="task-last-activity"
       data-stale={activity.stale ? 'true' : 'false'}
       className={cn(
-        'rounded-full px-2 py-0.5 text-[10px] font-medium',
+        'rounded-full px-2 py-0.5 text-[length:var(--type-caption-size)] font-medium',
         activity.stale
           ? 'bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
           : 'bg-[var(--color-surface-2)] text-[var(--color-muted)]',

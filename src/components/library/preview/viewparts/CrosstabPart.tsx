@@ -32,14 +32,14 @@ function UnitGrid({ crosstab, unit }: { crosstab: ViewResultCrosstab; unit: stri
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
-            <th className="border-b border-[var(--color-border)] px-3 py-1.5 text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
+            <th className="border-b border-[var(--color-border)] px-3 py-1.5 text-left text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
               {crosstab.row_property}
               {unit !== undefined && ` · ${unit}`}
             </th>
             {crosstab.column_keys.map((ck) => (
               <th
                 key={ck}
-                className="border-b border-[var(--color-border)] px-3 py-1.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]"
+                className="border-b border-[var(--color-border)] px-3 py-1.5 text-right text-[length:var(--type-caption-size)] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]"
               >
                 {keyLabel(ck)}
               </th>
@@ -81,7 +81,7 @@ export function CrosstabPart({ part }: { part: ViewResultPart }) {
   const crosstab = part.crosstab
   if (crosstab === undefined) {
     return (
-      <p className="px-3 py-3 text-[12px] text-[var(--color-muted)]" data-testid="viewpart-crosstab">
+      <p className="px-3 py-3 text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="viewpart-crosstab">
         No grid was computed for this part.
       </p>
     )
@@ -93,7 +93,7 @@ export function CrosstabPart({ part }: { part: ViewResultPart }) {
         <UnitGrid key={unit ?? ' '} crosstab={crosstab} unit={unit} />
       ))}
       {units.filter((u) => u !== undefined).length > 1 && (
-        <p className="px-3 text-[11px] leading-snug text-[var(--color-muted)]" data-testid="viewpart-no-grand-total">
+        <p className="px-3 text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]" data-testid="viewpart-no-grand-total">
           <span className="font-medium text-[var(--color-warning)]">One grid per unit. </span>
           Values in different units are never added into one cell.
         </p>

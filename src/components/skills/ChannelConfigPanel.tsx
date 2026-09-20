@@ -146,7 +146,7 @@ function PasswordField({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={hasStoredSecret ? STORED_SECRET_PLACEHOLDER : field.placeholder}
-        className="pr-9 font-mono text-xs"
+        className="pr-9 font-mono text-[length:var(--type-utility-xs-size)]"
         autoComplete="off"
         aria-describedby={ariaDescribedBy}
         aria-invalid={ariaInvalid || undefined}
@@ -169,7 +169,7 @@ function PasswordField({
 function HelperLink({ field, storedNote }: { field: ChannelField; storedNote?: string }) {
   if (!field.helpText && !field.helpLink && !storedNote) return null
   return (
-    <p id={`help-${field.key}`} className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+    <p id={`help-${field.key}`} className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
       {storedNote}
       {storedNote && (field.helpText || field.helpLink) && ' '}
       {field.helpText}
@@ -279,7 +279,7 @@ function ChannelFieldRow({
       <Label
         htmlFor={`field-${field.key}`}
         id={`field-label-${field.key}`}
-        className="text-xs font-medium text-[var(--color-secondary)]"
+        className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]"
       >
         {field.label}
         {field.required && (
@@ -313,7 +313,7 @@ function ChannelFieldRow({
           value={String(getValue(field.key) ?? '')}
           onChange={(e) => setValue(field.key, e.target.value)}
           placeholder={showStoredNote ? STORED_SECRET_PLACEHOLDER : field.placeholder}
-          className="font-mono text-xs resize-none h-20"
+          className="font-mono text-[length:var(--type-utility-xs-size)] resize-none h-20"
           aria-describedby={describedBy}
           aria-invalid={invalid}
         />
@@ -331,14 +331,14 @@ function ChannelFieldRow({
             )
           }
           placeholder={field.placeholder}
-          className="text-xs"
+          className="text-[length:var(--type-utility-xs-size)]"
           aria-describedby={describedBy}
           aria-invalid={invalid}
         />
       )}
 
       {error ? (
-        <p id={errorId} role="alert" className="text-[10px] text-[var(--color-error)]">{error}</p>
+        <p id={errorId} role="alert" className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">{error}</p>
       ) : (
         <HelperLink field={field} storedNote={showStoredNote ? STORED_SECRET_HELP_NOTE : undefined} />
       )}
@@ -835,7 +835,7 @@ export function ChannelConfigPanel({
             expects. */}
         <p
           id={descriptionId}
-          className="text-xs text-[var(--color-muted)] leading-relaxed px-6 pt-3"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-6 pt-3"
         >
           {isGoogleChat
             ? 'Choose how you want to connect Google Chat, then fill in the credentials below.'
@@ -862,7 +862,7 @@ export function ChannelConfigPanel({
             <div
               data-testid="channel-config-fetch-error"
               role="alert"
-              className="flex flex-col items-start gap-2 px-4 py-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-medium"
+              className="flex flex-col items-start gap-2 px-4 py-3 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[length:var(--type-utility-xs-size)] font-medium"
             >
               <span>Couldn&apos;t load {channelName} configuration. Check your connection and try again.</span>
               <button tabIndex={0}
@@ -879,10 +879,10 @@ export function ChannelConfigPanel({
             {/* #324 — Google Chat auth method picker */}
             {isGoogleChat && (
               <div className="space-y-3">
-                <p className="text-xs font-medium text-[var(--color-secondary)]">
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                   How do you want to connect?
                 </p>
-                <p className="text-[10px] text-amber-400 leading-relaxed">
+                <p className="text-[length:var(--type-caption-size)] text-amber-400 leading-relaxed">
                   Switching connection method clears any values already entered for the other method.
                 </p>
                 <div className="flex flex-col gap-2" role="radiogroup" aria-label="Connection method">
@@ -906,8 +906,8 @@ export function ChannelConfigPanel({
                         aria-describedby={`gchat-auth-desc-${opt.value}`}
                       />
                       <div>
-                        <p className="text-xs font-medium text-[var(--color-secondary)]">{opt.label}</p>
-                        <p id={`gchat-auth-desc-${opt.value}`} className="text-[10px] text-[var(--color-muted)] mt-0.5">{opt.description}</p>
+                        <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{opt.label}</p>
+                        <p id={`gchat-auth-desc-${opt.value}`} className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-0.5">{opt.description}</p>
                       </div>
                     </label>
                   ))}
@@ -956,7 +956,7 @@ export function ChannelConfigPanel({
               (whatsAppNativeUnavailable ? (
                 <p
                   data-testid="native-unavailable-hint"
-                  className="text-xs text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
                 >
                   WhatsApp requires the native build (whatsmeow); this server build
                   doesn&apos;t include it, so linked-device pairing is unavailable.
@@ -966,7 +966,7 @@ export function ChannelConfigPanel({
               ) : (
                 <p
                   data-testid="whatsapp-enable-prompt"
-                  className="text-xs text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
+                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed mt-1 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-border)]"
                 >
                   Save &amp; Enable WhatsApp to start pairing. Once enabled, the QR code will appear here automatically.
                 </p>
@@ -975,11 +975,11 @@ export function ChannelConfigPanel({
             {/* Routing — hidden for webchat (no agent-routing concept) */}
             {!isWebchat && (
               <div className="pt-2 border-t border-[var(--color-border)] space-y-3">
-                <h3 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+                <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                   Routing
                 </h3>
                 {routingError ? (
-                  <p className="text-xs text-[var(--color-error)]">
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                     Couldn&apos;t load routing — save may overwrite current setting.
                   </p>
                 ) : (
@@ -988,7 +988,7 @@ export function ChannelConfigPanel({
                     <div className="space-y-1.5">
                       <Label
                         htmlFor="routing-workspace-select"
-                        className="text-xs font-medium text-[var(--color-secondary)]"
+                        className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]"
                       >
                         Workspace
                       </Label>
@@ -1020,18 +1020,18 @@ export function ChannelConfigPanel({
                           ]}
                         />
                       </div>
-                      <p className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
                         Bind this channel to a workspace. Once bound, only that workspace&apos;s member agents are eligible.
                       </p>
                     </div>
 
                     {/* Agent selector (US-2 / FR-002) — disabled until workspace chosen */}
                     <div className="space-y-1.5">
-                      <Label className="text-xs font-medium text-[var(--color-secondary)]">
+                      <Label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                         Default agent
                       </Label>
                       {agentsError ? (
-                        <p className="text-xs text-[var(--color-error)]">
+                        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                           Couldn&apos;t load agent list.
                         </p>
                       ) : isBoundFlow && workspaceLoadError ? (
@@ -1039,7 +1039,7 @@ export function ChannelConfigPanel({
                         // Distinct from the loading/empty-core_team states (Finding #1).
                         <p
                           data-testid="routing-workspace-load-error"
-                          className="text-xs text-[var(--color-error)]"
+                          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
                         >
                           Couldn&apos;t load workspace members — try again.{' '}
                           <button tabIndex={0}
@@ -1056,7 +1056,7 @@ export function ChannelConfigPanel({
                         // FR-009: empty core_team — can't select anything
                         <p
                           data-testid="routing-empty-core-team-hint"
-                          className="text-xs text-[var(--color-error)]"
+                          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
                         >
                           Add a member to this workspace first.
                         </p>
@@ -1100,7 +1100,7 @@ export function ChannelConfigPanel({
                       {isBoundFlow && !workspaceLoadError && (selectedAgentId === '__none__' || selectedAgentId === '') && !(coreTeam !== null && coreTeam.length === 0) && (
                         <p
                           data-testid="routing-agent-required-hint"
-                          className="text-xs text-[var(--color-error)]"
+                          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
                         >
                           Select an agent from this workspace to enable routing.
                         </p>
@@ -1108,7 +1108,7 @@ export function ChannelConfigPanel({
 
                       {/* Unbound flow helper text */}
                       {!isBoundFlow && (
-                        <p className="text-[10px] text-[var(--color-muted)] leading-relaxed">
+                        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
                           Which agent handles inbound messages on this channel. &quot;(Global default)&quot; falls back to the globally-configured default agent.
                         </p>
                       )}

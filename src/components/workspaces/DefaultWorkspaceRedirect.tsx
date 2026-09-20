@@ -59,7 +59,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
     return (
       <div className="flex flex-col items-center justify-center gap-3 h-full min-h-[200px] p-8 text-center">
         <WarningCircle size={20} weight="bold" className="text-[var(--color-error)]" />
-        <p className="text-sm text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           Could not load workspaces. Check your connection, then retry.
         </p>
         <button tabIndex={0}
@@ -68,7 +68,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
           onClick={() => void refetch()}
           disabled={isFetching}
           aria-label="Retry loading workspaces"
-          className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-[length:var(--type-utility-xs-size)] font-medium transition-colors disabled:opacity-50"
           style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
         >
           <ArrowClockwise size={14} className={isFetching ? 'animate-spin' : undefined} />
@@ -81,7 +81,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
   // Loaded, but there are no workspaces to redirect into — don't spin forever.
   if (!isLoading && (workspaces?.length ?? 0) === 0) {
     return (
-      <div className="flex items-center justify-center h-full min-h-[200px] p-8 text-center text-sm text-[var(--color-muted)]">
+      <div className="flex items-center justify-center h-full min-h-[200px] p-8 text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
         No workspaces yet. Create one to get started.
       </div>
     )

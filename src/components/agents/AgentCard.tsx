@@ -53,7 +53,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         <div className="flex items-start gap-3">
           {/* Avatar — decorative next to the visible name below */}
           <div
-            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold"
+            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
             style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
             aria-hidden="true"
           >
@@ -69,7 +69,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
           {/* Info */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-              <span className="font-headline font-bold text-sm text-[var(--color-secondary)] truncate">
+              <span className="font-headline font-bold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {agent.name}
               </span>
               {agent.status === 'active' && (
@@ -83,13 +83,13 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                     className="text-[var(--color-accent)] shrink-0"
                     aria-label="Default agent"
                   />
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-accent)] shrink-0">
+                  <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-accent)] shrink-0">
                     Default
                   </span>
                 </>
               )}
             </div>
-            <p className="text-sm text-[var(--color-muted)] line-clamp-2 mb-2">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-2">
               {agent.description || 'No description'}
             </p>
             <div className="flex items-center gap-2 flex-wrap">
@@ -104,7 +104,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               )}
               {agent.model && (
                 <span
-                  className="text-xs font-mono text-[var(--color-muted)] truncate max-w-[140px]"
+                  className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] truncate max-w-[140px]"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
@@ -121,12 +121,12 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               )}
             </div>
             {agent.status === 'draft' && agent.type === 'Main' && (
-              <p className="text-xs text-[var(--color-warning)]/70 mt-1">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/70 mt-1">
                 Set up SOUL.md to activate this agent
               </p>
             )}
             {agent.status === 'error' && (
-              <p className="text-xs text-[var(--color-error)]/70 mt-1">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/70 mt-1">
                 Agent encountered an error — check the activity log
               </p>
             )}
@@ -141,7 +141,7 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
         <button tabIndex={0}
           type="button"
           onClick={onSetDefault}
-          className="absolute bottom-3 right-4 flex items-center justify-center gap-1 min-h-tap-target-min min-w-tap-target-min px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          className="absolute bottom-3 right-4 flex items-center justify-center gap-1 min-h-tap-target-min min-w-tap-target-min px-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
           aria-label={`Set ${agent.name} as default agent`}
         >
           <Star size={12} weight="fill" />

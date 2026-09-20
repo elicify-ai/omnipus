@@ -31,8 +31,8 @@ export function QueryErrorState({
       data-testid={testId ?? 'query-error-state'}
     >
       <WarningCircle size={24} className="text-[var(--color-error)]" aria-hidden="true" />
-      <p className="text-sm text-[var(--color-muted)]">{message}</p>
-      {onRetry ? <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={onRetry}>Retry</Button> : null}
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">{message}</p>
+      {onRetry ? <Button variant="link" size="sm" className="h-auto p-0 text-[length:var(--type-utility-xs-size)]" onClick={onRetry}>Retry</Button> : null}
     </div>
   )
 }

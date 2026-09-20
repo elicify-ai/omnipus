@@ -88,7 +88,7 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
 
   return (
     <div className={cn('space-y-1.5', className)}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         Run history
       </p>
 
@@ -97,7 +97,7 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
       ) : isError ? (
         <div
           data-testid="task-runs-error"
-          className="flex items-center justify-between gap-2 rounded-md border border-[color:var(--color-error)]/30 bg-[color:var(--color-error)]/10 px-3 py-2 text-xs text-[color:var(--color-error)]"
+          className="flex items-center justify-between gap-2 rounded-md border border-[color:var(--color-error)]/30 bg-[color:var(--color-error)]/10 px-3 py-2 text-[length:var(--type-utility-xs-size)] text-[color:var(--color-error)]"
         >
           <span className="flex items-center gap-1.5">
             <Warning size={13} weight="fill" />
@@ -107,7 +107,7 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
             type="button"
             variant="outline"
             size="sm"
-            className="h-6 shrink-0 px-2 text-[11px]"
+            className="h-6 shrink-0 px-2 text-[length:var(--type-caption-size)]"
             onClick={() => void refetch()}
             disabled={isFetching}
           >
@@ -117,7 +117,7 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
       ) : visibleRuns.length === 0 ? (
         <div
           data-testid="task-runs-empty"
-          className="flex items-center gap-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-xs text-[var(--color-muted)]"
+          className="flex items-center gap-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         >
           <ClockCounterClockwise size={14} />
           No runs yet.
@@ -148,20 +148,20 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Badge className={cn('h-6 rounded-md border-transparent px-2 text-[11px]', badgeClass)}>
+          <Badge className={cn('h-6 rounded-md border-transparent px-2 text-[length:var(--type-caption-size)]', badgeClass)}>
             {statusLabel(run.status)}
           </Badge>
-          <span className="text-[11px] text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {run.kind === 'manual' ? 'Run now' : 'Scheduled'}
           </span>
         </div>
-        <span className="text-[11px] text-[var(--color-muted)]">{formatDateTime(run.ended_at)}</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatDateTime(run.ended_at)}</span>
       </div>
 
       {showResult ? (
         <pre
           data-testid="task-run-result"
-          className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-2 font-mono text-xs leading-relaxed text-[var(--color-secondary)]"
+          className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-2 font-mono text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-secondary)]"
         >
           {run.result}
         </pre>
@@ -172,7 +172,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
           type="button"
           variant="outline"
           size="sm"
-          className="h-7 w-full gap-2 text-xs"
+          className="h-7 w-full gap-2 text-[length:var(--type-utility-xs-size)]"
           onClick={onOpenInChat}
         >
           <ChatCircle size={12} />

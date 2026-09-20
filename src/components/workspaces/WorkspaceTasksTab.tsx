@@ -244,7 +244,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
         <button tabIndex={0}
           type="button"
           onClick={() => setPlanSlideOver({ open: true, plan: null })}
-          className="flex items-center gap-1 text-sm text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+          className="flex items-center gap-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
         >
           <Plus size={14} />
           New Plan
@@ -280,7 +280,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
               {heading}
             </h2>
             {view === 'board' && ownerAgent && (
-              <span className="whitespace-nowrap text-xs text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>
+              <span className="whitespace-nowrap text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">· Agent: {ownerAgent.name}</span>
             )}
           </div>
           <ViewSwitcher value={view} onChange={setView} />
@@ -305,7 +305,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           <button tabIndex={0}
             type="button"
             onClick={() => setCreateTaskOpen(true)}
-            className="flex items-center gap-1 text-sm text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+            className="flex items-center gap-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
           >
             <Plus size={14} />
             New Task
@@ -323,7 +323,7 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           {selectedPlan && (
             <span
               data-testid="new-task-unplanned-hint"
-              className="text-[10px] leading-snug text-[var(--color-muted)]"
+              className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
             >
               Lands unplanned, not in "{selectedPlan.title}" — use "Move to plan…" after creating
             </span>
@@ -333,19 +333,19 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
       <div className="mx-6 border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
 
       {agentsError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
           Agent details failed to load — task avatars may be missing.
         </div>
       )}
       {plansError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
           Plans failed to load — the plans filter band may be incomplete.
         </div>
       )}
       {tasksError && tasks.length > 0 && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)] flex-shrink-0">
+        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0">
           <Info size={12} weight="fill" className="shrink-0" />
           Couldn't refresh — showing last-known tasks.
         </div>
@@ -472,7 +472,7 @@ function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: 
             // Flat like the workspace header tabs — no border, background or
             // shadow; just an icon + label on the header, gold when active.
             className={cn(
-              'flex items-center gap-1.5 text-sm font-medium transition-colors',
+              'flex items-center gap-1.5 text-[length:var(--type-body-compact-size)] font-medium transition-colors',
               checked
                 ? 'text-[var(--color-accent)]'
                 : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -501,7 +501,7 @@ function AgentAvatar({ agent }: { agent: Agent }) {
   return (
     <div
       aria-hidden="true"
-      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold"
+      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[length:var(--type-caption-size)] font-bold"
       style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
     >
       {agent.icon ? <IconRenderer icon={agent.icon} size={11} /> : initialOf(agent.name)}
@@ -526,7 +526,7 @@ function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownPro
             variant="ghost"
             size="sm"
             aria-label={`Filter by agent (current: ${selected?.name ?? 'all agents'})`}
-            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-xs font-medium"
+            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-[length:var(--type-utility-xs-size)] font-medium"
           >
             {selected ? (
               <AgentAvatar agent={selected} />
@@ -552,7 +552,7 @@ function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownPro
             </div>
             <span className="truncate">All agents</span>
             {value === null && (
-              <span className="ml-auto shrink-0 text-[10px] text-[var(--color-success)]">active</span>
+              <span className="ml-auto shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-success)]">active</span>
             )}
           </DropdownMenuItem>
           {agents.map((agent) => (
@@ -565,7 +565,7 @@ function AgentFilterDropdown({ agents, value, onChange }: AgentFilterDropdownPro
               <AgentAvatar agent={agent} />
               <span className="truncate">{agent.name}</span>
               {agent.id === value && (
-                <span className="ml-auto shrink-0 text-[10px] text-[var(--color-success)]">active</span>
+                <span className="ml-auto shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-success)]">active</span>
               )}
             </DropdownMenuItem>
           ))}
@@ -604,7 +604,7 @@ function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectPr
             variant="ghost"
             size="sm"
             aria-label="Filter by tags"
-            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-xs font-medium"
+            className="flex h-8 min-w-0 max-w-[200px] items-center gap-1.5 px-2 text-[length:var(--type-utility-xs-size)] font-medium"
           >
             <Tag size={13} className="shrink-0 opacity-70" />
             <span className="truncate">{label}</span>
@@ -619,7 +619,7 @@ function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectPr
             checked={value.includes(PLAN_FILTER_UNTAGGED)}
             onCheckedChange={() => toggle(PLAN_FILTER_UNTAGGED)}
             onSelect={(e) => e.preventDefault()}
-            className="text-xs"
+            className="text-[length:var(--type-utility-xs-size)]"
           >
             Untagged
           </DropdownMenuCheckboxItem>
@@ -630,7 +630,7 @@ function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectPr
               checked={value.includes(tag)}
               onCheckedChange={() => toggle(tag)}
               onSelect={(e) => e.preventDefault()}
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
             >
               {tag}
             </DropdownMenuCheckboxItem>
@@ -638,7 +638,7 @@ function TagFilterMultiSelect({ tasks, value, onChange }: TagFilterMultiSelectPr
           {value.length > 0 && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => onChange([])} className="text-xs text-[var(--color-muted)]">
+              <DropdownMenuItem onClick={() => onChange([])} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Clear tags
               </DropdownMenuItem>
             </>

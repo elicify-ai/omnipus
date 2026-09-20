@@ -46,7 +46,7 @@ export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }
 
   return (
     <span
-      className={clsx("inline-flex items-center gap-1 text-[10px] transition-opacity duration-300", status === 'saved' ? 'opacity-60' : status === 'idle' ? 'opacity-0' : 'opacity-100', className)}
+      className={clsx("inline-flex items-center gap-1 text-[length:var(--type-caption-size)] transition-opacity duration-300", status === 'saved' ? 'opacity-60' : status === 'idle' ? 'opacity-0' : 'opacity-100', className)}
       aria-live={isError || isConflict ? undefined : 'polite'}
       role={isError || isConflict ? 'alert' : undefined}
     >

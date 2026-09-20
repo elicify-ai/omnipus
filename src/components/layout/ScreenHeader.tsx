@@ -42,7 +42,7 @@ export function ScreenHeader({ title, actions }: ScreenHeaderProps) {
       </button>
 
       {/* Screen title */}
-      <h2 className="flex-1 min-w-0 font-headline font-semibold text-sm text-[var(--color-secondary)] truncate">
+      <h2 className="flex-1 min-w-0 font-headline font-semibold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
         {title}
       </h2>
 

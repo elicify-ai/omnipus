@@ -20,7 +20,7 @@ export function EvidenceViewer({ evidence }: EvidenceViewerProps) {
   const passed = !exitCodeUnavailable && evidence.exit_code === 0
 
   return (
-    <div className="rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)] p-2 text-[10px] font-mono" data-testid="evidence-viewer">
+    <div className="rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)] p-2 text-[length:var(--type-caption-size)] font-mono" data-testid="evidence-viewer">
       <p className="text-[var(--color-muted)] mb-1 truncate" title={evidence.command}>
         $ {evidence.command}
       </p>

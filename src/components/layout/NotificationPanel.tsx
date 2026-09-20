@@ -97,7 +97,7 @@ export function NotificationPanel() {
             <button tabIndex={0}
               type="button"
               onClick={handleMarkAllRead}
-              className="text-xs text-[var(--color-accent)] hover:underline"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
             >
               Mark all read
             </button>
@@ -130,7 +130,7 @@ export function NotificationPanel() {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline justify-between gap-2">
                       <span
-                        className={`truncate text-sm ${
+                        className={`truncate text-[length:var(--type-body-compact-size)] ${
                           item.read
                             ? 'text-[var(--color-secondary)]'
                             : 'font-medium text-[var(--color-secondary)]'
@@ -141,12 +141,12 @@ export function NotificationPanel() {
                         {!item.read && <span className="sr-only">Unread: </span>}
                         {item.title}
                       </span>
-                      <span className="shrink-0 text-[10px] text-[var(--color-muted)]">
+                      <span className="shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                         {relativeTime(item.createdAtMs)}
                       </span>
                     </div>
                     {item.body && (
-                      <p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-muted)]">
+                      <p className="mt-0.5 line-clamp-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                         {item.body}
                       </p>
                     )}
