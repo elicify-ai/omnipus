@@ -162,7 +162,7 @@ export function SkillsScreen() {
   return (
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Skills & Tools" />
-    <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+    <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
     <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
       <div className="mb-[var(--space-4)]">
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">

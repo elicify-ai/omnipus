@@ -344,15 +344,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "0eee88bd52026cf782b237189faa247a8fc46356ed429bf3cfeaae070020aba7",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/ProfileScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "owner": "C1 Lane 7: Shell, navigation, authentication/onboarding, profile and usage",
-      "replacement": "Supply a justified closed-scale fallback in `pb-[env(safe-area-inset-bottom)]` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "0ef6d4c07f772e216d0ae2e90142f5ea24a42f8db9f98e9fe33a7d1fff6160a7",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -467,15 +458,6 @@
       "syntax": "text-red-400",
       "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Replace raw colour literal `text-red-400` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "122b408d4ec7759abbc819ac92ea57b6d755050f3b640906e23d7f1165b83f0c",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/ConnectorsScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
-      "replacement": "Supply a justified closed-scale fallback in `pb-[env(safe-area-inset-bottom)]` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -695,6 +677,15 @@
       "expiryCheckpoint": "C2"
     },
     {
+      "fingerprint": "1f6b8511b75d28b2b80005f20bbc5b1b1b1653cba79714ca5591757fe23bdb4d",
+      "ruleId": "spacing/root-dependent",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom,var(--space-0)))]",
+      "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
+      "replacement": "Express `pb-[max(0.5rem,env(safe-area-inset-bottom,var(--space-0)))]` on the closed 4px/8px scale under the activated root font size: convert to the equivalent registered spacing token (hairline/1px border exception only where justified) so the value survives root-size changes.",
+      "expiryCheckpoint": "C1"
+    },
+    {
       "fingerprint": "2018127e82f67b3ed73ffc8ba61e113d6d174643c6b3aabe7bf724c01b875ffb",
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/team/AddAgentPicker.tsx",
@@ -830,15 +821,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "23e230402c356e65a10d56a978b9f0ad450821caaec6f2851d62ab738d7dc96a",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/styles/globals.css",
-      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top))",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Supply a justified closed-scale fallback in `padding-top: max(0.75rem, env(safe-area-inset-top))` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "242d392b9ad935011685c4a59d6524657c438dd1c0959fdc70609683e9365568",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/RateLimitIndicator.tsx",
@@ -872,15 +854,6 @@
       "syntax": "#22c55e",
       "owner": "C1 Lane 5: Agents and skills",
       "replacement": "Replace raw colour literal `#22c55e` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "255584ffb1dcf2dcb84bfcaf70cdedb178e53b042313739a0508fef62b7e28ff",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "padding-bottom: env(safe-area-inset-bottom)",
-      "owner": "C1 Lead—shared foundations: Tree depth indentation (one shared indent pattern)",
-      "replacement": "Supply a justified closed-scale fallback in `padding-bottom: env(safe-area-inset-bottom)` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -1079,15 +1052,6 @@
       "syntax": "-mb-px",
       "owner": "C1 Lane 4: Library, knowledge, media and document previews",
       "replacement": "Move `-mb-px` onto the registered 4px/8px spacing scale using the nearest governed token that preserves the rendered value (hairline/1px exception only where justified).",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "2fe72d9d23a8391aa35e2dc71ee36d9b00819feec81debac9de83d2fac24a469",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/styles/globals.css",
-      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top))",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Express `padding-top: max(0.75rem, env(safe-area-inset-top))` on the closed 4px/8px scale under the activated root font size: convert to the equivalent registered spacing token (hairline/1px border exception only where justified) so the value survives root-size changes.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -1541,15 +1505,6 @@
       "expiryCheckpoint": "C2"
     },
     {
-      "fingerprint": "3f5304ad2ae1736885e99130885117e521a58317d5caa30b3f93fa962a671c5c",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/styles/globals.css",
-      "syntax": "padding-right: env(safe-area-inset-right)",
-      "owner": "C1 Lead—shared foundations: Global stylesheets",
-      "replacement": "Supply a justified closed-scale fallback in `padding-right: env(safe-area-inset-right)` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "3fa0d60a5bc9cac8809bfc87a0a2b3f40c75f21a052aca9e76e9cd87cee04888",
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/ToolCallBadge.tsx",
@@ -1619,15 +1574,6 @@
       "syntax": "bg-white",
       "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Replace raw colour literal `bg-white` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "41ba6eaf2bd50d762b6618227dc9855781c74a4d0bf45fa9cc59885e3c0a8a71",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom))]",
-      "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "Supply a justified closed-scale fallback in `pb-[max(0.5rem,env(safe-area-inset-bottom))]` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -2657,15 +2603,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "6f2dad8fdae244dc5ef6dee8d514399ad230dab44979e69e21ee8f8f1b52999f",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "padding-top: env(safe-area-inset-top)",
-      "owner": "C1 Lead—shared foundations: Tree depth indentation (one shared indent pattern)",
-      "replacement": "Supply a justified closed-scale fallback in `padding-top: env(safe-area-inset-top)` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "6fe7eb1b1b642bcbc531e9e6a1742b78bd7a49eaacc2566dd74c1726fdf2bf58",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -3557,15 +3494,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "9c84bcfcf83ba03f427bcc90588dc14cbce342527b80ed8cf52cb1d09c4c93a7",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "padding-left: env(safe-area-inset-left)",
-      "owner": "C1 Lead—shared foundations: Tree depth indentation (one shared indent pattern)",
-      "replacement": "Supply a justified closed-scale fallback in `padding-left: env(safe-area-inset-left)` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "9ccf6eeda0cc6bd62276ac9937bb8ed342a3a8664c0b766c3b598785908c68dc",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/shared/ToolPolicyEditor.tsx",
@@ -3923,15 +3851,6 @@
       "syntax": "text-zinc-400",
       "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Replace raw colour literal `text-zinc-400` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "ad85e9952567d8342973af11ca2580f8bc63a5fd7f6641e5f92718dde1265cf3",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/SettingsScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
-      "replacement": "Supply a justified closed-scale fallback in `pb-[env(safe-area-inset-bottom)]` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -4574,15 +4493,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "c46ef3cab3b606a5a38a2afe58a07d9406a1e7ee8f4fb84264a9d0cbb8de007b",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "owner": "C1 Lane 5: Agents and skills",
-      "replacement": "Supply a justified closed-scale fallback in `pb-[env(safe-area-inset-bottom)]` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "c47f3eb9c8f28a5676a17b0aec9278f94979a40e9af850527a1156e64bb7bf02",
       "ruleId": "controls/raw-button",
       "path": "src/components/settings/AllowedPathsEditor.tsx",
@@ -4952,15 +4862,6 @@
       "expiryCheckpoint": "C2"
     },
     {
-      "fingerprint": "d1eb381eff48cfd8fe135a9b2ed9b979a338ad0e4288f29e8f2176ef38069b71",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/SkillsScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "owner": "C1 Lane 5: Agents and skills",
-      "replacement": "Supply a justified closed-scale fallback in `pb-[env(safe-area-inset-bottom)]` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "d1f53f6724bff34e8e7fd07ff2178995ac610558e64db49577a8928bdc6fe439",
       "ruleId": "controls/raw-button",
       "path": "src/components/shared/PolicyBadge.tsx",
@@ -5048,15 +4949,6 @@
       "syntax": "border-red-500/30",
       "owner": "C1 Lane 6: Settings, providers, connectors and policy controls",
       "replacement": "Replace raw colour literal `border-red-500/30` with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
-      "fingerprint": "d74de5d2cb70d5980bdff474a3ae82fc20e8496315275993536dc2f3a16bba79",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/shared/RouteFallback.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "owner": "C1 Lane 7: Shell, navigation, authentication/onboarding, profile and usage",
-      "replacement": "Supply a justified closed-scale fallback in `pb-[env(safe-area-inset-bottom)]` — env(safe-area-inset-*, <registered closed-scale value>) — so layout degrades safely without the inset; the fallback value itself stays subject to central review.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -5309,6 +5201,15 @@
       "syntax": "var(--fc-highlight-color)",
       "owner": "C1 lane 2: Calendar and workspace management",
       "replacement": "Replace direct calendar selection reads with a governed calendar-selection component token preserving the existing tint; drive the FullCalendar override from that same token.",
+      "expiryCheckpoint": "C1"
+    },
+    {
+      "fingerprint": "e0dd84730881479a5dc32afedeb16cea76aaa85e9ebdc59f9120d65ad800546d",
+      "ruleId": "spacing/root-dependent",
+      "path": "src/styles/globals.css",
+      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top,var(--space-0)))",
+      "owner": "C1 Lead—shared foundations: Global stylesheets",
+      "replacement": "Express `padding-top: max(0.75rem, env(safe-area-inset-top,var(--space-0)))` on the closed 4px/8px scale under the activated root font size: convert to the equivalent registered spacing token (hairline/1px border exception only where justified) so the value survives root-size changes.",
       "expiryCheckpoint": "C1"
     },
     {
@@ -5717,15 +5618,6 @@
       "expiryCheckpoint": "C1"
     },
     {
-      "fingerprint": "f5e555b7d49aa78c62336ea69c6b28afc0773e72a5f780395715a9ee3d08164e",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom))]",
-      "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "Express `pb-[max(0.5rem,env(safe-area-inset-bottom))]` on the closed 4px/8px scale under the activated root font size: convert to the equivalent registered spacing token (hairline/1px border exception only where justified) so the value survives root-size changes.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "f5ea7ef786c29ced6f8782f80884886c216c2bbab7e635ac8e242ff5b7b948cc",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/workspaces/graph/TaskNode.tsx",
@@ -5913,6 +5805,13 @@
     },
     {
       "ruleId": "spacing/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom,var(--space-0)))]",
+      "reason": "Lead read (undefined): line 3599: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
       "path": "src/components/chat/MediaActionToolbar.tsx",
       "syntax": "MediaActionToolbar#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: MediaActionToolbar's own destructured prop `className` is declared at src/components/chat/MediaActionToolbar.tsx:128:3 and flows unmodified to 1 sink(s) — src/components/chat/MediaActionToolbar.tsx:155:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between. Sibling rule already registers this exact (path, syntax) under ruleId \"ts-colors/extension-boundary\" with category \"caller pass-through\"; this rule extends the same review to the sibling ruleId this scanner reports.",
@@ -5952,6 +5851,27 @@
       "syntax": "TokenCounter#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: TokenCounter's own destructured prop `className` is declared at src/components/chat/composer/TokenCounter.tsx:13:32 and flows unmodified to 1 sink(s) — src/components/chat/composer/TokenCounter.tsx:19:7 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-bottom: env(safe-area-inset-bottom,var(--space-0))",
+      "reason": "Lead read (undefined): line 822, line 852: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-left: env(safe-area-inset-left,var(--space-0))",
+      "reason": "Lead read (undefined): line 823, line 853: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-top: env(safe-area-inset-top,var(--space-0))",
+      "reason": "Lead read (undefined): line 821, line 851: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
     },
     {
       "ruleId": "spacing/extension-boundary",
@@ -6011,6 +5931,41 @@
     },
     {
       "ruleId": "spacing/extension-boundary",
+      "path": "src/components/screens/AgentListScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "reason": "Lead read (undefined): line 639, line 658, line 675: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/screens/ConnectorsScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "reason": "Lead read (undefined): line 1063: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/screens/ProfileScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "reason": "Lead read (undefined): line 12: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/screens/SettingsScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "reason": "Lead read (undefined): line 55: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/screens/SkillsScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "reason": "Lead read (undefined): line 165: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
       "path": "src/components/shared/IconRenderer.tsx",
       "syntax": "IconRenderer#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: IconRenderer's own destructured prop `className` is declared at src/components/shared/IconRenderer.tsx:111:49 and flows unmodified to 1 sink(s) — src/components/shared/IconRenderer.tsx:123:28 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
@@ -6022,6 +5977,13 @@
       "syntax": "QueryErrorState#className",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: QueryErrorState's own destructured prop `className` is declared at src/components/shared/QueryErrorState.tsx:28:3 and flows unmodified to 1 sink(s) — src/components/shared/QueryErrorState.tsx:33:107 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/shared/RouteFallback.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "reason": "Lead read (undefined): line 9: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
     },
     {
       "ruleId": "spacing/extension-boundary",
@@ -6806,6 +6768,20 @@
       "syntax": "statusDot#colorClass",
       "reason": "Category: caller pass-through — migration plan §5. Mechanically verified by registry-verify.mjs: statusDot's own parameter `colorClass` is declared at src/lib/toolStatusConfig.tsx:69:27 and flows unmodified to 1 sink(s) — src/lib/toolStatusConfig.tsx:70:35 (JSX attribute `className`) — with no transformation, conditional replacement, or non-forwarding read in between.",
       "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/styles/globals.css",
+      "syntax": "padding-right: env(safe-area-inset-right,var(--space-0))",
+      "reason": "Lead read (undefined): line 268: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/styles/globals.css",
+      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top,var(--space-0)))",
+      "reason": "Lead read (undefined): line 274: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt.",
+      "owner": "safe-area env() with validated closed-scale fallback exception registry"
     },
     {
       "ruleId": "ts-colors/extension-boundary",

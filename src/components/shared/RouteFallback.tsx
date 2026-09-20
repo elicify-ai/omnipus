@@ -6,7 +6,7 @@ import { SkeletonList } from './ListStates'
 // consistency with in-screen loading states.
 export function RouteFallback() {
   return (
-    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+    <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
       <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
         <SkeletonList />
       </div>

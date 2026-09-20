@@ -818,9 +818,9 @@ export function Sidebar() {
           className="flex flex-col h-full flex-shrink-0 bg-[var(--color-surface-0)] border-r border-[var(--color-border)]"
           style={{
             width: 'var(--spacing-sidebar)',
-            paddingTop: 'env(safe-area-inset-top)',
-            paddingBottom: 'env(safe-area-inset-bottom)',
-            paddingLeft: 'env(safe-area-inset-left)',
+            paddingTop: 'env(safe-area-inset-top,var(--space-0))',
+            paddingBottom: 'env(safe-area-inset-bottom,var(--space-0))',
+            paddingLeft: 'env(safe-area-inset-left,var(--space-0))',
           }}
         >
           {/* No aria-label here — the <nav aria-label="Main navigation"> inside
@@ -848,9 +848,9 @@ export function Sidebar() {
             className="absolute left-0 top-0 z-40 flex h-full flex-col bg-[var(--color-surface-0)] border-r border-[var(--color-border)] shadow-2xl"
             style={{
               width: 'var(--spacing-sidebar)',
-              paddingTop: 'env(safe-area-inset-top)',
-              paddingBottom: 'env(safe-area-inset-bottom)',
-              paddingLeft: 'env(safe-area-inset-left)',
+              paddingTop: 'env(safe-area-inset-top,var(--space-0))',
+              paddingBottom: 'env(safe-area-inset-bottom,var(--space-0))',
+              paddingLeft: 'env(safe-area-inset-left,var(--space-0))',
             }}
             id="sidebar-overlay-panel"
             role="dialog"

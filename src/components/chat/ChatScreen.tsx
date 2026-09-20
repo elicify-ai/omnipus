@@ -3596,7 +3596,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <GoalPillTray />
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
-            <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+            <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(0.5rem,env(safe-area-inset-bottom,var(--space-0)))]">
               <OmnipusComposer agentRemoved={agentRemoved} />
             </div>
           </div>

@@ -1060,7 +1060,7 @@ export function ConnectorsScreen() {
   return (
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Connectors" />
-      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
       <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
         {/* Header */}
         <div className="mb-[var(--space-4)] flex items-start justify-between gap-[var(--space-3)]">

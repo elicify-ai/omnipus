@@ -9,7 +9,7 @@ export function ProfileScreen() {
   return (
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Profile" />
-      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
         <div className="max-w-3xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
           <div className="mb-[var(--space-4)]">
             <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Profile</h1>

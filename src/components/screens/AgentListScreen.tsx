@@ -636,7 +636,7 @@ export function AgentListScreen() {
 
   if (isLoading) {
     return (
-      <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+      <div className="absolute inset-0 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
         <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-[var(--space-3)]">
             {[1, 2, 3].map((i) => (
@@ -655,7 +655,7 @@ export function AgentListScreen() {
     return (
       <div className="absolute inset-0 flex flex-col">
         <ScreenHeader title="Agents" />
-        <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+        <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
           <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
             <div className="flex flex-col items-center justify-center py-[var(--space-8)] gap-[var(--space-2-5)]">
               <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">Could not load agents.</p>
@@ -672,7 +672,7 @@ export function AgentListScreen() {
   return (
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Agents" />
-      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
+      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
       <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
         {/* Header */}
         <div className="flex items-center justify-between mb-[var(--space-4)]">

@@ -268,13 +268,6 @@
       "count": 1
     },
     {
-      "fingerprint": "0eee88bd52026cf782b237189faa247a8fc46356ed429bf3cfeaae070020aba7",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/ProfileScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "count": 1
-    },
-    {
       "fingerprint": "0ef6d4c07f772e216d0ae2e90142f5ea24a42f8db9f98e9fe33a7d1fff6160a7",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -363,13 +356,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/DefaultModelCard.tsx",
       "syntax": "text-red-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "122b408d4ec7759abbc819ac92ea57b6d755050f3b640906e23d7f1165b83f0c",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/ConnectorsScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
       "count": 1
     },
     {
@@ -541,6 +527,13 @@
       "count": 1
     },
     {
+      "fingerprint": "1f6b8511b75d28b2b80005f20bbc5b1b1b1653cba79714ca5591757fe23bdb4d",
+      "ruleId": "spacing/root-dependent",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom,var(--space-0)))]",
+      "count": 1
+    },
+    {
       "fingerprint": "2018127e82f67b3ed73ffc8ba61e113d6d174643c6b3aabe7bf724c01b875ffb",
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/team/AddAgentPicker.tsx",
@@ -646,13 +639,6 @@
       "count": 1
     },
     {
-      "fingerprint": "23e230402c356e65a10d56a978b9f0ad450821caaec6f2851d62ab738d7dc96a",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/styles/globals.css",
-      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top))",
-      "count": 1
-    },
-    {
       "fingerprint": "242d392b9ad935011685c4a59d6524657c438dd1c0959fdc70609683e9365568",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/RateLimitIndicator.tsx",
@@ -679,13 +665,6 @@
       "path": "src/components/agents/CreateAgentWizard.tsx",
       "syntax": "#22c55e",
       "count": 1
-    },
-    {
-      "fingerprint": "255584ffb1dcf2dcb84bfcaf70cdedb178e53b042313739a0508fef62b7e28ff",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "padding-bottom: env(safe-area-inset-bottom)",
-      "count": 2
     },
     {
       "fingerprint": "25b3342f12ab4dc151aaf025e0d03934f6f162a216e97065b16916982ae2893e",
@@ -840,13 +819,6 @@
       "path": "src/components/library/preview/BasePreview.tsx",
       "syntax": "-mb-px",
       "count": 2
-    },
-    {
-      "fingerprint": "2fe72d9d23a8391aa35e2dc71ee36d9b00819feec81debac9de83d2fac24a469",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/styles/globals.css",
-      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top))",
-      "count": 1
     },
     {
       "fingerprint": "2ff80bcc9bd10380f99f6dddaa3a62d303043d1e450f7c19fe52b917348603f9",
@@ -1199,13 +1171,6 @@
       "count": 1
     },
     {
-      "fingerprint": "3f5304ad2ae1736885e99130885117e521a58317d5caa30b3f93fa962a671c5c",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/styles/globals.css",
-      "syntax": "padding-right: env(safe-area-inset-right)",
-      "count": 1
-    },
-    {
       "fingerprint": "3fa0d60a5bc9cac8809bfc87a0a2b3f40c75f21a052aca9e76e9cd87cee04888",
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/ToolCallBadge.tsx",
@@ -1259,13 +1224,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/GodModeControl.tsx",
       "syntax": "bg-white",
-      "count": 1
-    },
-    {
-      "fingerprint": "41ba6eaf2bd50d762b6618227dc9855781c74a4d0bf45fa9cc59885e3c0a8a71",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom))]",
       "count": 1
     },
     {
@@ -2067,13 +2025,6 @@
       "count": 1
     },
     {
-      "fingerprint": "6f2dad8fdae244dc5ef6dee8d514399ad230dab44979e69e21ee8f8f1b52999f",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "padding-top: env(safe-area-inset-top)",
-      "count": 2
-    },
-    {
       "fingerprint": "6fe7eb1b1b642bcbc531e9e6a1742b78bd7a49eaacc2566dd74c1726fdf2bf58",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/settings/AuditLogViewer.tsx",
@@ -2767,13 +2718,6 @@
       "count": 1
     },
     {
-      "fingerprint": "9c84bcfcf83ba03f427bcc90588dc14cbce342527b80ed8cf52cb1d09c4c93a7",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/layout/Sidebar.tsx",
-      "syntax": "padding-left: env(safe-area-inset-left)",
-      "count": 2
-    },
-    {
       "fingerprint": "9ccf6eeda0cc6bd62276ac9937bb8ed342a3a8664c0b766c3b598785908c68dc",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/shared/ToolPolicyEditor.tsx",
@@ -3052,13 +2996,6 @@
       "path": "src/components/settings/AuditLogViewer.tsx",
       "syntax": "text-zinc-400",
       "count": 4
-    },
-    {
-      "fingerprint": "ad85e9952567d8342973af11ca2580f8bc63a5fd7f6641e5f92718dde1265cf3",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/SettingsScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "count": 1
     },
     {
       "fingerprint": "add7d5a6fc846f21374e9d277317a8db5bbfad84f3d915e4f851e81021d6b56f",
@@ -3558,13 +3495,6 @@
       "count": 1
     },
     {
-      "fingerprint": "c46ef3cab3b606a5a38a2afe58a07d9406a1e7ee8f4fb84264a9d0cbb8de007b",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/AgentListScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "count": 3
-    },
-    {
       "fingerprint": "c47f3eb9c8f28a5676a17b0aec9278f94979a40e9af850527a1156e64bb7bf02",
       "ruleId": "controls/raw-button",
       "path": "src/components/settings/AllowedPathsEditor.tsx",
@@ -3852,13 +3782,6 @@
       "count": 1
     },
     {
-      "fingerprint": "d1eb381eff48cfd8fe135a9b2ed9b979a338ad0e4288f29e8f2176ef38069b71",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/screens/SkillsScreen.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "count": 1
-    },
-    {
       "fingerprint": "d1f53f6724bff34e8e7fd07ff2178995ac610558e64db49577a8928bdc6fe439",
       "ruleId": "controls/raw-button",
       "path": "src/components/shared/PolicyBadge.tsx",
@@ -3927,13 +3850,6 @@
       "path": "src/components/screens/ConnectorsScreen.tsx",
       "syntax": "border-red-500/30",
       "count": 2
-    },
-    {
-      "fingerprint": "d74de5d2cb70d5980bdff474a3ae82fc20e8496315275993536dc2f3a16bba79",
-      "ruleId": "spacing/missing-safe-area-fallback",
-      "path": "src/components/shared/RouteFallback.tsx",
-      "syntax": "pb-[env(safe-area-inset-bottom)]",
-      "count": 1
     },
     {
       "fingerprint": "d7a63a6e69532d3a0b71991aa17925455f463647b64741b8026a858672892dbc",
@@ -4129,6 +4045,13 @@
       "ruleId": "css-colors/unregistered-token",
       "path": "src/styles/fullcalendar-theme.css",
       "syntax": "var(--fc-highlight-color)",
+      "count": 1
+    },
+    {
+      "fingerprint": "e0dd84730881479a5dc32afedeb16cea76aaa85e9ebdc59f9120d65ad800546d",
+      "ruleId": "spacing/root-dependent",
+      "path": "src/styles/globals.css",
+      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top,var(--space-0)))",
       "count": 1
     },
     {
@@ -4444,13 +4367,6 @@
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/agents/AgentProfile.tsx",
       "syntax": "text-emerald-400",
-      "count": 1
-    },
-    {
-      "fingerprint": "f5e555b7d49aa78c62336ea69c6b28afc0773e72a5f780395715a9ee3d08164e",
-      "ruleId": "spacing/root-dependent",
-      "path": "src/components/chat/ChatScreen.tsx",
-      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom))]",
       "count": 1
     },
     {
