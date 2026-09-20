@@ -6,7 +6,12 @@
 // exceptions/baselines are applied centrally by the orchestrator, never in scanners.
 //
 // Rules (docs/internal/design/design-system-definition.md E1, D5):
-//   controls/raw-button              — JSX <button>, element factories, document.createElement
+//   controls/raw-button              — JSX <button>, element factories, document.createElement,
+//                                      AND a hand-built control: any non-component element (a
+//                                      lowercase intrinsic tag, or a lowercase-member JSX member
+//                                      tag such as `motion.div`) carrying a literal or
+//                                      statically-resolvable role="button"/"radio"/"switch"/"tab"
+//                                      attribute — see "Hand-built ARIA-role controls" below.
 //   controls/raw-dialog              — JSX <dialog>, element factories, document.createElement
 //   controls/global-confirm          — window/globalThis/bare/aliased confirm() calls
 //   controls/checkbox-as-switch      — Checkbox or input[type=checkbox] with role="switch",
@@ -772,7 +777,19 @@ function handleJsxElement(context, node) {
     // Member tags resolve like identifiers: only the Checkbox primitive name is
     // governed; neutral member tags (SwitchPrimitives.Root) stay allowed and
     // Radix-backed members fail through the import rule instead (review-09).
-    if (tag.name.text === 'Checkbox') handleCheckboxComponent(context, node)
+    if (tag.name.text === 'Checkbox') {
+      handleCheckboxComponent(context, node)
+      return
+    }
+    // A member tag whose OWN member segment is lowercase (`motion.div`,
+    // `animated.span`, …) is the JSX-member-expression spelling of an
+    // intrinsic element: these animation-wrapper libraries re-export every
+    // HTML tag as `Namespace.<tag>` and render exactly that tag, so
+    // `motion.div` is `<div>` for every governance purpose here (see
+    // "Hand-built ARIA-role controls" below). An uppercase member segment
+    // (`SwitchPrimitives.Root`, `ComposerPrimitive.Send`, `DropdownMenu.Item`)
+    // is a real component reference and stays exempt.
+    if (isIntrinsicShapedMemberTag(tag)) reportRoleControlIfPresent(context, node, memberTagLabel(tag))
     return
   }
   if (!ts.isIdentifier(tag)) return
@@ -790,6 +807,11 @@ function handleJsxElement(context, node) {
     handleCheckboxComponent(context, node)
     return
   }
+  // A lowercase tag identifier is always an intrinsic DOM element in JSX
+  // (React never resolves a lowercase tag name through scope lookup, even
+  // when a same-named binding exists) — never one of our components. See
+  // "Hand-built ARIA-role controls" below.
+  if (/^[a-z]/.test(tag.text)) reportRoleControlIfPresent(context, node, tag.text)
   const alias = lookupName(context, tag.text)?.value
   if (alias === 'raw-button' || alias === 'raw-button-or-dialog') {
     reportAliasedIntrinsic(context, node, 'button')
@@ -797,6 +819,135 @@ function handleJsxElement(context, node) {
   if (alias === 'raw-dialog' || alias === 'raw-button-or-dialog') {
     reportAliasedIntrinsic(context, node, 'dialog')
   }
+}
+
+// ---------------------------------------------------------------------------
+// Hand-built ARIA-role controls (controls-review FIX-ROLEBUTTON)
+//
+// The raw-button/raw-dialog checks above match the literal <button>/<dialog>
+// tag only, so a control hand-built from a non-component element — a div, an
+// img, a lowercase-member animation-wrapper tag like motion.div — carrying
+// role="button" (or the same "acts like a governed widget but isn't one" shape
+// for role="radio"/"switch"/"tab") is invisible to them. That is still a raw
+// control needing the Button primitive (or the matching composite for
+// radio/switch/tab), so it is reported under controls/raw-button — the
+// existing raw-control rule — with a syntax string naming both the element
+// and the role so each shape fingerprints and baselines independently.
+//
+// Scope, deliberately narrow and sound:
+//  - Only non-component elements are checked: a lowercase-identifier
+//    intrinsic tag, or a JSX member tag whose member segment is itself
+//    lowercase (the motion.div family). A capitalized component reference
+//    (Button, any catalogued composite, or a third-party component like
+//    ComposerPrimitive.Send or Link) is exempt outright — its own internals,
+//    not this call site, own the DOM it renders; that is precisely "our own
+//    catalogued components are not violations." <button>/<dialog> themselves
+//    are excluded here because they are already unconditionally reported by
+//    the raw-intrinsic check above — role="button" on an element that IS a
+//    button is not a second, separate violation.
+//  - Only an explicit `role` JSX attribute triggers this check. A spread
+//    attribute alone is not treated as evidence of an injected role: unlike
+//    the narrow Checkbox/input surface (where spread-prop-forwarding for
+//    role/type is a known, specific idiom), `<div {...rest}>` is one of the
+//    most common patterns in this codebase and inferring a role from spread
+//    presence alone would flag most of the component tree.
+//  - A literal role value ("button"/"radio"/"switch"/"tab", including a
+//    ternary/conditional whose every reachable branch resolves to a literal
+//    or to `undefined`/`null`) is proven and reported outright when any
+//    branch is a governed role.
+//  - Any other dynamic role expression (a plain identifier, a member/call
+//    expression, or a ternary with an unresolvable branch) cannot be proven
+//    to exclude button/radio/switch/tab, so it fails closed and is reported
+//    as unresolved rather than silently passed — per FIX-ROLEBUTTON's brief:
+//    "If a case cannot be judged, fail closed rather than stay silent."
+//    (Investigation found exactly one such case live in the tree today:
+//    toast-container.tsx's `role={toastRole}`, where toastRole is a local
+//    alias of a two-branch literal ternary this scanner does not trace
+//    through a variable declaration — deliberately out of scope; see the
+//    FIX-ROLEBUTTON evidence notes.)
+//  - A bare `tabIndex`+`onClick` pair with NO role attribute at all — a
+//    strictly worse a11y gap (clickable and focusable but not even announced
+//    as interactive) — was investigated and is NOT checked here: an
+//    AST-precise sweep of the whole src tree (correlating both attributes to
+//    the same JSX element, unlike a text grep) found zero non-component,
+//    non-natively-interactive elements carrying that exact shape — every
+//    match was either the already-governed <button> intrinsic, a natively
+//    interactive intrinsic with its own implicit role (a/select/input), or a
+//    third-party action-button component that renders a real <button>
+//    (ComposerPrimitive.Send). Nothing in today's tree can be distinguished
+//    soundly from an ordinary container on this shape, so no rule was added
+//    for it; a future occurrence remains a design-review, not a lock, gap.
+const ROLE_CONTROL_ROLES = new Set(['button', 'radio', 'switch', 'tab'])
+
+function isIntrinsicShapedMemberTag(tag) {
+  return /^[a-z]/.test(tag.name.text)
+}
+
+function memberTagLabel(tag) {
+  return `${tag.expression.getText()}.${tag.name.text}`
+}
+
+function reportRoleControlIfPresent(context, node, label) {
+  const role = roleValuesFor(node)
+  if (!role.present) return
+  if (role.values === null) {
+    context.findings.push(
+      makeFinding(
+        RULES.RAW_BUTTON,
+        context.filePath,
+        `<${label} role={expr}>`,
+        `<${label}> is not one of our catalogued components and carries a dynamic role attribute that cannot be statically excluded from button/radio/switch/tab; a hand-built control here would be invisible to review unless proven safe. Use the Button primitive (or the matching composite for radio/switch/tab), give this element a literal role that is provably not a control role, or register an exact exception (design-system-definition.md D5).`,
+        ...positionOf(node),
+      )
+    )
+    return
+  }
+  const matched = [...new Set(role.values.filter((value) => ROLE_CONTROL_ROLES.has(value)))].sort()
+  if (matched.length === 0) return
+  const roleSyntax = matched.join('|')
+  context.findings.push(
+    makeFinding(
+      RULES.RAW_BUTTON,
+      context.filePath,
+      `<${label} role="${roleSyntax}">`,
+      `<${label}> is a hand-built control: a non-component element carrying role="${roleSyntax}" without using the Button primitive (or the matching composite for radio/switch/tab); use the primitive/composite (design-system-definition.md D5) or register an exact exception.`,
+      ...positionOf(node),
+    )
+  )
+}
+
+// The `role` attribute's statically-known shape: `{ present: false }` when no
+// role attribute exists at all (including on a spread — see the scope note
+// above); otherwise `{ present: true, values }` where `values` is the
+// exhaustive set of literal role strings the attribute can produce
+// (`undefined`/`null` branches contribute nothing), or `null` when any
+// reachable branch cannot be proven — the fail-closed signal.
+function roleValuesFor(node) {
+  for (const attribute of node.attributes.properties) {
+    if (!ts.isJsxAttribute(attribute) || attribute.name.text !== 'role') continue
+    const initializer = attribute.initializer
+    if (!initializer) return { present: true, values: null }
+    if (ts.isStringLiteral(initializer)) return { present: true, values: [initializer.text] }
+    if (ts.isJsxExpression(initializer) && initializer.expression) {
+      return { present: true, values: literalRoleValues(initializer.expression) }
+    }
+    return { present: true, values: null }
+  }
+  return { present: false, values: null }
+}
+
+function literalRoleValues(expression) {
+  const unwrapped = unwrapTypeWrapper(expression)
+  if (ts.isStringLiteral(unwrapped)) return [unwrapped.text]
+  if (unwrapped.kind === ts.SyntaxKind.UndefinedKeyword || unwrapped.kind === ts.SyntaxKind.NullKeyword) return []
+  if (ts.isIdentifier(unwrapped) && unwrapped.text === 'undefined') return []
+  if (ts.isConditionalExpression(unwrapped)) {
+    const whenTrue = literalRoleValues(unwrapped.whenTrue)
+    const whenFalse = literalRoleValues(unwrapped.whenFalse)
+    if (whenTrue === null || whenFalse === null) return null
+    return [...whenTrue, ...whenFalse]
+  }
+  return null
 }
 
 function reportAliasedIntrinsic(context, node, tag) {
