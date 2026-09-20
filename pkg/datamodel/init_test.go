@@ -6,6 +6,7 @@ package datamodel
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -154,7 +155,7 @@ func TestDirectoryInit_BackupsDirGuardedByEditionAuthMode(t *testing.T) {
 		require.NoError(t, Init(omnipusHome))
 
 		_, err := os.Stat(filepath.Join(omnipusHome, "backups"))
-		assert.True(t, os.IsNotExist(err), "backups directory must NOT exist in platform mode")
+		assert.True(t, errors.Is(err, os.ErrNotExist), "backups directory must NOT exist in platform mode")
 	})
 }
 

@@ -65,8 +65,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/elicify-ai/omnipus/pkg/app/internal/run"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/app/internal/run"
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 

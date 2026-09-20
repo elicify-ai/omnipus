@@ -330,10 +330,13 @@ func TestWriteLocalAdminUser_DuplicateUsername_ReturnsSentinel(t *testing.T) {
 	err := ro.writeLocalAdminUser(m)
 
 	require.ErrorIs(t, err, errOnboardingUsernameTaken)
-	gw := m["gateway"].(map[string]any)
-	users := gw["users"].([]any)
+	gw, ok := m["gateway"].(map[string]any)
+	require.True(t, ok, "the fixture's gateway subtree must be a map")
+	users, ok := gw["users"].([]any)
+	require.True(t, ok, "the fixture's users list must be a slice")
 	require.Len(t, users, 1, "the existing row must not be duplicated or replaced")
-	existing := users[0].(map[string]any)
+	existing, ok := users[0].(map[string]any)
+	require.True(t, ok, "the existing row must be a map")
 	assert.Equal(t, "existing-hash", existing["password_hash"],
 		"the existing account's password hash must be untouched")
 }

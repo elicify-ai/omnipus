@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -225,5 +226,5 @@ func TestExtractTarGz_RefusesSymlink(t *testing.T) {
 	err = extractTarGz(archive, home)
 	require.Error(t, err, "writing through a symlinked directory must be refused")
 	_, statErr := os.Stat(filepath.Join(outside, "x.txt"))
-	require.True(t, os.IsNotExist(statErr), "nothing may land outside the destination")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "nothing may land outside the destination")
 }

@@ -222,7 +222,8 @@ func TestHandleStateGET_IdentitySignedInVsNot(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		identity := resp["identity"].(map[string]any)
+		identity, ok := resp["identity"].(map[string]any)
+		require.True(t, ok, "identity must be a map")
 		assert.Equal(t, false, identity["signed_in"])
 		assert.Equal(t, "signed_out", identity["blocked_reason"])
 		_, hasAccount := identity["account"]
@@ -241,7 +242,8 @@ func TestHandleStateGET_IdentitySignedInVsNot(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		identity := resp["identity"].(map[string]any)
+		identity, ok := resp["identity"].(map[string]any)
+		require.True(t, ok, "identity must be a map")
 		assert.Equal(t, true, identity["signed_in"])
 		_, hasBlockedReason := identity["blocked_reason"]
 		assert.False(t, hasBlockedReason, "identity.blocked_reason must be absent when signed_in is true")
