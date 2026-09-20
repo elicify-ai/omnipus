@@ -66,9 +66,11 @@ func (fc *subTurnForceCancel) disarm() bool {
 	return fc.fired.Load()
 }
 
-// subTurnTimedOutResult builds what spawnSubTurn returns for a sub-turn its
-// force-cancel stopped. The error wraps tools.ErrDelegationTimedOut (the
-// discriminator pkg/tools/delegate.go reports from), ErrTurnTimedOut and
+// subTurnTimedOutResult builds what spawnSubTurn returns for a sub-turn whose
+// force-cancel either stopped it or reached the detach ceiling while an
+// already-running operation ignored cancellation. The error wraps
+// tools.ErrDelegationTimedOut (the discriminator pkg/tools/delegate.go reports
+// from), ErrTurnTimedOut and
 // context.DeadlineExceeded, so TranslateTurnError and every existing
 // errors.Is(err, context.DeadlineExceeded) caller still classify it as a
 // timeout. cause — what the dispatch itself returned, typically nil or
@@ -80,20 +82,43 @@ func (fc *subTurnForceCancel) disarm() bool {
 // abortTurn's Case 1, which deliberately records nothing), so the child's
 // session shows why it stopped — and says so truthfully: the delegation's time
 // limit, not the model provider.
-func subTurnTimedOutResult(al *AgentLoop, childTS *turnState, limit time.Duration, cause error) (*tools.ToolResult, error) {
+func subTurnTimedOutResult(
+	al *AgentLoop,
+	childTS *turnState,
+	limit time.Duration,
+	cause error,
+	detached bool,
+) (*tools.ToolResult, error) {
 	err := fmt.Errorf("%w: reached its %s time limit and was force-cancelled (%w: %w)",
 		tools.ErrDelegationTimedOut, limit, ErrTurnTimedOut, context.DeadlineExceeded)
-	slog.Warn("subturn: force-cancelled at its time limit",
+	if detached {
+		err = fmt.Errorf("%w: reached its %s time limit (%w: %w)",
+			tools.ErrDelegationDetached, limit, ErrTurnTimedOut, context.DeadlineExceeded)
+	}
+	message := fmt.Sprintf("This delegated task reached its %s time limit and was force-cancelled. "+
+		"It made no further tool calls or changes after that point.", limit)
+	resultMessage := fmt.Sprintf("SubTurn timed out: it reached its %s time limit and was force-cancelled. "+
+		"It is stopped and will make no further tool calls or changes; work it completed before the "+
+		"limit may remain.", limit)
+	if detached {
+		message = fmt.Sprintf("This delegated task reached its %s time limit, ignored cancellation, and was detached. "+
+			"The parent stopped waiting. No new model or tool call will be dispatched, but the already-running "+
+			"operation may still be unwinding.", limit)
+		resultMessage = fmt.Sprintf("SubTurn timed out: it reached its %s time limit, ignored cancellation, and "+
+			"was detached. The parent stopped waiting. No new model or tool call will be dispatched, but the "+
+			"already-running operation may still be unwinding; work completed before the limit may remain.", limit)
+	}
+	slog.Warn("subturn: reached its time limit",
 		"child_turn_id", childTS.turnID,
 		"agent_id", childTS.agentID,
 		"limit", limit,
+		"detached", detached,
 		"exit_cause", cause,
 	)
 
 	if !errors.Is(cause, ErrTurnTimedOut) {
 		llm := TranslateTurnError(err)
-		llm.Message = fmt.Sprintf("This delegated task reached its %s time limit and was force-cancelled. "+
-			"It made no further tool calls or changes after that point.", limit)
+		llm.Message = message
 		// The same error frame and transcript record typedTurnExit writes for
 		// a turn that timed out on its own, through the same emitter: before
 		// the force-cancel existed, a timed-out child exited through
@@ -101,15 +126,17 @@ func subTurnTimedOutResult(al *AgentLoop, childTS *turnState, limit time.Duratio
 		// frame's session id is stamped inside emitTurnErrorFrame (loop.go),
 		// so this function never reads routingSessionID and adds no consumer
 		// to ADR-057 FR-014's closed set.
-		al.emitTurnErrorFrame(childTS, childTS.eventMeta("spawnSubTurn", "subturn.force_cancel"),
-			"subturn_timeout", "subturn_timeout", llm)
+		meta := childTS.eventMeta("spawnSubTurn", "subturn.force_cancel")
+		if detached {
+			al.emitDetachedTurnErrorFrame(childTS, meta, "subturn_timeout", "subturn_timeout", llm)
+		} else {
+			al.emitTurnErrorFrame(childTS, meta, "subturn_timeout", "subturn_timeout", llm)
+		}
 	}
 
 	return &tools.ToolResult{
-		Err: err,
-		ForLLM: fmt.Sprintf("SubTurn timed out: it reached its %s time limit and was force-cancelled. "+
-			"It is stopped and will make no further tool calls or changes; work it completed before the "+
-			"limit may remain.", limit),
+		Err:     err,
+		ForLLM:  resultMessage,
 		IsError: true,
 	}, err
 }

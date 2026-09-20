@@ -120,6 +120,10 @@ type AgentLoop struct {
 	// Turn tracking
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
+	// delegatedRateLimitSleep is a per-loop test seam. Production leaves it
+	// nil and callProvider uses sleepWithContext; tests can record the exact
+	// retry delays without a wall-clock assertion or process-global mutation.
+	delegatedRateLimitSleep func(context.Context, time.Duration) error
 
 	// mediaRefsDropped counts media refs that could not be resolved (unknown ref
 	// or file missing on disk). Observable via GetMediaRefsDropped for tests and
@@ -2518,6 +2522,26 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 func (al *AgentLoop) emitTurnErrorFrame(
 	ts *turnState, meta EventMeta, payloadStage, transcriptStage string, llm LLMError,
 ) {
+	al.emitTurnErrorFrameWithTranscriptPolicy(ts, meta, payloadStage, transcriptStage, llm, false)
+}
+
+// emitDetachedTurnErrorFrame is the controller-owned variant for a child that
+// has already been marked abandoned. It preserves the same live frame shape
+// while allowing the coordinator's terminal timeout record after zombie
+// writes have been suppressed.
+func (al *AgentLoop) emitDetachedTurnErrorFrame(
+	ts *turnState, meta EventMeta, payloadStage, transcriptStage string, llm LLMError,
+) {
+	al.emitTurnErrorFrameWithTranscriptPolicy(ts, meta, payloadStage, transcriptStage, llm, true)
+}
+
+func (al *AgentLoop) emitTurnErrorFrameWithTranscriptPolicy(
+	ts *turnState,
+	meta EventMeta,
+	payloadStage, transcriptStage string,
+	llm LLMError,
+	allowAbandoned bool,
+) {
 	al.emitEvent(EventKindError, meta, ErrorPayload{
 		Stage:     payloadStage,
 		ChatID:    ts.opts.ChatID,
@@ -2525,6 +2549,10 @@ func (al *AgentLoop) emitTurnErrorFrame(
 		Message:   llm.Message,
 		SessionID: string(ts.routingSessionID),
 	})
+	if allowAbandoned {
+		ts.appendDetachedTerminalError(EventKindError.String(), transcriptStage, llm)
+		return
+	}
 	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 

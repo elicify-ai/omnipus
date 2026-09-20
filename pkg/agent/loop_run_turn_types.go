@@ -9,6 +9,7 @@ package agent
 
 import (
 	"context"
+	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -31,6 +32,12 @@ type agentLoopRunTurn struct {
 	llmModel           string
 	onToolCallProgress protocoltypes.OnToolCallProgress
 	inspectionImages   map[string][]tools.InspectionImage
+	// providerCallStreamedBytes is reset before each single-candidate retry
+	// attempt and counts callback-emitted bytes before streamer.Update. The
+	// successful-response tail flush is outside the error/retry path. This
+	// prevents retrying a 429 after partial output without optional streamer
+	// methods.
+	providerCallStreamedBytes atomic.Int64
 }
 
 // agentLoopRunTurnFallbacks carries the shared state of runTurn across its stages.

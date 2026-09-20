@@ -545,15 +545,12 @@ func resetMemoryAdmissionRefusalLogForTest() {
 // spawner.SpawnSubTurn (pkg/tools/delegate.go executeSync/executeAsync) —
 // there is no other shared choke point. spawnSubTurn (pkg/agent/subturn.go)
 // runs the child's ENTIRE turn synchronously inside itself regardless of
-// cfg.Async — Async only changes how the result is delivered afterward
-// (return value vs deliverSubTurnResult), never whether the call blocks.
-// executeAsync's background goroutine calls SpawnSubTurn and blocks on it
-// for the child's full lifetime before that goroutine exits; executeSync's
-// await path blocks on the very same call on the delegating turn's own
-// goroutine. So wrapping SpawnSubTurn and releasing the admission slot only
-// after the wrapped call returns IS releasing on "the delegated child's
-// terminal state" (TryAdmit's own contract), not merely on dispatch
-// acknowledgement — true for both sync and async delegation alike.
+// cfg.Async — Async only changes how the result is delivered afterward.
+// Ordinarily the wrapped call blocks for the child's full physical lifetime.
+// A native child whose in-flight operation ignores cancellation is the one
+// exception: spawnSubTurn returns a detached timeout while its runTurn
+// goroutine unwinds. In that case the lease below transfers to the physical
+// child goroutine and releases only when that goroutine actually exits.
 //
 // Root vs nested: parentTS.depth == 0 (turnState's own "0 for root turn"
 // invariant, turn.go) distinguishes a root-level dispatch from a NESTED one
@@ -578,6 +575,36 @@ type rootDelegationAdmittingSpawner struct {
 	// agent's own id) purely to label the BDD-77 refusal log/result when the
 	// gate is saturated; it does not affect admission decisions.
 	delegatingAgentID string
+}
+
+type rootDelegationLeaseContextKey struct{}
+
+// rootDelegationLease lets the admitting wrapper transfer ownership to a
+// native child's physical runTurn goroutine. transferred selects exactly one
+// release owner; once makes the release itself idempotent as a second belt.
+type rootDelegationLease struct {
+	release     func()
+	transferred atomic.Bool
+	once        sync.Once
+}
+
+func (l *rootDelegationLease) transferToPhysicalChild() bool {
+	return l != nil && l.transferred.CompareAndSwap(false, true)
+}
+
+func (l *rootDelegationLease) releaseSlot() {
+	if l == nil {
+		return
+	}
+	l.once.Do(l.release)
+}
+
+func rootDelegationLeaseFromContext(ctx context.Context) *rootDelegationLease {
+	if ctx == nil {
+		return nil
+	}
+	lease, _ := ctx.Value(rootDelegationLeaseContextKey{}).(*rootDelegationLease)
+	return lease
 }
 
 // newRootDelegationAdmittingSpawner constructs the wrapper described above.
@@ -608,6 +635,12 @@ func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg t
 		}
 		return RefuseRootDelegation(s.gate.Cap(), s.delegatingAgentID, cfg.TargetAgentID), nil
 	}
-	defer release()
+	lease := &rootDelegationLease{release: release}
+	ctx = context.WithValue(ctx, rootDelegationLeaseContextKey{}, lease)
+	defer func() {
+		if !lease.transferred.Load() {
+			lease.releaseSlot()
+		}
+	}()
 	return s.inner.SpawnSubTurn(ctx, cfg)
 }

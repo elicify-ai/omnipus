@@ -138,7 +138,7 @@ type turnState struct {
 	// cancelMu guards cancelFired to make the first-cancel-wins check atomic.
 	cancelMu       sync.Mutex
 	cancelFired    atomic.Bool               // true once handleCancel has claimed this turn
-	abandoned      atomic.Bool               // true once the stuck-watchdog gives up on the goroutine
+	abandoned      atomic.Bool               // true once a controller detaches a stuck turn goroutine
 	onCancelFinish func(cancelMethod string) // called exactly once by Finish when cancelFired
 
 	// cancelling is the GATE half of the chain-reaction cancellation fix
@@ -193,6 +193,10 @@ type turnState struct {
 	pendingResults chan *tools.ToolResult // Channel for SubTurn results
 	concurrencySem chan struct{}          // Semaphore for limiting concurrent SubTurns
 	isFinished     atomic.Bool            // Whether this turn has finished
+	// finishedByHardAbort distinguishes a parent's hard-abort cascade from a
+	// normal Finish(false). Both set isFinished, but only the former makes a
+	// child's terminal cancellation an interruption caused by its parent.
+	finishedByHardAbort atomic.Bool
 	// subTurnRecordPersisted is true once this sub-turn's OWN spawning
 	// "delegate"/"spawn" tool-call record (on the PARENT's transcript) has
 	// been corrected with the real terminal status/duration — or it has been
@@ -971,8 +975,8 @@ type TurnCancelHook interface {
 	// if this call is the first to claim the cancel (i.e. cancelFired was false
 	// and has now been set to true). Returns false if already canceled.
 	ClaimCancel() bool
-	// MarkAbandoned sets the abandoned flag so the gateway can stop tracking
-	// a stuck goroutine (FR-19, FR-20, FR-21).
+	// MarkAbandoned suppresses later writes after a controller detaches a
+	// stuck turn goroutine (gateway cancel or delegation timeout).
 	MarkAbandoned()
 }
 

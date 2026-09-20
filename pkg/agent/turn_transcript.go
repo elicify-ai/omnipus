@@ -419,11 +419,28 @@ func (ts *turnState) appendClassifiedError(kind, stage string, llm LLMError) {
 	ts.writeErrorTranscript(kind, stage, llm.Message, llm.Code)
 }
 
+// appendDetachedTerminalError is the controller-owned timeout write allowed after
+// MarkAbandoned. The abandoned flag suppresses writes from the detached child
+// goroutine; it must not suppress the coordinator's single terminal timeout,
+// or a session reload would lose the reason the child stopped.
+func (ts *turnState) appendDetachedTerminalError(kind, stage string, llm LLMError) {
+	ts.writeErrorTranscriptWithAbandonment(kind, stage, llm.Message, llm.Code, true)
+}
+
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
+	ts.writeErrorTranscriptWithAbandonment(kind, stage, message, code, false, pe...)
+}
+
+func (ts *turnState) writeErrorTranscriptWithAbandonment(
+	kind, stage, message string,
+	code LLMErrorCode,
+	allowAbandoned bool,
+	pe ...*ProviderError,
+) {
 	if ts == nil {
 		return
 	}
-	if ts.abandoned.Load() {
+	if ts.abandoned.Load() && !allowAbandoned {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendErrorTranscript")
 		return
@@ -467,7 +484,7 @@ func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLME
 	if code != "" {
 		llm.Code = code
 		llm.Retryable = isRetryable(code)
-		if isTrustedInternalStage(stage, kind) {
+		if allowAbandoned || isTrustedInternalStage(stage, kind) {
 			llm.Message = message
 		} else {
 			llm.Message = defaultUserMessage(code)
@@ -490,7 +507,7 @@ func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLME
 	}
 
 	written := message
-	if !isTrustedInternalStage(stage, kind) {
+	if !allowAbandoned && !isTrustedInternalStage(stage, kind) {
 		// Friendly short-circuit for rate-limit messages whose caller-supplied
 		// copy is already generic and safe (rate_limit: policyRule (retry
 		// after Ns)); translation reuses it. This is the ADR-051 §RD5
