@@ -8,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { IconButton } from '@/components/ui/icon-button'
 import { validateConnection, type TeamEditState, type TeamNodeModel } from './teamGraphModel'
 
 export interface AgentDelegatePickerProps {
@@ -63,18 +64,17 @@ export function AgentDelegatePicker({
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <button tabIndex={0}
+        <IconButton
           ref={triggerRef}
-          type="button"
           data-node-action="delegate"
           data-testid={`team-node-delegate-${source.id}`}
           aria-label={`Delegate from ${source.name} to another agent`}
           title="Delegate to another agent — keyboard equivalent of dragging the gold connection dot"
-          className="nodrag shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)]"
+          className="nodrag h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)]"
           onClick={(e) => e.stopPropagation()}
         >
           <ArrowBendUpRight size={12} weight="bold" />
-        </button>
+        </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"

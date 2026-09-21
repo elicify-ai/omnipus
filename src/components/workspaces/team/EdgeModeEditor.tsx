@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useRef, useState } from 'react'
 import { Stack, Trash, X } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { cn } from '@/lib/utils'
 import { ALL_MODES, type DelegationMode, type TeamEdgeModel } from './teamGraphModel'
 
@@ -10,6 +11,16 @@ export const MODE_CHIP_CLASS: Record<DelegationMode, string> = {
     'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
   task:
     'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]',
+}
+
+// Hover companion for MODE_CHIP_CLASS's "on" colors: the mode toggle below is
+// now a catalogued `Button` (ghost variant), whose own hover treatment
+// (surface tint + secondary text) would repaint an ENABLED chip's hover state
+// — it previously had none. These pin the chip's own colors back in for
+// `:hover` so an enabled chip's appearance is unchanged, matching MODE_CHIP_CLASS 1:1.
+const MODE_CHIP_HOVER_CLASS: Record<DelegationMode, string> = {
+  direct: 'hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)]',
+  task: 'hover:bg-[var(--color-success)]/10 hover:text-[var(--color-success)]',
 }
 
 /** Human-readable label for each delegation mode (chip title/tooltip + a11y label). */
@@ -72,24 +83,23 @@ export function EdgeModeEditor({
         <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
           Delegation modes
         </span>
-        <button tabIndex={0}
-          type="button"
+        <IconButton
           aria-label="Close edge editor"
-          className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          className="h-auto w-auto inline-flex items-center justify-center p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
           onClick={onClose}
         >
           <X size={12} weight="bold" />
-        </button>
+        </IconButton>
       </div>
       <div className="flex flex-wrap gap-[var(--space-1)]">
         {ALL_MODES.map((m, i) => {
           const on = model.modes.includes(m)
           const isLastOn = on && model.modes.length === 1
           return (
-            <button tabIndex={0}
+            <Button
               key={m}
               ref={i === 0 ? firstModeRef : undefined}
-              type="button"
+              variant="ghost"
               data-testid={`team-edge-mode-${m}`}
               aria-pressed={on}
               aria-disabled={isLastOn}
@@ -111,15 +121,19 @@ export function EdgeModeEditor({
                 onToggleMode(model.from, model.to, m)
               }}
               className={cn(
-                'rounded border px-[var(--space-1)] py-[var(--space-0-5)] font-mono text-[length:var(--type-caption-size)] lowercase transition-opacity',
+                // h-auto/font-normal/aria-disabled:opacity-100 override
+                // Button's own default height, font-medium and its
+                // aria-disabled:opacity-50 rule (Button's own automatic
+                // disabled-look) — this chip stays full-opacity even
+                // aria-disabled (the title tooltip is the only isLastOn cue).
+                'h-auto rounded border px-[var(--space-1)] py-[var(--space-0-5)] font-mono text-[length:var(--type-caption-size)] lowercase font-[var(--font-weight-regular)] transition-opacity aria-disabled:opacity-100',
                 on
-                  ? MODE_CHIP_CLASS[m]
-                  : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] opacity-60 hover:opacity-100',
-                isLastOn ? 'cursor-not-allowed' : undefined,
+                  ? cn(MODE_CHIP_CLASS[m], MODE_CHIP_HOVER_CLASS[m])
+                  : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] opacity-60 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-muted)] hover:opacity-100',
               )}
             >
               {MODE_LABEL[m]}
-            </button>
+            </Button>
           )
         })}
       </div>
@@ -182,12 +196,12 @@ export const EdgeLabelChip = forwardRef<HTMLButtonElement, EdgeLabelChipProps>(f
   ref,
 ) {
   return (
-    <button tabIndex={0}
+    <Button
       ref={ref}
-      type="button"
+      variant="ghost"
       aria-label={`Edit delegation ${model.from} to ${model.to}`}
       onClick={onClick}
-      className="flex cursor-pointer items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-1)] py-[var(--space-0-5)] shadow-sm hover:border-[var(--color-accent)]/50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+      className="flex h-auto w-auto cursor-pointer items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-1)] py-[var(--space-0-5)] font-[var(--font-weight-regular)] shadow-sm hover:bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
     >
       {model.modes.length === 0 ? (
         <span className="text-[length:var(--type-caption-size)] italic text-[var(--color-muted)]">all modes</span>
@@ -211,6 +225,6 @@ export const EdgeLabelChip = forwardRef<HTMLButtonElement, EdgeLabelChipProps>(f
         <Stack size={9} weight="bold" />
         {model.depth ?? defaultDepth}
       </span>
-    </button>
+    </Button>
   )
 })

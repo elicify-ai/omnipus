@@ -25,6 +25,7 @@ import '../reactflow-theme.css'
 import { Star, Lightning, Trash, Warning, PencilSimple, X, Scales } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Badge } from '@/components/ui/badge'
+import { IconButton } from '@/components/ui/icon-button'
 import { cn, initialOf } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import { AgentDelegatePicker } from './AgentDelegatePicker'
@@ -167,18 +168,17 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
               deleted — dangling edge
             </span>
           </div>
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             aria-label={`Remove ${model.id} from team`}
             title="Remove from team"
-            className="nodrag shrink-0 rounded p-[var(--space-1)] text-[var(--color-warning)]/70 hover:bg-[var(--color-warning)]/15 hover:text-[var(--color-warning)]"
+            className="nodrag h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-warning)]/70 hover:bg-[var(--color-warning)]/15 hover:text-[var(--color-warning)]"
             onClick={(e) => {
               e.stopPropagation()
               data.onRemoveMember(model.id)
             }}
           >
             <X size={13} weight="bold" />
-          </button>
+          </IconButton>
         </div>
       </div>
     )
@@ -310,34 +310,32 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
           />
         )}
         {data.onOpenAgent && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             data-node-action="edit"
             aria-label={`Edit ${model.name}`}
             title="Edit the global agent"
-            className="nodrag rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+            className="nodrag h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
             onClick={(e) => {
               e.stopPropagation()
               data.onOpenAgent?.(id)
             }}
           >
             <PencilSimple size={12} weight="bold" />
-          </button>
+          </IconButton>
         )}
         {!model.isDefault && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             data-node-action="remove"
             aria-label={`Remove ${model.name} from team`}
             title="Remove from this workspace's team"
-            className="nodrag rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
+            className="nodrag h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
             onClick={(e) => {
               e.stopPropagation()
               data.onRemoveMember(id)
             }}
           >
             <Trash size={12} weight="bold" />
-          </button>
+          </IconButton>
         )}
       </div>
 
