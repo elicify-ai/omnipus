@@ -45,6 +45,7 @@
 
 import { Target, Repeat } from '@phosphor-icons/react'
 import type { GoalStatusFrame, LoopStatusFrame } from '@/lib/api/generated/asyncapi-types'
+import { Card } from '@/components/ui/card'
 
 export interface GoalIndicatorProps {
   goalStatus: GoalStatusFrame | null
@@ -206,11 +207,11 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
   if (!showGoal && !showLoop) return null
 
   return (
-    <div
+    <Card
       data-testid="goal-indicator"
       role="status"
       aria-live="polite"
-      className="flex flex-col gap-[var(--space-1)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
+      className="flex flex-col gap-[var(--space-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
     >
       {showGoal && goalStatus && goalStatus.state !== 'queued' && (
         <div className="flex items-start gap-[var(--space-2)]">
@@ -262,6 +263,6 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
           </p>
         </div>
       )}
-    </div>
+    </Card>
   )
 }

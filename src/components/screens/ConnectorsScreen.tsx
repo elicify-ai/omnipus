@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gear, Envelope, Plus, Trash, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
@@ -178,9 +179,9 @@ function ChannelInstanceRow({
   const isDegraded = connectionStatus === 'degraded'
 
   return (
-    <div
+    <Card
       data-testid={`channel-card-${instanceId}`}
-      className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+      className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-[var(--space-2)] flex-wrap">
@@ -259,7 +260,7 @@ function ChannelInstanceRow({
           <Trash size={13} />
         </IconButton>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -822,9 +823,9 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
   const pairKey = mailboxPairKey(mailbox)
 
   return (
-    <div
+    <Card
       data-testid={`mailbox-row-${pairKey}`}
-      className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+      className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
     >
       <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
       <div className="flex-1 min-w-0">
@@ -863,7 +864,7 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
           Configure
         </Button>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -1126,14 +1127,14 @@ export function ConnectorsScreen() {
               </div>
               <div data-testid="email-mailbox-card" className="space-y-[var(--space-2)]">
                 {mailboxesLoading ? (
-                  <div className="h-16 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse" />
+                  <Card className="h-16 animate-pulse" />
                 ) : mailboxesError ? (
-                  <div className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]">
+                  <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]">
                     <Envelope size={20} weight="duotone" className="text-[var(--color-muted)] shrink-0" />
                     <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load mailboxes.</span>
-                  </div>
+                  </Card>
                 ) : mailboxes.length === 0 ? (
-                  <div className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]">
+                  <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]">
                     <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-[var(--space-2)] flex-wrap">
@@ -1151,7 +1152,7 @@ export function ConnectorsScreen() {
                         Give an agent its own inbox. It reads mail on heartbeat; unhandled mail becomes Board tasks.
                       </p>
                     </div>
-                  </div>
+                  </Card>
                 ) : (
                   mailboxes.map((mb) => (
                     <MailboxRow
@@ -1174,9 +1175,9 @@ export function ConnectorsScreen() {
                     Built-in
                   </h2>
                 </div>
-                <div
+                <Card
                   data-testid={`channel-card-${webchatChannel.id}`}
-                  className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                  className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-[var(--space-2)] flex-wrap">
@@ -1191,7 +1192,7 @@ export function ConnectorsScreen() {
                       Built into every Omnipus install. No configuration needed.
                     </p>
                   </div>
-                </div>
+                </Card>
               </div>
             )}
 

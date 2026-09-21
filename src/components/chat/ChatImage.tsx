@@ -11,6 +11,7 @@ import type { MediaAction } from './MediaActionToolbar'
 import { useUiStore } from '@/store/ui'
 import { isDisplayableImageSrc } from '@/lib/url-safe'
 import { cn } from '@/lib/utils'
+import { Card } from '@/components/ui/card'
 import {
   canCopyImage,
   canShareFiles,
@@ -126,9 +127,10 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
   // upload-failure convention in omnipus-runtime.ts.
   if (imgError) {
     return (
-      <div
+      <Card
+        variant="inset"
         className={cn(
-          'flex flex-col gap-[var(--space-2)] pl-[var(--space-2)] pr-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]',
+          'flex flex-col gap-[var(--space-2)] pl-[var(--space-2)] pr-[var(--space-2-5)] py-[var(--space-2)] max-w-[220px]',
           className,
         )}
         title={name}
@@ -147,7 +149,7 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
           actions={errorActions}
           className="pt-[var(--space-1)] border-t border-[var(--color-border)] flex-wrap"
         />
-      </div>
+      </Card>
     )
   }
 

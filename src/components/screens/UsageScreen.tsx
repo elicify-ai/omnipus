@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
@@ -24,7 +25,7 @@ interface StatCardProps {
 
 function StatCard({ label, value, hero = false, unit }: StatCardProps) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] flex flex-col gap-[var(--space-1)]">
+    <Card className="p-[var(--space-3)] flex flex-col gap-[var(--space-1)]">
       <div
         className={`font-mono tabular-nums font-bold${hero ? ' text-2xl text-[var(--color-accent)]' : ' text-base text-[var(--color-secondary)]'}`}
       >
@@ -36,7 +37,7 @@ function StatCard({ label, value, hero = false, unit }: StatCardProps) {
         )}
       </div>
       <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</div>
-    </div>
+    </Card>
   )
 }
 
@@ -48,10 +49,7 @@ function UsageSkeleton() {
       {/* Hero row skeleton */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-[var(--space-3)]">
         {[1, 2, 3, 4].map((i) => (
-          <div
-            key={i}
-            className="h-20 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
-          />
+          <Card key={i} className="h-20 animate-pulse" />
         ))}
       </div>
       {/* Bar list skeleton */}

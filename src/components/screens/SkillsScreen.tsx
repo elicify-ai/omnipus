@@ -21,6 +21,7 @@ import { SkeletonList, EmptyState, ErrorState } from '@/components/shared/ListSt
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -203,9 +204,9 @@ export function SkillsScreen() {
               </div>
             <div className="space-y-[var(--space-2)]">
               {skills.map((skill) => (
-                <div
+                <Card
                   key={skill.id}
-                  className="flex items-start gap-[var(--space-2-5)] p-[var(--space-3)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                  className="flex items-start gap-[var(--space-2-5)] p-[var(--space-3)]"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-[var(--space-2)] flex-wrap">
@@ -273,7 +274,7 @@ export function SkillsScreen() {
                       <Trash size={14} />
                     </IconButton>
                   )}
-                </div>
+                </Card>
               ))}
             </div>
             </>
@@ -298,9 +299,9 @@ export function SkillsScreen() {
               {mcpServers.map((server) => {
                 const isExpanded = expandedMcp === server.id
                 return (
-                  <div
+                  <Card
                     key={server.id}
-                    className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
+                    className="overflow-hidden"
                   >
                     <div className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]">
                       <div className="flex-1 min-w-0">
@@ -395,7 +396,7 @@ export function SkillsScreen() {
                         )}
                       </div>
                     )}
-                  </div>
+                  </Card>
                 )
               })}
             </div>
@@ -555,9 +556,9 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
               `${catTools.length} tool${catTools.length !== 1 ? 's' : ''} in this category`
             const isExpanded = expandedCategories.has(cat)
             return (
-              <div
+              <Card
                 key={cat}
-                className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
+                className="overflow-hidden"
                 data-testid={`tool-category-${cat}`}
               >
                 {/* Category header row — clickable to expand/collapse */}
@@ -609,7 +610,7 @@ function ToolsOverview({ tools }: { tools: ToolRegistryEntry[] }) {
                     </div>
                   </div>
                 )}
-              </div>
+              </Card>
             )
           })}
         </div>

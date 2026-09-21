@@ -23,6 +23,7 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Card } from '@/components/ui/card'
 
 type IconComp = typeof File
 
@@ -125,11 +126,9 @@ export function AttachmentCard({ filename, contentType, imageUrl, isImage, remov
   // attachment is an image from m.type === 'image'.
   if ((isImage ?? isImageAttachment(filename, contentType)) && imageUrl && !imgError) {
     return (
-      <div
-        className={cn(
-          'relative shrink-0 rounded-lg overflow-hidden border border-[var(--color-border)] bg-[var(--color-surface-2)]',
-          className,
-        )}
+      <Card
+        variant="inset"
+        className={cn('relative shrink-0 overflow-hidden', className)}
         title={filename}
       >
         <img
@@ -140,15 +139,16 @@ export function AttachmentCard({ filename, contentType, imageUrl, isImage, remov
           onError={handleImgError}
         />
         {removeButton}
-      </div>
+      </Card>
     )
   }
 
   const { Icon, color, label } = fileTypeMeta(filename, contentType)
   return (
-    <div
+    <Card
+      variant="inset"
       className={cn(
-        'relative shrink-0 flex items-center gap-[var(--space-2)] pl-[var(--space-2)] pr-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]',
+        'relative shrink-0 flex items-center gap-[var(--space-2)] pl-[var(--space-2)] pr-[var(--space-2-5)] py-[var(--space-2)] max-w-[220px]',
         className,
       )}
       title={filename}
@@ -164,7 +164,7 @@ export function AttachmentCard({ filename, contentType, imageUrl, isImage, remov
         <p className="text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]">{label}</p>
       </div>
       {removeButton}
-    </div>
+    </Card>
   )
 }
 

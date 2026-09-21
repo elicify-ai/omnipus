@@ -51,6 +51,7 @@ import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { cn } from '@/lib/utils'
 import { DisclosureRow } from '@/components/ui/disclosure-row'
+import { Card } from '@/components/ui/card'
 
 // ── Display cap for the goal condition (grapheme-safe, mirrors GoalIndicator) ─
 const CONDITION_DISPLAY_CAP = 80
@@ -223,9 +224,9 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
       )}
 
       {expanded && (
-        <div
+        <Card
           data-testid="goal-pill-expanded"
-          className="mt-[var(--space-1)] w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] shadow-lg"
+          className="mt-[var(--space-1)] w-[320px] max-w-[calc(100vw-2rem)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] shadow-lg"
         >
           {/* Condition (full, not truncated) */}
           <div className="flex items-start gap-[var(--space-2)]">
@@ -267,7 +268,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
               </ul>
             </div>
           )}
-        </div>
+        </Card>
       )}
     </div>
   )

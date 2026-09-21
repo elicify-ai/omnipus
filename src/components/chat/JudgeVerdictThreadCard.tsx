@@ -13,6 +13,7 @@
 
 import { Check, X, Scales } from '@phosphor-icons/react'
 import type { JudgeVerdict } from '@/lib/api'
+import { Card } from '@/components/ui/card'
 
 export interface JudgeVerdictThreadCardProps {
   verdict: JudgeVerdict
@@ -21,7 +22,7 @@ export interface JudgeVerdictThreadCardProps {
 export function JudgeVerdictThreadCard({ verdict }: JudgeVerdictThreadCardProps) {
   return (
     <div className="flex justify-center py-[var(--space-2)]" data-testid="judge-verdict-thread-card">
-      <div className="w-full max-w-md rounded-lg border border-[var(--color-accent)]/30 bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]">
+      <Card className="w-full max-w-md border-[var(--color-accent)]/30 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]">
         <div className="flex items-center gap-[var(--space-1)] mb-[var(--space-1)]">
           <Scales size={13} weight="fill" className="text-[var(--color-accent)]" aria-hidden="true" />
           <span className="font-medium text-[var(--color-secondary)]">
@@ -55,7 +56,7 @@ export function JudgeVerdictThreadCard({ verdict }: JudgeVerdictThreadCardProps)
         <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
           {verdict.model} · judged by {verdict.judge_agent_id}
         </p>
-      </div>
+      </Card>
     </div>
   )
 }

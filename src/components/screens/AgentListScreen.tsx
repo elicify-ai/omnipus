@@ -15,6 +15,7 @@ import { WorkerCard } from '@/components/agents/WorkerCard'
 import { CreateAgentModal } from '@/components/agents/CreateAgentModal'
 import type { WizardCli } from '@/components/agents/wizard/types'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from '@/components/ui/accordion'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -365,8 +366,8 @@ function AgentsLibraryView({
               </Button>
             </div>
             {mainAgents.length === 0 ? (
-              <div
-                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-3)] text-center"
+              <Card
+                className="border-dashed px-[var(--space-3)] py-[var(--space-3)] text-center"
                 data-testid="base-agents-empty"
               >
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
@@ -374,7 +375,7 @@ function AgentsLibraryView({
                     ? 'No Main agents on this workspace team.'
                     : 'No custom Main agents yet. Create one, or use a built-in above.'}
                 </p>
-              </div>
+              </Card>
             ) : (
               <div className="grid gap-[var(--space-3)] grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {mainAgents.map((agent) => (
@@ -479,8 +480,8 @@ function AgentsLibraryView({
             )}
 
             {workerAgents.length === 0 ? (
-              <div
-                className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-3)] text-center"
+              <Card
+                className="border-dashed px-[var(--space-3)] py-[var(--space-3)] text-center"
                 data-testid="worker-agents-empty"
               >
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
@@ -493,7 +494,7 @@ function AgentsLibraryView({
                     Create a worker to delegate labour to a third-party runtime.
                   </p>
                 )}
-              </div>
+              </Card>
             ) : (
               <div className="grid gap-[var(--space-3)] grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
                 {workerAgents.map((agent) => (
@@ -641,10 +642,7 @@ export function AgentListScreen() {
         <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-[var(--space-3)]">
             {[1, 2, 3].map((i) => (
-              <div
-                key={i}
-                className="h-32 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
-              />
+              <Card key={i} className="h-32 rounded-xl animate-pulse" />
             ))}
           </div>
         </div>
