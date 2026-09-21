@@ -101,6 +101,30 @@ type Document struct {
 	Source              string
 	DefaultResizeLimits ResizeLimits
 	Providers           []Provider
+	// SkippedProviders records provider rows ParseDocument left out of an
+	// otherwise-successfully-parsed document because they named a protocol
+	// outside this build's closed vocabulary (parseProtocol) — forward
+	// compatibility with a catalog publisher shipping a protocol newer than
+	// this build knows about (e.g. "bedrock"). The document is NOT rejected
+	// for this, and every other provider is unaffected; a genuinely
+	// structural defect (bad JSON, wrong schema_version, a malformed row
+	// unrelated to protocol, a duplicate id among the providers that ARE
+	// kept, or zero valid providers remaining) still rejects the whole
+	// document. See parse.go's unknownProtocolError. Callers with a Logger
+	// (Catalog.logSkippedProviders) emit one WARN per entry naming the
+	// provider id and the unrecognized protocol.
+	SkippedProviders []SkippedProvider
+}
+
+// SkippedProvider is one provider row ParseDocument left out of a Document
+// because of an unrecognized protocol value. See Document.SkippedProviders.
+type SkippedProvider struct {
+	// ID is the skipped row's provider id (validated non-empty before the
+	// protocol check ran, so this is always populated).
+	ID string
+	// Protocol is the unrecognized value as published — either the
+	// provider's primary protocol or one of its protocols[] entries.
+	Protocol string
 }
 
 // Endpoint is one (protocol, base URL) pair a provider offers (A-8).

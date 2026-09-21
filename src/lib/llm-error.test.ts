@@ -50,6 +50,7 @@ const ALL_CODES: LLMErrorCode[] = [
   'model_unassigned',
   'turn_canceled',
   'turn_timed_out',
+  'delegated_task_limit',
   'context_unrecoverable',
   'context_window_unknown',
   'unknown',

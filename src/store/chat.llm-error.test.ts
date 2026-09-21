@@ -122,6 +122,36 @@ function bucketMessages(): ChatMessage[] {
 // ---------------------------------------------------------------------------
 
 describe("ADR-051 live 'error' — typed payload translation", () => {
+  it('shows the controller-authored delegated-task limit notice in the default bubble', () => {
+    const notice = [
+      'This delegated task reached its time limit and was force-cancelled.',
+      'Label: build-docs-renderer',
+      'Task ID: delegate-12',
+      'Session: 8813c467-1b06-4e4f-a5ba-77e33a6340fb',
+      'Limit: timeout_seconds (5m0s)',
+    ].join('\n')
+    seedEmptyBucket()
+
+    act(() => {
+      useChatStore.getState().handleFrame(
+        liveErrorFrame({
+          sessionId: SID,
+          message: notice,
+          llmError: {
+            code: 'delegated_task_limit',
+            message: notice,
+            retryable: false,
+          },
+        }),
+      )
+    })
+
+    const bubble = bucketMessages()[0]
+    expect(bubble.content).toBe(notice)
+    expect(bubble.errorCode).toBe('delegated_task_limit')
+    expect(bubble.errorDetail).toBeUndefined()
+  })
+
   it('renders the translated code→display copy (NOT the raw wire message) on a fresh error bubble', () => {
     seedEmptyBucket()
     act(() => {
@@ -294,6 +324,40 @@ describe("ADR-051 live 'error' — legacy frame (no typed payload) fallback", ()
 // ---------------------------------------------------------------------------
 
 describe("ADR-051 'replay_error' — typed payload translation + coalesce", () => {
+  it('replays the controller-authored delegated-task limit notice with its identifiers', () => {
+    const notice = [
+      'This delegated task reached max_tool_iterations without a final response.',
+      'Label: build-docs-renderer',
+      'Task ID: delegate-13',
+      'Session: 6813c467-1b06-4e4f-a5ba-77e33a6340fc',
+      'Limit: max_tool_iterations (1)',
+    ].join('\n')
+    seedEmptyBucket({ isReplaying: true })
+
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'replay_error',
+        session_id: SID,
+        entry_id: 'entry-delegated-limit',
+        timestamp: '2026-01-01T00:00:00Z',
+        kind: 'error',
+        message: notice,
+        payload: {
+          llm_error: {
+            code: 'delegated_task_limit',
+            message: notice,
+            retryable: false,
+          },
+        },
+      } as unknown as WsReceiveFrame)
+    })
+
+    const bubble = bucketMessages()[0]
+    expect(bubble.content).toBe(notice)
+    expect(bubble.errorCode).toBe('delegated_task_limit')
+    expect(bubble.errorEntryId).toBe('entry-delegated-limit')
+  })
+
   it('pushes a fresh error bubble with the translated copy when no trailing assistant bubble exists', () => {
     seedEmptyBucket({ isReplaying: true })
     act(() => {

@@ -318,7 +318,10 @@ func TestParseDocument_Rejects(t *testing.T) {
 		}, wantErr: "providers[0].models[1].id"},
 		{name: "empty provider id", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["id"] = "" }, wantErr: "providers[0].id"},
 		{name: "empty model id", mutate: func(t *testing.T, m map[string]any) { model(t, provider(t, m, 0), 0)["id"] = "" }, wantErr: "providers[0].models[0].id"},
-		{name: "DS-1.7 protocol grpc", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["protocol"] = "grpc" }, wantErr: "providers[0].protocol"},
+		// DS-1.7 "protocol grpc" moved to TestParseDocument_UnknownProtocolSkipsProvider:
+		// an unrecognized protocol is a forward-compat SKIP of that one
+		// provider, not a whole-document rejection (catalog forward-compat
+		// fix). See unknownProtocolError in parse.go.
 		{name: "empty protocol on supported tier", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["protocol"] = "" }, wantErr: "providers[0].protocol"},
 		{name: "DS-1.8 modalities lack text", mutate: func(t *testing.T, m map[string]any) {
 			model(t, provider(t, m, 0), 0)["input_modalities"] = []any{"image"}
@@ -414,6 +417,139 @@ func TestParseDocument_Rejects(t *testing.T) {
 				t.Fatal("a rejected Apply must retain the previous document")
 			}
 		})
+	}
+}
+
+// ── catalog forward-compat: unrecognized-protocol SKIPS the provider ───────
+//
+// Bug: a catalog publisher adding any new protocol value (it just added
+// "bedrock") used to reject the WHOLE document on every build that doesn't
+// know it yet, falling back to the embedded snapshot and losing every other
+// provider's updates until upgraded. Fix: a provider (or one of its
+// protocols[] entries) naming a protocol outside this build's closed
+// vocabulary is skipped — recorded in Document.SkippedProviders and logged
+// as one WARN — while the rest of the document parses normally. Genuinely
+// structural problems (bad JSON, wrong schema_version, a malformed row for
+// any OTHER reason, a duplicate id among the providers that ARE kept, or
+// zero valid providers remaining) still reject the whole document. See
+// unknownProtocolError in parse.go.
+
+// TestParseDocument_UnknownProtocolSkipsProvider is the RED/GREEN case: one
+// provider with an unrecognized protocol among otherwise-valid providers
+// must not take down the document.
+func TestParseDocument_UnknownProtocolSkipsProvider(t *testing.T) {
+	m := fixtureMap(t)
+	provider(t, m, providerIndex(t, m, "zai"))["protocol"] = "future-proto"
+	data := encode(t, m)
+
+	doc, err := ParseDocument(data)
+	if err != nil {
+		t.Fatalf("ParseDocument must accept a document with one unrecognized-protocol provider among valid ones, got: %v", err)
+	}
+	if got := len(doc.Providers); got != 5 {
+		t.Fatalf("providers = %d, want 5 (6 in the fixture, 1 skipped)", got)
+	}
+	for _, p := range doc.Providers {
+		if p.ID == "zai" {
+			t.Fatal("the unrecognized-protocol provider must not appear in Providers")
+		}
+	}
+	if len(doc.SkippedProviders) != 1 {
+		t.Fatalf("SkippedProviders = %+v, want exactly 1", doc.SkippedProviders)
+	}
+	if sp := doc.SkippedProviders[0]; sp.ID != "zai" || sp.Protocol != "future-proto" {
+		t.Fatalf("SkippedProviders[0] = %+v, want {ID: zai, Protocol: future-proto}", sp)
+	}
+
+	// Catalog.Apply must serve the rest of the document and log exactly one
+	// WARN naming the skipped provider id and its unrecognized protocol.
+	log := &captureLogger{}
+	c := New()
+	c.log = log
+	if err := c.Apply(data); err != nil {
+		t.Fatalf("Apply must accept the document: %v", err)
+	}
+	if _, ok := c.Provider("zai"); ok {
+		t.Fatal("the skipped provider must not be servable")
+	}
+	if _, ok := c.Provider("openrouter"); !ok {
+		t.Fatal("a valid sibling provider must still be servable")
+	}
+	warns := log.byLevel("WARN")
+	if len(warns) != 1 {
+		t.Fatalf("WARN count = %d, want 1: %+v", len(warns), warns)
+	}
+	if warns[0].attrs["provider"] != "zai" || warns[0].attrs["protocol"] != "future-proto" {
+		t.Fatalf("the WARN must name the provider id and the unrecognized protocol, got %+v", warns[0])
+	}
+}
+
+// TestParseDocument_UnknownProtocolInSecondaryEndpointSkipsProvider covers
+// the same forward-compat gap one level down: a provider whose PRIMARY
+// protocol is recognized but whose protocols[] list names an additional
+// endpoint this build doesn't recognize (e.g. an existing provider growing
+// a new "bedrock" secondary endpoint) is skipped the same way, not
+// rejected.
+func TestParseDocument_UnknownProtocolInSecondaryEndpointSkipsProvider(t *testing.T) {
+	m := fixtureMap(t)
+	p := provider(t, m, providerIndex(t, m, "zai"))
+	p["protocols"] = []any{
+		map[string]any{"protocol": p["protocol"], "api": p["api"]},
+		map[string]any{"protocol": "future-proto", "api": "https://api.z.ai/future"},
+	}
+	doc, err := ParseDocument(encode(t, m))
+	if err != nil {
+		t.Fatalf("ParseDocument must accept, got: %v", err)
+	}
+	if got := len(doc.Providers); got != 5 {
+		t.Fatalf("providers = %d, want 5", got)
+	}
+	if len(doc.SkippedProviders) != 1 || doc.SkippedProviders[0].ID != "zai" || doc.SkippedProviders[0].Protocol != "future-proto" {
+		t.Fatalf("SkippedProviders = %+v, want [{zai future-proto}]", doc.SkippedProviders)
+	}
+}
+
+// TestParseDocument_AllProvidersUnknownProtocolRejects: skip-not-reject
+// only holds while at least one provider survives — zero valid providers
+// remaining is still a structural rejection (FR-002's "must contain at
+// least one provider" invariant, now checked after skipping too).
+func TestParseDocument_AllProvidersUnknownProtocolRejects(t *testing.T) {
+	m := fixtureMap(t)
+	zai := provider(t, m, providerIndex(t, m, "zai"))
+	zai["protocol"] = "future-proto"
+	m["providers"] = []any{zai}
+
+	_, err := ParseDocument(encode(t, m))
+	if err == nil {
+		t.Fatal("a document with zero valid providers remaining (all skipped) must be rejected")
+	}
+	if !strings.Contains(err.Error(), "providers") {
+		t.Fatalf("error must name providers: %v", err)
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("rejection must wrap ErrInvalid: %v", err)
+	}
+}
+
+// TestParseDocument_DuplicateIDAmongKeptProvidersStillRejects proves the
+// skip path doesn't mask a genuinely structural problem: a duplicate id
+// between two KEPT providers still rejects the whole document even when a
+// different, unrelated row in the same document was skipped for an
+// unrecognized protocol.
+func TestParseDocument_DuplicateIDAmongKeptProvidersStillRejects(t *testing.T) {
+	m := fixtureMap(t)
+	provider(t, m, providerIndex(t, m, "openrouter"))["protocol"] = "future-proto" // skipped, index 1
+	provider(t, m, providerIndex(t, m, "minimax"))["id"] = "zai"                   // duplicate of kept provider 0, index 2
+
+	_, err := ParseDocument(encode(t, m))
+	if err == nil {
+		t.Fatal("a duplicate id among the providers that ARE kept must still reject the whole document")
+	}
+	if !strings.Contains(err.Error(), "providers[2].id") {
+		t.Fatalf("error must name the duplicate id path, got: %v", err)
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("rejection must wrap ErrInvalid: %v", err)
 	}
 }
 

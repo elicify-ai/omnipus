@@ -120,6 +120,9 @@ x-user-messages:
   turn_timed_out:
     message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
     attribution: provider
+  delegated_task_limit:
+    message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
+    attribution: config
   context_unrecoverable:
     message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
     attribution: product
@@ -152,6 +155,7 @@ properties:
       - model_unassigned
       - turn_canceled
       - turn_timed_out
+      - delegated_task_limit
       - context_unrecoverable
       - context_window_unknown
       - unknown

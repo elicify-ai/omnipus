@@ -457,7 +457,9 @@ func executeReload(
 		}
 		runningServices.bundle = newBundle
 
-		// Re-register resolved plaintexts so the scrubber stays current after reload.
+		// Re-register the complete plaintext set so the scrubber stays current
+		// after reload: config refs, enabled MCP env values, and OAuth grants
+		// Omnipus owns in the encrypted store.
 		reloadValues := make([]string, 0, len(newBundle))
 		for _, v := range newBundle {
 			if v != "" {
@@ -468,9 +470,8 @@ func executeReload(
 		// mcpEnabledEnvSensitiveValues's doc comment (bootCredentials has the
 		// matching call for the boot path).
 		reloadValues = append(reloadValues, mcpEnabledEnvSensitiveValues(newCfg, cs)...)
-		if len(reloadValues) > 0 {
-			newCfg.RegisterSensitiveValues(reloadValues)
-		}
+		reloadValues = append(reloadValues, providers.CollectOAuthSensitiveValues(cs)...)
+		newCfg.RegisterSensitiveValues(reloadValues)
 	}
 	if err := handleConfigReload(
 		ctx,

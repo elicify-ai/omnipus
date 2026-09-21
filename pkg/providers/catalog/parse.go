@@ -108,6 +108,28 @@ func invalid(path, format string, args ...any) error {
 	return fmt.Errorf("%w: %s: %s", ErrInvalid, path, fmt.Sprintf(format, args...))
 }
 
+// unknownProtocolError is parseProvider's internal signal that a provider
+// named a protocol value outside this build's closed vocabulary
+// (parseProtocol) — either as its primary protocol or inside protocols[].
+// It is deliberately NOT wrapped in ErrInvalid and NOT treated as a
+// structural defect: ParseDocument's provider loop catches this specific
+// sentinel with errors.As, skips just the one offending provider (recording
+// it in Document.SkippedProviders), and keeps parsing the rest of the
+// document. This is the forward-compatibility fix — a catalog publisher
+// that starts shipping a protocol this build doesn't implement yet (e.g.
+// "bedrock") must not take down every other provider with it. Every OTHER
+// parseProvider failure still rejects the whole document via the ordinary
+// invalid() path — this sentinel exists precisely so unknown-protocol is
+// the ONLY per-provider failure that downgrades from reject to skip.
+type unknownProtocolError struct {
+	providerID string
+	protocol   string
+}
+
+func (e *unknownProtocolError) Error() string {
+	return fmt.Sprintf("provider %q: protocol %q is not recognized by this build", e.providerID, e.protocol)
+}
+
 // ParseDocument decodes and validates a 2.0.0 document (FR-001, FR-002,
 // FR-033) and derives locality on every provider (FR-039). It never
 // touches any catalog state: callers (Catalog.Apply, the refresh
@@ -156,6 +178,17 @@ func ParseDocument(data []byte) (*Document, error) {
 		path := "providers[" + strconv.Itoa(i) + "]"
 		p, err := parseProvider(path, &dto.Providers[i], defaults)
 		if err != nil {
+			var unknownProtocol *unknownProtocolError
+			if errors.As(err, &unknownProtocol) {
+				// Forward-compat skip, not a structural defect (see
+				// unknownProtocolError) — record and keep parsing the rest of
+				// the document.
+				doc.SkippedProviders = append(doc.SkippedProviders, SkippedProvider{
+					ID:       unknownProtocol.providerID,
+					Protocol: unknownProtocol.protocol,
+				})
+				continue
+			}
 			return nil, err
 		}
 		if _, dup := seenProviders[p.ID]; dup {
@@ -163,6 +196,9 @@ func ParseDocument(data []byte) (*Document, error) {
 		}
 		seenProviders[p.ID] = struct{}{}
 		doc.Providers = append(doc.Providers, p)
+	}
+	if len(doc.Providers) == 0 {
+		return nil, invalid("providers", "no providers remain after skipping %d with an unrecognized protocol", len(doc.SkippedProviders))
 	}
 	return doc, nil
 }
@@ -300,7 +336,9 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 	} else {
 		p, ok := parseProtocol(dto.Protocol)
 		if !ok {
-			return Provider{}, invalid(path+".protocol", "%q is not one of openai-compatible|anthropic|google|ollama|cli|bedrock", dto.Protocol)
+			// Forward-compat (see unknownProtocolError): an unrecognized
+			// primary protocol skips this provider, not the whole document.
+			return Provider{}, &unknownProtocolError{providerID: dto.ID, protocol: dto.Protocol}
 		}
 		protocol = p
 	}
@@ -340,7 +378,11 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 			epath := path + ".protocols[" + strconv.Itoa(i) + "]"
 			ep, ok := parseProtocol(e.Protocol)
 			if !ok {
-				return Provider{}, invalid(epath+".protocol", "%q is not a known protocol", e.Protocol)
+				// Same forward-compat rationale as the primary protocol
+				// check above: an unrecognized secondary protocol entry
+				// skips this provider (not just the entry), rather than
+				// rejecting the whole document.
+				return Provider{}, &unknownProtocolError{providerID: dto.ID, protocol: e.Protocol}
 			}
 			if _, dup := seen[ep]; dup {
 				return Provider{}, invalid(epath, "duplicate protocol %q", e.Protocol)
