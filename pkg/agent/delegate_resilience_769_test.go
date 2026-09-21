@@ -521,7 +521,7 @@ func TestIssue769_DelegatedChildIgnoringCancellationSurfacesTimeout(t *testing.T
 	case <-time.After(2500 * time.Millisecond):
 		t.Error("delegated child stayed wedged after its time limit and detach grace; the parent still has no terminal error")
 		releaseStuckTool()
-		got = <-done
+		<-done
 		return
 	}
 
@@ -707,7 +707,7 @@ func TestIssue769_PriorHardAbortStillDetachesIgnoringChild(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Error("a prior hard abort left the delegation waiting without a detach bound")
 		releaseStuckTool()
-		got = <-done
+		<-done
 		return
 	}
 
