@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Plus, SquaresFour, ListBullets, Graph as GraphIcon, CaretDown, UsersThree, Tag } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
@@ -11,6 +11,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { CreatePlanSlideOver } from './CreatePlanSlideOver'
@@ -241,14 +242,15 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           spacing.) */}
       <div className="flex items-center justify-between px-[var(--space-4)] pt-[var(--space-3)] pb-[var(--space-2-5)] flex-shrink-0">
         <h2 className="font-headline text-base font-bold text-[var(--color-secondary)]">Plans</h2>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setPlanSlideOver({ open: true, plan: null })}
-          className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)] transition-colors"
         >
           <Plus size={14} />
           New Plan
-        </button>
+        </Button>
       </div>
       <div className="mx-[var(--space-4)] border-t border-[var(--color-border)]/60 flex-shrink-0" aria-hidden="true" />
 
@@ -302,14 +304,15 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
 
         {/* Right: New Task on its own. */}
         <div className="flex flex-col items-end gap-[var(--space-0-5)]">
-          <button tabIndex={0}
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => setCreateTaskOpen(true)}
-            className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+            className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-accent)] transition-colors"
           >
             <Plus size={14} />
             New Task
-          </button>
+          </Button>
           {/* S3 UAT finding — quick-create inside a plan-scoped board always
               lands the new task UNPLANNED (`plan_id: null` — intended, see
               CreateTaskSlideOver's `planId={null}` below: "no filter-scoped
@@ -418,72 +421,45 @@ const VIEW_OPTIONS: { value: TasksView; label: string; Icon: Icon }[] = [
   { value: 'graph', label: 'Graph', Icon: GraphIcon },
 ]
 
-// WAI-ARIA radio group pattern (mirrors AltitudeToggle): exactly one option
-// is in the tab sequence (the checked one — roving tabindex); arrow keys
-// move AND immediately select the adjacent option.
+// WAI-ARIA radio group pattern (mirrors AltitudeToggle), via the shared
+// `RadioGroup`/`RadioGroupItem` primitive (src/components/ui/radio-group.tsx)
+// — built specifically to replace this component's own former hand-rolled
+// roving-tabindex implementation (see that file's doc comment, which names
+// this exact ViewSwitcher shape). Behavior is unchanged: exactly one option
+// is in the tab sequence (the checked one); arrow keys move AND immediately
+// select the adjacent option; RadioGroup additionally supports Home/End
+// (jump to first/last), a WAI-ARIA APG addition this component never had,
+// not a removed capability.
 function ViewSwitcher({ value, onChange }: { value: TasksView; onChange: (next: TasksView) => void }) {
-  const optionRefs = useRef<Partial<Record<TasksView, HTMLButtonElement | null>>>({})
-
-  function moveSelection(delta: 1 | -1) {
-    const currentIndex = VIEW_OPTIONS.findIndex((opt) => opt.value === value)
-    const next = VIEW_OPTIONS[(currentIndex + delta + VIEW_OPTIONS.length) % VIEW_OPTIONS.length]
-    onChange(next.value)
-    optionRefs.current[next.value]?.focus()
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
-    switch (e.key) {
-      case 'ArrowRight':
-      case 'ArrowDown':
-        e.preventDefault()
-        moveSelection(1)
-        break
-      case 'ArrowLeft':
-      case 'ArrowUp':
-        e.preventDefault()
-        moveSelection(-1)
-        break
-      default:
-        break
-    }
-  }
-
   return (
-    <div
-      className="flex items-center gap-[var(--space-3)] flex-shrink-0"
-      role="radiogroup"
+    <RadioGroup
+      value={value}
+      onValueChange={(next) => onChange(next as TasksView)}
       aria-label="Task view"
+      className="gap-[var(--space-3)] flex-shrink-0"
     >
       {VIEW_OPTIONS.map((opt) => {
         const checked = value === opt.value
         return (
-          <button
+          <RadioGroupItem
             key={opt.value}
-            ref={(el) => {
-              optionRefs.current[opt.value] = el
-            }}
-            type="button"
-            role="radio"
-            aria-checked={checked}
-            tabIndex={checked ? 0 : -1}
+            value={opt.value}
             data-testid={`tasks-view-${opt.value}`}
-            onClick={() => onChange(opt.value)}
-            onKeyDown={handleKeyDown}
             // Flat like the workspace header tabs — no border, background or
             // shadow; just an icon + label on the header, gold when active.
             className={cn(
-              'flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium transition-colors',
+              'h-auto w-auto justify-start border-0 bg-transparent gap-[var(--space-1)] p-0 text-[length:var(--type-body-compact-size)] font-medium transition-colors',
               checked
-                ? 'text-[var(--color-accent)]'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+                ? 'text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]'
+                : 'text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]',
             )}
           >
             <opt.Icon size={15} weight={checked ? 'fill' : 'regular'} />
             {opt.label}
-          </button>
+          </RadioGroupItem>
         )
       })}
-    </div>
+    </RadioGroup>
   )
 }
 
