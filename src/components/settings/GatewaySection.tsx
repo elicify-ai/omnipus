@@ -25,6 +25,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { SmartSelect } from '@/components/ui/smart-select'
@@ -272,7 +273,7 @@ export function GatewaySection() {
 
   if (isConfigError) {
     return (
-      <div className="rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+      <Card className="border-[var(--color-error)]/40 p-[var(--space-3)] space-y-[var(--space-2-5)]">
         <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load gateway configuration.</p>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Save is disabled until the configuration is loaded successfully to prevent overwriting real settings with defaults.
@@ -280,7 +281,7 @@ export function GatewaySection() {
         <Button size="sm" variant="outline" onClick={() => refetchConfig()}>
           Retry
         </Button>
-      </div>
+      </Card>
     )
   }
 
@@ -309,7 +310,7 @@ export function GatewaySection() {
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
         {/* Bind address — risky when 0.0.0.0 (US-B2) */}
         <div className="space-y-[var(--space-2)]">
           <div>
@@ -417,7 +418,7 @@ export function GatewaySection() {
             ]}
           />
         </div>
-      </div>
+      </Card>
 
       {/* O4 honest status — show the *running* value (applied_value from pending
           entries) vs the *saved* value separately when a restart is pending. */}
@@ -542,7 +543,7 @@ export function GatewaySection() {
         {remoteAccessOpen && (
           <div id="remote-access-panel" className="mt-[var(--space-2-5)] space-y-[var(--space-3)]">
             {/* Tailscale */}
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2)]">
+            <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
               <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tailscale</p>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Install Tailscale on this machine and your client device. Once connected, access Omnipus via your Tailscale IP:
@@ -553,10 +554,10 @@ export function GatewaySection() {
               <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 Ensure the gateway bind address is set to <span className="font-mono">0.0.0.0</span> or your Tailscale IP to accept remote connections.
               </p>
-            </div>
+            </Card>
 
             {/* SSH tunnel */}
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2)]">
+            <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
               <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">SSH Tunnel</p>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Forward the gateway port to your local machine over SSH:
@@ -567,7 +568,7 @@ export function GatewaySection() {
               <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 Then open <span className="font-mono">http://localhost:{port}</span> in your browser.
               </p>
-            </div>
+            </Card>
           </div>
         )}
       </section>

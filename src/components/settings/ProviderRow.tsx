@@ -14,6 +14,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { BrandIcon } from '@/components/ui/brand-icon'
+import { Card } from '@/components/ui/card'
 import { providerCatalogMode } from '@/lib/agents/providerCatalog'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { providerStatusLabel, isProviderUsable, type ProviderStatus } from '@/lib/providerStatus'
@@ -393,8 +394,8 @@ export function ProviderRow({
   const handleSignInAction = signInActionLabel(provider.status) === 'Manage' ? onManage : onSignIn
 
   return (
-    <div
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
+    <Card
+      className="overflow-hidden"
       data-testid={`provider-row-${provider.id}`}
     >
       {/* Test-validation warning banner */}
@@ -552,7 +553,7 @@ export function ProviderRow({
           )}
         </div>
       )}
-    </div>
+    </Card>
   )
 }
 

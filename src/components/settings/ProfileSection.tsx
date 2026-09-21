@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
@@ -211,7 +212,7 @@ export function ProfileSection() {
       {/* Identity */}
       <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Identity</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between gap-[var(--space-3)]">
             <Label htmlFor="pref-name" className="shrink-0">
               Display name
@@ -224,13 +225,13 @@ export function ProfileSection() {
               className="h-8 text-[length:var(--type-utility-xs-size)] max-w-xs"
             />
           </div>
-        </div>
+        </Card>
       </section>
 
       {/* Locale */}
       <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Locale</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Timezone</p>
@@ -244,13 +245,13 @@ export function ProfileSection() {
             />
           </div>
 
-        </div>
+        </Card>
       </section>
 
       {/* Appearance */}
       <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Appearance</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Theme</p>
@@ -282,13 +283,13 @@ export function ProfileSection() {
               <span>20px</span>
             </div>
           </div>
-        </div>
+        </Card>
       </section>
 
       {/* Change Password */}
       <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Security</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="space-y-[var(--space-1)]">
             <h4 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Change Password</h4>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Update your login password. Must be at least 8 characters.</p>
@@ -360,7 +361,7 @@ export function ProfileSection() {
               {isChangingPassword ? 'Changing...' : 'Change Password'}
             </Button>
           </form>
-        </div>
+        </Card>
       </section>
 
       {/* Workspace Context (USER.md) */}
@@ -373,7 +374,7 @@ export function ProfileSection() {
             <AutoSaveIndicator status={contextSaveStatus} error={contextSaveError} />
           )}
         </div>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" id="workspace-context-desc">
             Shared context available to all agents — your role, preferences, and workspace information.
           </p>
@@ -405,7 +406,7 @@ export function ProfileSection() {
               disabled={!contextHydrated}
             />
           )}
-        </div>
+        </Card>
       </section>
     </div>
   )

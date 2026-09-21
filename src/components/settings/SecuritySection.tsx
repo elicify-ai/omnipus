@@ -33,6 +33,7 @@ import { SkillTrustSection } from './SkillTrustSection'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash, Key, Lock } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -359,7 +360,7 @@ export function SecuritySection() {
         </p>
 
         {/* 1. Default policy mode — wraps risky "Allow" (US-B2) */}
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2)]">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
           <div>
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Agent tool access</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
@@ -384,10 +385,10 @@ export function SecuritySection() {
               setPolicyMode(v as 'allow' | 'deny')
             }}
           />
-        </div>
+        </Card>
 
         {/* 2. Exec approval */}
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
+        <Card className="p-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Shell command approval</p>
@@ -405,7 +406,7 @@ export function SecuritySection() {
               ]}
             />
           </div>
-        </div>
+        </Card>
 
         {/* 3. Skill Trust (US-E4 / #340) — plain language, top-level */}
         <SkillTrustSection />
@@ -434,7 +435,7 @@ export function SecuritySection() {
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
               Command Execution
             </p>
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+            <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="exec-timeout-seconds">Exec timeout (seconds)</Label>
@@ -482,7 +483,7 @@ export function SecuritySection() {
                   aria-label="Enable deny patterns"
                 />
               </div>
-            </div>
+            </Card>
 
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-[var(--space-3)] mb-[var(--space-2)]">
               Binary Allowlist
@@ -539,7 +540,7 @@ export function SecuritySection() {
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mb-[var(--space-2-5)]">
               Per-Agent Rate Limits
             </p>
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+            <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="agent-llm-calls-per-hour">LLM calls / hour</Label>
@@ -570,7 +571,7 @@ export function SecuritySection() {
                   placeholder="Unlimited"
                 />
               </div>
-            </div>
+            </Card>
           </section>
 
           <Separator />
@@ -633,7 +634,7 @@ export function SecuritySection() {
           </div>
         </div>
 
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
+        <Card className="divide-y divide-[var(--color-border)]">
           {credentialsError && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load credentials. Please try again.</div>
           )}
@@ -661,7 +662,7 @@ export function SecuritySection() {
               </Button>
             </div>
           ))}
-        </div>
+        </Card>
       </section>
 
       <AuditLogViewer open={auditLogOpen} onOpenChange={setAuditLogOpen} />

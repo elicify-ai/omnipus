@@ -4,6 +4,7 @@ import { Database, Archive, ArrowCounterClockwise, Trash } from '@phosphor-icons
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Dialog,
@@ -179,7 +180,7 @@ export function DataSection() {
       {/* Session retention */}
       <section className="space-y-[var(--space-2)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Session Retention</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
+        <Card className="p-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Retention period</p>
@@ -197,7 +198,7 @@ export function DataSection() {
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">days</span>
             </div>
           </div>
-        </div>
+        </Card>
       </section>
 
       <Separator />
@@ -218,7 +219,7 @@ export function DataSection() {
           </Button>
         </div>
 
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
+        <Card className="divide-y divide-[var(--color-border)]">
           {backupsLoading && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading backups...</div>
           )}
@@ -247,13 +248,13 @@ export function DataSection() {
               </Button>
             </div>
           ))}
-        </div>
+        </Card>
       </section>
 
       {/* Danger zone */}
       <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-error)] uppercase tracking-wider">Danger Zone</h3>
-        <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-surface-1)] p-[var(--space-3)] flex items-center justify-between">
+        <Card className="border-[var(--color-error)]/30 p-[var(--space-3)] flex items-center justify-between">
           <div>
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Clear all sessions</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Permanently delete all session transcripts. Cannot be undone.</p>
@@ -267,7 +268,7 @@ export function DataSection() {
             <Trash size={12} />
             Clear sessions
           </Button>
-        </div>
+        </Card>
       </section>
 
       {/* Restore confirmation */}
@@ -329,10 +330,10 @@ function StatBox({
   icon?: React.ReactNode
 }) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)]">
+    <Card className="p-[var(--space-2-5)]">
       {icon && <div className="text-[var(--color-muted)] mb-[var(--space-1)]">{icon}</div>}
       <div className="font-headline font-bold text-base text-[var(--color-secondary)]">{value}</div>
       <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">{label}</div>
-    </div>
+    </Card>
   )
 }

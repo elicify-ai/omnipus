@@ -9,6 +9,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { DeviceMobile, CheckCircle, XCircle, Trash, Clock, Fingerprint, Info, ArrowRight } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { fetchDevices, type DevicePending, type DevicePaired } from '@/lib/api'
 import { useChatStore } from '@/store/chat'
 import { useConnectionStore } from '@/store/connection'
@@ -18,9 +19,10 @@ import { useUiStore } from '@/store/ui'
 
 function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
   return (
-    <div
+    <Card
+      variant="inset"
       data-testid="pair-device-instructions"
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-3)] space-y-[var(--space-2-5)]"
+      className="p-[var(--space-3)] space-y-[var(--space-2-5)]"
     >
       <div className="flex items-center justify-between gap-[var(--space-2)]">
         <div className="flex items-center gap-[var(--space-2)]">
@@ -55,7 +57,7 @@ function PairDeviceInstructions({ onClose }: { onClose: () => void }) {
       >
         Learn more <ArrowRight size={11} />
       </a>
-    </div>
+    </Card>
   )
 }
 
@@ -99,8 +101,9 @@ export function DevicesSection() {
   return (
     <section className="space-y-[var(--space-4)]">
       {/* Explainer + Pair entry point (UAT fix #3) */}
-      <div
-        className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-3)]"
+      <Card
+        variant="inset"
+        className="flex items-start gap-[var(--space-2-5)] p-[var(--space-3)]"
         data-testid="devices-explainer"
       >
         <Info size={15} className="text-[var(--color-accent)] shrink-0 mt-[var(--space-0-5)]" />
@@ -122,7 +125,7 @@ export function DevicesSection() {
             Pair a device
           </Button>
         </div>
-      </div>
+      </Card>
 
       {/* Pairing instructions panel — shown when "Pair a device" is clicked */}
       {showPairInstructions && (

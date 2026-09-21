@@ -10,6 +10,7 @@ import {
   Star,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -88,9 +89,9 @@ export function IntegrationsSection() {
     const keyVal = apiKeys[p.id] ?? ''
 
     return (
-      <div
+      <Card
         key={p.id}
-        className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
+        className="overflow-hidden"
       >
         <div className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]">
           <div className="flex-1 min-w-0">
@@ -199,7 +200,7 @@ export function IntegrationsSection() {
             </div>
           </div>
         )}
-      </div>
+      </Card>
     )
   }
 
@@ -220,9 +221,9 @@ export function IntegrationsSection() {
       {isLoading ? (
         <div className="space-y-[var(--space-2)]">
           {[1, 2, 3].map((i) => (
-            <div
+            <Card
               key={i}
-              className="h-14 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+              className="h-14 animate-pulse"
             />
           ))}
         </div>

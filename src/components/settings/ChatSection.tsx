@@ -14,6 +14,7 @@
  */
 
 import { ChatCircleText } from '@phosphor-icons/react'
+import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 
@@ -30,7 +31,7 @@ export function ChatSection(): React.ReactElement {
       </div>
 
       {/* Verbose chat card */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {/* Toggle row */}
         <div className="flex items-start justify-between gap-[var(--space-3)]">
           <div className="flex-1 min-w-0">
@@ -55,7 +56,7 @@ export function ChatSection(): React.ReactElement {
           This is a local, per-device display preference — it is not synced across
           devices and does not change what is stored in the session transcript.
         </p>
-      </div>
+      </Card>
     </div>
   )
 }

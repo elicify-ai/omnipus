@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Globe, ArrowsClockwise, Warning, CheckCircle, XCircle, ArrowCounterClockwise } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { fetchExecProxyStatus, updateConfig, getErrorMessage } from '@/lib/api'
 import { RestartConfirmDialog } from '@/components/ui/RestartConfirmDialog'
@@ -125,7 +126,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
         </Button>
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {/* Enable toggle row */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-[var(--space-2)]">
@@ -193,7 +194,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
         <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed border-t border-[var(--color-border)] pt-[var(--space-2)]">
           Routes bash tool child process HTTP/HTTPS traffic through an SSRF-protected loopback proxy (SEC-28).
         </p>
-      </div>
+      </Card>
 
       <RestartConfirmDialog
         open={pendingEnabled !== null}

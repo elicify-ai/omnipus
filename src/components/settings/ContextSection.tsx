@@ -21,6 +21,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Sliders, Plus, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { getContextSettings, putContextSettings, getErrorMessage, isApiError } from '@/lib/api'
@@ -243,11 +244,11 @@ function fieldFromError(err: unknown): { field?: string; message: string } {
 
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
-    </div>
+    </Card>
   )
 }
 
@@ -325,10 +326,10 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
   if (isLoading || !form) return <Skeleton />
   if (isError) {
     return (
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }} role="alert">
+      <Card className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }} role="alert">
         <Warning size={14} className="inline mr-[var(--space-1)]" weight="fill" />
         Could not load context settings: {getErrorMessage(error, 'unknown error')}
-      </div>
+      </Card>
     )
   }
 

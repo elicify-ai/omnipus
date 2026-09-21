@@ -4,6 +4,7 @@ import { Shield } from '@phosphor-icons/react'
 import { fetchPromptGuardLevel, updatePromptGuardLevel, getErrorMessage } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { Card } from '@/components/ui/card'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 
@@ -34,11 +35,11 @@ const LEVELS: { value: PromptInjectionLevel; label: string; subtitle: string }[]
 
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
-    </div>
+    </Card>
   )
 }
 
@@ -110,7 +111,7 @@ export function PromptGuardSection(): React.ReactElement {
         <SaveStatus state={saveState} errorMessage={errorMessage} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Controls how untrusted tool output is sanitised before passing to the agent.
         </p>
@@ -161,7 +162,7 @@ export function PromptGuardSection(): React.ReactElement {
             )
           })}
         </RadioGroup>
-      </div>
+      </Card>
     </section>
   )
 }

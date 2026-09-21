@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Brain, ArrowUp, ArrowDown, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -17,12 +18,12 @@ import { SaveStatus, useSaveStatus } from './SaveStatus'
 
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
-    </div>
+    </Card>
   )
 }
 
@@ -343,7 +344,7 @@ export function MemorySection(): React.ReactElement {
         <SaveStatus state={saveState} errorMessage={errorMessage} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Global settings for automatic session recap (context compaction) and memory retention.
           These settings apply across all workspaces and agents.
@@ -568,7 +569,7 @@ export function MemorySection(): React.ReactElement {
             {isSaving ? 'Saving...' : 'Save'}
           </Button>
         </div>
-      </div>
+      </Card>
     </section>
   )
 }

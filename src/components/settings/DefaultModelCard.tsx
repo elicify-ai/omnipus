@@ -19,6 +19,7 @@
 
 import * as React from 'react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { buildProviderModelGroups, providerDisplayName } from '@/lib/providerModelGroups'
 import { USABLE_PROVIDER_STATUSES } from '@/lib/providerStatus'
@@ -125,8 +126,8 @@ export function DefaultModelCard({
   const windowUnknown = defaultModel?.window_unknown === true
 
   return (
-    <div
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-2-5)]"
+    <Card
+      className="px-[var(--space-3)] py-[var(--space-2-5)]"
       data-testid="default-model-card"
     >
       <div className="flex items-start justify-between gap-[var(--space-2-5)]">
@@ -222,6 +223,6 @@ export function DefaultModelCard({
           />
         </div>
       )}
-    </div>
+    </Card>
   )
 }

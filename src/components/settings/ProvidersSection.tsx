@@ -36,6 +36,7 @@ import {
   Globe,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -383,8 +384,9 @@ function ProviderConfigSheet({
           {/* View-only variant info — Plan/Region/Endpoint, derived from the
               fetched CatalogProvider (src/lib/catalogDisplay.ts). */}
           {entry && (
-            <div
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
+            <Card
+              variant="inset"
+              className="px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
               data-testid="variant-info"
             >
               <div className="flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)] text-[length:var(--type-utility-xs-size)]">
@@ -418,7 +420,7 @@ function ProviderConfigSheet({
                   </span>
                 </div>
               </div>
-            </div>
+            </Card>
           )}
 
           {/* API Key input */}
@@ -549,12 +551,13 @@ function ProviderConfigSheet({
           {/* FR-033 inline discard prompt — rendered inside the sheet so the
               question never steals focus from it (WCAG 3.2.1). */}
           {discardPrompt && (
-            <div
+            <Card
+              variant="inset"
               role="alertdialog"
               aria-labelledby={`discard-key-title-${draftKey}`}
               aria-describedby={`discard-key-body-${draftKey}`}
               data-testid="discard-key-prompt"
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
+              className="px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
             >
               <p
                 id={`discard-key-title-${draftKey}`}
@@ -584,7 +587,7 @@ function ProviderConfigSheet({
                   {DRAFT_DISCARD_PROMPT.confirm}
                 </Button>
               </div>
-            </div>
+            </Card>
           )}
 
           {/* Footer actions */}
@@ -1145,9 +1148,9 @@ export function ProvidersSection() {
       ) : isLoading ? (
         <div className="space-y-[var(--space-2)]">
           {[1, 2, 3].map((i) => (
-            <div
+            <Card
               key={i}
-              className="h-14 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+              className="h-14 animate-pulse"
             />
           ))}
         </div>
@@ -1237,8 +1240,8 @@ export function ProvidersSection() {
       ) : (
         /* ── Empty state (FIX-3) — no default-visible roster; a compact
              message + one primary "Connect a provider" CTA. ── */
-        <div
-          className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-5)] text-center space-y-[var(--space-2-5)]"
+        <Card
+          className="border-dashed px-[var(--space-3)] py-[var(--space-5)] text-center space-y-[var(--space-2-5)]"
           data-testid="providers-empty-state"
         >
           <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No providers configured yet.</p>
@@ -1249,7 +1252,7 @@ export function ProvidersSection() {
           >
             <Plus size={13} weight="bold" /> Connect a provider
           </Button>
-        </div>
+        </Card>
       )}
 
       {/* Provider picker Sheet (FIX-3) — the sheet is Settings' own container;

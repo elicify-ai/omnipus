@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Terminal, Plus, Trash } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -135,7 +136,7 @@ export function ExecAllowlistSection(): React.ReactElement {
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {patterns.length === 0 ? (
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">
             No patterns configured. Bash runs without the binary allowlist restriction
@@ -194,7 +195,7 @@ export function ExecAllowlistSection(): React.ReactElement {
         {addError && (
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{addError}</p>
         )}
-      </div>
+      </Card>
     </section>
   )
 }

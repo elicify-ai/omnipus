@@ -19,6 +19,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Cpu, Info, Warning, Target } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -44,11 +45,11 @@ import { ReAuthDialog } from './ReAuthDialog'
 // ~7 seconds before any error surfaced).
 function Skeleton() {
   return (
-    <div
+    <Card
       role="status"
       aria-live="polite"
       data-testid="performance-loading"
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]"
+      className="p-[var(--space-3)] space-y-[var(--space-2-5)]"
     >
       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Loading performance settings…</p>
       <div className="space-y-[var(--space-2-5)] animate-pulse" aria-hidden="true">
@@ -56,7 +57,7 @@ function Skeleton() {
         <div className="h-3 w-full rounded bg-[var(--color-border)]" />
         <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -456,7 +457,7 @@ export function PerformanceSection(): React.ReactElement {
       </div>
 
       {/* Live concurrency card — shown above the input */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-2-5)] flex items-start gap-[var(--space-2)]">
+      <Card variant="inset" className="p-[var(--space-2-5)] flex items-start gap-[var(--space-2)]">
         <Info size={14} className="text-[var(--color-accent)] mt-[var(--space-0-5)] shrink-0" />
         <div className="flex-1 min-w-0">
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] leading-relaxed">
@@ -468,10 +469,10 @@ export function PerformanceSection(): React.ReactElement {
               : 'Nothing is configured, so concurrency is bounded by this host\u2019s available memory at the moment each agent turn starts. Set a value below to cap it explicitly instead.'}
           </p>
         </div>
-      </div>
+      </Card>
 
       {/* Concurrency card */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
         <div className="space-y-[var(--space-1)]">
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
             Controls how many tasks and subagents may run concurrently across all agents.
@@ -528,10 +529,10 @@ export function PerformanceSection(): React.ReactElement {
             </span>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Tool loading card */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {/* Section heading */}
         <div className="flex items-center gap-[var(--space-2)]">
           <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tool loading</h3>
@@ -570,14 +571,14 @@ export function PerformanceSection(): React.ReactElement {
           Applies to all agents. Takes effect on the next message — no restart required.
           Changes apply after re-authentication.
         </p>
-      </div>
+      </Card>
 
       {/* Goal completion budget card (GOAL-FR-024/FR-045, D-D/D-E) — the ONE
           global goal-tries setting in the product. There is no per-goal
           override anywhere: not on the task detail panel, not in chat, not
           on the wire, not in the store. This single control governs task
           goals and chat goals identically. */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         <div className="flex items-center gap-[var(--space-2)]">
           <Target size={16} className="text-[var(--color-secondary)]" />
           <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Goal completion budget</h3>
@@ -611,7 +612,7 @@ export function PerformanceSection(): React.ReactElement {
           Goals already running keep the limit they started with. Saving asks you to
           re-enter your password to confirm it's really you.
         </p>
-      </div>
+      </Card>
 
       <ReAuthDialog
         open={reauthOpen}

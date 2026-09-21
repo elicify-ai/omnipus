@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Copy, GithubLogo, ArrowSquareOut } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { fetchAboutInfo } from '@/lib/api'
@@ -77,7 +78,7 @@ export function AboutSection() {
           </Button>
         </div>
 
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
+        <Card className="divide-y divide-[var(--color-border)]">
           {isLoading && (
             <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading system info...</div>
           )}
@@ -100,7 +101,7 @@ export function AboutSection() {
               <InfoRow label="Uptime" value={formatUptime(info.uptime_seconds)} mono />
             </>
           )}
-        </div>
+        </Card>
       </section>
 
       <Separator />
@@ -108,7 +109,7 @@ export function AboutSection() {
       {/* Open source */}
       <section className="space-y-[var(--space-2-5)]">
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Open Source</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] flex items-center justify-between">
+        <Card className="p-[var(--space-3)] flex items-center justify-between">
           <div>
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">GitHub Repository</p>
             <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
@@ -127,7 +128,7 @@ export function AboutSection() {
               <ArrowSquareOut size={11} className="text-[var(--color-muted)]" />
             </a>
           </Button>
-        </div>
+        </Card>
       </section>
 
       <div className="text-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]">

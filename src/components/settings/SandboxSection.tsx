@@ -12,6 +12,7 @@ import {
   Warning,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import {
   Dialog,
@@ -187,14 +188,14 @@ function CapBadge({ children }: { children: React.ReactNode }) {
 
 function SandboxSkeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="flex items-center gap-[var(--space-2)]">
         <div className="w-2 h-2 rounded-full bg-[var(--color-border)]" />
         <div className="h-4 w-32 rounded bg-[var(--color-border)]" />
       </div>
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
-    </div>
+    </Card>
   )
 }
 
@@ -892,7 +893,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
     if (statusIsError) {
       const errorDetail = statusError instanceof Error ? statusError.message : undefined
       return (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] flex items-start gap-[var(--space-2)]">
+        <Card className="p-[var(--space-3)] flex items-start gap-[var(--space-2)]">
           <XCircle size={14} style={{ color: 'var(--color-error)' }} className="mt-[var(--space-0-5)] shrink-0" />
           <div className="flex-1 min-w-0">
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load sandbox status</p>
@@ -911,14 +912,14 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
           >
             Retry
           </Button>
-        </div>
+        </Card>
       )
     }
 
     if (!statusData) return null
 
     return (
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
+      <Card className="p-[var(--space-3)]">
         <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-2-5)]">
           <StatusDot variant={dotVariant} />
           <HeaderIcon
@@ -960,7 +961,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
             {statusExpanded && <CapabilitiesPanel data={statusData} />}
           </>
         )}
-      </div>
+      </Card>
     )
   }
 
@@ -1000,7 +1001,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
 
       {/* Config editor — only shown when status loaded successfully */}
       {!statusLoading && !statusIsError && (
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           {/* ── Mode radio — top of config section ── */}
           <div className="space-y-[var(--space-2)]">
             <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Sandbox mode</p>
@@ -1277,7 +1278,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
               />
             )}
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Wildcard SSRF confirmation modal */}
