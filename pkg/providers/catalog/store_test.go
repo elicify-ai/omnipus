@@ -143,6 +143,65 @@ func TestBoot_CorruptEmbedded_NoCatalog(t *testing.T) {
 	})
 }
 
+// ── catalog forward-compat: the skip reaches Boot's parse paths too ────────
+//
+// Boot parses both the embedded snapshot and the persisted last-known-good
+// directly through ParseDocument (store.go), independently of the
+// refresh/puller transaction covered in refresh_test.go. Both call sites
+// must apply the same unrecognized-protocol skip and log the same WARN.
+
+func TestBoot_UnknownProtocolProvider_EmbeddedSkipsAndServes(t *testing.T) {
+	m := fixtureMap(t)
+	provider(t, m, providerIndex(t, m, "zai"))["protocol"] = "future-proto"
+	log := &captureLogger{}
+
+	c := Boot(context.Background(), encode(t, m), nil, nil, log)
+
+	require.NotNil(t, c.Document())
+	assert.Equal(t, ServedEmbedded, mustServed(t, c).From)
+	if _, ok := c.Provider("zai"); ok {
+		t.Fatal("the unrecognized-protocol provider must not be servable")
+	}
+	if _, ok := c.Provider("openrouter"); !ok {
+		t.Fatal("a valid sibling provider must still be servable")
+	}
+	warns := log.byLevel("WARN")
+	require.Len(t, warns, 1)
+	assert.Equal(t, "zai", warns[0].attrs["provider"])
+	assert.Equal(t, "future-proto", warns[0].attrs["protocol"])
+}
+
+func TestBoot_UnknownProtocolProvider_PersistedSkipsAndServes(t *testing.T) {
+	dir := t.TempDir()
+	m := fixtureMap(t)
+	m["version"] = "v2026.8.23"
+	provider(t, m, providerIndex(t, m, "zai"))["protocol"] = "future-proto"
+	writePersisted(t, dir, encode(t, m))
+	log := &captureLogger{}
+
+	c := Boot(context.Background(), loadFixture(t), nil, NewFileStore(dir), log)
+
+	assert.Equal(t, "v2026.8.23", c.Version().String(), "E6: the newer persisted document wins")
+	assert.Equal(t, ServedPulled, mustServed(t, c).From)
+	if _, ok := c.Provider("zai"); ok {
+		t.Fatal("the unrecognized-protocol provider must not be servable")
+	}
+	if _, ok := c.Provider("openrouter"); !ok {
+		t.Fatal("a valid sibling provider must still be servable")
+	}
+	warns := log.byLevel("WARN")
+	require.Len(t, warns, 1)
+	assert.Equal(t, "zai", warns[0].attrs["provider"])
+	assert.Equal(t, "future-proto", warns[0].attrs["protocol"])
+}
+
+func mustServed(t *testing.T, c *Catalog) ServedCatalog {
+	t.Helper()
+	s, ok := c.Served()
+	require.True(t, ok)
+	return s
+}
+
 // ── DoD: no code path names capabilities_catalog.json ───────────────────────
 
 func TestStore_NoLegacyFilenameInSource(t *testing.T) {

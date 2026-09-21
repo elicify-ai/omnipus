@@ -14,6 +14,7 @@ package catalog
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -440,4 +441,63 @@ func TestRefresh_NoPuller_NoOp(t *testing.T) {
 	require.NoError(t, c.Refresh(context.Background()))
 	assert.Empty(t, log.byLevel("WARN"))
 	assert.Empty(t, log.byLevel("INFO"))
+}
+
+// ── catalog forward-compat: the skip reaches the live download path ────────
+//
+// TestParseDocument_UnknownProtocolSkipsProvider (catalog_test.go) proves
+// ParseDocument in isolation. This proves the SAME skip behaviour is live
+// on the puller path: a daily/startup Refresh() that pulls a document with
+// one unrecognized-protocol provider must still apply the rest of the
+// document, persist it, fire the OnRefreshApplied hooks, and WARN — not
+// silently fall back to the embedded snapshot and stop receiving updates
+// for every provider (the reported bug).
+func TestRefresh_UnknownProtocolProvider_SkipsAndApplies(t *testing.T) {
+	dir := t.TempDir()
+	log := &captureLogger{}
+	m := fixtureMap(t)
+	m["version"] = "v2026.8.23"
+	provider(t, m, providerIndex(t, m, "zai"))["protocol"] = "future-proto"
+	pulled, err := json.Marshal(m)
+	require.NoError(t, err)
+
+	p := &fakePuller{data: pulled}
+	c := bootEmbedded(t, p, NewFileStore(dir), log)
+
+	var hookFired atomic.Int32
+	c.OnRefreshApplied(func() { hookFired.Add(1) })
+
+	require.NoError(t, c.Refresh(context.Background()), "a skip is not a refresh failure")
+
+	// The refreshed document is live: version moved, the valid sibling
+	// provider is servable, and the pulled bytes (unmodified — the skip is
+	// an in-memory parse decision, not a rewrite of what's persisted) are
+	// the new last-known-good.
+	assert.Equal(t, "v2026.8.23", c.Version().String())
+	served, ok := c.Served()
+	require.True(t, ok)
+	assert.Equal(t, ServedPulled, served.From)
+	if _, ok := c.Provider("zai"); ok {
+		t.Fatal("the unrecognized-protocol provider must not be servable")
+	}
+	if _, ok := c.Provider("openrouter"); !ok {
+		t.Fatal("a valid sibling provider pulled in the same document must still be servable")
+	}
+	persisted, err := os.ReadFile(filepath.Join(dir, PersistedFileName))
+	require.NoError(t, err)
+	assert.Equal(t, pulled, persisted, "FR-010: the pulled bytes persist verbatim, including the skipped row")
+	assert.Equal(t, int32(1), hookFired.Load(), "a skip-but-apply refresh still fires OnRefreshApplied")
+
+	// One WARN for the skip, one INFO for the successful refresh — this is
+	// NOT the FR-009 rejection path (reasonInvalid etc.), so no WARN
+	// carries a "reason" key.
+	assert.Len(t, log.byLevel("INFO"), 1)
+	warns := log.byLevel("WARN")
+	require.Len(t, warns, 1)
+	assert.Equal(t, "zai", warns[0].attrs["provider"])
+	assert.Equal(t, "future-proto", warns[0].attrs["protocol"])
+	assert.Nil(t, warns[0].attrs["reason"], "the skip WARN is not an FR-009 rejection reason")
+
+	degraded, _ := c.Degraded()
+	assert.False(t, degraded, "a skip-but-apply refresh is not a degraded/failed refresh")
 }

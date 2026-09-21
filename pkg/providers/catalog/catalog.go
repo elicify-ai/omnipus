@@ -143,6 +143,7 @@ func (c *Catalog) Apply(data []byte) error {
 	if err != nil {
 		return err
 	}
+	c.logSkippedProviders(doc)
 	return c.applyDoc(doc, ServedEmbedded)
 }
 
