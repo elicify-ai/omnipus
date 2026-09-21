@@ -1982,10 +1982,12 @@ const signInProbePrompt = "hi"
 //   - `cli_kind` (codex | copilot) — a `protocol: cli` row whose vendor binary
 //     holds the login. The probe is one subprocess completion with the chosen
 //     model.
-//   - `token_source: codex-auth-json` — a row that reuses the Codex CLI's saved
-//     access token against its OWN base URL (openai-chatgpt). The probe is one
-//     ordinary completion carrying that token, classified by the same
-//     providers.ValidateKey the api_key path uses.
+//   - a first-party OAuth owner — a device-code row whose access token lives in
+//     Omnipus' encrypted credential store. The probe is one ordinary completion
+//     carrying that token, classified by the same providers.ValidateKey the
+//     api_key path uses.
+//   - `token_source: codex-auth-json` — a legacy/read-only row that reuses the
+//     Codex CLI's saved access token against its own base URL.
 //
 // Returns (result, refusal). A non-empty refusal is a 400 on field `auth` and
 // the result is meaningless; an empty refusal means a completion ran and its
@@ -2012,6 +2014,46 @@ func (a *restAPI) probeSignIn(
 	switch {
 	case row.CLIKind != "":
 		return a.probeSignInCLI(ctx, row, displayName, model)
+
+	case providers.OAuthEntryOwner(providerID):
+		store, err := a.resolveSignInCredStore()
+		if err != nil {
+			slog.Warn("rest: probe-provider: encrypted sign-in store unavailable",
+				"provider", providerID, "error", err)
+			return providers.ValidationResult{}, probeSignInUnavailableMsg
+		}
+		oauthCfg, err := signInRefreshOAuthConfig(providerID)
+		if err != nil {
+			slog.Warn("rest: probe-provider: sign-in refresh configuration unavailable",
+				"provider", providerID, "error", err)
+			return providers.ValidationResult{}, probeSignInUnavailableMsg
+		}
+		tokenSource := newStoreOAuthTokenSource(providerID, store, oauthCfg)
+		token, _, err := tokenSource()
+		if err != nil {
+			if errors.Is(err, providers.ErrProviderNeedsSignIn) {
+				return providers.ValidationResult{}, probeNotSignedInMsg
+			}
+			slog.Warn("rest: probe-provider: encrypted sign-in token unavailable",
+				"provider", providerID, "error", err)
+			return providers.ValidationResult{}, probeSignInUnavailableMsg
+		}
+		a.reRegisterOAuthSensitiveValues(store)
+		var probeModels []string
+		if model != "" {
+			probeModels = []string{model}
+		}
+		result := providers.ValidateKey(ctx, providers.ValidateInput{
+			ProviderID:   providerID,
+			ProviderName: displayName,
+			BaseURL:      baseURL,
+			APIKey:       token,
+			ProbeModels:  probeModels,
+		}, a.ssrfChk())
+		slog.Debug("rest: probe-provider: encrypted sign-in token probe result",
+			"provider", providerID, "outcome", result.Outcome,
+			"probed_model", result.ProbedModel, "detail", result.RawDetail)
+		return result, ""
 
 	case row.TokenSource == catalog.TokenSourceCodexAuthJSON:
 		// FR-007: the file is read, never written, refreshed or proxied.

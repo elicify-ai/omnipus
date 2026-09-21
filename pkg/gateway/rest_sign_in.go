@@ -32,6 +32,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/auth"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
@@ -387,6 +388,70 @@ func (a *restAPI) reRegisterOAuthSensitiveValues(store *credentials.Store) {
 	cfg.RegisterSensitiveValues(values)
 }
 
+// ensureSignedInProviderRow makes a successful first-party sign-in usable by
+// the rest of Omnipus. OAuth material remains exclusively in the encrypted
+// credential store; config.json receives only the provider, auth method, and
+// a catalog-backed model selection.
+func (a *restAPI) ensureSignedInProviderRow(providerID string) error {
+	row, known := providers_pkg.CatalogProvider(providerID)
+	if !known || !catalogOffersAuth(row.AuthMethods, gen.ProbeProviderRequestAuthSignIn) {
+		return nil
+	}
+
+	model := ""
+	if recommended := recommendedProbeModels(row); len(recommended) > 0 {
+		model = recommended[0]
+	} else {
+		model = providers_pkg.DefaultProbeModel(providerID)
+	}
+	if model == "" {
+		return fmt.Errorf("provider %q has no usable catalog model", providerID)
+	}
+
+	updatedAt := time.Now().UTC().Format(time.RFC3339)
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+		providerList, ok := m["providers"].([]any)
+		if !ok {
+			if m["providers"] != nil {
+				return fmt.Errorf("providers field is not an array: %T", m["providers"])
+			}
+			providerList = []any{}
+		}
+
+		for _, entry := range providerList {
+			provider, isMap := entry.(map[string]any)
+			if !isMap || strings.TrimSpace(strVal(provider, "provider")) != providerID {
+				continue
+			}
+			provider["provider"] = providerID
+			provider["auth_method"] = string(config.AuthMethodSignIn)
+			provider["updated_at"] = updatedAt
+			if strings.TrimSpace(strVal(provider, "model")) == "" {
+				provider["model"] = model
+			}
+			return nil
+		}
+
+		m["providers"] = append(providerList, map[string]any{
+			"provider":    providerID,
+			"model":       model,
+			"auth_method": string(config.AuthMethodSignIn),
+			"updated_at":  updatedAt,
+		})
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
+		return fmt.Errorf("reload signed-in provider: %w", err)
+	} else if !confirmed {
+		slog.Warn("rest: reload after sign-in did not confirm within the poll window; "+
+			"the provider may not be active until the next reload", "provider_id", providerID)
+	}
+	return nil
+}
+
 // handleProviderSignInStart implements POST /providers/{id}/sign-in (FR-008).
 func (a *restAPI) handleProviderSignInStart(w http.ResponseWriter, r *http.Request, providerID string) {
 	if err := validateEntityID(providerID); err != nil || len(providerID) > maxProviderIDLen {
@@ -516,6 +581,11 @@ func (a *restAPI) handleProviderSignInPoll(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		a.reRegisterOAuthSensitiveValues(store)
+		if configErr := a.ensureSignedInProviderRow(providerID); configErr != nil {
+			slog.Error("rest: configure signed-in provider", "provider", providerID, "error", configErr)
+			jsonErr(w, http.StatusInternalServerError, "failed to configure signed-in provider")
+			return
+		}
 		if a.auditor != nil {
 			if logErr := a.auditor.Log(&audit.Entry{
 				Event:    "provider.signed_in",
@@ -808,6 +878,11 @@ func (a *restAPI) handleProviderSignInImport(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	a.reRegisterOAuthSensitiveValues(store)
+	if configErr := a.ensureSignedInProviderRow("openai-chatgpt"); configErr != nil {
+		slog.Error("rest: configure imported signed-in provider", "provider", "openai-chatgpt", "error", configErr)
+		jsonErr(w, http.StatusInternalServerError, "failed to configure signed-in provider")
+		return
+	}
 	if a.auditor != nil {
 		if logErr := a.auditor.Log(&audit.Entry{
 			Event:    "provider.signed_in",

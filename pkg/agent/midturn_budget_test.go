@@ -17,6 +17,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,6 +271,8 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 		_, err := al.midTurnWindowCheck(ts, window, nil)
 		require.Error(t, err)
 		assert.True(t, errors.Is(err, ErrContextUnrecoverable), "FR-032: the guard is the typed sentinel, got %v", err)
+		assert.Contains(t, err.Error(), "un-emptiable residue exceeds the context budget")
+		assert.NotContains(t, err.Error(), "absolute tool-result-share bound")
 	})
 
 	t.Run("guard is decided BEFORE the pass: an unsatisfiable budget empties and persists nothing", func(t *testing.T) {
@@ -311,6 +314,101 @@ func TestMidTurnBudget_TriggerTargetStop(t *testing.T) {
 			"no projection state may be persisted on a turn the guard is certain to kill: "+
 				"typedTurnExit never rolls it back")
 	})
+}
+
+// TestMidTurnBudget_UnemptiableShareErrorNamesAbsoluteShareBound reproduces
+// issue #775's arithmetic shape: the request total fits comfortably below B,
+// while the protected tool-result residue exceeds only absoluteShare. The
+// operator-facing error must name that bound instead of claiming the total
+// context budget was exceeded.
+func TestMidTurnBudget_UnemptiableShareErrorNamesAbsoluteShareBound(t *testing.T) {
+	al, agent := midTurnFixture(t, 770_000, 0)
+	// ResolveWindow caps the fixture's unknown cloud model at its 128k floor.
+	// Reproduce the incident's ~770k resolved window directly; this test is
+	// exercising the mid-turn predicate, not ResolveWindow's unknown-model cap.
+	agent.mu.Lock()
+	agent.ContextWindow = 770_000
+	agent.WindowClamped = false
+	agent.mu.Unlock()
+	key := "midturn-unemptiable-share-bound"
+	budget := agentContextBudget(agent)
+	absShare := absoluteShareTokens(config.DefaultContextSettings())
+	require.Equal(t, 160_000, absShare)
+
+	window, ts := seedMidTurn(t, agent, key, []providers.Message{
+		{Role: "user", Content: proseOfTokens(100_000)},
+		{Role: "assistant", ToolCalls: []providers.ToolCall{toolCallFor("floor", "latest-step")}},
+		{Role: "tool", ToolCallID: "floor", Content: proseOfTokens(162_500)},
+	})
+	total := requestTokens(window, nil)
+	share := toolResultShareTokens(window)
+	cfg := al.GetConfig()
+	noteTokens := al.ephemeralSystemNoteTokens(ts) + al.manifestNoteTokens(ts, cfg)
+	observedTotal := total + noteTokens
+	require.Less(t, observedTotal, budget, "precondition: issue #775's total-budget bound did not fire")
+	require.Greater(t, share, absShare, "precondition: issue #775's absolute-share bound fired")
+	require.Empty(t, eligibleToolResults(window, midTurnLineResolverForTest(t, agent, key, window), nil),
+		"precondition: the latest assistant step is the protected, un-emptiable floor")
+
+	_, err := al.midTurnWindowCheck(ts, window, nil)
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrContextUnrecoverable)
+	assert.Contains(t, err.Error(), "un-emptiable tool-result residue exceeds the absolute tool-result-share bound")
+	assert.NotContains(t, err.Error(), "residue alone exceeds the budget")
+	assert.NotContains(t, err.Error(), "exceeds the context budget")
+	assert.Contains(t, err.Error(), fmt.Sprintf(
+		"total=%d budget=%d share=%d absolute_share=%d window_residue_total=%d residue_share=%d note_tokens=%d",
+		observedTotal, budget, share, absShare, total, share, noteTokens,
+	))
+	assert.Contains(t, err.Error(), "Work completed before this stop may already be persisted")
+	assert.Contains(t, err.Error(), "before retrying or re-delegating")
+}
+
+func TestContextUnrecoverableResidueError_NamesEveryBreachedBound(t *testing.T) {
+	const (
+		budget   = 100
+		absShare = 80
+	)
+	tests := []struct {
+		name      string
+		residue   midTurnResidueStatus
+		want      string
+		notWanted string
+	}{
+		{
+			name:      "context budget only",
+			residue:   midTurnResidueStatus{total: 101, share: 79, checked: allMidTurnBounds},
+			want:      "un-emptiable residue exceeds the context budget",
+			notWanted: "absolute tool-result-share bound",
+		},
+		{
+			name:      "absolute tool-result share only",
+			residue:   midTurnResidueStatus{total: 99, share: 81, checked: allMidTurnBounds},
+			want:      "un-emptiable tool-result residue exceeds the absolute tool-result-share bound",
+			notWanted: "exceeds the context budget",
+		},
+		{
+			name:    "both bounds",
+			residue: midTurnResidueStatus{total: 101, share: 81, checked: allMidTurnBounds},
+			want:    "un-emptiable residue exceeds the context budget and the absolute tool-result-share bound",
+		},
+		{
+			name:    "no breached bound is an accounting error",
+			residue: midTurnResidueStatus{total: 99, share: 79, checked: allMidTurnBounds},
+			want:    "internal context-bound accounting error: no breached bound recorded",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := contextUnrecoverableResidueError(101, budget, 81, absShare, 0, tc.residue, "mia", "session")
+			require.ErrorIs(t, err, ErrContextUnrecoverable)
+			assert.Contains(t, err.Error(), tc.want)
+			if tc.notWanted != "" {
+				assert.NotContains(t, err.Error(), tc.notWanted)
+			}
+		})
+	}
 }
 
 // TestMidTurnBudget_C1_CallMessagesInjections — ADR-066 D6, C1 (CRITICAL):
