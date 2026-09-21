@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import {
   fetchIntegrationProviders,
@@ -155,9 +156,10 @@ export function IntegrationsSection() {
         {isExpanded && p.requires_key && (
           <div className="border-t border-[var(--color-border)] px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-2-5)] bg-[var(--color-surface-2)]">
             <div>
-              <label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)] block">API Key</label>
+              <Label htmlFor={`key-input-${p.id}`} className="mb-[var(--space-2)] block">API Key</Label>
               <div className="relative">
                 <Input
+                  id={`key-input-${p.id}`}
                   type={showKey[p.id] ? 'text' : 'password'}
                   value={keyVal}
                   onChange={(e) => setApiKeys((prev) => ({ ...prev, [p.id]: e.target.value }))}

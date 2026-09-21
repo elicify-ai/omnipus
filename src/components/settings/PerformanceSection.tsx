@@ -20,6 +20,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Cpu, Info, Warning, Target } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import {
   fetchPerformanceSettings,
@@ -488,10 +489,14 @@ export function PerformanceSection(): React.ReactElement {
         </div>
 
         <div className="flex items-center gap-[var(--space-2-5)]">
-          <label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] w-44 shrink-0">
+          <Label
+            htmlFor="performance-max-agents"
+            className="text-[length:var(--type-utility-xs-size)] font-medium leading-[var(--font-line-height-body)] text-[var(--color-secondary)] w-44 shrink-0"
+          >
             Max parallel agents
-          </label>
+          </Label>
           <Input
+            id="performance-max-agents"
             type="number"
             min={0}
             placeholder="auto"
@@ -584,10 +589,14 @@ export function PerformanceSection(): React.ReactElement {
         </p>
 
         <div className="flex items-center gap-[var(--space-2-5)]">
-          <label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] w-44 shrink-0">
+          <Label
+            htmlFor="performance-goal-max-rounds"
+            className="text-[length:var(--type-utility-xs-size)] font-medium leading-[var(--font-line-height-body)] text-[var(--color-secondary)] w-44 shrink-0"
+          >
             Tries per goal
-          </label>
+          </Label>
           <Input
+            id="performance-goal-max-rounds"
             type="number"
             min={1}
             value={goalMaxRoundsInput}
