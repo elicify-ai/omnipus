@@ -20,6 +20,7 @@ import {
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 import { useActiveWorkspace } from './WorkspaceTabContainer'
@@ -570,13 +571,14 @@ function TeamGraphSkeleton() {
         <div className="relative h-full overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]">
           <div className="flex h-full flex-col items-center justify-center gap-[var(--space-6)]">
             <div className="flex gap-[var(--space-8)]">
-              <div className="h-[72px] w-[200px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse" />
+              <Card variant="default" className="h-[72px] w-[200px] rounded-xl animate-pulse" />
             </div>
             <div className="flex gap-[var(--space-8)]">
               {[0, 1, 2].map((i) => (
-                <div
+                <Card
                   key={i}
-                  className="h-[72px] w-[200px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+                  variant="default"
+                  className="h-[72px] w-[200px] rounded-xl animate-pulse"
                 />
               ))}
             </div>

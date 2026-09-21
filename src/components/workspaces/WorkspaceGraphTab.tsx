@@ -9,6 +9,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { GraphView } from './graph/GraphView'
 import { TaskDetailSlideOver } from './TaskDetailSlideOver'
 import {
@@ -388,9 +389,10 @@ function GraphSkeleton() {
         {[0, 1, 2].map((rank) => (
           <div key={rank} className="flex flex-1 flex-col gap-[var(--space-4)]">
             {[0, 1].map((row) => (
-              <div
+              <Card
                 key={row}
-                className="h-24 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+                variant="default"
+                className="h-24 rounded-xl animate-pulse"
               />
             ))}
           </div>

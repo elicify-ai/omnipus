@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { Card } from '@/components/ui/card'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useUiStore } from '@/store/ui'
 import {
@@ -480,7 +481,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Danger zone */}
-        <div className="mt-[var(--space-2)] flex flex-col gap-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
+        <Card variant="default" className="mt-[var(--space-2)] flex flex-col gap-[var(--space-2-5)] p-[var(--space-3)]">
           <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
             Manage
           </span>
@@ -515,7 +516,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               The default workspace cannot be archived or deleted.
             </span>
           )}
-        </div>
+        </Card>
       </div>
 
       <ConfirmDialog

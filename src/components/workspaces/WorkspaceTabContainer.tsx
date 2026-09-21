@@ -13,6 +13,7 @@ import { ChatControls } from '@/components/chat/ChatControls'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
+import { Card } from '@/components/ui/card'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
 
 // React context carrying the resolved workspace to every tab.
@@ -247,9 +248,10 @@ function WorkspaceShellSkeleton() {
       </div>
       <div className="flex gap-[var(--space-2-5)] p-[var(--space-3)] flex-1">
         {[1, 2, 3, 4, 5].map((i) => (
-          <div
+          <Card
             key={i}
-            className="flex-1 min-w-[180px] h-48 rounded-xl border border-[var(--color-border)] animate-pulse bg-[var(--color-surface-1)]"
+            variant="default"
+            className="flex-1 min-w-[180px] h-48 rounded-xl animate-pulse"
           />
         ))}
       </div>

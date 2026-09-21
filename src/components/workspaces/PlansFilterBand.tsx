@@ -16,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Card } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -180,16 +181,17 @@ function AllTasksTile({
   totalTasks: number
 }) {
   return (
-    <div
+    <Card
+      variant="default"
       role="group"
       aria-label="All tasks"
       data-testid="all-tasks-tile"
       className={cn(
         TILE_SIZE,
-        'rounded-lg border bg-[var(--color-surface-1)] p-[var(--space-2-5)] transition-colors',
+        'p-[var(--space-2-5)] transition-colors',
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
-          : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
+          : 'hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
       )}
     >
       <Button
@@ -212,7 +214,7 @@ function AllTasksTile({
           {totalTasks} task{totalTasks === 1 ? '' : 's'}
         </span>
       </Button>
-    </div>
+    </Card>
   )
 }
 
@@ -263,14 +265,23 @@ function PlanFilterTile({
   const failureReason = plan.state === 'failed' && !cancelled ? planSecondaryChipLabel(plan) : null
 
   return (
-    <div
+    <Card
+      variant="default"
       role="group"
       aria-label={plan.title}
       data-testid={`plan-filter-tile-${plan.id}`}
       title={plan.title}
       className={cn(
         TILE_SIZE,
-        'group relative rounded-lg border border-l-2 border-l-[var(--color-accent)]/40 bg-[var(--color-surface-1)] p-[var(--space-2-5)] transition-colors',
+        'group relative border-l-2 border-l-[var(--color-accent)]/40 p-[var(--space-2-5)] transition-colors',
+        // The bare border-color class below must stay in THIS same cn() call
+        // (not dropped as "supplied by the variant already"): tailwind-merge
+        // only drops the border-l-* override when a later bare border-color
+        // class appears in the SAME merge pass. Card's own outer
+        // cn(cardVariants, className) merge runs afterward and doesn't
+        // re-trigger that same-pass drop, so omitting it here would let the
+        // left accent rail become visible for the first time — a real pixel
+        // diff from the pre-Card markup, not a parity-preserving refactor.
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
@@ -439,6 +450,6 @@ function PlanFilterTile({
         destructive
         onConfirm={() => { setConfirmClear(false); onClear() }}
       />
-    </div>
+    </Card>
   )
 }

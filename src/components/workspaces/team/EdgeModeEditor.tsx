@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useRef, useState } from 'react'
 import { Stack, Trash, X } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { cn } from '@/lib/utils'
 import { ALL_MODES, type DelegationMode, type TeamEdgeModel } from './teamGraphModel'
@@ -75,9 +76,10 @@ export function EdgeModeEditor({
   }, [])
 
   return (
-    <div
+    <Card
+      variant="floating"
       data-testid={`team-edge-editor-${model.from}-${model.to}`}
-      className="w-56 rounded-lg border border-[var(--color-accent)]/60 bg-[var(--color-surface-1)] p-[var(--space-2)] shadow-lg"
+      className="w-56 rounded-lg border-[var(--color-accent)]/60 p-[var(--space-2)]"
     >
       <div className="mb-[var(--space-2)] flex items-center justify-between">
         <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
@@ -172,7 +174,7 @@ export function EdgeModeEditor({
           <Trash size={11} weight="bold" /> delete
         </Button>
       </div>
-    </div>
+    </Card>
   )
 }
 

@@ -19,6 +19,7 @@ import { useFocusRestore } from '@/hooks/useFocusRestore'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { IconButton } from '@/components/ui/icon-button'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { Input } from '@/components/ui/input'
@@ -2142,7 +2143,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               is further hidden for subagent_3p (see below). */}
           <section className="space-y-[var(--space-2-5)]">
               <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Execution</p>
-              <div className="space-y-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
+              <Card variant="default" className="space-y-[var(--space-2-5)] p-[var(--space-3)]">
                 <div className="flex items-center gap-[var(--space-2-5)]">
                   <Label htmlFor="agent-timeout-input" className="text-[var(--color-muted)] w-44 shrink-0">
                     Turn timeout
@@ -2291,7 +2292,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     )}
                   </div>
                 )}
-              </div>
+              </Card>
             </section>
 
           {/* Shell deny patterns — item 3 reorg: relocated from Basics into
@@ -2934,10 +2935,10 @@ function ProfileSheet({
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] text-center">
+    <Card variant="default" className="p-[var(--space-2-5)] text-center">
       <div className="font-headline font-bold text-base text-[var(--color-secondary)]">{value}</div>
       <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">{label}</div>
-    </div>
+    </Card>
   )
 }
 
