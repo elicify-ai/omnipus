@@ -393,4 +393,28 @@ func TestAskUserResume_ThroughBus_ChatTargetAgent(t *testing.T) {
 			"for card_id=%s — the answer reached the bus, but the running session's next "+
 			"turn did not see it; that is the field defect, end-to-end",
 		pending.CardID)
+
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err, "read transcript after the replacement turn")
+	var persisted *askuser.ResumeAnswers
+	for i := range entries {
+		if entries[i].Role != "user" {
+			continue
+		}
+		resume, recognized, parseErr := askuser.ParseResumeMessage(entries[i].Content)
+		require.NoError(t, parseErr, "decode persisted AskUserQuestion answer")
+		if recognized && resume.CardID == pending.CardID {
+			persisted = &resume
+			break
+		}
+	}
+	require.NotNil(t, persisted,
+		"the answered card must persist as a correlated user-role transcript record "+
+			"for card_id=%s (entry_count=%d)", pending.CardID, len(entries))
+	require.Equal(t, askuser.StatusAnswered, persisted.Status,
+		"the persisted card answer must retain its terminal status")
+	require.Len(t, persisted.Answers, 1,
+		"the persisted card answer must retain the submitted answer")
+	require.Equal(t, []string{"Single"}, persisted.Answers[0].Selected,
+		"the persisted card answer must retain the user's selected option label")
 }

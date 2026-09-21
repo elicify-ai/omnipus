@@ -230,7 +230,7 @@ func TestDispatchResume_LogsStrandedWithoutDispatcher(t *testing.T) {
 	stranded.Status = StatusAnswered
 	stranded.Answers = []Answer{{Header: "Scope", FreeText: strp("STRANDED-ANSWER-DO-NOT-LOG")}}
 	strandedReg := NewRegistry(nil, nil, Options{})
-	require.Error(t, strandedReg.dispatchResume(stranded))
+	require.Error(t, strandedReg.dispatchResume(stranded, false))
 	strandedLog := findAskUserRegistryLog(t, logBuf, "askuser: resume dispatch completed", stranded.CardID)
 	assert.Equal(t, "WARN", strandedLog["level"])
 	assert.Equal(t, "stranded", strandedLog["outcome"])
@@ -266,6 +266,63 @@ func TestDefaultSafeAutoSubmit_LogsFiring(t *testing.T) {
 	if strings.Contains(logBuf.String(), secretRecommended) {
 		t.Fatal("default-safe auto-submit log exposed answer content")
 	}
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	for i := range entries {
+		if entries[i].Role == "user" {
+			t.Fatalf("server auto-submit must not impersonate a user transcript record: %+v", entries[i])
+		}
+	}
+}
+
+func TestSubmit_PersistsHumanFreeTextAsCorrelatedUserTranscript(t *testing.T) {
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	resume := &fakeResume{}
+	reg := NewRegistry(store, resume, Options{})
+	t.Cleanup(reg.Quiesce)
+
+	set := testSet(sid)
+	set.CardID = "ask_human_free_text"
+	require.NoError(t, reg.CreatePending(set))
+	freeText := "Use the private staging environment."
+	require.NoError(t, reg.Submit(set.CardID, sid, "", []SubmittedAnswer{
+		{Header: "Scope", FreeText: &freeText},
+	}))
+
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "a human card submission must add one transcript record")
+	require.Equal(t, "user", entries[0].Role)
+	require.Equal(t, "mia", entries[0].AgentID)
+	persisted, recognized, err := ParseResumeMessage(entries[0].Content)
+	require.NoError(t, err)
+	require.True(t, recognized, "the transcript record must use the canonical resume-message shape")
+	require.Equal(t, set.CardID, persisted.CardID)
+	require.Equal(t, StatusAnswered, persisted.Status)
+	require.Len(t, persisted.Answers, 1)
+	require.NotNil(t, persisted.Answers[0].FreeText)
+	require.Equal(t, freeText, *persisted.Answers[0].FreeText,
+		"free text typed into the card is user-authored conversation content")
+}
+
+func TestSubmit_TranscriptPersistenceUnavailableDoesNotResume(t *testing.T) {
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	metaOnly := &countingMeta{inner: store}
+	resume := &fakeResume{}
+	reg := NewRegistry(metaOnly, resume, Options{})
+	t.Cleanup(reg.Quiesce)
+
+	set := testSet(sid)
+	require.NoError(t, reg.CreatePending(set))
+	err := reg.Submit(set.CardID, sid, "", []SubmittedAnswer{
+		{Header: "Scope", Selected: []string{"Backend"}},
+	})
+
+	require.ErrorIs(t, err, ErrResumeDispatch)
+	require.Zero(t, resume.count(),
+		"the agent must not act on a human answer that could not be written to the transcript")
 }
 
 func TestDefaultSafeAutoSubmit_ResumeFailureLogRedactsDispatcherError(t *testing.T) {
