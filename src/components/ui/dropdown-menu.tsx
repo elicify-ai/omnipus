@@ -20,7 +20,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
     ref={ref}
     className={cn(
       'flex cursor-default select-none items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none focus:bg-[var(--color-surface-3)] data-[state=open]:bg-[var(--color-surface-3)]',
-      inset && 'pl-[var(--space-5)]',
+      inset ? 'pl-[var(--space-5)]' : undefined,
       className
     )}
     {...props}
@@ -76,7 +76,7 @@ const DropdownMenuItem = React.forwardRef<
     ref={ref}
     className={cn(
       'relative flex cursor-default select-none items-center gap-[var(--space-2)] rounded-sm px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none transition-colors focus:bg-[var(--color-surface-3)] data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
-      inset && 'pl-[var(--space-5)]',
+      inset ? 'pl-[var(--space-5)]' : undefined,
       className
     )}
     {...props}
@@ -137,7 +137,7 @@ const DropdownMenuLabel = React.forwardRef<
 >(({ className, inset, ...props }, ref) => (
   <DropdownMenuPrimitive.Label
     ref={ref}
-    className={cn('px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)]', inset && 'pl-[var(--space-5)]', className)}
+    className={cn('px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)]', inset ? 'pl-[var(--space-5)]' : undefined, className)}
     {...props}
   />
 ))

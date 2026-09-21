@@ -79,6 +79,8 @@ function LettermarkChip({ slug, size, className }: LettermarkChipProps) {
         borderRadius: Math.round(size * 0.22),
         background: 'var(--color-surface-2)',
         border: '1px solid var(--color-border)',
+        // Matches the WHITE brand-mark mandate on BrandIcon below — this chip
+        // is the fallback rendering of the same brand mark.
         color: '#FFFFFF',
         fontFamily: 'var(--font-family-heading)',
         fontWeight: 'var(--font-weight-bold)',

@@ -566,7 +566,7 @@ function OnboardingWizard() {
       {appStateBannerMessage && (
         <div
           role="alert"
-          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-red-400"
+          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-[color-mix(in_srgb,var(--color-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-error)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]"
         >
           {appStateBannerMessage}
         </div>
@@ -613,10 +613,10 @@ function OnboardingWizard() {
                   width: s === step ? 24 : 8,
                   backgroundColor:
                     s === step
-                      ? '#d4af37'
+                      ? 'var(--color-accent)'
                       : s < step
-                      ? 'rgba(212,175,55,0.45)'
-                      : '#2d3748',
+                      ? 'color-mix(in srgb, var(--color-accent) 45%, transparent)'
+                      : 'var(--color-border)',
                 }}
                 transition={{ duration: 0.3, ease: 'easeInOut' }}
                 className="h-2 rounded-full"

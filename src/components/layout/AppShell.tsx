@@ -228,6 +228,10 @@ export function AppShell() {
             <div
               data-testid="app-state-fetch-error-banner"
               role="alert"
+              // Stays raw Tailwind amber: `--color-warning` resolves to
+              // Tailwind's yellow-500 (#EAB308), not amber-500 (#F59E0B) —
+              // mapping this onto it would shift the hue from amber toward
+              // yellow.
               className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-amber-500/10 border-b border-amber-500/30 text-amber-400 text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
             >
               <span>

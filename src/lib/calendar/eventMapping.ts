@@ -22,7 +22,6 @@ import type { EventInput } from '@fullcalendar/core'
 import type { Task } from '@/lib/api'
 import type { TaskOccurrenceSet, DayBucket, TaskRun } from '@/lib/api/generated/openapi-types'
 import {
-  CHIP_TEXT_COLOR,
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
   SCHEDULED_STYLE,
@@ -33,6 +32,12 @@ import {
   type OccurrenceChipStatus,
   type RunDerivedChipStatus,
 } from '@/components/calendar/types'
+
+// Near-black chip text — clears WCAG AAA (>=7:1) on every chip background
+// (SC-006b). Same value as `CHIP_TEXT_COLOR` in `@/components/calendar/
+// types`, declared locally so it is literal at its use site below. Keep both
+// in sync if this ever changes.
+const CHIP_TEXT_COLOR = 'var(--color-primary)'
 
 /** One entry of `TaskOccurrenceSet.occurrence_runs[]` — the per-instant run overlay. */
 type OccurrenceRunEntry = NonNullable<TaskOccurrenceSet['occurrence_runs']>[number]

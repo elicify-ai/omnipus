@@ -206,7 +206,7 @@ export type CalendarEventExtProps =
   | { kind: 'now-marker'; timeLabel: string }
 
 /** Near-black chip text — clears WCAG AAA (>=7:1) on every chip background (SC-006b). */
-export const CHIP_TEXT_COLOR = '#0A0A0B'
+export const CHIP_TEXT_COLOR = 'var(--color-primary)'
 
 /**
  * Canonical status → chip style map (single source of truth, FR-005).

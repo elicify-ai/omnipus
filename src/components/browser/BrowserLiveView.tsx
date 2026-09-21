@@ -2577,12 +2577,6 @@ export function BrowserLiveView({
       current.id ? { captureId: current.id, generation: current.generation } : undefined)
   }
 
-  const resolvedClassName = cn(
-                      'h-auto w-auto justify-start rounded-none p-0 text-[length:inherit] font-[var(--font-weight-regular)] disabled:opacity-100',
-                      'flex min-w-0 flex-1 items-center gap-[var(--space-1)]',
-                      connected ? 'cursor-pointer' : 'cursor-not-allowed',
-                      'disabled:cursor-not-allowed',
-                    )
   return (
     <div data-input-mode="dedicated" data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
@@ -2655,7 +2649,12 @@ export function BrowserLiveView({
                     onClick={() => handleTabSwitch(tab.index)}
                     title={tab.title || tab.url || 'New tab'}
                     data-testid={`browser-tab-${tab.index}`}
-                    className={resolvedClassName}
+                    className={cn(
+                      'h-auto w-auto justify-start rounded-none p-0 text-[length:inherit] font-[var(--font-weight-regular)] disabled:opacity-100',
+                      'flex min-w-0 flex-1 items-center gap-[var(--space-1)]',
+                      connected ? 'cursor-pointer' : 'cursor-not-allowed',
+                      'disabled:cursor-not-allowed',
+                    )}
                   >
                     <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
                     <span className={cn('min-w-0 flex-1 truncate', active ? 'font-medium' : undefined)}>{label}</span>
@@ -2831,7 +2830,7 @@ export function BrowserLiveView({
 
 
       {/* Body */}
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-[var(--space-2)]">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[var(--color-primary)] p-[var(--space-2)]">
         {/* State overlay — kept for the data-visual-state attribute (tests +
             future use) but the visible border/frame is REMOVED per operator
             direction. The header chip is the sole driving-state signal now. */}
@@ -2858,7 +2857,7 @@ export function BrowserLiveView({
           aria-hidden={visualState !== 'you-driving'}
           className={cn(
             'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-[var(--space-2-5)] py-[var(--space-1)] text-center text-[length:var(--type-caption-size)] text-[var(--color-secondary)]',
-            'bg-black/60 backdrop-blur-sm',
+            'bg-[color-mix(in_srgb,var(--color-primary)_60%,transparent)] backdrop-blur-sm',
             visualState !== 'you-driving' ? 'invisible' : undefined,
           )}
         >
@@ -2987,7 +2986,7 @@ export function BrowserLiveView({
             {!videoReady && (
               <div
                 data-testid="browser-live-waiting-overlay"
-                className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-[var(--space-2)] bg-black/70 p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
+                className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-[var(--space-2)] bg-[color-mix(in_srgb,var(--color-primary)_70%,transparent)] p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
               >
                 {displayError ? (
                   <>
@@ -3142,7 +3141,7 @@ export function BrowserLiveView({
           clears `mediaStream`, which flips `attached` false and routes the
           user to the top-level empty-state error instead. */}
       {attached && videoReady && !displayError && (frameGateState.status !== 'ready' || !frameGeometryReady) && (
-        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-black/80 px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-secondary)]">
+        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-[color-mix(in_srgb,var(--color-primary)_80%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-secondary)]">
           {frameCallbacksUnavailable || (frameGateState.status === 'locked' && frameGateState.reason === 'presentation-time-unavailable')
             ? 'Browser input is unavailable because this browser cannot confirm displayed video frames.'
             : frameGateState.status === 'ready' && !frameGeometryReady
@@ -3153,7 +3152,7 @@ export function BrowserLiveView({
         </div>
       )}
       {attached && videoReady && displayError && (
-        <div role="alert" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 min-w-0 [overflow-wrap:anywhere] bg-black/80 px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
+        <div role="alert" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 min-w-0 [overflow-wrap:anywhere] bg-[color-mix(in_srgb,var(--color-primary)_80%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
           {displayError}
         </div>
       )}

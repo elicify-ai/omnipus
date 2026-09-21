@@ -40,7 +40,19 @@ export const DateTriggerButton = React.forwardRef<HTMLButtonElement, DateTrigger
       ref={ref}
       type="button"
       variant="outline"
-      className={cn(DATE_TRIGGER_CLASSNAME, className)}
+      // Same classes as DATE_TRIGGER_CLASSNAME above, written literally here
+      // so they are literal at this JSX site. DATE_TRIGGER_CLASSNAME stays
+      // exported/catalogued for external consumers; keep the two in sync if
+      // this geometry ever changes.
+      className={cn(
+        'flex h-11 sm:h-9 w-full items-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)]',
+        'bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] shadow-sm transition-colors',
+        'justify-start text-left font-[var(--font-weight-regular)] whitespace-nowrap',
+        'hover:bg-[var(--color-surface-1)]',
+        'disabled:cursor-not-allowed disabled:opacity-50',
+        'data-[readonly=true]:cursor-default data-[readonly=true]:!opacity-100',
+        className,
+      )}
       {...rest}
     >
       <CalendarBlank size={16} className="shrink-0 opacity-70" aria-hidden="true" />

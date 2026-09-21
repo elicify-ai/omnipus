@@ -156,17 +156,6 @@ export function CalendarToolbar({
   // ── Shared touch-target class (WCAG 2.5.8 / I-4) ────────────────────────
   const touchTarget = 'pointer-coarse:min-h-[44px]'
 
-  // ── Shared icon-button class (prev / next / today) ───────────────────────
-  const navBtnClass = cn(
-    'flex items-center justify-center shrink-0',
-    'h-8 w-8 rounded-md text-[var(--color-muted)]',
-    'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-    'transition-colors',
-    touchTarget,
-    // On coarse pointer, ensure square-ish target width too
-    'pointer-coarse:w-11',
-  )
-
   return (
     /*
      * Outer wrapper: `@container` consumers upstream provide the container.
@@ -204,7 +193,15 @@ export function CalendarToolbar({
           data-testid="calendar-prev"
           aria-label="Go to previous period"
           onClick={handlePrev}
-          className={navBtnClass}
+          className={cn(
+            'flex items-center justify-center shrink-0',
+            'h-8 w-8 rounded-md text-[var(--color-muted)]',
+            'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+            'transition-colors',
+            touchTarget,
+            // On coarse pointer, ensure square-ish target width too
+            'pointer-coarse:w-11',
+          )}
         >
           <CaretLeft size={15} weight="bold" />
         </IconButton>
@@ -236,7 +233,15 @@ export function CalendarToolbar({
           data-testid="calendar-next"
           aria-label="Go to next period"
           onClick={handleNext}
-          className={navBtnClass}
+          className={cn(
+            'flex items-center justify-center shrink-0',
+            'h-8 w-8 rounded-md text-[var(--color-muted)]',
+            'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+            'transition-colors',
+            touchTarget,
+            // On coarse pointer, ensure square-ish target width too
+            'pointer-coarse:w-11',
+          )}
         >
           <CaretRight size={15} weight="bold" />
         </IconButton>

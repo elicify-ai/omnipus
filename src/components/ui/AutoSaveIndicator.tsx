@@ -58,8 +58,8 @@ export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }
       )}
       {status === 'saved' && (
         <>
-          <Check size={11} weight="bold" className="text-emerald-400" />
-          <span className="text-emerald-400">
+          <Check size={11} weight="bold" className="text-[var(--color-success)]" />
+          <span className="text-[var(--color-success)]">
             {lastSavedAt ? formatSavedAt(lastSavedAt) : 'Saved'}
           </span>
         </>

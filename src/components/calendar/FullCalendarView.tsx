@@ -37,8 +37,13 @@ import type {
   CalendarViewName,
   CalendarEventExtProps,
 } from './types'
-import { CHIP_TEXT_COLOR } from './types'
 import { statusLabel } from '@/lib/statusColors'
+
+// Near-black chip text — clears WCAG AAA (>=7:1) on every chip background
+// (SC-006b). Same value as `CHIP_TEXT_COLOR` in `./types`, declared locally
+// so it is literal at each JSX className/color site below. Keep both in sync
+// if this ever changes.
+const CHIP_TEXT_COLOR = 'var(--color-primary)'
 
 // ---------------------------------------------------------------------------
 // Icon map: StatusIconKey → Phosphor component (WCAG 1.4.1 non-colour cue)
