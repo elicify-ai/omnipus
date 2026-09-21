@@ -1,46 +1,37 @@
-// taskStatusConfig — single source of truth for Task status labels/colors.
+// taskStatusConfig — single source of truth for Task status labels.
 //
 // Extracted from TaskDetailPanel.tsx so both the full task detail panel and
 // the calendar's TaskRunStatusField (a read-only badge for the recurring-task
 // EDIT slide-over) render the exact same status vocabulary — no drift between
-// the two surfaces that show a task's lifecycle state.
+// the two surfaces that show a task's lifecycle state. Status pill COLOURS
+// live in `StatusBadge.tsx` (a component, not a class-string helper here) —
+// see that file's doc comment for why.
 //
 // `skipped` is a `TaskRun.status`-only value (a scheduled fire the backend's
 // overlap guard declined to run because the previous occurrence was still
-// `in_progress`) — NOT a `Task['status']` member. It's included in
-// `STATUS_BADGE`/`statusLabel` below because both `TaskRunsList.tsx` and
-// `TaskRunStatusField.tsx` key these maps off a `TaskRun['status']` value
-// (a strict superset-minus-`next`/`inbox`/`blocked` of `Task['status']`,
-// plus `skipped`), not off `Task['status']` itself.
+// `in_progress`) — NOT a `Task['status']` member. `statusLabel` below widens
+// to accept it because both `TaskRunsList.tsx` and `TaskRunStatusField.tsx`
+// call it with a `TaskRun['status']` value (a strict superset-minus-`next`/
+// `inbox`/`blocked` of `Task['status']`, plus `skipped`), not `Task['status']`
+// itself.
 
 import type { Task } from '@/lib/api'
 import type { TaskRun } from '@/lib/api'
 
 // User-settable status options (blocked is excluded — it is backend-derived
-// and read-only). Theme-token colours. `text-[color:…]` keeps these as
-// inline-var text colours (no raw Tailwind palette) so status renderers
-// track "The Sovereign Deep" tokens.
-export const STATUS_OPTIONS: { value: Task['status']; label: string; color: string }[] = [
-  { value: 'inbox',       label: 'Inbox',       color: 'text-[var(--color-muted)]' },
-  { value: 'next',        label: 'Next',        color: 'text-[color:var(--color-accent)]' },
-  { value: 'in_progress', label: 'In Progress', color: 'text-[color:var(--color-warning)]' },
-  { value: 'done',        label: 'Done',        color: 'text-[color:var(--color-success)]' },
-  { value: 'failed',      label: 'Failed',      color: 'text-[color:var(--color-error)]' },
+// and read-only). Colour classes for these are resolved by TaskDetailPanel's
+// own local `statusOptionTextClass` (a literal `switch`, not a data lookup,
+// kept in that file rather than here so the design-system static scanners —
+// which cannot resolve a class-returning function across a module boundary —
+// see the switch in the same file as its JSX call site; see that function's
+// own doc comment).
+export const STATUS_OPTIONS: { value: Task['status']; label: string }[] = [
+  { value: 'inbox',       label: 'Inbox' },
+  { value: 'next',        label: 'Next' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'done',        label: 'Done' },
+  { value: 'failed',      label: 'Failed' },
 ]
-
-export const STATUS_BADGE: Record<string, string> = {
-  inbox:       'text-[var(--color-muted)] bg-white/5',
-  next:        'text-[color:var(--color-status-next)] bg-[var(--color-status-next)]/10',
-  in_progress: 'text-[color:var(--color-status-in-progress)] bg-[var(--color-status-in-progress)]/10',
-  blocked:     'text-[color:var(--color-status-blocked)] bg-[var(--color-status-blocked)]/10',
-  done:        'text-[color:var(--color-success)] bg-[var(--color-success)]/10',
-  failed:      'text-[color:var(--color-error)] bg-[var(--color-error)]/10',
-  // TaskRun-only outcome (overlap guard) — the established design-system
-  // orange (`--color-cancelled`, #F97316), NOT `--color-warning` (yellow,
-  // already used for `blocked`/`in_progress` above) — distinct so a skipped
-  // run never reads as the same color as those.
-  skipped:     'text-[color:var(--color-cancelled)] bg-[var(--color-cancelled)]/10',
-}
 
 /**
  * Human-readable label for a status value. Widened to accept both

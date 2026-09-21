@@ -10,13 +10,13 @@
 // below) and TaskDetailPanel's Runs section (§4.4, Board/List normal-task
 // re-run flow). Do not fork/duplicate this component — extend it in place.
 //
-// Each run renders: a status badge sharing taskStatusConfig's STATUS_BADGE/
-// statusLabel vocabulary (TaskRun.status is in_progress | done | failed |
-// skipped — the first three ARE Task['status'] members, but skipped is a
-// TaskRun-only outcome, the overlap guard's declined-fire result, that is NOT
-// a valid Task['status'] value; see taskStatusConfig.ts's doc comment — so
-// the two surfaces share colors/labels via STATUS_BADGE/statusLabel's
-// TaskRun['status'] widening, not an identical status domain), how it
+// Each run renders: a `StatusBadge` sharing `StatusBadge.tsx`'s colour
+// vocabulary and taskStatusConfig's `statusLabel` (TaskRun.status is
+// in_progress | done | failed | skipped — the first three ARE Task['status']
+// members, but skipped is a TaskRun-only outcome, the overlap guard's
+// declined-fire result, that is NOT a valid Task['status'] value — so the two
+// surfaces share colors/labels via each helper's TaskRun['status'] widening,
+// not an identical status domain), how it
 // started (scheduled fire vs manual Run-now), when it ended,
 // its terminal result (mirrors TaskResultField's compact display idiom via
 // the shared `hasVisibleResult` gate — Q3 dedup), and an Open-in-Chat action
@@ -31,9 +31,9 @@ import { useNavigate } from '@tanstack/react-router'
 import { ChatCircle, ClockCounterClockwise, Warning } from '@phosphor-icons/react'
 import { fetchTaskRuns, tasksQueryKeys, isApiError } from '@/lib/api'
 import type { TaskRun } from '@/lib/api'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { STATUS_BADGE, statusLabel } from '@/components/workspaces/taskStatusConfig'
+import { StatusBadge } from '@/components/workspaces/StatusBadge'
+import { statusLabel } from '@/components/workspaces/taskStatusConfig'
 import { formatDateTime } from '@/lib/dateFormat'
 import { hasVisibleResult } from '@/lib/taskRuns'
 import { cn } from '@/lib/utils'
@@ -134,7 +134,6 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
 }
 
 function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => void }) {
-  const badgeClass = STATUS_BADGE[run.status] ?? STATUS_BADGE.inbox
   const isFailed = run.status === 'failed'
   const showResult = hasVisibleResult(run.status, run.result)
 
@@ -148,9 +147,9 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
     >
       <div className="flex items-center justify-between gap-[var(--space-2)]">
         <div className="flex items-center gap-[var(--space-2)]">
-          <Badge className={cn('h-6 rounded-md border-transparent px-[var(--space-2)] text-[length:var(--type-caption-size)]', badgeClass)}>
+          <StatusBadge status={run.status} className="h-6 rounded-md border-transparent px-[var(--space-2)] text-[length:var(--type-caption-size)]">
             {statusLabel(run.status)}
-          </Badge>
+          </StatusBadge>
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {run.kind === 'manual' ? 'Run now' : 'Scheduled'}
           </span>

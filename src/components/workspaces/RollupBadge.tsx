@@ -12,11 +12,38 @@
 
 import { motion } from 'framer-motion'
 import { getIconComponent } from '@/lib/agentIcons'
-import { STATUS_COLORS } from '@/lib/statusColors'
 import type { Agent, Task } from '@/lib/api'
 
 /** A single item from Task['rollup'] */
 export type RollupItem = NonNullable<Task['rollup']>[number]
+
+/**
+ * Status accent for a rollup item — a literal `switch` over the closed
+ * status-family set, not a dynamic record lookup (the design-system static
+ * scanners cannot resolve a style value read out of a record via a runtime
+ * key). Each branch is the matching `--status-<name>-foreground` token
+ * (`src/styles/tokens.generated.css`), which resolves to the same value
+ * `src/design-system/status.ts`'s `statusContract` publishes for that
+ * status. Mirrors `BoardView.tsx`'s `statusHeaderColorVar`.
+ */
+function rollupStatusColorVar(status: RollupItem['status']): string {
+  switch (status) {
+    case 'inbox':
+      return 'var(--status-inbox-foreground)'
+    case 'next':
+      return 'var(--status-next-foreground)'
+    case 'in_progress':
+      return 'var(--status-in-progress-foreground)'
+    case 'blocked':
+      return 'var(--status-blocked-foreground)'
+    case 'done':
+      return 'var(--status-done-foreground)'
+    case 'failed':
+      return 'var(--status-failed-foreground)'
+    default:
+      return 'var(--status-inbox-foreground)'
+  }
+}
 
 interface RollupBadgeProps {
   rollup: RollupItem[]
@@ -31,9 +58,9 @@ function agentById(agents: Agent[], agentId: string): Agent | undefined {
 /** Single avatar chip for one rollup item */
 function RollupAvatar({ item, agent }: { item: RollupItem; agent: Agent | undefined }) {
   const isLive = item.status === 'in_progress'
-  const color = (agent?.color ?? STATUS_COLORS[item.status]) as string
+  const color = agent?.color ?? rollupStatusColorVar(item.status)
   const Icon = getIconComponent(agent?.icon)
-  const statusColor = STATUS_COLORS[item.status]
+  const statusColor = rollupStatusColorVar(item.status)
 
   return (
     <motion.span
@@ -49,7 +76,14 @@ function RollupAvatar({ item, agent }: { item: RollupItem; agent: Agent | undefi
       style={{
         width: 18,
         height: 18,
-        backgroundColor: `${color}22`,
+        // `color-mix` (not a `${color}NN` hex-alpha-suffix concat — see the
+        // design-system skill's "Alpha on a brand color" rule): `color` may
+        // be an arbitrary agent hex OR one of `rollupStatusColorVar`'s
+        // `var(--status-*)` token references, and only `color-mix` composes
+        // correctly with a CSS custom-property value (a suffixed `var(...)NN`
+        // string is invalid CSS and silently drops the declaration).
+        // 13.3% mix == a 0x22 (34/255) hex alpha, this pill's tint level.
+        backgroundColor: `color-mix(in srgb, ${color} 13.3%, transparent)`,
         borderColor: statusColor,
       }}
     >
@@ -74,7 +108,7 @@ export function RollupBadge({ rollup, agents }: RollupBadgeProps) {
       {/* Chevron indicator + count */}
       <span
         className="text-[length:var(--type-caption-size)] font-semibold leading-none"
-        style={{ color: isAnyLive ? STATUS_COLORS.in_progress : STATUS_COLORS.inbox }}
+        style={{ color: isAnyLive ? rollupStatusColorVar('in_progress') : rollupStatusColorVar('inbox') }}
       >
         &#9658; {countLabel} sub-agent{countLabel !== 1 ? 's' : ''} {isAnyLive ? 'running' : 'delegated'}
       </span>

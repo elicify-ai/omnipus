@@ -6,22 +6,33 @@ import { IconButton } from '@/components/ui/icon-button'
 import { cn } from '@/lib/utils'
 import { ALL_MODES, type DelegationMode, type TeamEdgeModel } from './teamGraphModel'
 
-// Mode-chip accents (Sovereign Deep). Shared by the editor + the collapsed label.
-export const MODE_CHIP_CLASS: Record<DelegationMode, string> = {
-  direct:
-    'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]',
-  task:
-    'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]',
+/**
+ * Mode-chip accents (Sovereign Deep) — a literal `if`-chain over the closed
+ * `DelegationMode` set, not a `Record` looked up by a runtime key (the
+ * design-system static scanners cannot resolve a class list read out of a
+ * record via a dynamic key). Shared by the editor + the collapsed label.
+ */
+export function modeChipClass(mode: DelegationMode): string {
+  const taskModeClass = 'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]'
+  if (mode === 'direct') return 'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+  return taskModeClass
 }
 
-// Hover companion for MODE_CHIP_CLASS's "on" colors: the mode toggle below is
-// now a catalogued `Button` (ghost variant), whose own hover treatment
-// (surface tint + secondary text) would repaint an ENABLED chip's hover state
-// — it previously had none. These pin the chip's own colors back in for
-// `:hover` so an enabled chip's appearance is unchanged, matching MODE_CHIP_CLASS 1:1.
-const MODE_CHIP_HOVER_CLASS: Record<DelegationMode, string> = {
-  direct: 'hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)]',
-  task: 'hover:bg-[var(--color-success)]/10 hover:text-[var(--color-success)]',
+/**
+ * The editor's "on" chip: `modeChipClass` plus its `:hover` companion (the
+ * mode toggle is a catalogued `Button` ghost variant, whose own hover
+ * treatment would otherwise repaint an ENABLED chip's hover state) — one
+ * combined literal `if`-chain per branch rather than two functions merged
+ * via a nested `cn()` call, which the design-system typography scanner
+ * cannot trace through a function-call argument.
+ */
+export function modeChipOnClass(mode: DelegationMode): string {
+  const taskModeOnClass =
+    'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)] hover:bg-[var(--color-success)]/10 hover:text-[var(--color-success)]'
+  if (mode === 'direct') {
+    return 'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)]'
+  }
+  return taskModeOnClass
 }
 
 /** Human-readable label for each delegation mode (chip title/tooltip + a11y label). */
@@ -130,7 +141,7 @@ export function EdgeModeEditor({
                 // aria-disabled (the title tooltip is the only isLastOn cue).
                 'h-auto rounded border px-[var(--space-1)] py-[var(--space-0-5)] font-mono text-[length:var(--type-caption-size)] lowercase font-[var(--font-weight-regular)] transition-opacity aria-disabled:opacity-100',
                 on
-                  ? cn(MODE_CHIP_CLASS[m], MODE_CHIP_HOVER_CLASS[m])
+                  ? modeChipOnClass(m)
                   : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] opacity-60 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-muted)] hover:opacity-100',
               )}
             >
@@ -213,7 +224,7 @@ export const EdgeLabelChip = forwardRef<HTMLButtonElement, EdgeLabelChipProps>(f
             key={m}
             className={cn(
               'rounded border px-[var(--space-1)] py-0 font-mono text-[length:var(--type-caption-size)] lowercase',
-              MODE_CHIP_CLASS[m],
+              modeChipClass(m),
             )}
           >
             {m}

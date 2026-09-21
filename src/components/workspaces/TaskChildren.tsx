@@ -14,9 +14,38 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { fetchSubtasks, tasksQueryKeys } from '@/lib/api'
 import type { Task } from '@/lib/api'
-import { STATUS_COLORS as STATUS_DOT, STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
+import { STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
+
+/**
+ * Status-dot / label tint per child status — a literal `switch` over the
+ * closed `Task['status']` set, not a dynamic record lookup (the
+ * design-system static scanners cannot resolve a style value read out of a
+ * record via a runtime key). Each branch is the matching
+ * `--status-<name>-foreground` token (`src/styles/tokens.generated.css`),
+ * which resolves to the same value `src/design-system/status.ts`'s
+ * `statusContract` publishes for that status. Mirrors `BoardView.tsx`'s
+ * `statusHeaderColorVar`.
+ */
+function childStatusColorVar(status: Task['status']): string {
+  switch (status) {
+    case 'inbox':
+      return 'var(--status-inbox-foreground)'
+    case 'next':
+      return 'var(--status-next-foreground)'
+    case 'in_progress':
+      return 'var(--status-in-progress-foreground)'
+    case 'blocked':
+      return 'var(--status-blocked-foreground)'
+    case 'done':
+      return 'var(--status-done-foreground)'
+    case 'failed':
+      return 'var(--status-failed-foreground)'
+    default:
+      return 'var(--status-inbox-foreground)'
+  }
+}
 
 interface TaskChildrenProps {
   parentTaskId: string
@@ -69,11 +98,6 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
 
   if (children.length === 0) return null
 
-  const resolvedClassName = cn(
-              'h-auto w-full items-center justify-start gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-left',
-              'text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-              'hover:bg-[var(--color-surface-2)]',
-            )
   return (
     // A native <ul>/<li> pair gives the list/listitem semantics for free —
     // putting `role="listitem"` directly ON the row <button> (the previous
@@ -91,7 +115,11 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
               e.stopPropagation()
               onChildClick(child)
             }}
-            className={resolvedClassName}
+            className={cn(
+              'h-auto w-full items-center justify-start gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-left',
+              'text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+              'hover:bg-[var(--color-surface-2)]',
+            )}
             aria-label={`Subtask: ${child.title} — ${STATUS_LABEL[child.status]}`}
           >
             {/* Status dot */}
@@ -100,13 +128,13 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
               style={{
                 width: 6,
                 height: 6,
-                backgroundColor: STATUS_DOT[child.status],
+                backgroundColor: childStatusColorVar(child.status),
               }}
             />
             <span className="flex-1 truncate leading-tight">{child.title}</span>
             <span
               className="flex-shrink-0 text-[length:var(--type-caption-size)] font-medium"
-              style={{ color: STATUS_DOT[child.status] }}
+              style={{ color: childStatusColorVar(child.status) }}
             >
               {STATUS_LABEL[child.status]}
             </span>

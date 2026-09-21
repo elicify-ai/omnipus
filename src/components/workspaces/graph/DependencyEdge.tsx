@@ -61,7 +61,7 @@ function DependencyEdgeComponent({
             // `pointer-events-auto` re-enables clicks (the EdgeLabelRenderer
             // container is pointer-events:none); `nodrag nopan` keeps the click
             // from starting a canvas pan/drag.
-            className="nodrag nopan pointer-events-auto absolute flex h-4 w-4 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0 text-[var(--color-muted)] opacity-70 shadow-[0_1px_4px_rgba(0,0,0,0.45)] transition-all hover:scale-110 hover:border-[var(--color-error)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-error)] hover:opacity-100 focus-visible:border-[var(--color-error)] focus-visible:text-[var(--color-error)] focus-visible:opacity-100"
+            className="nodrag nopan pointer-events-auto absolute flex h-4 w-4 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0 text-[var(--color-muted)] opacity-70 shadow-[0_1px_4px_color-mix(in_srgb,var(--color-primary)_45%,transparent)] transition-all hover:scale-110 hover:border-[var(--color-error)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-error)] hover:opacity-100 focus-visible:border-[var(--color-error)] focus-visible:text-[var(--color-error)] focus-visible:opacity-100"
             style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
             onClick={(e) => {
               e.stopPropagation()

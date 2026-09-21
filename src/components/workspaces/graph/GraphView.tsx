@@ -503,7 +503,7 @@ function GraphUnlinkedNotice({ count }: { count: number }) {
       data-testid="graph-unlinked-notice"
       className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2"
     >
-      <div className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur">
+      <div className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] shadow-[0_2px_8px_color-mix(in_srgb,var(--color-primary)_35%,transparent)] backdrop-blur">
         <Info size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
         <span>
           {count} {count === 1 ? 'task' : 'tasks'} not shown here — not in a plan and not

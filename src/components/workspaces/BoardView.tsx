@@ -19,7 +19,7 @@ import {
 import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { isRecurringTrigger, isScheduledTrigger } from './taskFormFields'
-import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
+import { STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import { taskMoveErrorMessage } from '@/lib/api'
 import type { Task, Agent, Plan } from '@/lib/api'
 import type { BoardAltitude } from '@/store/workspacesStore'
@@ -35,13 +35,42 @@ interface ColumnConfig {
   headerColor: string
 }
 
+/**
+ * Header tint per status — a literal `switch` over the closed `TaskStatus`
+ * set, not a dynamic record lookup (the design-system static scanners cannot
+ * resolve a class/style value read out of a record via a runtime key — same
+ * shape as `PriorityBadge.tsx`'s switch-per-branch `className`). Each branch
+ * is the matching `--status-<name>-foreground` token
+ * (`src/styles/tokens.generated.css`), which resolves to the same value
+ * `@/lib/statusColors`' `STATUS_COLORS` does (both ultimately read
+ * `src/design-system/status.ts`'s `statusContract`).
+ */
+function statusHeaderColorVar(status: TaskStatus): string {
+  switch (status) {
+    case 'inbox':
+      return 'var(--status-inbox-foreground)'
+    case 'next':
+      return 'var(--status-next-foreground)'
+    case 'in_progress':
+      return 'var(--status-in-progress-foreground)'
+    case 'blocked':
+      return 'var(--status-blocked-foreground)'
+    case 'done':
+      return 'var(--status-done-foreground)'
+    case 'failed':
+      return 'var(--status-failed-foreground)'
+    default:
+      return 'var(--status-inbox-foreground)'
+  }
+}
+
 // Columns are read off STATUS_ORDER — NEVER hardcoded here (ADR-051 D5 drops
 // `planning` from the canonical status set; this board just follows suit and
 // renders however many columns STATUS_ORDER holds, with no board-side edit).
 const COLUMNS: ColumnConfig[] = STATUS_ORDER.map((status) => ({
   status,
   label: STATUS_LABELS[status],
-  headerColor: STATUS_COLORS[status],
+  headerColor: statusHeaderColorVar(status),
 }))
 
 /** The canonical status vocabulary, for spotting tasks whose `status` isn't
@@ -624,9 +653,12 @@ function StatusColumn({
   const isOver = !!isOverDroppable
 
   // Visual feedback: highlight a cell the dragged card can legally land in.
-  const canAccept = activeTask
+  // `!!(...)` (matching `isOver` above) is what lets the design-system spacing
+  // scanner prove this is a plain boolean guard rather than a class value it
+  // must resolve — see scripts/design-system-locks/spacing.mjs::isProvenBoolean.
+  const canAccept = !!(activeTask
     ? canDropTransition(activeTask.status, config.status, isRecurringTrigger(activeTask.trigger)).ok
-    : true
+    : true)
 
   return (
     <div

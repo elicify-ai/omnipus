@@ -301,7 +301,7 @@ describe('TaskRunStatusField — run-aware (`occurrence` prop, ADR-050 RD8 / M7)
 
     const badge = await screen.findByTestId('task-run-status-badge')
     expect(badge).toHaveTextContent('Skipped')
-    expect(badge.className).toContain('--color-cancelled')
+    expect(badge.className).toContain('--status-cancelled-foreground')
     expect(screen.getByRole('button', { name: /run now/i })).toBeInTheDocument()
   })
 })

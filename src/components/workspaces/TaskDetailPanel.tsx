@@ -56,7 +56,8 @@ import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
 import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
 import { TaskActivityChip } from '@/components/workspaces/TaskActivityChip'
-import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+import { StatusBadge } from '@/components/workspaces/StatusBadge'
+import { STATUS_OPTIONS } from '@/components/workspaces/taskStatusConfig'
 import { formatDateTime } from '@/lib/dateFormat'
 import {
   Play,
@@ -81,9 +82,25 @@ import {
 } from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
-// STATUS_OPTIONS / STATUS_BADGE live in taskStatusConfig.ts — single source
-// of truth shared with TaskRunStatusField (the calendar's read-only status
-// badge). See that file for details.
+// STATUS_OPTIONS lives in taskStatusConfig.ts — single source of truth shared
+// with TaskRunStatusField (the calendar's read-only status badge). See that
+// file for details. `statusOptionTextClass` below stays local to THIS file
+// (rather than living in taskStatusConfig.ts alongside STATUS_OPTIONS): the
+// design-system static scanners (`scripts/design-system-locks/{typography,
+// spacing,ts-colors}.mjs`) cannot resolve a class-returning function across a
+// module boundary, only a literal `switch` in the same file as its JSX call
+// site (`items={STATUS_OPTIONS.filter(...).map(...)}` below) — same
+// literal-per-branch shape as `PriorityBadge.tsx` and `StatusBadge.tsx`.
+function statusOptionTextClass(status: Task['status']): string {
+  const fallback = 'text-[color:var(--status-inbox-foreground)]'
+  if (status === 'inbox') return fallback
+  if (status === 'next') return 'text-[color:var(--status-next-foreground)]'
+  if (status === 'in_progress') return 'text-[color:var(--status-in-progress-foreground)]'
+  if (status === 'blocked') return 'text-[color:var(--status-blocked-foreground)]'
+  if (status === 'done') return 'text-[color:var(--status-done-foreground)]'
+  if (status === 'failed') return 'text-[color:var(--status-failed-foreground)]'
+  return fallback
+}
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
   1: { label: 'P1 — Critical',  color: 'text-[color:var(--color-error)]' },
@@ -758,17 +775,17 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       <Field label="Status">
         {isRunning ? (
           <div className="flex flex-wrap items-center gap-[var(--space-2)]">
-            <Badge className={cn('h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center', STATUS_BADGE.in_progress)}>
+            <StatusBadge status="in_progress" className="h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
               In Progress
-            </Badge>
+            </StatusBadge>
             {/* "Last activity 5 s ago" (founder decision 2026-09-14). */}
             <TaskActivityChip task={task} variant="panel" />
           </div>
         ) : task.status === 'blocked' ? (
           // blocked is backend-derived (unmet dependency) — show read-only, not selectable
-          <Badge className={cn('h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center', STATUS_BADGE.blocked)}>
+          <StatusBadge status="blocked" className="h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
             Blocked (dependency unmet)
-          </Badge>
+          </StatusBadge>
         ) : task.status === 'done' ? (
           // Done is terminal — mirror canDropTransition (board DnD forbids
           // leaving done). Show a read-only badge instead of a dropdown that
@@ -793,7 +810,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             ).map((o) => ({
               value: o.value,
               label: o.label,
-              className: cn('text-[length:var(--type-utility-xs-size)]', o.color),
+              className: cn('text-[length:var(--type-utility-xs-size)]', statusOptionTextClass(o.value)),
             }))}
           />
         )}
@@ -1208,12 +1225,12 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                 onClick={() => onTaskSelect?.(sub)}
                 className="h-auto w-full justify-start gap-[var(--space-2)] rounded-md bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] text-left hover:bg-[var(--color-surface-1)]"
               >
-                <Badge
-                  variant="outline"
-                  className={cn('text-[length:var(--type-caption-size)] px-[var(--space-1)] py-0 shrink-0 border-0', STATUS_BADGE[sub.status] ?? '')}
+                <StatusBadge
+                  status={sub.status}
+                  className="text-[length:var(--type-caption-size)] px-[var(--space-1)] py-0 shrink-0 border-0"
                 >
                   {sub.status}
-                </Badge>
+                </StatusBadge>
                 <span className="flex-1 text-[var(--color-secondary)] truncate">{sub.title}</span>
                 {sub.agent_name && (
                   <span className="shrink-0 text-[var(--color-muted)] flex items-center gap-[var(--space-0-5)]">

@@ -7,13 +7,23 @@ import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
 import { TaskActionButton } from '../TaskActionButton'
 
-// Priority pill colours — mirrors TaskCard's P1..P5 ladder (red→muted).
-const PRIORITY_CLASS: Record<number, string> = {
-  1: 'text-red-400 border-red-500/40',
-  2: 'text-orange-400 border-orange-500/40',
-  3: 'text-yellow-400 border-yellow-500/40',
-  4: 'text-blue-400 border-blue-500/40',
-  5: 'text-[var(--color-muted)] border-[var(--color-border)]',
+/**
+ * Priority pill colours — mirrors `PriorityBadge.tsx`'s P1..P5 ladder
+ * (red→muted), same `--color-priority-N` tokens (converted, byte-for-byte,
+ * from this Tailwind v4 install's own `red-400`/`red-500`,
+ * `orange-400`/`orange-500`, `yellow-400`/`yellow-500`, `blue-400`/`blue-500`
+ * — see that file's doc comment). A literal `if`-chain over the closed
+ * priority set, not a `Record` looked up by a runtime key — the
+ * design-system static scanners cannot resolve a class list read out of a
+ * record via a dynamic key.
+ */
+function priorityNodeClass(priority: number): string {
+  const fallback = 'text-[var(--color-priority-3)] border-[var(--color-priority-3)]/40'
+  if (priority === 1) return 'text-[var(--color-priority-1)] border-[var(--color-priority-1)]/40'
+  if (priority === 2) return 'text-[var(--color-priority-2)] border-[var(--color-priority-2)]/40'
+  if (priority === 4) return 'text-[var(--color-priority-4)] border-[var(--color-priority-4)]/40'
+  if (priority === 5) return 'text-[var(--color-muted)] border-[var(--color-border)]'
+  return fallback
 }
 
 /**
@@ -87,7 +97,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
       }}
       className={cn(
         'group relative w-[248px] overflow-hidden rounded-xl border bg-[var(--color-surface-1)]',
-        'shadow-[0_2px_8px_rgba(0,0,0,0.35)] transition-colors',
+        'shadow-[0_2px_8px_color-mix(in_srgb,var(--color-primary)_35%,transparent)] transition-colors',
         'focus-visible:border-[var(--color-accent)]',
         selected
           ? 'border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent),0_4px_20px_color-mix(in_srgb,var(--color-accent)_25%,transparent)]'
@@ -153,7 +163,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
           <span
             className={cn(
               'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-none',
-              PRIORITY_CLASS[priority] ?? PRIORITY_CLASS[3],
+              priorityNodeClass(priority),
             )}
           >
             {PRIORITY_LABELS[priority] ?? 'P3'}
