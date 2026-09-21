@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
@@ -96,11 +97,10 @@ function FileTreeBlock({
     // the file tree's identity, preserved per the flat-redesign spec.
     <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
-      <button tabIndex={0}
-        type="button"
+      <Button variant="ghost" tabIndex={0}
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
-          'flex w-full items-center gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
+          'h-auto flex w-full items-center justify-start whitespace-normal px-0 gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left',
           !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
           isRunning && 'cursor-default'
         )}
@@ -115,7 +115,7 @@ function FileTreeBlock({
             <span className="ml-[var(--space-1)]">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}
         </span>
-      </button>
+      </Button>
 
       {/* Tree panel — left-accent block, no bordered card. Entries keep their
           Folder/File icons and paddingLeft-based indentation unchanged. */}

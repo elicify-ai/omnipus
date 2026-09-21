@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
 import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key, Info } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Wordmark } from '@/components/shared/Wordmark'
@@ -212,16 +213,16 @@ function LoginScreen() {
                 autoComplete="current-password"
                 className="pl-[var(--space-5)] pr-[var(--space-5)]"
               />
-              <button tabIndex={0}
-                type="button"
+              <IconButton
+                tabIndex={0}
                 onClick={() => setShowPassword((v) => !v)}
                 // Padded 44x44 mobile tap target without enlarging the 14px icon.
-                className="absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 transition-colors"
+                className="absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 h-auto w-auto hover:bg-transparent transition-colors"
                 style={{ color: 'var(--color-muted)' }}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-              </button>
+              </IconButton>
             </div>
           </div>
 
