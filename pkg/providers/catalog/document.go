@@ -16,6 +16,7 @@ const (
 	ProtocolGoogle           Protocol = "google"
 	ProtocolOllama           Protocol = "ollama"
 	ProtocolCLI              Protocol = "cli"
+	ProtocolBedrock          Protocol = "bedrock"
 )
 
 // Tier is the picker tier a provider row carries (ADR-067 D12; data, never

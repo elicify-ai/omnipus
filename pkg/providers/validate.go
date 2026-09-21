@@ -8,6 +8,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -752,8 +754,16 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	var outcome Outcome
 	var rawDetail string
 	var probedModel string
+	protocol := catalog.Protocol("")
+	if row, ok := CatalogProvider(in.ProviderID); ok {
+		protocol = row.Protocol
+	}
 	for i, model := range candidates {
-		outcome, rawDetail = probeCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		if protocol == catalog.ProtocolBedrock {
+			outcome, rawDetail = probeBedrockCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		} else {
+			outcome, rawDetail = probeCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		}
 		probedModel = model
 		if i+1 < len(candidates) && outcome != OutcomeValid && isModelNotFound(rawDetail) {
 			slog.Debug("providers: probe model not found upstream; trying the next candidate",
@@ -769,6 +779,39 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 		RawDetail:   rawDetail,
 		ProbedModel: probedModel,
 	}
+}
+
+// probeBedrockCompletion validates a Bedrock API key through the same plain
+// HTTPS Converse transport used at runtime. It intentionally has no AWS SDK or
+// credential-chain fallback: issue #800 is API-key-only, with those other
+// credential sources deferred to issue #801.
+func probeBedrockCompletion(
+	ctx context.Context,
+	baseURL, apiKey, model string,
+	checker URLChecker,
+) (Outcome, string) {
+	opts := []bedrock.Option{
+		bedrock.WithBaseEndpoint(baseURL),
+		bedrock.WithRequestTimeout(15 * time.Second),
+	}
+	if checker != nil {
+		opts = append(opts, bedrock.WithHTTPClient(checker.SafeClient()))
+	}
+	provider, err := bedrock.NewProvider(apiKey, opts...)
+	if err != nil {
+		return OutcomeUnreachable, err.Error()
+	}
+	_, err = provider.Chat(ctx, []bedrock.Message{{Role: "user", Content: "hi"}}, nil, model, map[string]any{"max_tokens": 1})
+	if err == nil {
+		return OutcomeValid, ""
+	}
+	var httpErr *bedrock.HTTPError
+	if errors.As(err, &httpErr) {
+		detail := strings.TrimSpace(httpErr.Code + " " + httpErr.Message)
+		return classify(nil, httpErr.StatusCode, []byte(detail)),
+			fmt.Sprintf("status=%d body=%s", httpErr.StatusCode, detail)
+	}
+	return classify(err, 0, nil), fmt.Sprintf("transport error: %v", err)
 }
 
 // probeCompletion fires a single minimal POST /chat/completions and classifies the result.

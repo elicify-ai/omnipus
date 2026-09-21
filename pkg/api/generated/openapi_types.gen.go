@@ -1199,6 +1199,7 @@ func (e CatalogModelWindowSource) Valid() bool {
 // Defines values for CatalogProtocolProtocol.
 const (
 	CatalogProtocolProtocolAnthropic        CatalogProtocolProtocol = "anthropic"
+	CatalogProtocolProtocolBedrock          CatalogProtocolProtocol = "bedrock"
 	CatalogProtocolProtocolCli              CatalogProtocolProtocol = "cli"
 	CatalogProtocolProtocolGoogle           CatalogProtocolProtocol = "google"
 	CatalogProtocolProtocolOllama           CatalogProtocolProtocol = "ollama"
@@ -1209,6 +1210,8 @@ const (
 func (e CatalogProtocolProtocol) Valid() bool {
 	switch e {
 	case CatalogProtocolProtocolAnthropic:
+		return true
+	case CatalogProtocolProtocolBedrock:
 		return true
 	case CatalogProtocolProtocolCli:
 		return true
@@ -1349,6 +1352,7 @@ func (e CatalogProviderModelsWindowSource) Valid() bool {
 // Defines values for CatalogProviderProtocol.
 const (
 	CatalogProviderProtocolAnthropic        CatalogProviderProtocol = "anthropic"
+	CatalogProviderProtocolBedrock          CatalogProviderProtocol = "bedrock"
 	CatalogProviderProtocolCli              CatalogProviderProtocol = "cli"
 	CatalogProviderProtocolGoogle           CatalogProviderProtocol = "google"
 	CatalogProviderProtocolOllama           CatalogProviderProtocol = "ollama"
@@ -1359,6 +1363,8 @@ const (
 func (e CatalogProviderProtocol) Valid() bool {
 	switch e {
 	case CatalogProviderProtocolAnthropic:
+		return true
+	case CatalogProviderProtocolBedrock:
 		return true
 	case CatalogProviderProtocolCli:
 		return true
@@ -1376,6 +1382,7 @@ func (e CatalogProviderProtocol) Valid() bool {
 // Defines values for CatalogProviderProtocolsProtocol.
 const (
 	CatalogProviderProtocolsProtocolAnthropic        CatalogProviderProtocolsProtocol = "anthropic"
+	CatalogProviderProtocolsProtocolBedrock          CatalogProviderProtocolsProtocol = "bedrock"
 	CatalogProviderProtocolsProtocolCli              CatalogProviderProtocolsProtocol = "cli"
 	CatalogProviderProtocolsProtocolGoogle           CatalogProviderProtocolsProtocol = "google"
 	CatalogProviderProtocolsProtocolOllama           CatalogProviderProtocolsProtocol = "ollama"
@@ -1386,6 +1393,8 @@ const (
 func (e CatalogProviderProtocolsProtocol) Valid() bool {
 	switch e {
 	case CatalogProviderProtocolsProtocolAnthropic:
+		return true
+	case CatalogProviderProtocolsProtocolBedrock:
 		return true
 	case CatalogProviderProtocolsProtocolCli:
 		return true
@@ -5690,6 +5699,7 @@ func (e ProviderLocality) Valid() bool {
 // Defines values for ProviderProtocol.
 const (
 	ProviderProtocolAnthropic        ProviderProtocol = "anthropic"
+	ProviderProtocolBedrock          ProviderProtocol = "bedrock"
 	ProviderProtocolCli              ProviderProtocol = "cli"
 	ProviderProtocolGoogle           ProviderProtocol = "google"
 	ProviderProtocolOllama           ProviderProtocol = "ollama"
@@ -5700,6 +5710,8 @@ const (
 func (e ProviderProtocol) Valid() bool {
 	switch e {
 	case ProviderProtocolAnthropic:
+		return true
+	case ProviderProtocolBedrock:
 		return true
 	case ProviderProtocolCli:
 		return true
@@ -5852,6 +5864,7 @@ func (e ProviderUpdateRequestAuthMethod) Valid() bool {
 // Defines values for ProviderUpdateRequestProtocol.
 const (
 	ProviderUpdateRequestProtocolAnthropic        ProviderUpdateRequestProtocol = "anthropic"
+	ProviderUpdateRequestProtocolBedrock          ProviderUpdateRequestProtocol = "bedrock"
 	ProviderUpdateRequestProtocolCli              ProviderUpdateRequestProtocol = "cli"
 	ProviderUpdateRequestProtocolGoogle           ProviderUpdateRequestProtocol = "google"
 	ProviderUpdateRequestProtocolOllama           ProviderUpdateRequestProtocol = "ollama"
@@ -5862,6 +5875,8 @@ const (
 func (e ProviderUpdateRequestProtocol) Valid() bool {
 	switch e {
 	case ProviderUpdateRequestProtocolAnthropic:
+		return true
+	case ProviderUpdateRequestProtocolBedrock:
 		return true
 	case ProviderUpdateRequestProtocolCli:
 		return true
@@ -6002,6 +6017,7 @@ func (e ProvidersCatalogProvidersModelsWindowSource) Valid() bool {
 // Defines values for ProvidersCatalogProvidersProtocol.
 const (
 	ProvidersCatalogProvidersProtocolAnthropic        ProvidersCatalogProvidersProtocol = "anthropic"
+	ProvidersCatalogProvidersProtocolBedrock          ProvidersCatalogProvidersProtocol = "bedrock"
 	ProvidersCatalogProvidersProtocolCli              ProvidersCatalogProvidersProtocol = "cli"
 	ProvidersCatalogProvidersProtocolGoogle           ProvidersCatalogProvidersProtocol = "google"
 	ProvidersCatalogProvidersProtocolOllama           ProvidersCatalogProvidersProtocol = "ollama"
@@ -6012,6 +6028,8 @@ const (
 func (e ProvidersCatalogProvidersProtocol) Valid() bool {
 	switch e {
 	case ProvidersCatalogProvidersProtocolAnthropic:
+		return true
+	case ProvidersCatalogProvidersProtocolBedrock:
 		return true
 	case ProvidersCatalogProvidersProtocolCli:
 		return true
@@ -6029,6 +6047,7 @@ func (e ProvidersCatalogProvidersProtocol) Valid() bool {
 // Defines values for ProvidersCatalogProvidersProtocolsProtocol.
 const (
 	ProvidersCatalogProvidersProtocolsProtocolAnthropic        ProvidersCatalogProvidersProtocolsProtocol = "anthropic"
+	ProvidersCatalogProvidersProtocolsProtocolBedrock          ProvidersCatalogProvidersProtocolsProtocol = "bedrock"
 	ProvidersCatalogProvidersProtocolsProtocolCli              ProvidersCatalogProvidersProtocolsProtocol = "cli"
 	ProvidersCatalogProvidersProtocolsProtocolGoogle           ProvidersCatalogProvidersProtocolsProtocol = "google"
 	ProvidersCatalogProvidersProtocolsProtocolOllama           ProvidersCatalogProvidersProtocolsProtocol = "ollama"
@@ -6039,6 +6058,8 @@ const (
 func (e ProvidersCatalogProvidersProtocolsProtocol) Valid() bool {
 	switch e {
 	case ProvidersCatalogProvidersProtocolsProtocolAnthropic:
+		return true
+	case ProvidersCatalogProvidersProtocolsProtocolBedrock:
 		return true
 	case ProvidersCatalogProvidersProtocolsProtocolCli:
 		return true

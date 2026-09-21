@@ -9720,7 +9720,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description True iff this row's id is not in the catalog — an operator-named custom endpoint configured with api_base + protocol (ADR-067 FR-035, X-13). Every check keys on this flag, never on a literal id. Absent = false.
              * @example false
@@ -9988,7 +9988,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /** @description Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol. */
             protocols?: components["schemas"]["CatalogProtocol"][];
             /**
@@ -10126,7 +10126,7 @@ export interface components {
              * @example anthropic
              * @enum {string}
              */
-            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
              * @example https://api.z.ai/api/anthropic
@@ -12526,7 +12526,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
              * @example api_key

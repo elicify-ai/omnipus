@@ -9,14 +9,13 @@
   },
   "providers": [
     {
-      "id": "amazon-bedrock",
-      "name": "Amazon Bedrock",
-      "company": "Amazon",
+      "id": "cloud-iam-example",
+      "name": "Cloud IAM Example",
+      "company": "Example",
       "api": "",
       "protocol": "",
       "env": [
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY"
+        "CLOUD_IAM_EXAMPLE_KEY"
       ],
       "tier": "unsupported",
       "unsupported_reason": "cloud-iam",
@@ -24,7 +23,7 @@
         "api_key"
       ],
       "aliases": [
-        "bedrock"
+        "cloud-iam"
       ],
       "resize_limits": {
         "long_edge_px": 7680,

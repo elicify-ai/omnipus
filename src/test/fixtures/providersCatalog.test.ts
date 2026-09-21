@@ -33,10 +33,12 @@ describe('providers-catalog.json fixture', () => {
     expect(popular.map((p) => p.id)).not.toContain('groq')
   })
 
-  it('marks bedrock unsupported with the cloud-iam reason (FR-025)', () => {
-    const bedrock = CATALOG_PROVIDERS.find((p) => p.id === 'bedrock')
-    expect(bedrock?.tier).toBe('unsupported')
-    expect(bedrock?.unsupported_reason).toBe('cloud-iam')
+  it('marks Bedrock as a normal API-key provider (issue #800)', () => {
+    const bedrock = CATALOG_PROVIDERS.find((p) => p.id === 'amazon-bedrock')
+    expect(bedrock?.tier).toBe('standard')
+    expect(bedrock?.protocol).toBe('bedrock')
+    expect(bedrock?.auth_methods).toEqual(['api_key'])
+    expect(bedrock?.unsupported_reason).toBeUndefined()
   })
 
   it('covers all three unsupported reasons', () => {

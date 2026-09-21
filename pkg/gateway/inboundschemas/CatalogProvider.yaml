@@ -55,6 +55,7 @@ properties:
       - google
       - ollama
       - cli
+      - bedrock
     description: >
       Primary wire protocol the factory dispatches on (ADR-067 D11). Absent
       only when tier is "unsupported" (F-19).

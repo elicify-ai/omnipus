@@ -13,6 +13,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -135,7 +136,7 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 		},
 		{
 			name:    "DS-3.9 a tier-unsupported row names the catalog's reason",
-			cfg:     config.ModelConfig{Provider: "amazon-bedrock", Model: "anthropic.claude-opus-4"},
+			cfg:     config.ModelConfig{Provider: "cloud-iam-example", Model: "anthropic.claude-opus-4"},
 			wantErr: "cloud-iam",
 		},
 	}
@@ -448,6 +449,32 @@ func TestCreateProviderFromConfig_EmbeddedSnapshotIsTheDefaultSource(t *testing.
 	}
 	if !strings.HasPrefix(got.APIBase(), "https://api.openai.com") {
 		t.Errorf("base URL = %q, want OpenAI's own from the snapshot", got.APIBase())
+	}
+}
+
+// Issue #800 — Bedrock is a normal catalog provider in the default build.
+// Its API key follows the same encrypted-store reference path as every other
+// hosted provider; the factory must construct it without a build tag.
+func TestCreateProviderFromConfig_BedrockDefaultBuild(t *testing.T) {
+	SetCatalog(nil)
+
+	p, modelID, err := CreateProviderFromConfig(&config.ModelConfig{
+		Provider:  "amazon-bedrock",
+		Model:     "anthropic.claude-opus-4-6-v1",
+		APIKeyRef: keyRef(t, "FACTORY_BEDROCK_TEST_KEY"),
+	})
+	if err != nil {
+		t.Fatalf("Bedrock must construct in the default build: %v", err)
+	}
+	got, ok := p.(*bedrock.Provider)
+	if !ok {
+		t.Fatalf("provider = %T, want *bedrock.Provider", p)
+	}
+	if want := "https://bedrock-runtime.us-east-1.amazonaws.com"; got.Endpoint() != want {
+		t.Fatalf("endpoint = %q, want %q", got.Endpoint(), want)
+	}
+	if modelID != "anthropic.claude-opus-4-6-v1" {
+		t.Fatalf("modelID = %q, want the configured Bedrock model verbatim", modelID)
 	}
 }
 

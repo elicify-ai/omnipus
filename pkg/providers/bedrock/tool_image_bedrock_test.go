@@ -1,5 +1,3 @@
-//go:build bedrock
-
 package bedrock
 
 import (
@@ -11,12 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
-	"strings"
 	"testing"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
 func TestConvertMessages_ToolImageNativeBlock(t *testing.T) {
@@ -25,53 +18,33 @@ func TestConvertMessages_ToolImageNativeBlock(t *testing.T) {
 	if len(messages) != 1 || len(messages[0].Content) != 1 {
 		t.Fatalf("messages=%#v", messages)
 	}
-	tool, ok := messages[0].Content[0].(*types.ContentBlockMemberToolResult)
-	if !ok {
-		t.Fatalf("block=%T", messages[0].Content[0])
+	tool := messages[0].Content[0].ToolResult
+	if tool == nil || tool.ToolUseID != "call-bed" || len(tool.Content) != 2 {
+		t.Fatalf("tool=%#v", tool)
 	}
-	if tool.Value.ToolUseId == nil || *tool.Value.ToolUseId != "call-bed" || len(tool.Value.Content) != 2 {
-		t.Fatalf("tool=%#v", tool.Value)
+	image := tool.Content[1].Image
+	if image == nil {
+		t.Fatal("tool-result image block is nil")
 	}
-	imageBlock, ok := tool.Value.Content[1].(*types.ToolResultContentBlockMemberImage)
-	if !ok {
-		t.Fatalf("image block=%T", tool.Value.Content[1])
-	}
-	bytesSource, ok := imageBlock.Value.Source.(*types.ImageSourceMemberBytes)
-	if !ok {
-		t.Fatalf("source=%T", imageBlock.Value.Source)
-	}
-	cfg, err := png.DecodeConfig(bytes.NewReader(bytesSource.Value))
+	cfg, err := png.DecodeConfig(bytes.NewReader(image.Source.Bytes))
 	if err != nil || cfg.Width != 1 || cfg.Height != 1 {
 		t.Fatalf("config=%#v err=%v", cfg, err)
-	}
-	for _, block := range tool.Value.Content {
-		if text, ok := block.(*types.ToolResultContentBlockMemberText); ok && strings.Contains(text.Value, "Tool-result media omitted") {
-			t.Fatalf("supported PNG produced an omission warning: %q", text.Value)
-		}
 	}
 }
 
 func TestConvertMessages_ToolMediaOmissionIsVisible(t *testing.T) {
 	const warning = "[Tool-result media omitted for Bedrock: unsupported image format (2), malformed image data (1), image exceeds 10 MiB (1). Re-read the attachment in a supported image format.]"
-	oversize := "data:image/png;base64," + strings.Repeat("A", 14*1024*1024)
+	oversize := "data:image/png;base64," + string(bytes.Repeat([]byte{'A'}, 14*1024*1024))
 	messages, _ := convertMessages([]Message{{
-		Role:       "tool",
-		ToolCallID: "call-warning",
-		Content:    "inspection completed",
+		Role: "tool", ToolCallID: "call-warning", Content: "inspection completed",
 		Media: []string{
-			"data:image/bmp;base64,AA==",
-			"data:image/tiff;base64,AA==",
-			"data:image/png;base64,not-valid!!!",
-			oversize,
+			"data:image/bmp;base64,AA==", "data:image/tiff;base64,AA==",
+			"data:image/png;base64,not-valid!!!", oversize,
 		},
 	}})
-	tool := messages[0].Content[0].(*types.ContentBlockMemberToolResult)
-	if len(tool.Value.Content) != 2 {
-		t.Fatalf("tool result content=%#v, want original text plus one warning", tool.Value.Content)
-	}
-	text, ok := tool.Value.Content[1].(*types.ToolResultContentBlockMemberText)
-	if !ok || text.Value != warning {
-		t.Fatalf("warning block=%#v, want exact %q", tool.Value.Content[1], warning)
+	tool := messages[0].Content[0].ToolResult
+	if tool == nil || len(tool.Content) != 2 || tool.Content[1].Text == nil || *tool.Content[1].Text != warning {
+		t.Fatalf("tool result=%#v, want exact warning %q", tool, warning)
 	}
 }
 
@@ -86,11 +59,10 @@ func TestChatTransportsCorrelatedToolImagesInOrder(t *testing.T) {
 		_, _ = w.Write([]byte(`{"output":{"message":{"role":"assistant","content":[{"text":"ok"}]}},"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}`))
 	}))
 	defer server.Close()
-	client := bedrockruntime.NewFromConfig(aws.Config{Region: "us-east-1", Credentials: testCredentials{}}, func(o *bedrockruntime.Options) {
-		o.BaseEndpoint = aws.String(server.URL)
-		o.Retryer = aws.NopRetryer{}
-	})
-	p := &Provider{client: client}
+	p, err := NewProvider("fake-key", WithBaseEndpoint(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
 	messages := []Message{
 		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Name: "read_file"}, {ID: "call-2", Name: "read_file"}}},
 		{Role: "tool", ToolCallID: "call-1", Content: "first", Media: []string{"data:image/png;base64," + encodedPNG}},
@@ -115,9 +87,9 @@ func TestChatTransportsCorrelatedToolImagesInOrder(t *testing.T) {
 					continue
 				}
 				encoded := image["source"].(map[string]any)["bytes"].(string)
-				decoded, err := base64.StdEncoding.DecodeString(encoded)
-				if err != nil {
-					t.Fatal(err)
+				decoded, decodeErr := base64.StdEncoding.DecodeString(encoded)
+				if decodeErr != nil {
+					t.Fatal(decodeErr)
 				}
 				images = append(images, decoded)
 			}

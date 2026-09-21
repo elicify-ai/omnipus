@@ -83,9 +83,9 @@ func catalogDocJSON(age time.Duration) []byte {
 				"models": []
 			},
 			{
-				"id": "amazon-bedrock",
-				"name": "Amazon Bedrock",
-				"company": "Amazon",
+				"id": "cloud-iam-example",
+				"name": "Cloud IAM Example",
+				"company": "Example",
 				"api": "",
 				"tier": "unsupported",
 				"unsupported_reason": "cloud-iam",
@@ -171,10 +171,10 @@ func TestRestProvidersCatalog_GET(t *testing.T) {
 		assert.Equal(t, "Sky Large — 大", sky.Models[0].Name)
 		assert.Equal(t, gen.CatalogProviderTier("popular"), sky.Tier)
 
-		bedrock := byID["amazon-bedrock"]
-		assert.Equal(t, gen.CatalogProviderTier("unsupported"), bedrock.Tier)
-		require.NotNil(t, bedrock.UnsupportedReason)
-		assert.Equal(t, gen.CatalogProviderUnsupportedReason("cloud-iam"), *bedrock.UnsupportedReason)
+		cloudIAM := byID["cloud-iam-example"]
+		assert.Equal(t, gen.CatalogProviderTier("unsupported"), cloudIAM.Tier)
+		require.NotNil(t, cloudIAM.UnsupportedReason)
+		assert.Equal(t, gen.CatalogProviderUnsupportedReason("cloud-iam"), *cloudIAM.UnsupportedReason)
 
 		require.NotNil(t, byID["emptyprov"].Models)
 		assert.Empty(t, byID["emptyprov"].Models,
@@ -794,9 +794,9 @@ func TestRestProviders_PUT_Unknown_CloudIAM_Custom(t *testing.T) {
 
 	t.Run("row 5: a cloud-IAM provider is 400 with the catalog's own reason", func(t *testing.T) {
 		api := newAPI(t)
-		w := doPutProvider(t, api, "amazon-bedrock", `{"api_key":"sk-x"}`)
+		w := doPutProvider(t, api, "cloud-iam-example", `{"api_key":"sk-x"}`)
 		require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
-		assert.Equal(t, `provider "amazon-bedrock" is unsupported: cloud-iam`, errorOf(t, w))
+		assert.Equal(t, `provider "cloud-iam-example" is unsupported: cloud-iam`, errorOf(t, w))
 	})
 
 	t.Run("row 7: a custom id without api_base is 400 unknown", func(t *testing.T) {

@@ -1,30 +1,26 @@
-//go:build bedrock
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 //
 // Copyright (c) 2026 Omnipus contributors
 
-// Package bedrock implements the LLM provider interface for AWS Bedrock.
-// It uses the Bedrock Runtime Converse API for unified access to multiple
-// model families (Claude, Llama, Mistral, etc.) with tool/function calling support.
+// Package bedrock implements the AWS Bedrock Runtime Converse API over plain
+// HTTPS. Authentication is an AWS Bedrock API key sent as a Bearer token; AWS
+// credential-chain authentication belongs to roadmap issue #801.
 package bedrock
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
-	smithydocument "github.com/aws/smithy-go/document"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
@@ -41,99 +37,120 @@ type (
 	ToolFunctionDefinition = protocoltypes.ToolFunctionDefinition
 )
 
+const (
+	defaultRegion          = "us-east-1"
+	maxImageSize           = 10 * 1024 * 1024
+	maxResponseBody        = 8 * 1024 * 1024
+	bedrockContentTypeJSON = "application/json"
+)
+
 // Provider implements the LLM provider interface for AWS Bedrock.
 type Provider struct {
-	client         *bedrockruntime.Client
+	apiKey         string
+	endpoint       string
 	region         string
+	httpClient     *http.Client
 	requestTimeout time.Duration
 }
 
-// Option configures the Bedrock Provider.
+// Option configures the Bedrock provider.
 type Option func(*providerConfig)
 
 type providerConfig struct {
 	region         string
-	profile        string
 	baseEndpoint   string
+	httpClient     *http.Client
 	requestTimeout time.Duration
 }
 
-// WithRegion sets the AWS region for Bedrock requests.
+// WithRegion selects the regional Bedrock Runtime endpoint.
 func WithRegion(region string) Option {
 	return func(c *providerConfig) {
-		c.region = region
+		c.region = strings.TrimSpace(region)
+		c.baseEndpoint = ""
 	}
 }
 
-// WithProfile sets the AWS profile to use for credentials.
-func WithProfile(profile string) Option {
-	return func(c *providerConfig) {
-		c.profile = profile
-	}
-}
-
-// WithBaseEndpoint sets a custom Bedrock endpoint URL.
-// Example: https://bedrock-runtime.us-east-1.amazonaws.com
+// WithBaseEndpoint overrides the Bedrock Runtime endpoint. Production catalog
+// rows use regional HTTPS endpoints; tests use this seam with httptest.Server.
 func WithBaseEndpoint(endpoint string) Option {
 	return func(c *providerConfig) {
-		c.baseEndpoint = endpoint
+		c.baseEndpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
 	}
 }
 
-// WithRequestTimeout sets the timeout for Bedrock API requests.
+// WithHTTPClient supplies the HTTP client used for Converse requests.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *providerConfig) { c.httpClient = client }
+}
+
+// WithRequestTimeout sets the timeout for Bedrock Runtime requests.
 func WithRequestTimeout(timeout time.Duration) Option {
-	return func(c *providerConfig) {
-		c.requestTimeout = timeout
-	}
+	return func(c *providerConfig) { c.requestTimeout = timeout }
 }
 
-// NewProvider creates a new AWS Bedrock provider.
-// It uses the default AWS credential chain (env vars, shared config, IAM roles, etc.).
-func NewProvider(ctx context.Context, opts ...Option) (*Provider, error) {
-	pc := &providerConfig{}
+// NewProvider creates an API-key-authenticated Bedrock provider without
+// loading AWS profiles, roles, instance metadata, SSO, or any AWS SDK code.
+func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
+	if strings.TrimSpace(apiKey) == "" {
+		return nil, errors.New("bedrock api key is required")
+	}
+	pc := providerConfig{region: defaultRegion, httpClient: http.DefaultClient}
 	for _, opt := range opts {
-		opt(pc)
+		opt(&pc)
 	}
-
-	// Build AWS config options
-	var configOpts []func(*config.LoadOptions) error
-
-	if pc.region != "" {
-		configOpts = append(configOpts, config.WithRegion(pc.region))
+	if pc.httpClient == nil {
+		pc.httpClient = http.DefaultClient
 	}
-
-	if pc.profile != "" {
-		configOpts = append(configOpts, config.WithSharedConfigProfile(pc.profile))
+	if pc.region == "" && pc.baseEndpoint == "" {
+		return nil, errors.New("bedrock region or endpoint is required")
 	}
-
-	// Load AWS config with automatic credential discovery
-	cfg, err := config.LoadDefaultConfig(ctx, configOpts...)
-	if err != nil {
-		return nil, fmt.Errorf("loading AWS config: %w", err)
+	endpoint := pc.baseEndpoint
+	if endpoint == "" {
+		endpoint = regionalEndpoint(pc.region)
 	}
-
-	// Validate region is set - required for Bedrock request signing
-	if cfg.Region == "" {
-		return nil, fmt.Errorf(
-			"AWS region not configured: set AWS_REGION, AWS_DEFAULT_REGION, or use WithRegion option",
-		)
+	if err := validateEndpoint(endpoint); err != nil {
+		return nil, err
 	}
-
-	// Build client options
-	var clientOpts []func(*bedrockruntime.Options)
-	if pc.baseEndpoint != "" {
-		clientOpts = append(clientOpts, func(o *bedrockruntime.Options) {
-			o.BaseEndpoint = aws.String(pc.baseEndpoint)
-		})
-	}
-
-	client := bedrockruntime.NewFromConfig(cfg, clientOpts...)
-
 	return &Provider{
-		client:         client,
-		region:         cfg.Region,
+		apiKey:         apiKey,
+		endpoint:       endpoint,
+		region:         pc.region,
+		httpClient:     pc.httpClient,
 		requestTimeout: pc.requestTimeout,
 	}, nil
+}
+
+func regionalEndpoint(region string) string {
+	return "https://bedrock-runtime." + strings.TrimSpace(region) + ".amazonaws.com"
+}
+
+func validateEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+		return fmt.Errorf("invalid bedrock runtime endpoint %q", endpoint)
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("invalid bedrock runtime endpoint %q", endpoint)
+	}
+	return nil
+}
+
+// HTTPError is a non-success response from the Bedrock Runtime API.
+type HTTPError struct {
+	StatusCode int
+	Code       string
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	if e.Code != "" && e.Message != "" {
+		return fmt.Sprintf("bedrock runtime returned HTTP %d (%s): %s", e.StatusCode, e.Code, e.Message)
+	}
+	if e.Message != "" {
+		return fmt.Sprintf("bedrock runtime returned HTTP %d: %s", e.StatusCode, e.Message)
+	}
+	return fmt.Sprintf("bedrock runtime returned HTTP %d", e.StatusCode)
 }
 
 // Chat sends messages to AWS Bedrock using the Converse API.
@@ -144,8 +161,9 @@ func (p *Provider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
-	// Apply request timeout if context doesn't already have a deadline.
-	// Use explicit timeout if set, otherwise fall back to common default.
+	if strings.TrimSpace(model) == "" {
+		return nil, errors.New("bedrock model is required")
+	}
 	effectiveTimeout := p.requestTimeout
 	if effectiveTimeout <= 0 {
 		effectiveTimeout = common.DefaultRequestTimeout
@@ -156,561 +174,459 @@ func (p *Provider) Chat(
 		defer cancel()
 	}
 
-	// Build the Converse API input
-	input := &bedrockruntime.ConverseInput{
-		ModelId: aws.String(model),
+	payload, err := json.Marshal(buildConverseRequest(messages, tools, options))
+	if err != nil {
+		return nil, fmt.Errorf("bedrock converse request: %w", err)
 	}
-
-	// Convert messages to Bedrock format
-	bedrockMessages, systemPrompts := convertMessages(messages)
-	input.Messages = bedrockMessages
-
-	// Set system prompts if any
-	if len(systemPrompts) > 0 {
-		input.System = systemPrompts
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.converseURL(model), bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("bedrock converse request: %w", err)
 	}
+	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", bedrockContentTypeJSON)
+	req.Header.Set("Accept", bedrockContentTypeJSON)
 
-	// Set inference configuration only when options are provided
-	var inferenceConfig *types.InferenceConfiguration
-
-	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok && maxTokens > 0 {
-		if inferenceConfig == nil {
-			inferenceConfig = &types.InferenceConfiguration{}
-		}
-		// Clamp to int32 range to avoid overflow
-		if maxTokens > math.MaxInt32 {
-			maxTokens = math.MaxInt32
-		}
-		inferenceConfig.MaxTokens = aws.Int32(int32(maxTokens))
-	}
-
-	if temp, ok := common.AsFloat(options["temperature"]); ok {
-		if inferenceConfig == nil {
-			inferenceConfig = &types.InferenceConfiguration{}
-		}
-		inferenceConfig.Temperature = aws.Float32(float32(temp))
-	}
-
-	if inferenceConfig != nil {
-		input.InferenceConfig = inferenceConfig
-	}
-
-	// Convert tools to Bedrock format
-	// Only set ToolConfig if at least one valid tool was produced
-	if len(tools) > 0 {
-		toolConfig := convertTools(tools)
-		if len(toolConfig.Tools) > 0 {
-			input.ToolConfig = toolConfig
-		}
-	}
-
-	// Call Bedrock Converse API
-	output, err := p.client.Converse(ctx, input)
+	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("bedrock converse: %w", err)
 	}
-
-	// Parse the response
-	return parseResponse(output)
-}
-
-// GetDefaultModel returns an empty string as Bedrock models are user-configured.
-func (p *Provider) GetDefaultModel() string {
-	return ""
-}
-
-// Region returns the AWS region configured for this Provider.
-func (p *Provider) Region() string {
-	return p.region
-}
-
-// convertMessages converts internal messages to Bedrock Converse format.
-// Returns the conversation messages and any system prompts separately.
-// Note: Bedrock requires all tool results for a given assistant turn to be in a single
-// user message with multiple ToolResultBlock content blocks. This function merges
-// consecutive tool result messages accordingly.
-func convertMessages(messages []Message) ([]types.Message, []types.SystemContentBlock) {
-	var bedrockMessages []types.Message
-	var systemPrompts []types.SystemContentBlock
-
-	// Helper to check if a message is a tool result
-	isToolResult := func(msg Message) bool {
-		return (msg.Role == "tool" || (msg.Role == "user" && msg.ToolCallID != "")) && msg.ToolCallID != ""
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
+	if err != nil {
+		return nil, fmt.Errorf("bedrock converse response: %w", err)
 	}
-
-	// Helper to create a tool result content block
-	makeToolResultBlock := func(msg Message) types.ContentBlock {
-		content := []types.ToolResultContentBlock{&types.ToolResultContentBlockMemberText{Value: msg.Content}}
-		rejected := map[string]int{}
-		for _, mediaURL := range msg.Media {
-			if imageBlock, reason := bedrockImageBlock(mediaURL); reason == "" {
-				content = append(content, &types.ToolResultContentBlockMemberImage{Value: imageBlock})
-			} else {
-				rejected[reason]++
-			}
-		}
-		if len(rejected) > 0 {
-			parts := make([]string, 0, 4)
-			for _, reason := range []string{"unsupported image format", "malformed image data", "image exceeds 10 MiB", "unsupported media type"} {
-				if count := rejected[reason]; count > 0 {
-					parts = append(parts, fmt.Sprintf("%s (%d)", reason, count))
-				}
-			}
-			warning := "[Tool-result media omitted for Bedrock: " + strings.Join(parts, ", ") + ". Re-read the attachment in a supported image format.]"
-			content = append(content, &types.ToolResultContentBlockMemberText{Value: warning})
-			logger.WarnCF("bedrock", "tool-result media omitted", map[string]any{
-				"unsupported_image_format_count": rejected["unsupported image format"],
-				"malformed_image_data_count":     rejected["malformed image data"],
-				"image_oversize_count":           rejected["image exceeds 10 MiB"],
-				"unsupported_media_type_count":   rejected["unsupported media type"],
-			})
-		}
-		return &types.ContentBlockMemberToolResult{
-			Value: types.ToolResultBlock{
-				ToolUseId: aws.String(msg.ToolCallID),
-				Content:   content,
-			},
-		}
+	if len(body) > maxResponseBody {
+		return nil, errors.New("bedrock converse response exceeds 8 MiB")
 	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, parseHTTPError(resp, body)
+	}
+	var output converseResponse
+	if err := json.Unmarshal(body, &output); err != nil {
+		return nil, fmt.Errorf("bedrock converse response: %w", err)
+	}
+	return parseResponse(&output)
+}
 
-	i := 0
-	for i < len(messages) {
+func (p *Provider) converseURL(model string) string {
+	return p.endpoint + "/model/" + url.PathEscape(strings.TrimSpace(model)) + "/converse"
+}
+
+func parseHTTPError(resp *http.Response, body []byte) error {
+	var payload struct { // not-wire-format: upstream Bedrock error envelope
+		Message string `json:"message"`
+		Code    string `json:"code"`
+		Type    string `json:"__type"`
+	}
+	_ = json.Unmarshal(body, &payload)
+	code := strings.TrimSpace(resp.Header.Get("X-Amzn-Errortype"))
+	if code == "" {
+		code = payload.Code
+	}
+	if code == "" {
+		code = payload.Type
+	}
+	if before, _, found := strings.Cut(code, ":"); found {
+		code = before
+	}
+	return &HTTPError{StatusCode: resp.StatusCode, Code: code, Message: payload.Message}
+}
+
+// GetDefaultModel returns an empty string because Bedrock models are selected
+// from the catalog.
+func (p *Provider) GetDefaultModel() string { return "" }
+
+// Region returns the configured region. A custom endpoint retains the default
+// region unless WithRegion was also selected.
+func (p *Provider) Region() string { return p.region }
+
+// Endpoint returns the Bedrock Runtime base URL.
+func (p *Provider) Endpoint() string { return p.endpoint }
+
+type converseRequest struct {
+	Messages        []bedrockMessage     `json:"messages"`
+	System          []systemContentBlock `json:"system,omitempty"`
+	InferenceConfig *inferenceConfig     `json:"inferenceConfig,omitempty"`
+	ToolConfig      *toolConfiguration   `json:"toolConfig,omitempty"`
+}
+
+type bedrockMessage struct {
+	Role    string         `json:"role"`
+	Content []contentBlock `json:"content"`
+}
+
+type systemContentBlock struct {
+	Text string `json:"text"`
+}
+
+type contentBlock struct {
+	Text       *string          `json:"text,omitempty"`
+	Image      *imageBlock      `json:"image,omitempty"`
+	ToolUse    *toolUseBlock    `json:"toolUse,omitempty"`
+	ToolResult *toolResultBlock `json:"toolResult,omitempty"`
+}
+
+type imageBlock struct {
+	Format string      `json:"format"`
+	Source imageSource `json:"source"`
+}
+
+type imageSource struct {
+	Bytes []byte `json:"bytes"`
+}
+
+type toolUseBlock struct {
+	ToolUseID string         `json:"toolUseId"`
+	Name      string         `json:"name"`
+	Input     map[string]any `json:"input"`
+}
+
+type toolResultBlock struct {
+	ToolUseID string         `json:"toolUseId"`
+	Content   []contentBlock `json:"content"`
+}
+
+type toolConfiguration struct {
+	Tools []toolBlock `json:"tools"`
+}
+
+type toolBlock struct {
+	ToolSpec toolSpecification `json:"toolSpec"`
+}
+
+type toolSpecification struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	InputSchema toolInputSchema `json:"inputSchema"`
+}
+
+type toolInputSchema struct {
+	JSON map[string]any `json:"json"`
+}
+
+type inferenceConfig struct {
+	MaxTokens   *int32   `json:"maxTokens,omitempty"`
+	Temperature *float32 `json:"temperature,omitempty"`
+}
+
+func buildConverseRequest(messages []Message, tools []ToolDefinition, options map[string]any) converseRequest {
+	converted, system := convertMessages(messages)
+	request := converseRequest{Messages: converted, System: system}
+	if maxTokens, ok := common.AsInt(options["max_tokens"]); ok && maxTokens > 0 {
+		if maxTokens > math.MaxInt32 {
+			maxTokens = math.MaxInt32
+		}
+		value := int32(maxTokens)
+		request.InferenceConfig = &inferenceConfig{MaxTokens: &value}
+	}
+	if temperature, ok := common.AsFloat(options["temperature"]); ok {
+		if request.InferenceConfig == nil {
+			request.InferenceConfig = &inferenceConfig{}
+		}
+		value := float32(temperature)
+		request.InferenceConfig.Temperature = &value
+	}
+	if convertedTools := convertTools(tools); convertedTools != nil && len(convertedTools.Tools) > 0 {
+		request.ToolConfig = convertedTools
+	}
+	return request
+}
+
+// convertMessages preserves the existing Converse mapping: system prompts are
+// separated, consecutive tool results are merged into one user message, and
+// assistant tool calls retain their correlation ids and arguments.
+func convertMessages(messages []Message) ([]bedrockMessage, []systemContentBlock) {
+	var converted []bedrockMessage
+	var system []systemContentBlock
+	for i := 0; i < len(messages); {
 		msg := messages[i]
-
 		switch {
 		case msg.Role == "system":
-			// System messages go to the System field
-			systemPrompts = append(systemPrompts, &types.SystemContentBlockMemberText{
-				Value: msg.Content,
-			})
+			system = append(system, systemContentBlock{Text: msg.Content})
 			i++
-
 		case isToolResult(msg):
-			// Collect all consecutive tool results into a single user message
-			// Bedrock requires all tool results for a turn in one message
-			var toolResultBlocks []types.ContentBlock
+			blocks := make([]contentBlock, 0, 1)
 			for i < len(messages) && isToolResult(messages[i]) {
-				toolResultBlocks = append(toolResultBlocks, makeToolResultBlock(messages[i]))
+				blocks = append(blocks, makeToolResultBlock(messages[i]))
 				i++
 			}
-			bedrockMessages = append(bedrockMessages, types.Message{
-				Role:    types.ConversationRoleUser,
-				Content: toolResultBlocks,
-			})
-
-		case msg.Role == "user":
-			// Regular user message (no ToolCallID)
-			content := buildUserContent(msg)
-			bedrockMessages = append(bedrockMessages, types.Message{
-				Role:    types.ConversationRoleUser,
-				Content: content,
-			})
-			i++
-
+			converted = append(converted, bedrockMessage{Role: "user", Content: blocks})
 		case msg.Role == "assistant":
-			content := buildAssistantContent(msg)
-			bedrockMessages = append(bedrockMessages, types.Message{
-				Role:    types.ConversationRoleAssistant,
-				Content: content,
-			})
+			converted = append(converted, bedrockMessage{Role: "assistant", Content: buildAssistantContent(msg)})
 			i++
-
-		case msg.Role == "tool" && msg.ToolCallID == "":
-			// Tool message without ToolCallID - treat as regular user message
-			content := buildUserContent(msg)
-			bedrockMessages = append(bedrockMessages, types.Message{
-				Role:    types.ConversationRoleUser,
-				Content: content,
-			})
+		case msg.Role == "user" || msg.Role == "tool":
+			converted = append(converted, bedrockMessage{Role: "user", Content: buildUserContent(msg)})
 			i++
-
 		default:
-			// Unknown role - skip
 			i++
 		}
 	}
-
-	return bedrockMessages, systemPrompts
+	return converted, system
 }
 
-func bedrockImageBlock(mediaURL string) (types.ImageBlock, string) {
+func isToolResult(msg Message) bool {
+	return (msg.Role == "tool" || msg.Role == "user") && msg.ToolCallID != ""
+}
+
+func makeToolResultBlock(msg Message) contentBlock {
+	content := []contentBlock{{Text: stringPointer(msg.Content)}}
+	rejected := map[string]int{}
+	for _, mediaURL := range msg.Media {
+		if image, reason := bedrockImageBlock(mediaURL); reason == "" {
+			content = append(content, contentBlock{Image: &image})
+		} else {
+			rejected[reason]++
+		}
+	}
+	if len(rejected) > 0 {
+		warning := toolMediaWarning(rejected)
+		content = append(content, contentBlock{Text: &warning})
+		logger.WarnCF("bedrock", "tool-result media omitted", map[string]any{
+			"unsupported_image_format_count": rejected["unsupported image format"],
+			"malformed_image_data_count":     rejected["malformed image data"],
+			"image_oversize_count":           rejected["image exceeds 10 MiB"],
+			"unsupported_media_type_count":   rejected["unsupported media type"],
+		})
+	}
+	return contentBlock{ToolResult: &toolResultBlock{ToolUseID: msg.ToolCallID, Content: content}}
+}
+
+func toolMediaWarning(rejected map[string]int) string {
+	parts := make([]string, 0, 4)
+	for _, reason := range []string{"unsupported image format", "malformed image data", "image exceeds 10 MiB", "unsupported media type"} {
+		if count := rejected[reason]; count > 0 {
+			parts = append(parts, fmt.Sprintf("%s (%d)", reason, count))
+		}
+	}
+	return "[Tool-result media omitted for Bedrock: " + strings.Join(parts, ", ") + ". Re-read the attachment in a supported image format.]"
+}
+
+func bedrockImageBlock(mediaURL string) (imageBlock, string) {
 	if !strings.HasPrefix(mediaURL, "data:image/") {
-		return types.ImageBlock{}, "unsupported media type"
+		return imageBlock{}, "unsupported media type"
 	}
 	parts := strings.SplitN(mediaURL, ",", 2)
 	if len(parts) != 2 || !strings.Contains(parts[0], ";base64") {
-		return types.ImageBlock{}, "malformed image data"
+		return imageBlock{}, "malformed image data"
 	}
-	mediaType := strings.TrimSuffix(strings.TrimPrefix(parts[0], "data:image/"), ";base64")
-	var format types.ImageFormat
-	switch mediaType {
-	case "jpeg", "jpg":
-		format = types.ImageFormatJpeg
-	case "png":
-		format = types.ImageFormatPng
-	case "gif":
-		format = types.ImageFormatGif
-	case "webp":
-		format = types.ImageFormatWebp
+	format := strings.TrimSuffix(strings.TrimPrefix(parts[0], "data:image/"), ";base64")
+	if format == "jpg" {
+		format = "jpeg"
+	}
+	switch format {
+	case "jpeg", "png", "gif", "webp":
 	default:
-		return types.ImageBlock{}, "unsupported image format"
+		return imageBlock{}, "unsupported image format"
 	}
-	const maxImageSize = 10 * 1024 * 1024
 	if base64.StdEncoding.DecodedLen(len(parts[1])) > maxImageSize {
-		return types.ImageBlock{}, "image exceeds 10 MiB"
+		return imageBlock{}, "image exceeds 10 MiB"
 	}
 	data, err := base64.StdEncoding.DecodeString(parts[1])
 	if err != nil {
-		return types.ImageBlock{}, "malformed image data"
+		return imageBlock{}, "malformed image data"
 	}
 	if len(data) > maxImageSize {
-		return types.ImageBlock{}, "image exceeds 10 MiB"
+		return imageBlock{}, "image exceeds 10 MiB"
 	}
-	return types.ImageBlock{Format: format, Source: &types.ImageSourceMemberBytes{Value: data}}, ""
+	return imageBlock{Format: format, Source: imageSource{Bytes: data}}, ""
 }
 
-// buildUserContent builds Bedrock content blocks for a user message.
-func buildUserContent(msg Message) []types.ContentBlock {
-	var content []types.ContentBlock
-
-	// Add text content
+func buildUserContent(msg Message) []contentBlock {
+	content := make([]contentBlock, 0, 1+len(msg.Media))
 	if msg.Content != "" {
-		content = append(content, &types.ContentBlockMemberText{
-			Value: msg.Content,
-		})
+		content = append(content, contentBlock{Text: stringPointer(msg.Content)})
 	}
-
-	// Add images from Media field
 	for _, mediaURL := range msg.Media {
-		if strings.HasPrefix(mediaURL, "data:image/") {
-			// Parse data URL: data:image/jpeg;base64,<data>
-			parts := strings.SplitN(mediaURL, ",", 2)
-			if len(parts) != 2 {
-				continue
-			}
-
-			// Extract media type from "data:image/jpeg;base64"
-			mediaType := ""
-			header := parts[0]
-			if idx := strings.Index(header, "/"); idx != -1 {
-				end := strings.Index(header[idx:], ";")
-				if end == -1 {
-					end = len(header) - idx
-				}
-				mediaType = header[idx+1 : idx+end]
-			}
-
-			// Verify this is base64 encoded
-			if !strings.Contains(header, ";base64") {
-				continue // Skip non-base64 encoded data
-			}
-
-			// Map media type to Bedrock format
-			var format types.ImageFormat
-			switch mediaType {
-			case "jpeg", "jpg":
-				format = types.ImageFormatJpeg
-			case "png":
-				format = types.ImageFormatPng
-			case "gif":
-				format = types.ImageFormatGif
-			case "webp":
-				format = types.ImageFormatWebp
-			default:
-				continue // Skip unsupported formats
-			}
-
-			// Check size before decoding to prevent excessive memory allocation
-			// Bedrock has a ~20MB request limit; cap decoded images at 10MB
-			const maxImageSize = 10 * 1024 * 1024
-			decodedLen := base64.StdEncoding.DecodedLen(len(parts[1]))
-			if decodedLen > maxImageSize {
-				logger.WarnCF(
-					"bedrock",
-					"skipping image exceeding size limit",
-					map[string]any{"bytes": decodedLen, "limit": maxImageSize},
-				)
-				continue
-			}
-
-			// Decode base64 data
-			imageData, err := base64.StdEncoding.DecodeString(parts[1])
-			if err != nil {
-				logger.WarnCF("bedrock", "failed to decode base64 image data", map[string]any{"error": err.Error()})
-				continue
-			}
-
-			content = append(content, &types.ContentBlockMemberImage{
-				Value: types.ImageBlock{
-					Format: format,
-					Source: &types.ImageSourceMemberBytes{
-						Value: imageData,
-					},
-				},
-			})
+		image, reason := bedrockImageBlock(mediaURL)
+		if reason != "" {
+			logger.WarnCF("bedrock", "skipping user image", map[string]any{"reason": reason})
+			continue
 		}
+		content = append(content, contentBlock{Image: &image})
 	}
-
-	// Bedrock requires at least one content block; add empty text if needed
 	if len(content) == 0 {
-		content = append(content, &types.ContentBlockMemberText{Value: ""})
+		content = append(content, contentBlock{Text: stringPointer("")})
 	}
-
 	return content
 }
 
-// buildAssistantContent builds Bedrock content blocks for an assistant message.
-func buildAssistantContent(msg Message) []types.ContentBlock {
-	var content []types.ContentBlock
-
-	// Add text content if present
+func buildAssistantContent(msg Message) []contentBlock {
+	content := make([]contentBlock, 0, 1+len(msg.ToolCalls))
 	if msg.Content != "" {
-		content = append(content, &types.ContentBlockMemberText{
-			Value: msg.Content,
-		})
+		content = append(content, contentBlock{Text: stringPointer(msg.Content)})
 	}
-
-	// Add tool use blocks
 	for _, tc := range msg.ToolCalls {
-		// Validate tool call ID - Bedrock requires non-empty ToolUseId
 		if strings.TrimSpace(tc.ID) == "" {
 			logger.WarnCF("bedrock", "skipping tool call with empty ID", map[string]any{"tool": tc.Name})
 			continue
 		}
-
-		// Resolve tool name: prefer tc.Name, fallback to tc.Function.Name
-		// (tc.Name/tc.Arguments are json:"-" and may be empty when from JSON)
-		toolName := tc.Name
-		if toolName == "" && tc.Function != nil {
-			toolName = tc.Function.Name
-		}
-		if strings.TrimSpace(toolName) == "" {
+		name, args := toolCallParts(tc)
+		if strings.TrimSpace(name) == "" {
 			continue
 		}
-
-		// Resolve arguments: prefer tc.Arguments, fallback to parsing tc.Function.Arguments
-		args := tc.Arguments
-		if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-			if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-				logger.WarnCF(
-					"bedrock",
-					"failed to parse Function.Arguments",
-					map[string]any{"tool": toolName, "error": err.Error()},
-				)
-				args = map[string]any{}
-			}
-		}
-		if args == nil {
-			args = map[string]any{}
-		}
-
-		// Convert arguments to a Bedrock document using NewLazyDocument
-		inputDoc := document.NewLazyDocument(args)
-
-		content = append(content, &types.ContentBlockMemberToolUse{
-			Value: types.ToolUseBlock{
-				ToolUseId: aws.String(tc.ID),
-				Name:      aws.String(toolName),
-				Input:     inputDoc,
-			},
-		})
+		content = append(content, contentBlock{ToolUse: &toolUseBlock{
+			ToolUseID: tc.ID,
+			Name:      name,
+			Input:     args,
+		}})
 	}
-
-	// Bedrock requires at least one content block; add empty text if needed
 	if len(content) == 0 {
-		content = append(content, &types.ContentBlockMemberText{Value: ""})
+		content = append(content, contentBlock{Text: stringPointer("")})
 	}
-
 	return content
 }
 
-// convertTools converts tool definitions to Bedrock format.
-func convertTools(tools []ToolDefinition) *types.ToolConfiguration {
-	bedrockTools := make([]types.Tool, 0, len(tools))
+func toolCallParts(tc ToolCall) (string, map[string]any) {
+	name := tc.Name
+	if name == "" && tc.Function != nil {
+		name = tc.Function.Name
+	}
+	args := tc.Arguments
+	if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
+		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
+			logger.WarnCF("bedrock", "failed to parse Function.Arguments", map[string]any{
+				"tool": name, "error": err.Error(),
+			})
+		}
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return name, args
+}
 
+func convertTools(tools []ToolDefinition) *toolConfiguration {
+	converted := make([]toolBlock, 0, len(tools))
 	for _, tool := range tools {
-		// Skip tools with empty names
 		if strings.TrimSpace(tool.Function.Name) == "" {
 			continue
 		}
-
-		// Ensure parameters is not nil - default to minimal object schema
-		params := tool.Function.Parameters
-		if params == nil {
-			params = map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			}
+		parameters := tool.Function.Parameters
+		if parameters == nil {
+			parameters = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
-
-		// Convert parameters schema to a Bedrock document
-		inputSchema := document.NewLazyDocument(params)
-
-		bedrockTools = append(bedrockTools, &types.ToolMemberToolSpec{
-			Value: types.ToolSpecification{
-				Name:        aws.String(tool.Function.Name),
-				Description: aws.String(tool.Function.Description),
-				InputSchema: &types.ToolInputSchemaMemberJson{
-					Value: inputSchema,
-				},
-			},
-		})
+		converted = append(converted, toolBlock{ToolSpec: toolSpecification{
+			Name:        tool.Function.Name,
+			Description: tool.Function.Description,
+			InputSchema: toolInputSchema{JSON: parameters},
+		}})
 	}
-
-	return &types.ToolConfiguration{
-		Tools: bedrockTools,
-	}
+	return &toolConfiguration{Tools: converted}
 }
 
-// parseResponse converts Bedrock Converse output to LLMResponse.
-func parseResponse(output *bedrockruntime.ConverseOutput) (*LLMResponse, error) {
+type converseResponse struct {
+	Output     converseOutput `json:"output"`
+	StopReason string         `json:"stopReason"`
+	Usage      *tokenUsage    `json:"usage,omitempty"`
+}
+
+type converseOutput struct {
+	Message bedrockResponseMessage `json:"message"`
+}
+
+type bedrockResponseMessage struct {
+	Role    string                 `json:"role"`
+	Content []responseContentBlock `json:"content"`
+}
+
+type responseContentBlock struct {
+	Text    *string               `json:"text,omitempty"`
+	ToolUse *responseToolUseBlock `json:"toolUse,omitempty"`
+}
+
+type responseToolUseBlock struct {
+	ToolUseID string          `json:"toolUseId"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
+}
+
+type tokenUsage struct {
+	InputTokens  int `json:"inputTokens"`
+	OutputTokens int `json:"outputTokens"`
+	TotalTokens  int `json:"totalTokens"`
+}
+
+func parseResponse(output *converseResponse) (*LLMResponse, error) {
+	if output == nil {
+		return nil, errors.New("bedrock converse response is nil")
+	}
+	usage := responseUsage(output.Usage)
 	var content strings.Builder
 	toolCalls := make([]ToolCall, 0)
-
-	// Computed up front (output.StopReason/output.Usage are top-level
-	// fields, not dependent on the content-block loop below) so a tool-call
-	// decode failure can attach this same evidence to the refusal (ADR-087
-	// D3.9 / D5 / D7) instead of building a bare, unclassifiable error.
-	// StopReasonMaxTokens's raw string value is "max_tokens", which already
-	// matches AttachToolArgumentsEvidence's normalised-spelling matcher, so
-	// it is passed through unmapped.
-	var usage *UsageInfo
-	if output.Usage != nil {
-		usage = &UsageInfo{
-			PromptTokens:     int(aws.ToInt32(output.Usage.InputTokens)),
-			CompletionTokens: int(aws.ToInt32(output.Usage.OutputTokens)),
-			TotalTokens:      int(aws.ToInt32(output.Usage.InputTokens)) + int(aws.ToInt32(output.Usage.OutputTokens)),
+	for _, block := range output.Output.Message.Content {
+		if block.Text != nil {
+			content.WriteString(*block.Text)
 		}
-	}
-
-	// Process output content blocks
-	if output.Output != nil {
-		if msgOutput, ok := output.Output.(*types.ConverseOutputMemberMessage); ok {
-			for _, block := range msgOutput.Value.Content {
-				switch b := block.(type) {
-				case *types.ContentBlockMemberText:
-					content.WriteString(b.Value)
-
-				case *types.ContentBlockMemberToolUse:
-					// Bedrock hands tool input as a Smithy document rather than
-					// a JSON string, so this is the one inbound path that does
-					// not go through common.DecodeToolCallArguments. The POLICY
-					// it enforces is the same: an input that is present but
-					// will not unmarshal fails the response instead of being
-					// replaced by a stand-in.
-					//
-					// This site was previously the quietest degrade of the
-					// family — it substituted an EMPTY map, so the tool ran
-					// with no arguments at all and not even a fragment
-					// survived to say why. It was also, until this fix, the
-					// only decode site that built a plain fmt.Errorf instead
-					// of a *common.ToolArgumentsError: errors.As could never
-					// classify it as tool_call_truncated, so a max_tokens
-					// cutoff on Bedrock always read as "filled in arguments
-					// incorrectly" no matter how clearly the stop reason said
-					// otherwise.
-					args := make(map[string]any)
-					if b.Value.Input != nil {
-						if err := b.Value.Input.UnmarshalSmithyDocument(&args); err != nil {
-							cause := fmt.Errorf(
-								"%w: tool %q (id %q): %v",
-								common.ErrToolArgumentsUndecodable,
-								aws.ToString(b.Value.Name),
-								aws.ToString(b.Value.ToolUseId),
-								err,
-							)
-							tae := common.NewToolArgumentsError(
-								aws.ToString(b.Value.Name), cause,
-								output.StopReason == types.StopReasonMaxTokens,
-							)
-							return nil, common.AttachToolArgumentsEvidence(tae, string(output.StopReason), usage)
-						}
-					}
-
-					// Numeric leaves decoded above are smithydocument.Number,
-					// a named string type; rewrite them before either surface
-					// below consumes them so numbers reach the tool as numbers.
-					args = normalizeDocumentNumbers(args).(map[string]any)
-
-					// Serialize arguments to JSON string for FunctionCall
-					argsJSON, err := json.Marshal(args)
-					if err != nil {
-						logger.WarnCF("bedrock", "failed to marshal tool arguments", map[string]any{
-							"tool":  aws.ToString(b.Value.Name),
-							"id":    aws.ToString(b.Value.ToolUseId),
-							"error": err.Error(),
-						})
-						argsJSON = []byte("{}")
-					}
-
-					toolCalls = append(toolCalls, ToolCall{
-						ID:        aws.ToString(b.Value.ToolUseId),
-						Name:      aws.ToString(b.Value.Name),
-						Arguments: args,
-						Function: &FunctionCall{
-							Name:      aws.ToString(b.Value.Name),
-							Arguments: string(argsJSON),
-						},
-					})
-				}
-			}
+		if block.ToolUse == nil {
+			continue
 		}
+		args, err := decodeToolInput(block.ToolUse.Input)
+		if err != nil {
+			cause := fmt.Errorf("%w: tool %q (id %q): %v",
+				common.ErrToolArgumentsUndecodable, block.ToolUse.Name, block.ToolUse.ToolUseID, err)
+			tae := common.NewToolArgumentsError(block.ToolUse.Name, cause, output.StopReason == "max_tokens")
+			return nil, common.AttachToolArgumentsEvidence(tae, output.StopReason, usage)
+		}
+		argsJSON, err := json.Marshal(args)
+		if err != nil {
+			return nil, fmt.Errorf("bedrock tool arguments for %q: %w", block.ToolUse.Name, err)
+		}
+		toolCalls = append(toolCalls, ToolCall{
+			ID:        block.ToolUse.ToolUseID,
+			Name:      block.ToolUse.Name,
+			Arguments: args,
+			Function:  &FunctionCall{Name: block.ToolUse.Name, Arguments: string(argsJSON)},
+		})
 	}
-
-	// Map stop reason
-	finishReason := "stop"
-	switch output.StopReason {
-	case types.StopReasonToolUse:
-		finishReason = "tool_calls"
-	case types.StopReasonMaxTokens:
-		finishReason = "length"
-	case types.StopReasonEndTurn:
-		finishReason = "stop"
-	case types.StopReasonStopSequence:
-		finishReason = "stop"
-	case types.StopReasonContentFiltered:
-		finishReason = "content_filter"
-	}
-
 	return &LLMResponse{
 		Content:      content.String(),
 		ToolCalls:    toolCalls,
-		FinishReason: finishReason,
+		FinishReason: mapStopReason(output.StopReason),
 		Usage:        usage,
 	}, nil
 }
 
-// normalizeDocumentNumbers rewrites every smithy document.Number in a decoded
-// tool-use input to a json.Number, in place.
-//
-// smithy-go's document decoder represents a JSON number decoded into an
-// open value as smithydocument.Number (decoder.go: "type Number string" —
-// a named string type; the bedrockruntime document package does not
-// re-export it). Left as-is it corrupts both argument surfaces parseResponse
-// produces: encoding/json marshals the named string type as a quoted JSON
-// string, and a consumer of the raw Arguments map receives a string where
-// the tool's schema promised a number. json.Number is the standard
-// encoder's counterpart that marshals unquoted, preserving the original
-// literal exactly (3 stays 3, never 3.0, and values beyond float64
-// precision survive verbatim).
-//
-// Mutating the value in place is safe: the map is allocated by parseResponse
-// for a single content block and nothing else holds it or its nested values.
-func normalizeDocumentNumbers(v any) any {
-	switch t := v.(type) {
-	case smithydocument.Number:
-		return json.Number(string(t))
-	case map[string]any:
-		for k, e := range t {
-			t[k] = normalizeDocumentNumbers(e)
-		}
-		return t
-	case []any:
-		for i, e := range t {
-			t[i] = normalizeDocumentNumbers(e)
-		}
-		return t
-	default:
-		return v
+func decodeToolInput(raw json.RawMessage) (map[string]any, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return map[string]any{}, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var args map[string]any
+	if err := decoder.Decode(&args); err != nil {
+		return nil, err
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	return args, nil
+}
+
+func responseUsage(usage *tokenUsage) *UsageInfo {
+	if usage == nil {
+		return nil
+	}
+	total := usage.TotalTokens
+	if total == 0 {
+		total = usage.InputTokens + usage.OutputTokens
+	}
+	return &UsageInfo{
+		PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, TotalTokens: total,
 	}
 }
+
+func mapStopReason(reason string) string {
+	switch reason {
+	case "tool_use":
+		return "tool_calls"
+	case "max_tokens":
+		return "length"
+	case "content_filtered", "guardrail_intervened":
+		return "content_filter"
+	default:
+		return "stop"
+	}
+}
+
+func stringPointer(value string) *string { return &value }

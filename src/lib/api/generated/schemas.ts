@@ -1375,7 +1375,14 @@ type Provider = {
     | "signed_in"
     | "expired";
   protocol?:
-    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | (
+        | "openai-compatible"
+        | "anthropic"
+        | "google"
+        | "ollama"
+        | "cli"
+        | "bedrock"
+      )
     | undefined;
   custom?: boolean | undefined;
   company?: string | undefined;
@@ -1448,7 +1455,14 @@ type CatalogProvider = {
   company: string;
   api: string;
   protocol?:
-    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | (
+        | "openai-compatible"
+        | "anthropic"
+        | "google"
+        | "ollama"
+        | "cli"
+        | "bedrock"
+      )
     | undefined;
   protocols?: Array<CatalogProtocol> | undefined;
   env?: Array<string> | undefined;
@@ -1467,7 +1481,13 @@ type CatalogProvider = {
   models: Array<CatalogModel>;
 };
 type CatalogProtocol = {
-  protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+  protocol:
+    | "openai-compatible"
+    | "anthropic"
+    | "google"
+    | "ollama"
+    | "cli"
+    | "bedrock";
   api: string;
 };
 type CatalogModel = {
@@ -3855,7 +3875,14 @@ export const Provider: z.ZodType<Provider> = z.object({
     "expired",
   ]),
   protocol: z
-    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .enum([
+      "openai-compatible",
+      "anthropic",
+      "google",
+      "ollama",
+      "cli",
+      "bedrock",
+    ])
     .optional(),
   custom: z.boolean().optional(),
   company: z.string().optional(),
@@ -3884,6 +3911,7 @@ export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
     "google",
     "ollama",
     "cli",
+    "bedrock",
   ]),
   api: z.string(),
 });
@@ -3908,7 +3936,14 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   company: z.string().min(1),
   api: z.string(),
   protocol: z
-    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .enum([
+      "openai-compatible",
+      "anthropic",
+      "google",
+      "ollama",
+      "cli",
+      "bedrock",
+    ])
     .optional(),
   protocols: z.array(CatalogProtocol).optional(),
   env: z.array(z.string()).optional(),
@@ -3956,6 +3991,7 @@ export const ProviderUpdateRequest = z
       "google",
       "ollama",
       "cli",
+      "bedrock",
     ]),
     auth_method: z.enum(["api_key", "sign_in"]),
     api_base: z.string().max(2048),

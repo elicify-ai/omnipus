@@ -153,12 +153,12 @@ describe('ProviderPicker search — dataset rows 1–10 (FR-024)', () => {
     expect(renderedCompanies()).toEqual(['Zhipu AI'])
   })
 
-  it('row 7 — "bedrock" keeps the unsupported row visible and disabled', async () => {
+  it('row 7 — "bedrock" keeps the normal provider visible and enabled', async () => {
     await search('bedrock')
     expect(renderedCompanies()).toEqual(['Amazon'])
     const row = screen.getByTestId('picker-row-Amazon')
-    expect(row).toHaveAttribute('aria-disabled', 'true')
-    expect(row).toHaveTextContent('needs request signing')
+    expect(row).not.toHaveAttribute('aria-disabled')
+    expect(row).not.toHaveTextContent('needs request signing')
   })
 
   it('row 8 — regex metacharacters are treated literally: no crash, no match', async () => {

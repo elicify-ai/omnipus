@@ -546,6 +546,41 @@ func TestValidateKey_NoModelsPreFetchForCatalogProvider(t *testing.T) {
 	}
 }
 
+// Issue #800 — Bedrock is API-key authenticated but speaks Converse rather
+// than the OpenAI-compatible /chat/completions protocol. Onboarding and the
+// Settings key check must therefore probe the catalog protocol, not the host.
+func TestValidateKey_BedrockUsesConverseBearer(t *testing.T) {
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/model/anthropic.claude-opus-4-6-v1/converse" {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer fake-bedrock-key" {
+			t.Errorf("Authorization = %q, want Bearer fake-bedrock-key", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"output":{"message":{"role":"assistant","content":[{"text":"ok"}]}},"stopReason":"end_turn","usage":{"inputTokens":1,"outputTokens":1,"totalTokens":2}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	result := ValidateKey(context.Background(), ValidateInput{
+		ProviderID:   "amazon-bedrock",
+		ProviderName: "Amazon Bedrock",
+		BaseURL:      server.URL,
+		APIKey:       "fake-bedrock-key",
+		ProbeModels:  []string{"anthropic.claude-opus-4-6-v1"},
+	}, nil)
+
+	if result.Outcome != OutcomeValid {
+		t.Fatalf("Outcome = %q (%s), want %q; detail=%s", result.Outcome, result.Message, OutcomeValid, result.RawDetail)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want exactly one Converse probe", requests)
+	}
+}
+
 // TestValidateKey_OutcomeClassificationUnchanged — the regression this task
 // owes: the probe MODEL now comes from the catalog, and the outcome
 // CLASSIFICATION must be byte-for-byte what it was. Each row is an upstream

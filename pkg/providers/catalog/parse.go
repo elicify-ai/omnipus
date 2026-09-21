@@ -176,7 +176,7 @@ func parseResizeLimits(path string, dto *resizeLimitsDTO, inherit *ResizeLimits)
 
 func parseProtocol(s string) (Protocol, bool) {
 	switch p := Protocol(s); p {
-	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolCLI:
+	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolCLI, ProtocolBedrock:
 		return p, true
 	}
 	return "", false
@@ -213,7 +213,7 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 	} else {
 		p, ok := parseProtocol(dto.Protocol)
 		if !ok {
-			return Provider{}, invalid(path+".protocol", "%q is not one of openai-compatible|anthropic|google|ollama|cli", dto.Protocol)
+			return Provider{}, invalid(path+".protocol", "%q is not one of openai-compatible|anthropic|google|ollama|cli|bedrock", dto.Protocol)
 		}
 		protocol = p
 	}

@@ -8,10 +8,12 @@ package providers
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -260,6 +262,25 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			row.api,
 			cfg.RequestTimeout,
 		), modelID, nil
+
+	case catalog.ProtocolBedrock:
+		if err := requireKey(cfg, row); err != nil {
+			return nil, "", err
+		}
+		opts := make([]bedrock.Option, 0, 2)
+		if strings.Contains(row.api, "://") {
+			opts = append(opts, bedrock.WithBaseEndpoint(row.api))
+		} else {
+			opts = append(opts, bedrock.WithRegion(row.api))
+		}
+		if cfg.RequestTimeout > 0 {
+			opts = append(opts, bedrock.WithRequestTimeout(time.Duration(cfg.RequestTimeout)*time.Second))
+		}
+		p, err := bedrock.NewProvider(cfg.APIKey(), opts...)
+		if err != nil {
+			return nil, "", err
+		}
+		return p, modelID, nil
 
 	case catalog.ProtocolCLI:
 		p, err := NewCliProviderForKind(row.cliKind, cfg.Home, "")

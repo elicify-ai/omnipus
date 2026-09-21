@@ -804,17 +804,20 @@
       ]
     },
     {
-      "id": "bedrock",
+      "id": "amazon-bedrock",
       "name": "Amazon Bedrock",
       "company": "Amazon",
       "api": "https://bedrock-runtime.us-east-1.amazonaws.com",
-      "protocol": "openai-compatible",
-      "tier": "unsupported",
-      "unsupported_reason": "cloud-iam",
+      "protocol": "bedrock",
+      "region": "us-east-1",
+      "tier": "standard",
       "auth_methods": [
         "api_key"
       ],
-      "aliases": [],
+      "aliases": [
+        "bedrock",
+        "aws"
+      ],
       "locality": "cloud",
       "models": [
         {
