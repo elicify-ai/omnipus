@@ -13,7 +13,7 @@
 
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 
 let mockSearch: { workspace?: string; path?: string; folder?: string } = {}
 
@@ -50,6 +50,15 @@ vi.mock('@/lib/libraryHandoff', () => ({
   announceLibraryWorkspaceChanged: mockAnnounceLibraryWorkspaceChanged,
 }))
 
+// The real LibraryExplorer hosts the ONE discard-unsaved-edits ConfirmDialog
+// that answers confirmDiscardLibraryEdits() for every caller — including
+// this route's useBlocker (see unsavedGuard.ts's own doc comment: "Both
+// Library entry points ... always keep a LibraryExplorer mounted for the
+// whole time a navigation guard could fire"). The pop-out route renders
+// LibraryExplorer unconditionally (see ./library.tsx), so a realistic test
+// of the guard must mount that same dialog host rather than spy on
+// `window.confirm` — the mock below reproduces just that one piece of
+// LibraryExplorer's render tree, wired to the real unsavedGuard store.
 vi.mock('@/components/library/LibraryExplorer', () => ({
   LibraryExplorer: (props: {
     initialWorkspaceId?: string
@@ -59,12 +68,37 @@ vi.mock('@/components/library/LibraryExplorer', () => ({
     onWorkspaceChange?: (workspaceId: string | null) => void
   }) => {
     mockLibraryExplorerProps(props)
-    return <div data-testid="mock-library-explorer" />
+    return <MockLibraryExplorer />
   },
 }))
 
-import { setLibraryEditorDirty } from '@/components/library/preview/unsavedGuard'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import {
+  setLibraryEditorDirty,
+  getDiscardConfirmDialogOpen,
+  resolveDiscardConfirmDialog,
+  subscribeDiscardConfirmDialog,
+} from '@/components/library/preview/unsavedGuard'
 import { Route } from './library'
+
+function MockLibraryExplorer() {
+  const discardDialogOpen = React.useSyncExternalStore(subscribeDiscardConfirmDialog, getDiscardConfirmDialogOpen)
+  return (
+    <div data-testid="mock-library-explorer">
+      <ConfirmDialog
+        open={discardDialogOpen}
+        onOpenChange={(next) => {
+          if (!next) resolveDiscardConfirmDialog(false)
+        }}
+        title="Discard unsaved changes?"
+        description="You have unsaved changes in the Library editor. Leaving now will discard them. Continue?"
+        confirmLabel="Discard"
+        destructive
+        onConfirm={() => resolveDiscardConfirmDialog(true)}
+      />
+    </div>
+  )
+}
 
 // Route.component is the React component created by createFileRoute — cast
 // through `unknown` first (mirrors -browser-live.test.tsx's identical
@@ -310,37 +344,43 @@ describe('/library pop-out route', () => {
   // browser's back button, which is a new way to lose an unsaved edit that
   // deep-linking itself introduces. The route blocks it.
   describe('unsaved-edit guard on browser navigation', () => {
-    function shouldBlock(): boolean {
-      const [[opts]] = mockUseBlocker.mock.calls as [[{ shouldBlockFn: () => boolean }]]
+    // shouldBlockFn is now async — it awaits confirmDiscardLibraryEdits(),
+    // which opens the catalogued ConfirmDialog in place of window.confirm
+    // (see unsavedGuard.ts). Driving it means resolving the SAME real
+    // dialog MockLibraryExplorer hosts above, not spying on window.confirm.
+    function shouldBlock(): Promise<boolean> {
+      const [[opts]] = mockUseBlocker.mock.calls as [[{ shouldBlockFn: () => Promise<boolean> }]]
       return opts.shouldBlockFn()
     }
 
-    it('does not block, and does not prompt, when nothing is unsaved', () => {
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    it('does not block, and does not prompt, when nothing is unsaved', async () => {
       render(<LibraryRoute />)
 
-      expect(shouldBlock()).toBe(false)
-      expect(confirmSpy).not.toHaveBeenCalled()
-      confirmSpy.mockRestore()
+      await expect(shouldBlock()).resolves.toBe(false)
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
-    it('blocks the navigation when the Library editor has unsaved edits and the operator chooses to stay', () => {
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    it('blocks the navigation when the Library editor has unsaved edits and the operator chooses to stay', async () => {
       render(<LibraryRoute />)
       setLibraryEditorDirty(true)
 
-      expect(shouldBlock()).toBe(true)
-      expect(confirmSpy).toHaveBeenCalled()
-      confirmSpy.mockRestore()
+      const blockPromise = shouldBlock()
+      const dialog = await screen.findByRole('alertdialog')
+      expect(dialog).toHaveTextContent('Discard unsaved changes?')
+      fireEvent.click(within(dialog).getByText('Cancel'))
+
+      await expect(blockPromise).resolves.toBe(true)
     })
 
-    it('lets the navigation through once the operator agrees to discard', () => {
-      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    it('lets the navigation through once the operator agrees to discard', async () => {
       render(<LibraryRoute />)
       setLibraryEditorDirty(true)
 
-      expect(shouldBlock()).toBe(false)
-      confirmSpy.mockRestore()
+      const blockPromise = shouldBlock()
+      const dialog = await screen.findByRole('alertdialog')
+      fireEvent.click(within(dialog).getByText('Discard'))
+
+      await expect(blockPromise).resolves.toBe(false)
     })
 
     it('leaves beforeunload to unsavedGuard.ts, so a reload prompts once and not twice', () => {

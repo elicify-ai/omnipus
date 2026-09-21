@@ -33,7 +33,26 @@ vi.mock('react-shiki', () => ({
 vi.mock('@/components/chat/ChatImage', () => ({
   ChatImage: ({ src, alt }: { src: string; alt?: string }) => <img data-testid="chat-image" src={src} alt={alt} />,
 }))
-vi.mock('@/store/ui', () => ({ useUiStore: { getState: () => ({ addToast: vi.fn() }) } }))
+// LibraryImagePreview (mounted for a sized picture embed, EMB-030) reads
+// openMediaLightbox via the selector-hook call form (`useUiStore((s) =>
+// s.openMediaLightbox)`) for its full-screen button — not just `getState()`.
+// The mock must therefore be CALLABLE and apply the selector, while still
+// exposing `getState`. `vi.hoisted` (not a plain top-level const, which threw
+// "Cannot access before initialization" here — KnowledgeBaseMarkdown pulls in
+// shiki-highlighter.tsx, which imports `@/store/ui` directly, so this
+// factory can run during import evaluation, before this file's own
+// non-hoisted statements would otherwise have executed) guarantees the
+// fixtures exist before any import of `@/store/ui` is resolved.
+const { mockAddToast, mockOpenMediaLightbox } = vi.hoisted(() => ({
+  mockAddToast: vi.fn(),
+  mockOpenMediaLightbox: vi.fn(),
+}))
+vi.mock('@/store/ui', () => {
+  const store = { addToast: mockAddToast, openMediaLightbox: mockOpenMediaLightbox }
+  const useUiStore = (selector?: (s: typeof store) => unknown) => (selector ? selector(store) : store)
+  useUiStore.getState = () => store
+  return { useUiStore }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
