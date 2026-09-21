@@ -37,9 +37,10 @@ export type LLMErrorCode = GeneratedLLMError['code']
 /**
  * Generic, user-facing copy per error code. Always shown regardless of the
  * verbose-chat preference — this is the minimum a user needs to understand
- * what went wrong. The raw `message` from the wire is NOT shown in the
+ * what went wrong. Provider-originated `message` text is NOT shown in the
  * bubble (it can leak provider internals / PII); verbose mode surfaces it
- * via the "Technical details" disclosure as `detail`.
+ * via the "Technical details" disclosure as `detail`. The sole exception is
+ * the controller-only `delegated_task_limit` code described below.
  *
  * GENERATED CONTENT — re-exported from
  * `@/lib/api/generated/llm-error-messages`, which is emitted from the
@@ -90,8 +91,12 @@ export function codeToMessage(code: string | undefined): string {
 /**
  * Compute the display shape for an LLM error.
  *
- * `message` is ALWAYS the generic code→display copy (stable, user-friendly,
- * never leaks provider internals). `detail` is included ONLY when BOTH
+ * `message` is the generic code→display copy (stable, user-friendly, never
+ * leaks provider internals), except for `delegated_task_limit`. That code is
+ * emitted only by the delegation controller; its only variable fields are
+ * task label/id, child session id, and the limit that fired. Showing that
+ * controller-owned message lets an operator correlate concurrent delegated
+ * work. `detail` is included ONLY when BOTH
  * `verboseChatEnabled` is true AND `le.detail` is a non-empty string —
  * otherwise it is `undefined`, and the renderer must omit the "Technical
  * details" disclosure entirely (not just hide it).
@@ -105,7 +110,11 @@ export function getLLMErrorDisplay(
   le: { code: string; message: string; retryable: boolean; detail?: string },
   verboseChatEnabled: boolean,
 ): { message: string; detail?: string } {
-  const message = codeToMessage(le.code)
+  const delegatedLimitMessage = le.message.trim()
+  const message =
+    le.code === 'delegated_task_limit' && delegatedLimitMessage.length > 0
+      ? le.message
+      : codeToMessage(le.code)
   // Trim before the emptiness check — a whitespace-only detail carries no
   // information and would render as a blank "Technical details" disclosure.
   // Mirrors the renderer's own trim guard on `message.errorDetail`.

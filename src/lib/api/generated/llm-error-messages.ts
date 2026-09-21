@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -60,6 +60,7 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   model_unassigned: "This agent has no model. Pick one in the agent's settings.",
   turn_canceled: "This turn was stopped before it finished.",
   turn_timed_out: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details.",
+  delegated_task_limit: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed.",
   context_unrecoverable: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details.",
   context_window_unknown: "This endpoint did not report a context length for this model. Set it under Settings → Models → Model overrides → Context length.",
   unknown: "This turn didn’t finish, and we can’t tell why. Retry — if it keeps happening, open Verbose chat for details, or try a different model.",
@@ -86,6 +87,7 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   model_unassigned: "config",
   turn_canceled: "user",
   turn_timed_out: "provider",
+  delegated_task_limit: "config",
   context_unrecoverable: "product",
   context_window_unknown: "config",
   unknown: "unknown",

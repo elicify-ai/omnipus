@@ -2456,7 +2456,7 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 // EventKindError and no transcript entry, so the user saw nothing and the
 // session worker rendered the "we can't tell why" copy.
 //
-// Every typed exit produces the three SC-006 artefacts:
+// A root-turn typed exit produces the three SC-006 artefacts:
 //   - one log line carrying the typed code AND the raw cause (operator triage),
 //   - one EventKindError carrying the typed code (live wire; the deferred
 //     EventKindTurnEnd in runTurn fires on return with the status returned
@@ -2464,6 +2464,13 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 //     action and must not mark the turn failed; TurnEndStatusError for a
 //     timeout),
 //   - one transcript entry with the typed code (replay).
+//
+// A delegated child timeout is the exception: typedTurnExit records the
+// child-local transcript entry but leaves live publication to spawnSubTurn.
+// The coordinator waits until it has either disarmed the delegation timer or
+// observed its completed callback before choosing either the generic
+// child-timeout frame or the identified delegated-task-limit frame. That
+// ordering prevents a timer callback racing this exit from publishing both.
 //
 // The returned error wraps BOTH the sentinel (ErrTurnCanceled /
 // ErrTurnTimedOut) and the raw cause, so runAgentLoop / processMessage /
@@ -2493,7 +2500,13 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
+	if code == CodeTurnTimedOut && ts.parentTurnState != nil {
+		// The delegation coordinator owns live publication after it settles
+		// timer ownership. Keep the child's private terminal record here.
+		ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	} else {
+		al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
+	}
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,
@@ -2509,51 +2522,38 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 // reload re-renders it. payloadStage is the frame's Stage; transcriptStage is
 // the transcript entry's stage.
 //
-// ADR-057 FR-014: this is a WS-payload-stamping consumer of routingSessionID.
-// The frame's SessionID is ts.routingSessionID — the session a second tab or a
-// reload is attached to; a webchat ChatID alone is a dead per-connection id —
-// and the value never leaves this function. Two exits share it: typedTurnExit
-// (a turn cancelled, timed out, or out of context) and subturn.go's
-// subTurnTimedOutResult (a delegation force-cancelled at its time limit, the
-// exit a timed-out child took through typedTurnExit before the force-cancel
-// existed). Code that needs the id for any other purpose must read the field
-// itself and justify that read against the consumer-set test
-// (routing_session_id_consumer_set_adr057_test.go).
+// ADR-057 FR-014: emitErrorEvent is the WS-payload-stamping consumer of
+// routingSessionID. The frame's SessionID is the routing session a second tab
+// or reload is attached to; a webchat ChatID alone is a dead per-connection
+// id. Code that needs the id for another purpose must justify that read
+// against routing_session_id_consumer_set_adr057_test.go.
 func (al *AgentLoop) emitTurnErrorFrame(
 	ts *turnState, meta EventMeta, payloadStage, transcriptStage string, llm LLMError,
 ) {
-	al.emitTurnErrorFrameWithTranscriptPolicy(ts, meta, payloadStage, transcriptStage, llm, false)
+	al.emitErrorEvent(ts, meta, payloadStage, llm)
+	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 
-// emitDetachedTurnErrorFrame is the controller-owned variant for a child that
-// has already been marked abandoned. It preserves the same live frame shape
-// while allowing the coordinator's terminal timeout record after zombie
-// writes have been suppressed.
-func (al *AgentLoop) emitDetachedTurnErrorFrame(
-	ts *turnState, meta EventMeta, payloadStage, transcriptStage string, llm LLMError,
+// emitDelegatedTaskLimitNotice keeps publication ownership coherent by
+// deriving both destinations from sourceTS: live delivery uses the child's
+// inherited routing identity, and replay persistence walks that same child's
+// canonical parent chain to the root conversation transcript.
+func (al *AgentLoop) emitDelegatedTaskLimitNotice(
+	sourceTS *turnState, meta EventMeta, notice delegatedTaskLimitNotice,
 ) {
-	al.emitTurnErrorFrameWithTranscriptPolicy(ts, meta, payloadStage, transcriptStage, llm, true)
+	llm := notice.llmError()
+	al.emitErrorEvent(sourceTS, meta, string(notice.stage), llm)
+	rootTurnState(sourceTS).appendDelegatedTaskLimitNotice(notice)
 }
 
-func (al *AgentLoop) emitTurnErrorFrameWithTranscriptPolicy(
-	ts *turnState,
-	meta EventMeta,
-	payloadStage, transcriptStage string,
-	llm LLMError,
-	allowAbandoned bool,
-) {
+func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {
 	al.emitEvent(EventKindError, meta, ErrorPayload{
-		Stage:     payloadStage,
+		Stage:     stage,
 		ChatID:    ts.opts.ChatID,
 		Code:      string(llm.Code),
 		Message:   llm.Message,
 		SessionID: string(ts.routingSessionID),
 	})
-	if allowAbandoned {
-		ts.appendDetachedTerminalError(EventKindError.String(), transcriptStage, llm)
-		return
-	}
-	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 
 // abortTurn finalizes a hard-aborted turn. It differentiates two cases by

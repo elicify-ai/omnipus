@@ -75,10 +75,9 @@ func (b *EventBus) Unsubscribe(id uint64) {
 
 // mustNotDropEventKindTimeout bounds the RETRY WINDOW FOR THE WHOLE Emit CALL
 // (not per-subscriber — see the shared deadline in Emit) that
-// EventKindSubTurnSpawn/EventKindSubTurnEnd get when a subscriber's channel is
-// full. Emit runs synchronously on the caller's own goroutine — for these two
-// kinds that caller is the agent turn that just spawned/finished a sub-turn
-// (see subturn.go) — so this cannot be long or unbounded: a slow, or
+// state-critical one-shot events get when a subscriber's channel is full.
+// Emit runs synchronously on the caller's own goroutine, so this cannot be
+// long or unbounded: a slow, or
 // disconnected-but-not-yet-cleaned-up, WebSocket subscriber must never be
 // able to stall a live turn. A low-hundreds-of-ms budget is enough for the
 // forwarder goroutine to catch up on a transient burst without risking a
@@ -89,13 +88,11 @@ const mustNotDropEventKindTimeout = 250 * time.Millisecond
 
 // Emit broadcasts an event to all current subscribers. Most event kinds are
 // best-effort: a full subscriber channel drops the event for that subscriber
-// with no retry. EventKindSubTurnSpawn/EventKindSubTurnEnd (see
-// mustNotDropEventKind) instead get one bounded blocking retry, because
-// nothing else ever resends them — a dropped spawn permanently leaves that
-// subagent's later tool-call activity rendering flat in the SPA with no
-// "spawned agent" card until the session is replayed from disk (2026-07-31
-// burst-drop UAT finding: 24 concurrent delegate calls overflowed a
-// subscriber buffer well within its capacity to eventually drain).
+// with no retry. mustNotDropEvent identifies one-shot events that instead get
+// one bounded blocking retry, because nothing else resends them live. This
+// includes sub-turn span boundaries and identified delegated-task limit
+// notices; losing either leaves the live SPA incomplete until transcript
+// replay.
 //
 // The retry itself happens OUTSIDE b.mu (2026-07-31 review finding): holding
 // RLock across a blocking per-subscriber wait would block any pending
@@ -113,6 +110,7 @@ func (b *EventBus) Emit(evt Event) {
 	if evt.Time.IsZero() {
 		evt.Time = time.Now()
 	}
+	mustRetry := mustNotDropEvent(evt)
 
 	b.mu.RLock()
 	if b.closed {
@@ -122,14 +120,14 @@ func (b *EventBus) Emit(evt Event) {
 		// straggling sub-turn's deferred cleanup racing AgentLoop.Close) must
 		// still be observable rather than vanishing with zero trace — the
 		// same "must be observable" invariant as every other drop path below.
-		if mustNotDropEventKind(evt.Kind) {
+		if mustRetry {
 			if evt.Kind < eventKindCount {
 				b.dropped[evt.Kind].Add(1)
 			}
 			logger.WarnCF(
 				"eventbus",
 				"dropped must-not-drop event: bus already closed",
-				map[string]any{"event_kind": evt.Kind},
+				eventDropDetails(evt),
 			)
 		}
 		return
@@ -146,11 +144,11 @@ func (b *EventBus) Emit(evt Event) {
 			continue
 		default:
 		}
-		if mustNotDropEventKind(evt.Kind) {
+		if mustRetry {
 			needsRetry = append(needsRetry, pendingRetry(sub))
 			continue
 		}
-		b.recordDrop(evt.Kind)
+		b.recordDrop(evt)
 	}
 	b.mu.RUnlock()
 
@@ -167,7 +165,7 @@ func (b *EventBus) Emit(evt Event) {
 		if trySendUntil(p.ch, evt, deadline) {
 			continue
 		}
-		b.recordDrop(evt.Kind)
+		b.recordDrop(evt)
 	}
 }
 
@@ -196,47 +194,63 @@ func trySendUntil(ch chan Event, evt Event, deadline time.Time) (delivered bool)
 // design, so a drop is debug-level. State-critical kinds (see
 // isStateCriticalEventKind) are low-frequency and a drop leaves the SPA
 // showing stale state until the next refresh, so surface those at warn.
-// mustNotDropEventKind kinds reach here only after the bounded blocking
+// mustNotDropEvent events reach here only after the bounded blocking
 // retry in Emit also failed, so they always warn too — same "must be
 // observable" reasoning as isStateCriticalEventKind, but the retry means the
 // buffer was full for a sustained period, not just a single instant.
-func (b *EventBus) recordDrop(kind EventKind) {
+func (b *EventBus) recordDrop(evt Event) {
+	kind := evt.Kind
 	if kind < eventKindCount {
 		b.dropped[kind].Add(1)
 	}
 	switch {
-	case mustNotDropEventKind(kind):
+	case mustNotDropEvent(evt):
 		logger.WarnCF(
 			"eventbus",
 			"dropped must-not-drop event after bounded blocking retry (subscriber buffer still full)",
-			map[string]any{"event_kind": kind},
+			eventDropDetails(evt),
 		)
 	case isStateCriticalEventKind(kind):
 		logger.WarnCF(
 			"eventbus",
 			"dropped state-critical event frame (subscriber buffer full); SPA may show stale state until refresh",
-			map[string]any{"event_kind": kind},
+			eventDropDetails(evt),
 		)
 	default:
 		logger.DebugCF(
 			"eventbus",
 			"event dropped, subscriber buffer full",
-			map[string]any{"event_kind": kind},
+			eventDropDetails(evt),
 		)
 	}
 }
 
-// mustNotDropEventKind reports whether Emit should give an event a bounded
+func eventDropDetails(evt Event) map[string]any {
+	details := map[string]any{"event_kind": evt.Kind}
+	if payload, ok := evt.Payload.(ErrorPayload); ok && payload.Code != "" {
+		details["error_code"] = payload.Code
+	}
+	return details
+}
+
+// mustNotDropEvent reports whether Emit should give an event a bounded
 // blocking retry (mustNotDropEventKindTimeout) before dropping it on a full
 // subscriber channel:
 //   - EventKindSubTurnSpawn / EventKindSubTurnEnd: the one-shot announcement
 //     that opens/closes a subagent's span in the SPA (FR-H-004). Unlike
 //     high-frequency kinds (tool exec, LLM deltas), losing one isn't just a
 //     missed intermediate update — there is no later event that repeats it.
-func mustNotDropEventKind(kind EventKind) bool {
-	switch kind {
+//   - EventKindError carrying CodeDelegatedTaskLimit: the sole identified
+//     operator notice for a delegated task's timeout or iteration limit. It
+//     is payload-specific so ordinary error events retain their existing
+//     best-effort behavior.
+func mustNotDropEvent(evt Event) bool {
+	switch evt.Kind {
 	case EventKindSubTurnSpawn, EventKindSubTurnEnd:
 		return true
+	case EventKindError:
+		payload, ok := evt.Payload.(ErrorPayload)
+		return ok && payload.Code == string(CodeDelegatedTaskLimit)
 	default:
 		return false
 	}
