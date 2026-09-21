@@ -42,9 +42,16 @@ const workspaceStreamingThreshold = 1 << 20 // 1,048,576 bytes
 //
 // Directives:
 //   - default-src 'none' — deny everything by default
-//   - script-src 'unsafe-inline' — permit inline scripts in HTML artifacts
-//   - style-src 'unsafe-inline' — permit inline CSS
+//   - script-src 'self' 'unsafe-inline' — permit static bundles served by the
+//     preview plus inline scripts in HTML artifacts; third-party scripts remain
+//     blocked
+//   - worker-src 'none' — keep workers blocked rather than letting worker-src
+//     fall back to the newly widened script-src directive
+//   - style-src 'self' 'unsafe-inline' — permit linked stylesheets served by
+//     the preview plus inline CSS; third-party stylesheets remain blocked
 //   - img-src 'self' data: blob: — images from same origin + data URIs
+//   - font-src 'self' — permit self-hosted fonts used by static exports;
+//     third-party font hosts and data URIs remain blocked
 //   - connect-src 'self' — hydrated SPA builds (Vite, Next.js exports)
 //     can fetch their own /data.json; external network blocked. Changed
 //     from 'none' in CR-01 / FR-007c.
@@ -67,8 +74,9 @@ func buildWorkspaceCSP(mainOrigin string) string {
 	if mainOrigin != "" {
 		frameAncestors = mainOrigin
 	}
-	return "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
-		"img-src 'self' data: blob:; connect-src 'self'; form-action 'self'; " +
+	return "default-src 'none'; script-src 'self' 'unsafe-inline'; worker-src 'none'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; form-action 'self'; " +
 		"frame-ancestors " + frameAncestors + "; base-uri 'none'; object-src 'none'"
 }
 
