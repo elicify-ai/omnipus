@@ -692,15 +692,7 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 			// when present, else the row's existing one).
 			persistedRegion := p.reqRegion
 			if persistedRegion == "" {
-				for _, m := range p.cfg.Providers {
-					if m.IsVirtual() {
-						continue
-					}
-					if strings.TrimSpace(m.Provider) == p.providerID {
-						persistedRegion = m.Region
-						break
-					}
-				}
+				persistedRegion = resolveBedrockPersistedRegion(p)
 			}
 			resolvedBase, resolvedModels, originalByResolved, rerr := bedrockProbeRegionResolution(
 				catRow, persistedRegion, explicitAPIBase, a.bedrockRuntimeBaseOverride, probeModels)

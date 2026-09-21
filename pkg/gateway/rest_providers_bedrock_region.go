@@ -23,6 +23,7 @@ package gateway
 import (
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
@@ -49,13 +50,37 @@ func (a *restAPI) refreshBedrockInferenceProfilesIfNeeded(p *providerPut) {
 	if apiKey == "" {
 		return
 	}
-	region := p.reqRegion
-	if region == "" {
-		region = row.Region
+	// Orchestrator review round 3 (issue #800 D1 gap): this used to fall
+	// straight from p.reqRegion to row.Region (the CATALOG default) on a
+	// key-only PUT — skipping the row's own PERSISTED region entirely, so a
+	// key-only edit on a row already saved as eu-central-1 refreshed and
+	// PERSISTED the us-east-1 profiles as that row's live cache. Required
+	// precedence, matching factory_provider.go's real-turn resolution
+	// exactly: request region -> the row's PERSISTED region
+	// (resolveBedrockPersistedRegion, same lookup style
+	// resolveBedrockRefreshAPIKey already uses) -> AWS_REGION -> catalog
+	// default — via bedrock.ResolveRegion, never a second copy of that
+	// precedence logic.
+	requestOrPersisted := p.reqRegion
+	if requestOrPersisted == "" {
+		requestOrPersisted = resolveBedrockPersistedRegion(p)
 	}
+	region := bedrock.ResolveRegion(requestOrPersisted, os.Getenv("AWS_REGION"), row.Region)
 
+	// Test-only: bedrockControlPlaneBaseOverride is a flat URL
+	// (httptest.Server) with no per-region host of its own — an
+	// httptest.Server's host cannot BE bedrock.<region>.amazonaws.com.
+	// Suffixing the region onto it lets a test's fake server observe which
+	// region a refresh actually targeted via the request PATH, the same
+	// pattern bedrockRuntimeBaseOverride uses for the probe paths (D1).
+	// Empty in every production path, where ListInferenceProfiles derives
+	// the real bedrock.ControlPlaneEndpoint(region) itself.
+	baseOverride := a.bedrockControlPlaneBaseOverride
+	if baseOverride != "" {
+		baseOverride = strings.TrimRight(baseOverride, "/") + "/" + region
+	}
 	profiles, err := bedrock.ListInferenceProfiles(
-		p.r.Context(), a.bedrockControlPlaneHTTPClient(), apiKey, region, a.bedrockControlPlaneBaseOverride,
+		p.r.Context(), a.bedrockControlPlaneHTTPClient(), apiKey, region, baseOverride,
 	)
 	if err != nil {
 		slog.Warn("rest: bedrock ListInferenceProfiles lookup failed; "+

@@ -32,6 +32,28 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
+// resolveBedrockPersistedRegion returns a Bedrock row's EXISTING persisted
+// region from the PRE-PUT config snapshot (p.cfg) — same lookup style as
+// resolveBedrockRefreshAPIKey (rest_providers_bedrock_region.go), which this
+// mirrors on purpose: a request that carries no region field of its own (a
+// key-only edit) still resolves the row's ACTUAL configured region, never
+// silently falling straight through to AWS_REGION or the catalog default.
+//
+// Shared by providerPutValidateKey's save-time key check (D1, round 2) and
+// refreshBedrockInferenceProfilesIfNeeded's live-profile-cache refresh (D1
+// gap, round 3) so this lookup is written once, not duplicated per caller.
+// Returns "" when the row is not found (a brand-new row this same PUT is
+// creating has nothing persisted yet).
+func resolveBedrockPersistedRegion(p *providerPut) string {
+	for _, m := range p.cfg.Providers {
+		if m.IsVirtual() || strings.TrimSpace(m.Provider) != p.providerID {
+			continue
+		}
+		return m.Region
+	}
+	return ""
+}
+
 // bedrockRegionsRow reports whether row is a Bedrock-protocol catalog row
 // with its own region picker — the ONE gate every Bedrock-probe branch
 // below checks first, matching the Bedrock region contract's "ignored for a

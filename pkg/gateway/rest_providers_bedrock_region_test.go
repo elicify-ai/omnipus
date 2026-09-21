@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,6 +228,72 @@ func TestRestProviders_PUT_RegionChange_RefreshesLiveInferenceProfileCache(t *te
 	require.True(t, ok, "bedrock_inference_profiles must be persisted: %#v", persisted)
 	assert.Equal(t, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		profiles["anthropic.claude-sonnet-4-5-20250929-v1:0"])
+}
+
+// TestRefreshBedrockInferenceProfilesIfNeeded_KeyOnlyPUT_UsesPersistedRegion
+// is orchestrator review round 3 (issue #800): a KEY-ONLY PUT (api_key
+// changed, no region field of its own) on a row already persisted with
+// region eu-central-1 fell back to row.Region — the CATALOG's us-east-1
+// default — and PERSISTED the us-east-1 profiles as that row's live cache.
+// A later real turn in eu-central-1 (factory_provider.go's ResolveModelIDLive)
+// would then read a us.* profile id for a request actually going to
+// eu-central-1 and fail. Required precedence, matching factory_provider.go's
+// real-turn resolution exactly: request region -> the row's PERSISTED region
+// (p.cfg, same lookup style as resolveBedrockRefreshAPIKey) -> AWS_REGION ->
+// catalog default, via bedrock.ResolveRegion (no second copy of that logic).
+func TestRefreshBedrockInferenceProfilesIfNeeded_KeyOnlyPUT_UsesPersistedRegion(t *testing.T) {
+	api, store := newBedrockAPIWithCredStore(t)
+	require.NoError(t, store.Set("T800_R3_KEY", "existing-key"))
+	seedProviderConfig(t, api, map[string]any{
+		"provider": "amazon-bedrock", "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		"api_key_ref": "T800_R3_KEY", "region": "eu-central-1",
+	})
+
+	// The control-plane override is per-region-suffixed (mirrors
+	// bedrockRuntimeBaseOverride's D1 pattern) so this fake server's request
+	// PATH reveals which region ListInferenceProfiles actually targeted —
+	// an httptest.Server's own host cannot BE a per-region AWS DNS name.
+	var gotPath string
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"inferenceProfileSummaries": [
+				{
+					"inferenceProfileId": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+					"models": [{"modelArn": "arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"}]
+				}
+			]
+		}`))
+	}))
+	defer controlPlane.Close()
+	api.bedrockControlPlaneBaseOverride = controlPlane.URL
+
+	// The PUT's OWN key-validation probe (D1, round 2) must also reach a
+	// fake server rather than real AWS — this test is about the SEPARATE
+	// live-profile-cache refresh trigger, not the save-time key check.
+	runtimeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(bedrockConverseOKBody))
+	}))
+	defer runtimeSrv.Close()
+	api.bedrockRuntimeBaseOverride = runtimeSrv.URL
+
+	// KEY-ONLY PUT: api_key changes, region field is absent entirely.
+	w := doPutProvider(t, api, "amazon-bedrock",
+		`{"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","api_key":"sk-new-key-r3"}`)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	require.NotEmpty(t, gotPath, "the control-plane call must have been made")
+	assert.True(t, strings.HasPrefix(gotPath, "/eu-central-1"),
+		"a key-only PUT on a row persisted with eu-central-1 must refresh THAT region, not the catalog's us-east-1 default; got path=%s", gotPath)
+
+	persisted := persistedProviderRow(t, api, "amazon-bedrock")
+	profiles, ok := persisted["bedrock_inference_profiles"].(map[string]any)
+	require.True(t, ok, "bedrock_inference_profiles must be persisted: %#v", persisted)
+	assert.Equal(t, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		profiles["anthropic.claude-sonnet-4-5-20250929-v1:0"],
+		"the persisted cache must hold EU profiles, never the catalog-default region's")
 }
 
 func TestRestProviders_PUT_RegionChange_LookupForbidden_DegradesSilently(t *testing.T) {
