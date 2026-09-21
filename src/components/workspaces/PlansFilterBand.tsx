@@ -273,15 +273,9 @@ function PlanFilterTile({
       title={plan.title}
       className={cn(
         TILE_SIZE,
-        'group relative border-l-2 border-l-[var(--color-accent)]/40 p-[var(--space-2-5)] transition-colors',
-        // The bare border-color class below must stay in THIS same cn() call
-        // (not dropped as "supplied by the variant already"): tailwind-merge
-        // only drops the border-l-* override when a later bare border-color
-        // class appears in the SAME merge pass. Card's own outer
-        // cn(cardVariants, className) merge runs afterward and doesn't
-        // re-trigger that same-pass drop, so omitting it here would let the
-        // left accent rail become visible for the first time — a real pixel
-        // diff from the pre-Card markup, not a parity-preserving refactor.
+        'group relative p-[var(--space-2-5)] transition-colors',
+        // Selection is carried by the gold border + ring alone: gold marks the
+        // active tile, so no tile carries a decorative accent in its resting state.
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
