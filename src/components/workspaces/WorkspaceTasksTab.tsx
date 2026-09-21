@@ -274,7 +274,26 @@ export function WorkspaceTasksTab({ workspaceId }: WorkspaceTasksTabProps) {
           replaces "Team Task Backlog" when a plan filter is active — ADR-051
           D2, Visibility of System Status) + the Board/List/Graph switcher +
           filters + a minimalist "+ New Task" link, over a thin separator. */}
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-[var(--space-2-5)] px-[var(--space-4)] pt-[var(--space-4)] pb-[var(--space-2-5)] flex-shrink-0">
+      {/* Phone-width fix (spec defect 2, docs/internal/design/components/zoomable-view.md
+          §"Defects this component must fix"): the single-row 3-column grid
+          (`1fr auto 1fr`) let the CENTER track (Agent/Tag filters, `auto`-sized
+          off its own content) claim whatever width it wanted before the two
+          `1fr` side tracks split what was left EQUALLY — at 390px the LEFT
+          track was squeezed to ~72px while the heading + non-shrinking
+          ViewSwitcher (`flex-shrink-0`, ~180px minimum) needed far more, so it
+          overflowed past its own track boundary into the CENTER track's paint
+          area. CENTER paints after LEFT in DOM order, so — the same "later
+          sibling wins the overlap" failure this skill's rule #12 documents for
+          touch hit-regions — a tap on the visually-peeking-through "Graph" tab
+          actually hit the Agent filter button underneath it. Reproduced with
+          Playwright at 390px: `document.elementFromPoint` at the Graph tab's
+          own rendered center resolved to `[data-testid="tasks-agent-filter"]`.
+          Below `md` (768px, this repo's phone/tablet boundary) each of the
+          three groups below gets the FULL row width and they stack instead of
+          sharing one squeezed row, so no group's minimum content size can ever
+          exceed what's available; `md:`+ is byte-for-byte the original
+          single-row grid, unchanged. */}
+      <div className="flex flex-col gap-[var(--space-2)] md:grid md:grid-cols-[1fr_auto_1fr] md:items-center md:gap-[var(--space-2-5)] px-[var(--space-4)] pt-[var(--space-4)] pb-[var(--space-2-5)] flex-shrink-0">
         {/* Left: dynamic heading + the flat Board/List/Graph view switcher. */}
         <div className="flex min-w-0 items-center gap-[var(--space-3)]">
           <div className="flex min-w-0 items-center gap-[var(--space-1)]" data-testid="tasks-heading">

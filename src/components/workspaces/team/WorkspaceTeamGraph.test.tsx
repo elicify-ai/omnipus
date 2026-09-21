@@ -66,6 +66,15 @@ beforeAll(() => {
   }
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+  // The canvas-frame measurement the mini-map visibility check reads (this
+  // canvas's own ResizeObserver-on-canvasDomRef effect) uses
+  // clientWidth/clientHeight, not offsetWidth/offsetHeight — jsdom defaults
+  // both to 0, which would make every test's "frame" 0x0 and the mini-map
+  // show unconditionally. Stubbed to a generously large frame so the DEFAULT
+  // across this file is "no mini-map"; the dedicated mini-map test below
+  // shrinks it back down.
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, value: 800 })
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: 600 })
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
     x: 0, y: 0, width: 220, height: 92, top: 0, left: 0, right: 220, bottom: 92, toJSON: () => ({}),
   } as DOMRect)
@@ -154,9 +163,93 @@ describe('WorkspaceTeamGraph — nodes', () => {
     expect(container.querySelector('[data-testid="team-graph-canvas"]')).not.toBeNull()
   })
 
-  it('renders the canvas with controls', () => {
-    renderGraph()
+  it('renders the canvas with the shared ZoomPill (not React Flow\'s own <Controls>)', () => {
+    const { container } = renderGraph()
     expect(screen.getByTestId('team-graph-canvas')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-zoom-out')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-percent')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-zoom-in')).toBeInTheDocument()
+    expect(container.querySelector('.react-flow__controls')).toBeNull()
+  })
+})
+
+// ── ZoomableView canvas migration (C3 phase 2, D18) ─────────────────────────
+describe('WorkspaceTeamGraph — the shared ZoomPill replaces React Flow\'s own <Controls>', () => {
+  it('the percent menu offers Fit and 100% (no Zoom-to-selection assumption baked in beyond what the shared hook always returns)', async () => {
+    renderGraph()
+    const user = userEvent.setup()
+
+    await user.click(screen.getByTestId('zoomable-view-percent'))
+
+    expect(screen.getByTestId('zoomable-view-menu-fit')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-menu-100')).toBeInTheDocument()
+  })
+
+  it('clicking zoom-in moves the reported percentage up from its starting value', async () => {
+    renderGraph()
+    const user = userEvent.setup()
+    const readPercent = () =>
+      Number(screen.getByTestId('zoomable-view-percent').textContent?.replace('%', ''))
+    const before = readPercent()
+
+    await user.click(screen.getByTestId('zoomable-view-zoom-in'))
+
+    expect(readPercent()).toBeGreaterThan(before)
+  })
+})
+
+// ── Mini-map shows only when content exceeds the frame (D18) ───────────────
+// The team graph previously had NO mini-map at all — this is new coverage,
+// not a migration of an old assertion.
+describe('WorkspaceTeamGraph — mini-map shows only when content exceeds the frame (D18)', () => {
+  it('renders no mini-map inside the generously-sized default frame', () => {
+    const { container } = renderGraph()
+    expect(container.querySelector('.react-flow__minimap')).toBeNull()
+  })
+
+  it('renders the mini-map once the frame is smaller than the content', () => {
+    const prevWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')!
+    const prevHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')!
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, value: 5 })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: 5 })
+    try {
+      const { container } = renderGraph()
+      expect(container.querySelector('.react-flow__minimap')).not.toBeNull()
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', prevWidth)
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', prevHeight)
+    }
+  })
+})
+
+// ── Zoom keyboard shortcuts do not hijack the depth editor (regression) ────
+// EdgeModeEditor.tsx's depth field is a real `<input type="number">` where a
+// user legitimately types "0" or "1" — D18's `+ − 0 1` shortcuts must not
+// fire while that field is focused. WorkspaceTeamGraph.tsx's
+// `handleCanvasKeyDown` guards every canvas keydown with
+// `target.closest('input, textarea, select, [contenteditable="true"]')`
+// before running the shortcut. The real depth input's own edge-label DOM
+// never paints in this jsdom harness (see the "edges" describe block above:
+// "React Flow only paints individual edge label DOM after nodes are
+// measured, which jsdom does not do" — that interaction is covered instead
+// by EdgeModeEditor.test.tsx), so this proves the CANVAS-LEVEL guard itself
+// against a real `<input>` placed inside the canvas, rather than depending on
+// DOM this harness cannot render.
+describe('WorkspaceTeamGraph — zoom keyboard shortcuts do not hijack typing in an editable field', () => {
+  it('a digit keydown on a real <input> inside the canvas does not change the reported zoom percent', () => {
+    const { container } = renderGraph()
+    const readPercent = () =>
+      Number(screen.getByTestId('zoomable-view-percent').textContent?.replace('%', ''))
+    const before = readPercent()
+
+    const input = document.createElement('input')
+    input.setAttribute('type', 'number')
+    container.querySelector('[data-testid="team-graph-canvas"]')!.appendChild(input)
+
+    fireEvent.keyDown(input, { key: '1' })
+
+    expect(readPercent()).toBe(before)
+    input.remove()
   })
 })
 

@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   ReactFlow,
   ReactFlowProvider,
-  Controls,
+  MiniMap,
+  Panel,
   Handle,
   Position,
   MarkerType,
@@ -11,6 +12,7 @@ import {
   getBezierPath,
   applyNodeChanges,
   useConnection,
+  useReactFlow,
   type Node,
   type Edge,
   type Connection,
@@ -30,6 +32,12 @@ import { cn, initialOf } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import { AgentDelegatePicker } from './AgentDelegatePicker'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
+import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
+import {
+  contentExceedsFrame,
+  useZoomableCanvasPill,
+  zoomableCanvasFlowProps,
+} from '@/components/ui/zoomable-view-canvas'
 import {
   validateConnection,
   rejectionMessageForFailedConnection,
@@ -620,11 +628,55 @@ function WorkspaceTeamGraphInner({
   const [flowNodes, setFlowNodes] = useState<AgentFlowNode[]>(modelNodes)
   const draggedPositions = useRef<Record<string, { x: number; y: number }>>({})
 
-  // React Flow renders the <Controls> zoom/fit buttons itself — no JSX site
-  // here can carry the repo's explicit-tabIndex convention, so stamp them
-  // post-render (WebKit Tab reachability; see useLibraryTabIndex).
+  // The zoom pill's own buttons (ZoomPill, catalogued Button/IconButton) stamp
+  // an explicit tabIndex in their own JSX — useLibraryTabIndex is no longer
+  // needed for them. It stays wired for React Flow's own attribution
+  // `<a href>` link, the one remaining library-rendered interactive element
+  // (WebKit Tab reachability; see useLibraryTabIndex).
   const canvasDomRef = useRef<HTMLDivElement>(null)
   useLibraryTabIndex(canvasDomRef)
+
+  // ZoomableView canvas preset (D18, docs/internal/design/components/zoomable-view.md)
+  // — same wiring as GraphView (graph/GraphView.tsx): the shared ZoomPill
+  // driven by this live React Flow instance, `+ − 0 1` keyboard shortcuts
+  // guarded against the delegation-depth number input (EdgeModeEditor.tsx)
+  // so typing "0"/"1" there never gets hijacked into a zoom action, and the
+  // mini-map shown only when content exceeds the frame.
+  const { getNodesBounds } = useReactFlow<AgentFlowNode>()
+  const teamFitViewOptions = useMemo(() => ({ padding: 0.25, maxZoom: 1.1 }), [])
+  const pill = useZoomableCanvasPill({ fitViewOptions: teamFitViewOptions })
+  const zoomKeyboard = useZoomableViewKeyboard({
+    onZoomIn: pill.onZoomIn,
+    onZoomOut: pill.onZoomOut,
+    onFit: pill.onFit,
+    onZoomTo100: pill.onZoomTo100,
+  })
+  const handleCanvasKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      if (target.closest('input, textarea, select, [contenteditable="true"]')) return
+      zoomKeyboard(event)
+    },
+    [zoomKeyboard],
+  )
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const el = canvasDomRef.current
+    if (!el) return undefined
+    const measure = () => setFrameSize({ width: el.clientWidth, height: el.clientHeight })
+    measure()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  const contentBounds = getNodesBounds(flowNodes)
+  const showMinimap =
+    frameSize != null &&
+    contentExceedsFrame(
+      { width: contentBounds.width * pill.zoom, height: contentBounds.height * pill.zoom },
+      frameSize,
+    )
 
   useEffect(() => {
     setFlowNodes(
@@ -677,6 +729,7 @@ function WorkspaceTeamGraphInner({
       ref={canvasDomRef}
       data-testid="team-graph-canvas"
       className="h-full w-full bg-[var(--color-surface-0)]"
+      onKeyDown={handleCanvasKeyDown}
     >
       <TeamGraphCanvasContext.Provider value={canvasContextValue}>
         <ReactFlow
@@ -700,16 +753,17 @@ function WorkspaceTeamGraphInner({
           // the duplicate outer stop, without touching drag/connect/select.
           nodesFocusable={false}
           elementsSelectable
+          {...zoomableCanvasFlowProps}
           fitView
-          fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
+          fitViewOptions={teamFitViewOptions}
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{ type: 'delegation' }}
           colorMode="dark"
         >
-          <Controls
-            showInteractive={false}
-            className="!border-[var(--color-border)] !bg-[var(--color-surface-1)]"
-          />
+          <Panel position="bottom-left">
+            <ZoomPill {...pill} aria-label="Zoom team graph" />
+          </Panel>
+          {showMinimap && <MiniMap pannable zoomable className="!bottom-4 !right-4" />}
         </ReactFlow>
       </TeamGraphCanvasContext.Provider>
     </div>

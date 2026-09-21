@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, type RenderResult } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import type { Task } from '@/lib/api'
@@ -35,12 +36,13 @@ const capturedNodesCalls: Node[][] = []
 // edges" describe block below).
 const capturedEdgesCalls: Edge[][] = []
 // Every `fitView(options)` call made through `useReactFlow()` — including
-// GraphView's own S2-fix re-fit effect AND the <Controls> "fit view" button
-// (both go through this same hook) — recorded here so the re-fit tests below
-// can assert WHEN a re-fit happened without needing real React Flow pixel
-// measurement (jsdom has none — see the file-level comment above). Wraps the
-// REAL `useReactFlow`/`fitView` rather than replacing it outright, so
-// `<Controls>`'s own internal `useReactFlow()` call keeps working.
+// GraphView's own S2-fix re-fit effect AND the shared ZoomPill's Fit action
+// (useZoomableCanvasPill, zoomable-view-canvas.tsx — both go through this
+// same hook) — recorded here so the re-fit tests below can assert WHEN a
+// re-fit happened without needing real React Flow pixel measurement (jsdom
+// has none — see the file-level comment above). Wraps the REAL
+// `useReactFlow`/`fitView` rather than replacing it outright, so the
+// ZoomPill's own internal `useReactFlow()` call keeps working.
 const fitViewCalls: unknown[] = []
 vi.mock('@xyflow/react', async () => {
   const actual = await vi.importActual<typeof import('@xyflow/react')>('@xyflow/react')
@@ -83,6 +85,15 @@ beforeAll(() => {
   }
   Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 600 })
+  // The canvas-frame measurement the mini-map visibility check reads
+  // (GraphView's own ResizeObserver-on-canvasRef effect, mirroring
+  // ZoomableMediaSurface's frame measurement) uses clientWidth/clientHeight,
+  // not offsetWidth/offsetHeight — jsdom defaults both to 0, which would make
+  // every test's "frame" 0x0 and the mini-map show unconditionally. Stubbed
+  // to a generously large frame here so the DEFAULT across this file is "no
+  // mini-map"; the one test that asserts the opposite shrinks it back down.
+  Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, value: 800 })
+  Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: 600 })
   // React Flow measures node bounding boxes; give them a size.
   if (!Element.prototype.getBoundingClientRect) return
   vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -493,5 +504,95 @@ describe('GraphView — unlinked-count notice (S3 UAT fix #9)', () => {
     expect(screen.queryByText('No tasks yet')).toBeNull()
     expect(screen.getByText('No dependencies to graph yet')).toBeInTheDocument()
     expect(screen.getByText(/not in a plan and not linked by a dependency/)).toBeInTheDocument()
+  })
+})
+
+// ── ZoomableView canvas migration (C3 phase 2, D18) ─────────────────────────
+// GraphView no longer renders React Flow's own <Controls> — it renders the
+// shared ZoomPill (zoomableCanvasFlowProps + useZoomableCanvasPill,
+// zoomable-view-canvas.tsx) wired to this same live instance instead. These
+// tests replace the old (never-written) assumption that <Controls> was the
+// zoom UI: they assert the NEW pill is what's actually on the canvas, and
+// that the old control bar is gone.
+describe('GraphView — the shared ZoomPill replaces React Flow\'s own <Controls>', () => {
+  it('renders the ZoomPill (zoom out / percent menu / zoom in) and no React-Flow-native control bar', () => {
+    const tasks = [makeTask({ id: 'a' })]
+    const { container } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+
+    expect(screen.getByTestId('zoomable-view-zoom-out')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-percent')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-zoom-in')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-percent')).toHaveTextContent(/^\d+%$/)
+    // The old React-Flow-native control bar (<Controls>) is gone entirely.
+    expect(container.querySelector('.react-flow__controls')).toBeNull()
+  })
+
+  it('the percent menu offers Fit, 100%, and Zoom to selection (D18: graphs get the selection action)', async () => {
+    const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })]
+    renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+    const user = userEvent.setup()
+
+    await user.click(screen.getByTestId('zoomable-view-percent'))
+
+    expect(screen.getByTestId('zoomable-view-menu-fit')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-menu-100')).toBeInTheDocument()
+    expect(screen.getByTestId('zoomable-view-menu-selection')).toBeInTheDocument()
+  })
+
+  it('clicking Fit in the pill menu re-fits with GraphView\'s own tuned options — the SAME object the opening fitView prop uses (D18: "Fit reproduces the opening frame identically")', async () => {
+    const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })]
+    renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+    const user = userEvent.setup()
+    const callsBefore = fitViewCalls.length
+
+    await user.click(screen.getByTestId('zoomable-view-percent'))
+    await user.click(screen.getByTestId('zoomable-view-menu-fit'))
+
+    expect(fitViewCalls.length).toBeGreaterThan(callsBefore)
+    expect(fitViewCalls[fitViewCalls.length - 1]).toMatchObject({ padding: 0.25, maxZoom: 1.1, minZoom: 0.8 })
+  })
+
+  it('clicking zoom-in moves the reported percentage up from its starting value', async () => {
+    const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })]
+    renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+    const user = userEvent.setup()
+    const readPercent = () =>
+      Number(screen.getByTestId('zoomable-view-percent').textContent?.replace('%', ''))
+    const before = readPercent()
+
+    await user.click(screen.getByTestId('zoomable-view-zoom-in'))
+
+    expect(readPercent()).toBeGreaterThan(before)
+  })
+})
+
+// ── Mini-map shows only when content exceeds the frame (D18) ───────────────
+// Frame size comes from a ResizeObserver on the canvas wrapper reading
+// clientWidth/clientHeight (see the file-level clientWidth/clientHeight stub
+// above — jsdom's real default is 0x0, which the beforeAll block overrides to
+// a generously large 800x600 "frame" so every OTHER test in this file gets
+// the "no mini-map" default without having to think about it).
+describe('GraphView — mini-map shows only when content exceeds the frame (D18)', () => {
+  it('renders no mini-map for a small graph inside the generously-sized default frame', () => {
+    const tasks = [makeTask({ id: 'a' })]
+    const { container } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+
+    expect(container.querySelector('.react-flow__minimap')).toBeNull()
+  })
+
+  it('renders the mini-map once the frame is smaller than the content', () => {
+    const prevWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth')!
+    const prevHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')!
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, value: 5 })
+    Object.defineProperty(HTMLElement.prototype, 'clientHeight', { configurable: true, value: 5 })
+    try {
+      const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })]
+      const { container } = renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
+
+      expect(container.querySelector('.react-flow__minimap')).not.toBeNull()
+    } finally {
+      Object.defineProperty(HTMLElement.prototype, 'clientWidth', prevWidth)
+      Object.defineProperty(HTMLElement.prototype, 'clientHeight', prevHeight)
+    }
   })
 })
