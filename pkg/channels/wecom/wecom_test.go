@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,126 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/media"
 )
+
+type recordingCancelInterceptor struct {
+	calls int
+}
+
+func (r *recordingCancelInterceptor) RequestCancelByChannelChat(
+	context.Context,
+	string,
+	string,
+	string,
+) (bool, bool, error) {
+	r.calls++
+	return true, false, nil
+}
+
+func TestDispatchIncoming_DeniedSenderHasNoSideEffects(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+
+	const secretRef = "WECOM_TEST_SECRET"
+	bundle := credentials.SecretBundle{
+		credentials.SecretRef(secretRef): "secret-1",
+	}
+	ch, err := NewChannel(config.WeComConfig{
+		BotID:     "bot-1",
+		SecretRef: secretRef,
+		AllowFrom: []string{"allowed-user"},
+	}, bundle, messageBus)
+	if err != nil {
+		t.Fatalf("NewChannel() error = %v", err)
+	}
+	ch.ctx = context.Background()
+	ch.routes = newReqIDStore(filepath.Join(t.TempDir(), "reqids.json"))
+	ch.SetRunning(true)
+
+	interceptor := &recordingCancelInterceptor{}
+	ch.SetCancelInterceptor(interceptor)
+	var commands []wecomCommand
+	ch.commandSend = func(cmd wecomCommand, _ time.Duration) (wecomEnvelope, error) {
+		commands = append(commands, cmd)
+		return wecomTestAck(nil), nil
+	}
+
+	msg := wecomIncomingMessage{
+		MsgID:    "msg-denied",
+		ChatID:   "chat-denied",
+		ChatType: "direct",
+		MsgType:  "text",
+		Text: &struct {
+			Content string `json:"content"`
+		}{Content: "/cancel"},
+	}
+	msg.From.UserID = "denied-user"
+
+	if err := ch.dispatchIncoming("req-denied", msg); err != nil {
+		t.Fatalf("dispatchIncoming() error = %v", err)
+	}
+	_, hasTurn := ch.getTurn("chat-denied")
+	_, hasRoute := ch.routes.Get("chat-denied")
+	if interceptor.calls != 0 || len(commands) != 0 || hasTurn || hasRoute {
+		t.Fatalf(
+			"denied sender side effects: cancel calls=%d, commands=%d, turn=%v, route=%v; want all zero/false",
+			interceptor.calls,
+			len(commands),
+			hasTurn,
+			hasRoute,
+		)
+	}
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("denied sender published inbound message: %+v", inbound)
+	default:
+	}
+}
+
+func TestDispatchIncoming_DeniedSenderDoesNotDownloadMedia(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+
+	const secretRef = "WECOM_TEST_SECRET"
+	bundle := credentials.SecretBundle{
+		credentials.SecretRef(secretRef): "secret-1",
+	}
+	ch, err := NewChannel(config.WeComConfig{
+		BotID:     "bot-1",
+		SecretRef: secretRef,
+		AllowFrom: []string{"allowed-user"},
+	}, bundle, messageBus)
+	if err != nil {
+		t.Fatalf("NewChannel() error = %v", err)
+	}
+	ch.ctx = context.Background()
+	ch.SetMediaStore(media.NewFileMediaStore())
+
+	mediaRequests := 0
+	ch.mediaClient = &http.Client{
+		Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			mediaRequests++
+			return nil, errors.New("unexpected media request")
+		}),
+	}
+
+	msg := wecomIncomingMessage{
+		MsgID:    "msg-denied-media",
+		ChatID:   "chat-denied",
+		ChatType: "direct",
+		MsgType:  "image",
+		Image: &struct {
+			URL    string `json:"url"`
+			AESKey string `json:"aeskey,omitempty"`
+		}{URL: "https://wecom.example/media"},
+	}
+	msg.From.UserID = "denied-user"
+
+	err = ch.dispatchIncoming("req-denied-media", msg)
+	if mediaRequests != 0 {
+		t.Fatalf("denied sender media requests = %d, want 0", mediaRequests)
+	}
+	if err != nil {
+		t.Fatalf("dispatchIncoming() error = %v", err)
+	}
+}
 
 func TestDispatchIncoming_UsesActualChatIDAndStoresReqIDRoute(t *testing.T) {
 	messageBus := bus.NewMessageBus()

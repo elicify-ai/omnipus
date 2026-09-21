@@ -569,6 +569,12 @@ func (c *WeComChannel) dispatchIncoming(reqID string, msg wecomIncomingMessage) 
 		CanonicalID: identity.BuildCanonicalID("wecom", senderID),
 		DisplayName: senderID,
 	}
+	if !c.IsAllowedSender(sender) {
+		logger.DebugCF("wecom", "Message rejected by allow-list", map[string]any{
+			"sender_id": senderID,
+		})
+		return nil
+	}
 
 	var (
 		content   string
