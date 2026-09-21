@@ -52,16 +52,7 @@ import { SubagentBlock } from './SubagentBlock'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
 import type { ChatMessage, PositionedToolCall, SubagentSpan } from '@/store/chat'
 import type { MessagePartStatus } from '@assistant-ui/react'
@@ -3252,57 +3243,41 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
       {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
           Stage 1 warns and lists the flagged files; stage 2 is the second
-          confirmation. Files are only attached after the user confirms stage 2. */}
-      <AlertDialog
-        open={fileUpload.harmfulConfirm !== null}
+          confirmation. Files are only attached after the user confirms stage 2.
+          Two catalogued ConfirmDialogs, mutually exclusive on `harmfulStage`
+          (only one is ever `open` at a time), rather than one dialog switching
+          its content by stage — ConfirmDialog's closed API takes static
+          title/description/confirmLabel per instance, not a stage switch. */}
+      <ConfirmDialog
+        open={fileUpload.harmfulConfirm !== null && fileUpload.harmfulStage === 1}
         onOpenChange={(open) => {
           if (!open) fileUpload.dismissHarmfulConfirm()
         }}
-      >
-        <AlertDialogContent>
-          {fileUpload.harmfulStage === 1 ? (
-            <>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Potentially harmful file(s)</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {fileUpload.harmfulConfirm
-                    ? `${fileUpload.harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
-                    : ''}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={fileUpload.advanceHarmfulStage}
-                >
-                  Continue
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </>
-          ) : (
-            <>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Confirm upload</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {fileUpload.harmfulConfirm
-                    ? `Please confirm again: Upload ${fileUpload.harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
-                    : ''}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={fileUpload.confirmHarmfulUpload}
-                >
-                  Upload
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </>
-          )}
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Potentially harmful file(s)"
+        description={
+          fileUpload.harmfulConfirm
+            ? `${fileUpload.harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
+            : ''
+        }
+        confirmLabel="Continue"
+        destructive
+        onConfirm={fileUpload.advanceHarmfulStage}
+      />
+      <ConfirmDialog
+        open={fileUpload.harmfulConfirm !== null && fileUpload.harmfulStage === 2}
+        onOpenChange={(open) => {
+          if (!open) fileUpload.dismissHarmfulConfirm()
+        }}
+        title="Confirm upload"
+        description={
+          fileUpload.harmfulConfirm
+            ? `Please confirm again: Upload ${fileUpload.harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
+            : ''
+        }
+        confirmLabel="Upload"
+        destructive
+        onConfirm={fileUpload.confirmHarmfulUpload}
+      />
     </div>
   )
 }
