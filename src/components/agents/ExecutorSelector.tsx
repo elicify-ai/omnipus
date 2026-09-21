@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
 import { testAgentRunner } from '@/lib/api'
 import type { ExecutorConfig, RunnerTestResponse } from '@/lib/api'
 import { getErrorMessage } from '@/lib/api'
@@ -111,10 +112,10 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
 
   return (
     <div className="space-y-[var(--space-2-5)]" data-testid="executor-selector">
-      <div className="space-y-[var(--space-1)]">
-        <label htmlFor="executor-kind" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+      <div className="space-y-[var(--space-2)]">
+        <Label htmlFor="executor-kind">
           Runtime
-        </label>
+        </Label>
         <Select
           value={kind}
           onValueChange={(v) => handleKindChange(v as ExecutorKind)}
@@ -161,9 +162,9 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
 
       {kind === 'external-cli' && (
         <div className="space-y-[var(--space-1)]" data-testid="executor-cli-block">
-          <label htmlFor="executor-cli" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+          <Label htmlFor="executor-cli">
             CLI tool
-          </label>
+          </Label>
           <Select
             value={cli ?? 'claude-code'}
             onValueChange={(v) => handleCliChange(v as ExecutorCLI)}

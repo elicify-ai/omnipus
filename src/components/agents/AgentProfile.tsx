@@ -22,6 +22,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
@@ -1922,7 +1923,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     {availableSkills.map((skill) => {
                       const granted = agentSkills.includes(skill.id)
                       return (
-                        <label
+                        <Label
                           key={skill.id}
                           className={`flex items-start gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-3)]'}`}
                         >
@@ -1961,7 +1962,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                               )}
                             </div>
                           </div>
-                        </label>
+                        </Label>
                       )
                     })}
                   </div>
@@ -1998,7 +1999,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 className="space-y-[var(--space-1)]"
               >
                 <div className="flex items-center gap-[var(--space-2-5)]">
-                  <label htmlFor="profile-cli-path-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
+                  <Label htmlFor="profile-cli-path-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">CLI path</Label>
                   <Input
                     id="profile-cli-path-input"
                     value={executor?.cli_path ?? offeredCliPath ?? ''}
@@ -2037,7 +2038,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 />
               </div>
               <div data-testid="profile-env-overrides" className="space-y-[var(--space-2)]">
-                <label className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Environment overrides</label>
+                <Label>Environment overrides</Label>
                 <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                   KEY=value pairs passed to the CLI process. Empty means no overrides.
                 </p>
@@ -2055,7 +2056,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
               <div data-testid="profile-cli-args" className="space-y-[var(--space-1)]">
                 <div className="flex items-center gap-[var(--space-2-5)]">
-                  <label htmlFor="profile-cli-args-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
+                  <Label htmlFor="profile-cli-args-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</Label>
                   <Input
                     id="profile-cli-args-input"
                     value={executor?.cli_args ?? ''}
@@ -2103,7 +2104,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {!useGlobalRateLimits && (
                   <div className="space-y-[var(--space-2)]">
                     <div className="flex items-center gap-[var(--space-2-5)]">
-                      <label htmlFor="profile-rate-limit-llm-calls" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">LLM calls / hour</label>
+                      <Label htmlFor="profile-rate-limit-llm-calls" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">LLM calls / hour</Label>
                       <Input
                         id="profile-rate-limit-llm-calls"
                         type="number"
@@ -2115,7 +2116,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       />
                     </div>
                     <div className="flex items-center gap-[var(--space-2-5)]">
-                      <label htmlFor="profile-rate-limit-tool-calls" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Tool calls / minute</label>
+                      <Label htmlFor="profile-rate-limit-tool-calls" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Tool calls / minute</Label>
                       <Input
                         id="profile-rate-limit-tool-calls"
                         type="number"
@@ -2127,7 +2128,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       />
                     </div>
                     <div className="flex items-center gap-[var(--space-2-5)]">
-                      <label htmlFor="profile-rate-limit-max-cost" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Max cost / day ($)</label>
+                      <Label htmlFor="profile-rate-limit-max-cost" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">Max cost / day ($)</Label>
                       <Input
                         id="profile-rate-limit-max-cost"
                         type="number"
@@ -2152,12 +2153,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Execution</p>
               <div className="space-y-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)]">
                 <div className="flex items-center gap-[var(--space-2-5)]">
-                  <label htmlFor="agent-timeout-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
+                  <Label htmlFor="agent-timeout-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
                     Turn timeout
                     <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                       Max seconds per turn. 0 = no limit.
                     </span>
-                  </label>
+                  </Label>
                   <Input
                     id="agent-timeout-input"
                     type="number"
@@ -2195,13 +2196,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     this type. */}
                 {!isExternalAgent && (
                   <div className="flex items-center gap-[var(--space-2-5)]">
-                    <label htmlFor="agent-max-tool-calls-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
+                    <Label htmlFor="agent-max-tool-calls-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
                       Max tool calls per turn
                       <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                         Per single turn (one message, task, or heartbeat run) — the
                         turn pauses at the limit and can be continued. Default: 200.
                       </span>
-                    </label>
+                    </Label>
                     <Input
                       id="agent-max-tool-calls-input"
                       type="number"
@@ -2237,12 +2238,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 {!isExternalAgent && (
                   <div className="space-y-[var(--space-1)]">
                     <div className="flex items-center gap-[var(--space-2-5)]">
-                      <label htmlFor="agent-context-window-override-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
+                      <Label htmlFor="agent-context-window-override-input" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0">
                         Context window override
                         <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                           Tokens. Lower-only — never above the model's own limit. Empty = use the model's window.
                         </span>
-                      </label>
+                      </Label>
                       <Input
                         id="agent-context-window-override-input"
                         type="number"
@@ -2470,7 +2471,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
         {/* Interval */}
         <div className="flex items-center gap-[var(--space-2-5)]">
-          <label
+          <Label
             htmlFor="heartbeat-interval"
             className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-44 shrink-0"
           >
@@ -2478,7 +2479,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
               Minimum 5 minutes
             </span>
-          </label>
+          </Label>
           <Input
             id="heartbeat-interval"
             data-testid="heartbeat-interval-input"
@@ -2505,17 +2506,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </div>
 
         {/* Body */}
-        <div className="space-y-[var(--space-1)]">
+        <div className="space-y-[var(--space-2)]">
           <div className="flex items-center justify-between">
-            <label
-              htmlFor="heartbeat-body"
-              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
-            >
+            <Label htmlFor="heartbeat-body">
               Heartbeat body
               {hbEnabled && (
                 <span className="text-[var(--color-error)] ml-[var(--space-1)]" aria-label="required">*</span>
               )}
-            </label>
+            </Label>
             <UploadMdButton
               onUpload={(content: string) => { markHbDirty(); setHbBody(content) }}
             />

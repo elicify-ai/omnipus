@@ -24,6 +24,7 @@
 // disclosure stays in sync with the Step 1 editor.
 
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ShellDenyPatternsEditor } from '../ShellDenyPatternsEditor'
 import type { AdvancedProps } from './types'
@@ -239,7 +240,7 @@ function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
   return (
     <div className="space-y-[var(--space-2)]">
       <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Rate limits</p>
-      <label className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+      <Label className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
         <input tabIndex={0}
           type="checkbox"
           checked={rateLimits.use_global_defaults ?? true}
@@ -249,7 +250,7 @@ function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
           className="accent-[var(--color-accent)]"
         />
         <span>Use global defaults</span>
-      </label>
+      </Label>
       {!rateLimits.use_global_defaults && (
         <div className="space-y-[var(--space-1)]">
           <NumberRow
@@ -295,9 +296,9 @@ interface RangeRowProps {
 function RangeRow({ label, caption, value, min, max, step, onChange }: RangeRowProps) {
   const display = value ?? defaultFor(label)
   return (
-    <div className="space-y-[var(--space-1)]">
+    <div className="space-y-[var(--space-2)]">
       <div className="flex items-center justify-between">
-        <label className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{label}</label>
+        <Label>{label}</Label>
         <span className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]">{display}</span>
       </div>
       <input tabIndex={0}
@@ -327,8 +328,8 @@ interface NumberRowProps {
 
 function NumberRow({ label, caption, value, min, step, onChange }: NumberRowProps) {
   return (
-    <div className="space-y-[var(--space-1)]">
-      <label className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">{label}</label>
+    <div className="space-y-[var(--space-2)]">
+      <Label className="text-[length:var(--type-caption-size)]">{label}</Label>
       <Input
         type="number"
         min={min}

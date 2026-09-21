@@ -16,6 +16,7 @@
 
 import type { RegistryTool } from '@/lib/api'
 import { resolveToolsCfg } from '@/lib/toolPolicyPresets'
+import { Label } from '@/components/ui/label'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { InheritToggle } from './InheritToggle'
 import type { StepProps } from './types'
@@ -58,7 +59,7 @@ export function Step3Tools({
       )}
       {!isExternal && !inheritTools && (
         <div className="space-y-[var(--space-2)]" data-testid="wizard-tools-cfg">
-          <label className="text-[length:var(--type-body-compact-size)] font-medium">Tools policy</label>
+          <Label>Tools policy</Label>
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Starts from the Balanced preset. Per-tool allow / ask / deny editor —
             every tool has an explicit policy, no hidden default.
@@ -91,7 +92,7 @@ export function Step3Tools({
           2026-07-03 — the gate below was missing !isExternal). */}
       {!isExternal && !inheritSkills && (
       <div className="space-y-[var(--space-2)]" data-testid="wizard-skills">
-        <label className="text-[length:var(--type-body-compact-size)] font-medium">Skills</label>
+        <Label>Skills</Label>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Multi-select chips of installed skills. Empty = no skills granted.
         </p>
@@ -102,7 +103,7 @@ export function Step3Tools({
             {skills.map((skill) => {
               const granted = (payload.skills ?? []).includes(skill.id)
               return (
-                <label
+                <Label
                   key={skill.id}
                   className="flex items-start gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] cursor-pointer hover:bg-[var(--color-surface-3)] transition-colors"
                 >
@@ -134,7 +135,7 @@ export function Step3Tools({
                       {skill.id}
                     </span>
                   </div>
-                </label>
+                </Label>
               )
             })}
           </div>

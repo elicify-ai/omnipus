@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
@@ -113,9 +114,9 @@ export function Step1Identity({
   return (
     <>
       <div className="space-y-[var(--space-2)]">
-        <label htmlFor="wizard-name" className="text-[length:var(--type-body-compact-size)] font-medium">
+        <Label htmlFor="wizard-name">
           Name <span className="text-[var(--color-error)]" aria-label="required">*</span>
-        </label>
+        </Label>
         <Input
           id="wizard-name"
           data-testid="wizard-name"
@@ -127,12 +128,12 @@ export function Step1Identity({
       </div>
 
       <div className="space-y-[var(--space-2)]">
-        <label htmlFor="wizard-description" className="text-[length:var(--type-body-compact-size)] font-medium">
+        <Label htmlFor="wizard-description">
           Description
           {isWorker && (
             <span className="text-[var(--color-error)] ml-[var(--space-1)]" aria-label="required">*</span>
           )}
-        </label>
+        </Label>
         <Textarea
           id="wizard-description"
           data-testid="wizard-description"
@@ -150,7 +151,7 @@ export function Step1Identity({
       </div>
 
       <div className="space-y-[var(--space-2)]">
-        <label className="text-[length:var(--type-body-compact-size)] font-medium">Avatar color</label>
+        <Label>Avatar color</Label>
         <AvatarColorPicker
           value={payload.color}
           onChange={(c) => setField('color', c)}
@@ -159,7 +160,7 @@ export function Step1Identity({
       </div>
 
       <div className="space-y-[var(--space-2)]">
-        <label className="text-[length:var(--type-body-compact-size)] font-medium">Icon</label>
+        <Label>Icon</Label>
         <IconPicker
           value={payload.icon as IconName}
           onChange={(icon) => setField('icon', icon)}
@@ -180,9 +181,9 @@ export function Step1Identity({
 
       {!inheritModel && (
       <div className="space-y-[var(--space-2)]">
-        <label htmlFor="wizard-model" className="text-[length:var(--type-body-compact-size)] font-medium">
+        <Label htmlFor="wizard-model">
           Model <span className="text-[var(--color-error)]" aria-label="required">*</span>
-        </label>
+        </Label>
         {/* subagent_3p: free-text slug only — passed verbatim to the CLI
             invocation (`claude --model <slug>`). The picker would lie about
             which providers are reachable from an external CLI runner. */}
@@ -303,7 +304,7 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
   return (
     <div className="space-y-[var(--space-2)]">
       <div className="flex items-center justify-between">
-        <label className="text-[length:var(--type-body-compact-size)] font-medium">Fallback models (max {MAX_FALLBACKS})</label>
+        <Label>Fallback models (max {MAX_FALLBACKS})</Label>
         <Button
           type="button"
           variant="ghost"
@@ -557,7 +558,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
       {/* CLI chooser — only when the roster did NOT pre-lock one. */}
       {!lockedCli && (
         <div className="space-y-[var(--space-2)]">
-          <label id="wizard-cli-chooser-label" className="text-[length:var(--type-body-compact-size)] font-medium">CLI runtime</label>
+          <Label id="wizard-cli-chooser-label">CLI runtime</Label>
           <SegmentedControl
             aria-labelledby="wizard-cli-chooser-label"
             value={payload.cli ?? ''}
@@ -601,9 +602,9 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
       )}
 
       <div className="space-y-[var(--space-2)]">
-        <label htmlFor="wizard-cli-path" className="text-[length:var(--type-body-compact-size)] font-medium">
+        <Label htmlFor="wizard-cli-path">
           CLI path
-        </label>
+        </Label>
         <Input
           id="wizard-cli-path"
           data-testid="wizard-cli-path"
@@ -637,7 +638,7 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
 
       <div className="space-y-[var(--space-2)]" data-testid="wizard-env-overrides">
         <div className="flex items-center justify-between">
-          <label className="text-[length:var(--type-body-compact-size)] font-medium">Environment overrides</label>
+          <Label>Environment overrides</Label>
           <Button
             type="button"
             variant="link"
@@ -702,9 +703,9 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
       </div>
 
       <div className="space-y-[var(--space-2)]">
-        <label htmlFor="wizard-cli-args" className="text-[length:var(--type-body-compact-size)] font-medium">
+        <Label htmlFor="wizard-cli-args">
           Additional CLI arguments
-        </label>
+        </Label>
         <Input
           id="wizard-cli-args"
           data-testid="wizard-cli-args"

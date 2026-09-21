@@ -8,6 +8,7 @@
 // revealed, explicit value sent).
 
 import { ArrowsLeftRight } from '@phosphor-icons/react'
+import { Label } from '@/components/ui/label'
 
 export interface InheritToggleProps {
   /** Field label shown next to the switch (e.g. "Model", "Tools"). */
@@ -21,7 +22,7 @@ export interface InheritToggleProps {
 
 export function InheritToggle({ label, inherit, onChange, testId }: InheritToggleProps) {
   return (
-    <label className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] cursor-pointer">
+    <Label className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] cursor-pointer">
       <span className="flex items-center gap-[var(--space-2)] min-w-0">
         <ArrowsLeftRight size={14} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
         <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{label}</span>
@@ -38,7 +39,7 @@ export function InheritToggle({ label, inherit, onChange, testId }: InheritToggl
         data-testid={testId}
         className="shrink-0 accent-[var(--color-accent)]"
       />
-    </label>
+    </Label>
   )
 }
 
