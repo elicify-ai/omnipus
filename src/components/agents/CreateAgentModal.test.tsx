@@ -135,8 +135,8 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
   // toggle OFF so the model picker appears and we can set an explicit model
   // (these tests exercise the explicit-model path).
   if (type === 'Subagent' && screen.queryByTestId('wizard-inherit-model')) {
-    const t = screen.getByTestId('wizard-inherit-model') as HTMLInputElement
-    if (t.checked) fireEvent.click(t)
+    const t = screen.getByTestId('wizard-inherit-model')
+    if (t.getAttribute('aria-checked') === 'true') fireEvent.click(t)
   }
   fireEvent.change(screen.getByTestId('wizard-model'), { target: { value: 'claude-sonnet-4-6' } })
   if (type !== 'Main') {
@@ -183,8 +183,8 @@ async function fillAndAdvanceToStep3(opts?: { initialType?: 'Main' | 'Subagent' 
   // Step ③ — Tools. UAT 4a: a native Subagent defaults to inheriting Tools —
   // turn the toggle OFF so the per-tool editor (wizard-tools-cfg) is shown.
   if (type === 'Subagent' && screen.queryByTestId('wizard-inherit-tools')) {
-    const t = screen.getByTestId('wizard-inherit-tools') as HTMLInputElement
-    if (t.checked) fireEvent.click(t)
+    const t = screen.getByTestId('wizard-inherit-tools')
+    if (t.getAttribute('aria-checked') === 'true') fireEvent.click(t)
   }
   // All fields are wire-optional for Main / Subagent. Just confirm the step renders.
   expect(await screen.findByTestId('wizard-create')).toBeInTheDocument()

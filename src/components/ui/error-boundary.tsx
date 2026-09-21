@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
 
 interface Props {
   children: ReactNode
@@ -40,21 +41,23 @@ export class ErrorBoundary extends Component<Props, State> {
           <p style={{ color: 'var(--color-error)' }}>Something went wrong</p>
           <p className="text-[length:var(--type-utility-xs-size)]">{error?.message}</p>
           {isChunkLoadError ? (
-            <button tabIndex={0}
+            <Button
+              variant="outline"
               onClick={() => window.location.reload()}
-              className="px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-utility-xs-size)] border transition-colors"
+              className="h-auto px-[var(--space-2-5)] py-[var(--space-1)] rounded-md font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] hover:bg-transparent"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
             >
               Reload
-            </button>
+            </Button>
           ) : (
-            <button tabIndex={0}
+            <Button
+              variant="outline"
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="px-[var(--space-2-5)] py-[var(--space-1)] rounded-md text-[length:var(--type-utility-xs-size)] border transition-colors"
+              className="h-auto px-[var(--space-2-5)] py-[var(--space-1)] rounded-md font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] hover:bg-transparent"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
             >
               Try again
-            </button>
+            </Button>
           )}
         </div>
       )

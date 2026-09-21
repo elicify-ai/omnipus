@@ -9,6 +9,7 @@
 
 import { ArrowsLeftRight } from '@phosphor-icons/react'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 
 export interface InheritToggleProps {
   /** Field label shown next to the switch (e.g. "Model", "Tools"). */
@@ -30,14 +31,19 @@ export function InheritToggle({ label, inherit, onChange, testId }: InheritToggl
           {inherit ? 'Inherited from caller' : 'Overridden'}
         </span>
       </span>
-      <input tabIndex={0}
-        type="checkbox"
-        role="switch"
+      {/* Was a native <input type="checkbox" role="switch">: role="switch" on
+          a plain checkbox is a masquerade (controls/checkbox-as-switch) —
+          the accent-color checkbox never actually rendered switch-shaped,
+          it only claimed the switch role. Switch is the real primitive:
+          same controlled boolean (checked/onCheckedChange ↔
+          inherit/onChange), genuine role="switch" + aria-checked from
+          Radix, and Radix's Label + Switch pairing already forwards a
+          label click to the switch (label-click behavior is unchanged). */}
+      <Switch
         checked={inherit}
-        onChange={(e) => onChange(e.target.checked)}
+        onCheckedChange={onChange}
         aria-label={`Inherit ${label} from caller`}
         data-testid={testId}
-        className="shrink-0 accent-[var(--color-accent)]"
       />
     </Label>
   )

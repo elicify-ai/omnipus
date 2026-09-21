@@ -5,6 +5,7 @@ import { CaretUpDown, Check, CircleNotch, Keyboard, WarningCircle } from '@phosp
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { isKnownModelSlugInList } from '@/lib/agents/model-validation'
 import {
@@ -427,8 +428,9 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           {catalogErrorMessage ?? 'Failed to load providers'}
         </span>
         {onRetryCatalog && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onRetryCatalog}
             // Explicit tabIndex: src/lib/tabindex-convention.test.ts requires
             // every native interactive element in src/ to declare one — WebKit
@@ -436,11 +438,11 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             // silently costs keyboard users this control on Safari.
             tabIndex={tabIndex}
             data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
-            className="shrink-0 text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:opacity-80"
+            className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
             style={{ color: 'var(--color-accent)' }}
           >
             Retry
-          </button>
+          </Button>
         )}
         {/* Dead-end fix: Retry alone is not enough when the underlying
             problem is not transient (e.g. the network path really is down).
@@ -448,16 +450,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             visible "Unresolved" chip every unconstrained picker already
             uses for an unverified value — an explicit, visibly-flagged
             escape hatch, not a silent reopening of free text. */}
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setManualOverride(true)}
           tabIndex={tabIndex}
           data-testid={triggerTestId ? `${triggerTestId}-enter-manually` : undefined}
-          className="shrink-0 text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:opacity-80"
+          className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
           style={{ color: 'var(--color-muted)' }}
         >
           Enter manually
-        </button>
+        </Button>
       </div>
     )
   }
@@ -522,8 +525,9 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           {emptyCatalogHint ?? 'No models available — connect a provider first'}
         </span>
         {onRetryCatalog && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onRetryCatalog}
             // Explicit tabIndex, opted out of the parent's cursor-not-allowed
             // styling (this control itself IS actionable — only the picker
@@ -531,11 +535,11 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             // button above for the identical rationale on tabIndex.
             tabIndex={tabIndex}
             data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
-            className="shrink-0 cursor-pointer text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:opacity-80"
+            className="h-auto w-auto shrink-0 p-0 cursor-pointer text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
             style={{ color: 'var(--color-accent)' }}
           >
             Retry
-          </button>
+          </Button>
         )}
         {/* Dead-end fix (see the block comment above): the operator decision
             was "non-catalogue model not selectable", which is sound only
@@ -544,16 +548,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             start itself), "Enter manually" is the deliberate, explicit,
             visibly-flagged way out — never a silent reopening of free text
             for a picker whose catalogue is simply working fine. */}
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setManualOverride(true)}
           tabIndex={tabIndex}
           data-testid={triggerTestId ? `${triggerTestId}-enter-manually` : undefined}
-          className="shrink-0 cursor-pointer text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:opacity-80"
+          className="h-auto w-auto shrink-0 p-0 cursor-pointer text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
           style={{ color: 'var(--color-muted)' }}
         >
           Enter manually
-        </button>
+        </Button>
       </div>
     )
   }
@@ -596,16 +601,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           className="font-mono text-[length:var(--type-body-compact-size)]"
         />
         {overriding && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => setManualOverride(false)}
             tabIndex={tabIndex}
             data-testid={triggerTestId ? `${triggerTestId}-use-catalog` : undefined}
-            className="text-[length:var(--type-caption-size)] font-medium underline underline-offset-2 hover:opacity-80"
+            className="h-auto w-auto p-0 text-[length:var(--type-caption-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
             style={{ color: 'var(--color-muted)' }}
           >
             ← Back to catalogue picker
-          </button>
+          </Button>
         )}
         {valueUnresolved && (
           <p
@@ -785,9 +791,10 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
+        <Button
           type="button"
           role="combobox"
+          variant="ghost"
           aria-expanded={open}
           aria-busy={catalogStatus === 'loading' || undefined}
           aria-label={
@@ -809,8 +816,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           data-unresolved={valueUnresolved || undefined}
           className={
             isGhost
-              ? 'flex items-center gap-[var(--space-1)] h-7 rounded-md px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--color-surface-2)]'
-              : 'flex w-full items-center justify-between h-10 rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+              ? 'h-7 justify-start gap-[var(--space-1)] rounded-md px-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] disabled:cursor-not-allowed hover:bg-[var(--color-surface-2)]'
+              : 'h-10 w-full justify-between gap-[var(--space-2)] rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] disabled:cursor-not-allowed'
           }
           style={
             isGhost
@@ -842,7 +849,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             )}
           </span>
           <CaretUpDown size={14} className="shrink-0 opacity-50" />
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         className="w-[--radix-popover-trigger-width] p-0"

@@ -372,11 +372,12 @@ describe('CreateAgentWizard — missing-field hint (B3 fix)', () => {
 describe('CreateAgentWizard — inherit-from-caller toggles (UAT 4a)', () => {
   it('renders the Model inherit toggle on step 1 for a native Subagent (OFF by default)', () => {
     renderWizard({ initialType: 'Subagent' })
-    const toggle = screen.getByTestId('wizard-inherit-model') as HTMLInputElement
+    const toggle = screen.getByTestId('wizard-inherit-model')
     expect(toggle).toBeInTheDocument()
     // Default OFF → explicit override → the model picker is shown so the
     // operator picks a model (UAT e2e fix). Inheritance stays an opt-in.
-    expect(toggle.checked).toBe(false)
+    // A switch, not a checkbox: its state is aria-checked, not .checked.
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
     expect(screen.getByTestId('wizard-model')).toBeInTheDocument()
   })
 
