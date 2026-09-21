@@ -24,6 +24,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { PreviewHeaderSlotProvider as PreviewHeaderSlotProviderType } from './previewHeaderSlot'
 
 // Rebound fresh in beforeEach, from the SAME `vi.resetModules()` generation
@@ -1099,29 +1100,44 @@ describe('LibraryPdfPreview — Save', () => {
 
 
 // ── UAT 2026-09-13: D-37 zoom, D-63 signature page default, D-43 dialog width ─
+// Scope extension 2026-09-21 (docs/internal/design/components/
+// zoomable-view.md, D18): the D-37 zoom control now rides the shared
+// `ZoomPill` (`src/components/ui/zoomable-view.tsx`) and its 25%-400%
+// `clampZoomScale` range, in place of the old fixed 50%-200% six-step
+// ladder and its own bespoke pill JSX — both deleted. These assertions were
+// rewritten against `ZoomPill`'s own test ids (`zoomable-view-*`), never
+// against the deleted `library-pdf-zoom-*` ids or `nextPdfZoom`.
 describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
-  it('offers zoom out / reset / zoom in; steps through the fixed ladder; Ctrl+wheel zooms too', async () => {
-    const mod = await import('./LibraryPdfPreview')
-    expect(mod.nextPdfZoom(1, 'in')).toBe(1.25)
-    expect(mod.nextPdfZoom(1, 'out')).toBe(0.75)
-    expect(mod.nextPdfZoom(2, 'in')).toBe(2)
-    expect(mod.nextPdfZoom(0.5, 'out')).toBe(0.5)
-    expect(mod.nextPdfZoom(0.9, 'in')).toBe(1.25) // off-ladder value re-anchors at 100%
-
+  it('offers zoom out / percent menu / zoom in on the shared ZoomPill; Ctrl+wheel zooms too', async () => {
+    const user = userEvent.setup()
     await renderPreview()
     const pages = await screen.findByTestId('library-pdf-pages')
     expect(pages).toHaveAttribute('data-zoom', '1')
-    expect(screen.getByTestId('library-pdf-zoom-reset')).toHaveTextContent('100%')
+    expect(screen.getByTestId('zoomable-view-percent')).toHaveTextContent('100%')
 
-    fireEvent.click(screen.getByTestId('library-pdf-zoom-in'))
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
     expect(pages).toHaveAttribute('data-zoom', '1.25')
-    expect(screen.getByTestId('library-pdf-zoom-reset')).toHaveTextContent('125%')
+    expect(screen.getByTestId('zoomable-view-percent')).toHaveTextContent('125%')
 
-    fireEvent.click(screen.getByTestId('library-pdf-zoom-reset'))
+    // The percent trigger opens a menu offering Fit and 100% — both reset
+    // this reader zoom to 1, since it is a pure multiplier on top of the
+    // already-fitted per-page render (there is no separate "fit" scale to
+    // reach here). Opened with `userEvent`, per the shared ZoomPill's own
+    // precedent (zoomable-view.test.tsx) — Radix's DropdownMenuTrigger opens
+    // on a real pointer-event sequence, which a bare `fireEvent.click` does
+    // not reproduce.
+    await user.click(screen.getByTestId('zoomable-view-percent'))
+    await user.click(await screen.findByTestId('zoomable-view-menu-100'))
     expect(pages).toHaveAttribute('data-zoom', '1')
 
-    fireEvent.click(screen.getByTestId('library-pdf-zoom-out'))
-    expect(pages).toHaveAttribute('data-zoom', '0.75')
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    expect(pages).toHaveAttribute('data-zoom', '1.25')
+    await user.click(screen.getByTestId('zoomable-view-percent'))
+    await user.click(await screen.findByTestId('zoomable-view-menu-fit'))
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-out'))
+    expect(pages).toHaveAttribute('data-zoom', '0.8')
 
     // Ctrl+wheel up = in; a plain wheel is scrolling and must not zoom.
     fireEvent.wheel(pages, { deltaY: -100, ctrlKey: true })
@@ -1129,10 +1145,35 @@ describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
     fireEvent.wheel(pages, { deltaY: -100 })
     expect(pages).toHaveAttribute('data-zoom', '1')
 
-    // The ends of the ladder disable the corresponding button.
-    for (let i = 0; i < 6; i++) fireEvent.click(screen.getByTestId('library-pdf-zoom-in'))
-    expect(pages).toHaveAttribute('data-zoom', '2')
-    expect(screen.getByTestId('library-pdf-zoom-in')).toBeDisabled()
+    // The shared range's ceiling (400%) disables the zoom-in button.
+    for (let i = 0; i < 20; i++) fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    expect(pages).toHaveAttribute('data-zoom', '4')
+    expect(screen.getByTestId('zoomable-view-zoom-in')).toBeDisabled()
+
+    // The shared range's floor (25%) disables the zoom-out button.
+    for (let i = 0; i < 20; i++) fireEvent.click(screen.getByTestId('zoomable-view-zoom-out'))
+    expect(pages).toHaveAttribute('data-zoom', '0.25')
+    expect(screen.getByTestId('zoomable-view-zoom-out')).toBeDisabled()
+  })
+
+  it('binds the shared +, -, 0, 1 keyboard shortcuts to the pages container', async () => {
+    await renderPreview()
+    const pages = await screen.findByTestId('library-pdf-pages')
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.keyDown(pages, { key: '+' })
+    expect(pages).toHaveAttribute('data-zoom', '1.25')
+
+    fireEvent.keyDown(pages, { key: '-' })
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.keyDown(pages, { key: '+' })
+    fireEvent.keyDown(pages, { key: '0' })
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.keyDown(pages, { key: '-' })
+    fireEvent.keyDown(pages, { key: '1' })
+    expect(pages).toHaveAttribute('data-zoom', '1')
   })
 
   // Claude review 2026-09-14, cut-list: the zoom gesture called preventDefault

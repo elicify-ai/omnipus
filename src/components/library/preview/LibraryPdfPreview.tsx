@@ -111,10 +111,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X,
-  MagnifyingGlassMinus,
-  MagnifyingGlassPlus,
-} from '@phosphor-icons/react'
+import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X } from '@phosphor-icons/react'
 import { ApiError, downloadLibraryFileVersioned, putLibraryContentBinary, isLibraryVersionConflict } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
@@ -126,6 +123,7 @@ import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
+import { ZoomPill, clampZoomScale, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
 import { setLibraryEditorDirty } from './unsavedGuard'
 import { getLibraryErrorMessage } from '../libraryErrorMessage'
 import { LibrarySignaturePad, SIGNATURE_PAD_WIDTH, SIGNATURE_PAD_HEIGHT } from './LibrarySignaturePad'
@@ -162,24 +160,23 @@ const ASSET_DIR_MEANING: Record<string, string> = {
 const MIN_SCALE = 0.25
 const MAX_SCALE = 4
 
-/** UAT D-37 (2026-09-13): the reader's own magnification, applied to the
- *  pages container as a CSS `zoom` ON TOP of the automatic fit-to-width
- *  render scale (`MIN_SCALE`/`MAX_SCALE` above clamp THAT, and were the only
- *  "scale" in this file — a reader had no control at all). A display zoom,
- *  not a re-render: re-rendering would reload the document (the render
- *  effect owns the fetch), and the canvas is already drawn at the device
- *  pixel ratio, so it stays sharp up to the 200% cap. */
-export const PDF_ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
-export const PDF_ZOOM_DEFAULT = 1
-
-/** The next zoom step in `direction`, or the current value at either end. */
-export function nextPdfZoom(current: number, direction: 'in' | 'out'): number {
-  const idx = PDF_ZOOM_STEPS.findIndex((z) => Math.abs(z - current) < 1e-6)
-  const at = idx === -1 ? PDF_ZOOM_STEPS.indexOf(1) : idx
-  const next = direction === 'in' ? at + 1 : at - 1
-  if (next < 0 || next >= PDF_ZOOM_STEPS.length) return PDF_ZOOM_STEPS[at]
-  return PDF_ZOOM_STEPS[next]
-}
+/** The reader's own magnification (UAT D-37), applied to the pages container
+ *  as a CSS `zoom` on top of the automatic fit-to-width render scale
+ *  (`MIN_SCALE`/`MAX_SCALE` above clamp that render scale, a separate
+ *  concern: how many pixels a page's canvas is drawn with). It uses the
+ *  shared `ZoomPill` and the shared 25%-400% range (D18,
+ *  docs/internal/design/components/zoomable-view.md).
+ *
+ *  It is a display zoom, not a re-render: the canvas is drawn once at
+ *  fit-width x device pixel ratio (capped at `MAX_PIXEL_RATIO`), so above
+ *  100% the drawn pixels are magnified and text softens progressively —
+ *  at 400% on a 2x display each drawn pixel covers four screen pixels
+ *  across. Re-rasterising at the zoom level would need the render effect
+ *  to keep the loaded document instead of owning its fetch.
+ *
+ *  Fit and 100% are the same action here (see `zoomToFit`/`zoomTo100`):
+ *  the base render is already fitted, and this zoom multiplies it. */
+const PDF_READER_ZOOM_DEFAULT = 1
 
 /** UAT D-63 (2026-09-13): the page a reader is LOOKING AT — the first
  *  rendered page whose bottom edge is below the container's scroll top — so
@@ -535,9 +532,10 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
   const [status, setStatus] = useState<'queued' | 'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [pageCount, setPageCount] = useState(0)
-  // D-37: display zoom (see PDF_ZOOM_STEPS). D-63: the page the signature
-  // dialog should default to, captured at the moment it is opened.
-  const [zoom, setZoom] = useState<number>(PDF_ZOOM_DEFAULT)
+  // D-37: display zoom (see PDF_READER_ZOOM_DEFAULT above). D-63: the page
+  // the signature dialog should default to, captured at the moment it is
+  // opened.
+  const [zoom, setZoom] = useState<number>(PDF_READER_ZOOM_DEFAULT)
   const [signatureDefaultPage, setSignatureDefaultPage] = useState(1)
   // Distinct from `status === 'ready'`: that flips as soon as the DOCUMENT
   // opens, while pages still render progressively afterwards (existing
@@ -615,21 +613,62 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     }
   }, [])
 
-  // D-37's zoom gesture, as a NATIVE non-passive listener (Claude review
-  // 2026-09-14, cut-list). It used to live in the container's onWheel prop,
-  // and React attaches delegated wheel listeners PASSIVELY at the root —
-  // calling preventDefault() there cannot cancel anything, so Ctrl/Cmd+wheel
-  // zoomed the PDF *and* the whole browser page at once. Registered directly
-  // on the pages container with { passive: false }, preventDefault actually
-  // suppresses the browser's own zoom gesture for the container. Only the
-  // Ctrl/Cmd case is cancelled — a plain wheel is ordinary scrolling.
+  // D-37's zoom actions, moved onto the shared ZoomableView contract (D18,
+  // docs/internal/design/components/zoomable-view.md, "Scope extension
+  // 2026-09-21"). These feed the catalogued `ZoomPill` in the header below
+  // (this file's own zoom-pill JSX is gone) and the keyboard hook just
+  // below, over the shared `clampZoomScale` 25%-400% range — replacing the
+  // old fixed 50%-200% six-step ladder. Deliberately NOT
+  // `useZoomableMedia`/`ZoomableMediaSurface`: those model a single
+  // pannable image/SVG inside a fixed frame (drag-to-pan, pinch, a
+  // frame-relative fit scale) — this preview is a SCROLLABLE, multi-page
+  // document, where "zoom" is a uniform reader magnification layered on top
+  // of the already-fitted per-page render (`MIN_SCALE`/`MAX_SCALE` above),
+  // never a pan/frame transform. Only the parts of the shared contract that
+  // actually fit a paginated document move over: the pill, the clamp, and
+  // the keyboard shortcuts.
+  function zoomIn() {
+    setZoom((z) => clampZoomScale(z * 1.25))
+  }
+  function zoomOut() {
+    setZoom((z) => clampZoomScale(z / 1.25))
+  }
+  // "Fit" and "100%" are the SAME action here: this reader zoom is a pure
+  // multiplier on top of the per-page fit-to-width render (see the
+  // pagesToRender loop below), so 1 — no extra magnification — is
+  // simultaneously "the fitted page" and "100%".
+  function zoomToFit() {
+    setZoom(PDF_READER_ZOOM_DEFAULT)
+  }
+  function zoomTo100() {
+    setZoom(PDF_READER_ZOOM_DEFAULT)
+  }
+  const handleZoomKeyDown = useZoomableViewKeyboard({
+    onZoomIn: zoomIn,
+    onZoomOut: zoomOut,
+    onFit: zoomToFit,
+    onZoomTo100: zoomTo100,
+  })
+
+  // The Ctrl/Cmd+wheel zoom gesture, as a NATIVE non-passive listener (Claude
+  // review 2026-09-14, cut-list — the precedent `ZoomableMediaSurface`'s own
+  // wheel handling in zoomable-view.tsx follows for the identical reason;
+  // see that file's header comment). It used to live in the container's
+  // onWheel prop, and React attaches delegated wheel listeners PASSIVELY at
+  // the root — calling preventDefault() there cannot cancel anything, so
+  // Ctrl/Cmd+wheel zoomed the PDF *and* the whole browser page at once.
+  // Registered directly on the pages container with { passive: false },
+  // preventDefault actually suppresses the browser's own zoom gesture for
+  // the container. Only the Ctrl/Cmd case is cancelled — a plain wheel is
+  // ordinary scrolling, since this is a scrollable document, not a
+  // fixed-frame media surface.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const onWheel = (event: WheelEvent) => {
       if (!(event.ctrlKey || event.metaKey)) return
       event.preventDefault()
-      setZoom((z) => nextPdfZoom(z, event.deltaY < 0 ? 'in' : 'out'))
+      setZoom((z) => clampZoomScale(event.deltaY < 0 ? z * 1.25 : z / 1.25))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
@@ -1766,38 +1805,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
           </SegmentedControlItem>
         </SegmentedControl>
-        <div className="flex items-center gap-[var(--space-0-5)]" role="group" aria-label="Zoom">
-          <IconButton
-            onClick={() => setZoom((z) => nextPdfZoom(z, 'out'))}
-            disabled={zoom <= PDF_ZOOM_STEPS[0]}
-            aria-label="Zoom out"
-            title="Zoom out"
-            data-testid="library-pdf-zoom-out"
-            className={LIBRARY_ICON_BTN}
-          >
-            <MagnifyingGlassMinus size={15} />
-          </IconButton>
-          <Button
-            variant="ghost"
-            onClick={() => setZoom(PDF_ZOOM_DEFAULT)}
-            aria-label={`Zoom ${Math.round(zoom * 100)} percent — reset to 100 percent`}
-            title="Reset zoom"
-            data-testid="library-pdf-zoom-reset"
-            className="h-auto rounded px-[var(--space-1)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
-          >
-            {Math.round(zoom * 100)}%
-          </Button>
-          <IconButton
-            onClick={() => setZoom((z) => nextPdfZoom(z, 'in'))}
-            disabled={zoom >= PDF_ZOOM_STEPS[PDF_ZOOM_STEPS.length - 1]}
-            aria-label="Zoom in"
-            title="Zoom in"
-            data-testid="library-pdf-zoom-in"
-            className={LIBRARY_ICON_BTN}
-          >
-            <MagnifyingGlassPlus size={15} />
-          </IconButton>
-        </div>
+        <ZoomPill zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={zoomToFit} onZoomTo100={zoomTo100} />
         {mode === 'edit' && (
           <IconButton
             onClick={() => {
@@ -1945,6 +1953,11 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         style={{ zoom }}
         data-zoom={zoom}
         data-testid="library-pdf-pages"
+        // D18's shared keyboard contract ("+, −, 0 for fit and 1 for 100%,
+        // while the view is focused") — this is the view the pill above
+        // controls, so it is the frame that owns focus and the shortcuts.
+        tabIndex={0}
+        onKeyDown={handleZoomKeyDown}
         aria-label={
           pageFragment !== undefined
             ? `${entry.name}, page ${pageFragment} of ${pageCount}`
