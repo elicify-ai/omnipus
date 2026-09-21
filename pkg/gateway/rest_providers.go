@@ -651,21 +651,68 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 		// Resolve the base URL to probe: the api_base this very
 		// request supplies wins (a custom row has no other source),
 		// then the persisted one, then the catalog's.
-		persistedAPIBase := p.reqAPIBase
-		if persistedAPIBase == "" {
+		explicitAPIBase := p.reqAPIBase
+		if explicitAPIBase == "" {
 			for _, m := range p.cfg.Providers {
 				if m.IsVirtual() {
 					continue
 				}
 				if strings.TrimSpace(m.Provider) == p.providerID {
-					persistedAPIBase = m.APIBase
+					explicitAPIBase = m.APIBase
 					break
 				}
 			}
 		}
+		persistedAPIBase := explicitAPIBase
 		if persistedAPIBase == "" {
 			persistedAPIBase = providers_pkg.APIBaseFor(p.providerID)
 		}
+
+		// Issue #800 D1 (orchestrator review round 2): this is Settings ->
+		// Providers' "test key" path — there is no separate probe endpoint,
+		// saving a new key here IS the key check. A Bedrock row's probe
+		// endpoint and model id are REGION-derived, same as the onboarding
+		// probe (rest_providers_bedrock_probe.go) and a real turn's factory
+		// construction — never the catalog's flat us-east-1 default,
+		// whatever AWS region this row is actually configured for.
+		var probeModels []string
+		if p.req.Model != nil && *p.req.Model != "" {
+			probeModels = []string{*p.req.Model}
+		}
+		var bedrockModelOriginal map[string]string
+		if catRow, isCatalogRow := providers_pkg.CatalogProvider(p.providerID); bedrockRegionsRow(catRow, isCatalogRow) {
+			if len(probeModels) == 0 {
+				probeModels = recommendedProbeModels(catRow)
+			}
+			// The row's own PERSISTED region — a key-only edit (this
+			// branch) carries no region field of its own; a request that
+			// DOES set region is handled by providerPutRespond's own
+			// p.reqRegion echo, but the probe here always runs against
+			// whatever region this save is ABOUT (the just-submitted one
+			// when present, else the row's existing one).
+			persistedRegion := p.reqRegion
+			if persistedRegion == "" {
+				for _, m := range p.cfg.Providers {
+					if m.IsVirtual() {
+						continue
+					}
+					if strings.TrimSpace(m.Provider) == p.providerID {
+						persistedRegion = m.Region
+						break
+					}
+				}
+			}
+			resolvedBase, resolvedModels, originalByResolved, rerr := bedrockProbeRegionResolution(
+				catRow, persistedRegion, explicitAPIBase, a.bedrockRuntimeBaseOverride, probeModels)
+			if rerr != nil {
+				jsonErrField(p.w, http.StatusUnprocessableEntity, rerr.Error(), "region")
+				return false
+			}
+			persistedAPIBase = resolvedBase
+			probeModels = resolvedModels
+			bedrockModelOriginal = originalByResolved
+		}
+
 		// SSRF-check the persisted api_base before any outbound probe.
 		if persistedAPIBase != "" && a.ssrfChecker != nil {
 			if err := a.ssrfChecker.CheckURL(p.r.Context(), persistedAPIBase); err != nil {
@@ -681,7 +728,11 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 			ProviderName: providers_pkg.DisplayName(p.providerID),
 			BaseURL:      persistedAPIBase,
 			APIKey:       *p.req.ApiKey,
+			ProbeModels:  probeModels,
 		}, a.ssrfChk())
+		if orig, ok := bedrockModelOriginal[p.putValidationResult.ProbedModel]; ok {
+			p.putValidationResult.ProbedModel = orig
+		}
 		slog.Debug("rest: PUT provider: key validation result",
 			"provider", p.providerID, "outcome", p.putValidationResult.Outcome,
 			"detail", p.putValidationResult.RawDetail)

@@ -259,7 +259,9 @@ function ProviderConfigSheet({
   const catalogMode = provider ? providerCatalogMode(provider) : 'live'
   const hint = PROVIDER_HINTS[providerId] ?? 'Enter your API key'
 
-  const sheetTitle = entry ? catalogLabel(entry) : displayName(provider, providerId)
+  // Issue #800 D2-addendum: `provider` is the configured row (null in
+  // 'connect' mode, where there is no configured region yet to prefer).
+  const sheetTitle = entry ? catalogLabel(entry, provider?.region) : displayName(provider, providerId)
   const sheetDescription =
     target.mode === 'connect'
       ? 'Enter your API key to connect this provider.'
@@ -1178,7 +1180,9 @@ export function ProvidersSection() {
           {groups.map((group) => {
             if (group.items.length === 1) {
               const { provider, entry } = group.items[0]
-              const title = entry ? catalogLabel(entry) : displayName(provider, provider.id)
+              // Issue #800 D2-addendum: the provider card title must reflect
+              // the row's CONFIGURED AWS region, not the catalog's default.
+              const title = entry ? catalogLabel(entry, provider.region) : displayName(provider, provider.id)
               return (
                 <ProviderRow
                   key={provider.id}
@@ -1351,7 +1355,9 @@ export function ProvidersSection() {
           provider={removeTarget}
           displayName={(() => {
             const entry = catalogEntryById(catalog, removeTarget.id)
-            return entry ? catalogLabel(entry) : displayName(removeTarget, removeTarget.id)
+            return entry
+              ? catalogLabel(entry, removeTarget.region)
+              : displayName(removeTarget, removeTarget.id)
           })()}
           otherProviders={providers.filter((p) => p.id !== removeTarget.id)}
           catalog={catalogDoc}

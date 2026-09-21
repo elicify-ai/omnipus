@@ -110,7 +110,7 @@ func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 		if err := ValidateRegion(pc.region); err != nil {
 			return nil, err
 		}
-		endpoint = regionalEndpoint(pc.region)
+		endpoint = RegionalEndpoint(pc.region)
 	}
 	if err := validateEndpoint(endpoint); err != nil {
 		return nil, err
@@ -124,7 +124,15 @@ func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 	}, nil
 }
 
-func regionalEndpoint(region string) string {
+// RegionalEndpoint derives the Bedrock RUNTIME (data-plane) host for a
+// region — distinct from inference_profiles.go's ControlPlaneEndpoint, which
+// derives the CONTROL-plane host ListInferenceProfiles uses. Exported
+// (orchestrator review round 2, issue #800 D1) so a caller that needs the
+// probe/validate endpoint BEFORE constructing a Provider — the onboarding
+// probe and the PUT-triggered save-time key check, both in pkg/gateway —
+// can derive the same host this package's own NewProvider builds via
+// WithRegion, rather than hand-rolling a second copy of the URL template.
+func RegionalEndpoint(region string) string {
 	return "https://bedrock-runtime." + strings.TrimSpace(region) + ".amazonaws.com"
 }
 

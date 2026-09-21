@@ -4009,6 +4009,11 @@ export interface components {
              */
             api_base?: string;
             /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions) — same name and semantics as ProviderUpdateRequest.region. The probe resolves the region-derived endpoint (bedrock.ValidateRegion, then the SSRF guard) and rewrites the probed model id with its cross-region inference profile group prefix when the model's inference_profiles lists it, so the key check runs against the region the operator actually picked rather than the catalog's default. `probed_model` still echoes the caller's own model id, never the AWS-facing rewritten one. Ignored for a provider whose catalog entry carries no `regions`.
+             * @example eu-central-1
+             */
+            region?: string;
+            /**
              * @description Wire protocol for a custom row. Required with api_base when id is not a catalog id.
              * @example openai-compatible
              * @enum {string}

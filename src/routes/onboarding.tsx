@@ -424,6 +424,11 @@ function OnboardingWizard() {
         ...(model.trim() ? { model: model.trim() } : {}),
         ...(current.apiBase ? { api_base: current.apiBase } : {}),
         ...(current.protocol ? { protocol: current.protocol } : {}),
+        // Issue #800 (Bedrock region contract) D1 — orchestrator review
+        // round 2: the probe must check the key against the SAME region
+        // the operator picked, not the catalog's default. Same field/
+        // semantics as OnboardingProviderApiKey.region below (handleComplete).
+        ...(current.awsRegion ? { region: current.awsRegion } : {}),
       }
       const result = await probeProvider(req)
       // A stale response (the operator changed the model while it was in
@@ -1488,10 +1493,12 @@ function ProviderStep({
               {entry && (
                 <>
                   <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
-                    {catalogSubtitle(entry)}
+                    {/* Issue #800 D2: reflect the operator's own AWS region
+                        pick, not the catalog's static us-east-1 default. */}
+                    {catalogSubtitle(entry, selection.awsRegion)}
                   </p>
                   <p className="text-xs font-mono truncate" style={{ color: 'var(--color-muted)' }}>
-                    → {catalogEndpointHint(entry)}
+                    → {catalogEndpointHint(entry, selection.awsRegion)}
                   </p>
                 </>
               )}

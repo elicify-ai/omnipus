@@ -472,6 +472,26 @@ describe('ProvidersSection — FIX-2 flat vs grouped rows', () => {
     expect(screen.getByTestId('provider-row-title-anthropic').textContent).toBe('Anthropic')
   })
 
+  // Orchestrator review round 2, D2-addendum (issue #800): after onboarding
+  // saved amazon-bedrock with region "eu-central-1", the provider card kept
+  // reading "Amazon Bedrock (us-east-1)" with a "...us-east-1.amazonaws.com"
+  // subtitle — both derived from the catalog's STATIC default fields, never
+  // from Provider.region (the value the row was actually SAVED with).
+  it('a configured Bedrock row shows its OWN saved AWS region, not the catalog default', async () => {
+    vi.mocked(api.fetchProviders).mockResolvedValue([
+      { ...CONFIGURED_BASE, id: 'amazon-bedrock', name: 'amazon-bedrock', region: 'eu-central-1' },
+    ] as never)
+    renderSection()
+    await waitFor(() => screen.getByTestId('provider-row-title-amazon-bedrock'))
+
+    expect(screen.getByTestId('provider-row-title-amazon-bedrock').textContent).toBe(
+      'Amazon Bedrock (eu-central-1)',
+    )
+    const row = screen.getByTestId('provider-row-amazon-bedrock')
+    expect(within(row).getByText(/bedrock-runtime\.eu-central-1\.amazonaws\.com/)).toBeInTheDocument()
+    expect(within(row).queryByText(/us-east-1/)).not.toBeInTheDocument()
+  })
+
   it('two Zhipu variants render under one Zhipu AI group header', async () => {
     vi.mocked(api.fetchProviders).mockResolvedValue([
       ZHIPU_STD_PROVIDER,

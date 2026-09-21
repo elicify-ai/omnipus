@@ -17317,6 +17317,9 @@ type ProbeProviderRequest struct {
 
 	// Protocol Wire protocol for a custom row. Required with api_base when id is not a catalog id.
 	Protocol *ProbeProviderRequestProtocol `json:"protocol,omitempty"`
+
+	// Region Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions) — same name and semantics as ProviderUpdateRequest.region. The probe resolves the region-derived endpoint (bedrock.ValidateRegion, then the SSRF guard) and rewrites the probed model id with its cross-region inference profile group prefix when the model's inference_profiles lists it, so the key check runs against the region the operator actually picked rather than the catalog's default. `probed_model` still echoes the caller's own model id, never the AWS-facing rewritten one. Ignored for a provider whose catalog entry carries no `regions`.
+	Region *string `json:"region,omitempty"`
 }
 
 // ProbeProviderRequestAuth Which auth method to probe. "api_key" probes with api_key. "sign_in" probes through the CLI's saved login / Copilot session and returns 400 {"error":"not signed in","field":"auth"} when none is present.

@@ -2846,6 +2846,7 @@ export const ProbeProviderRequest = z.object({
   api_key: z.string().min(1).optional(),
   model: z.string().min(1).max(256).optional(),
   api_base: z.string().max(2048).optional(),
+  region: z.string().max(128).optional(),
   protocol: z.enum(["openai-compatible", "anthropic"]).optional(),
 });
 export const ProbeProviderResponse: z.ZodType<ProbeProviderResponse> = z

@@ -1578,6 +1578,13 @@ type restAPIHandleOnboardingProbeProvider struct {
 	catalogRow   catalog.Provider
 	isCatalogRow bool
 	baseURL      string
+	// bedrockModelOriginal is issue #800 D1 (orchestrator review round 2):
+	// non-nil only for a Bedrock row with its own regions[] picker, mapping
+	// a probeModels entry AFTER bedrock.ResolveModelID's group-prefix
+	// rewrite back to the operator's own model id — see
+	// bedrockProbeRegionResolution's doc comment for why probed_model must
+	// never echo the rewritten id.
+	bedrockModelOriginal map[string]string
 }
 
 // HandleOnboardingProbeProvider handles POST /api/v1/onboarding/probe-provider.
@@ -1808,9 +1815,30 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 		return true
 	}
 
-	ro.baseURL = reqAPIBase
-	if ro.baseURL == "" {
-		ro.baseURL = providers.APIBaseFor(ro.body.Id)
+	// Issue #800 D1 (orchestrator review round 2): a Bedrock row's endpoint
+	// is REGION-derived, never the catalog's flat us-east-1 default — the
+	// SAME resolution a real turn's factory construction applies
+	// (factory_provider.go's ProtocolBedrock case), reused here for the
+	// probe via bedrockProbeRegionResolution. reqAPIBase still wins outright
+	// when supplied (a private/VPC endpoint override), matching
+	// ProviderUpdateRequest.api_base's own contract.
+	if bedrockRegionsRow(ro.catalogRow, ro.isCatalogRow) {
+		reqRegion := ""
+		if ro.body.Region != nil {
+			reqRegion = strings.TrimSpace(*ro.body.Region)
+		}
+		resolvedBase, _, _, rerr := bedrockProbeRegionResolution(
+			ro.catalogRow, reqRegion, reqAPIBase, ro.a.bedrockRuntimeBaseOverride, nil)
+		if rerr != nil {
+			jsonErrField(ro.w, http.StatusBadRequest, rerr.Error(), "region")
+			return true
+		}
+		ro.baseURL = resolvedBase
+	} else {
+		ro.baseURL = reqAPIBase
+		if ro.baseURL == "" {
+			ro.baseURL = providers.APIBaseFor(ro.body.Id)
+		}
 	}
 	if ro.baseURL == "" {
 		// Admission passed, so this is a catalog row whose document carries no
@@ -1899,6 +1927,27 @@ func (ro *restAPIHandleOnboardingProbeProvider) executeProbe() {
 	if ro.pickedModel != "" {
 		probeModels = []string{ro.pickedModel}
 	}
+	// Issue #800 D1: rewrite each candidate with its cross-region inference
+	// profile group prefix (bedrock.ResolveModelID) BEFORE probing — a
+	// model that needs the prefix in the selected region 403s as a genuine
+	// model-access restriction on the bare id, which is not what "the key
+	// works" should have answered. bedrockModelOriginal lets probed_model
+	// echo the operator's own pick afterward (see the field's doc comment).
+	if bedrockRegionsRow(ro.catalogRow, ro.isCatalogRow) && len(probeModels) > 0 {
+		reqRegion := ""
+		if ro.body.Region != nil {
+			reqRegion = strings.TrimSpace(*ro.body.Region)
+		}
+		_, resolvedModels, originalByResolved, rerr := bedrockProbeRegionResolution(
+			ro.catalogRow, reqRegion, "", ro.a.bedrockRuntimeBaseOverride, probeModels)
+		if rerr == nil {
+			probeModels = resolvedModels
+			ro.bedrockModelOriginal = originalByResolved
+		}
+		// A region error here was already caught (and answered) in
+		// resolveEndpoint, which runs first — this second call can only
+		// fail identically, so no second error response is needed.
+	}
 	result := providers.ValidateKey(ro.r.Context(), providers.ValidateInput{
 		ProviderID:   ro.body.Id,
 		ProviderName: providers.DisplayName(ro.body.Id),
@@ -1907,6 +1956,9 @@ func (ro *restAPIHandleOnboardingProbeProvider) executeProbe() {
 		Catalog:      models,
 		ProbeModels:  probeModels,
 	}, ro.a.ssrfChk())
+	if orig, ok := ro.bedrockModelOriginal[result.ProbedModel]; ok {
+		result.ProbedModel = orig
+	}
 	slog.Debug("rest: probe-provider: key validation result",
 		"provider", ro.body.Id, "outcome", result.Outcome,
 		"probed_model", result.ProbedModel, "detail", result.RawDetail)

@@ -12,7 +12,7 @@ import (
 )
 
 // validRegionPattern is the SSRF guard for every region-derived URL this
-// package builds (regionalEndpoint, ControlPlaneEndpoint): region became
+// package builds (RegionalEndpoint, ControlPlaneEndpoint): region became
 // operator-settable with issue #800, and both endpoint builders construct
 // their URL by naive string concatenation ("https://host." + region +
 // ".amazonaws.com") rather than net/url composition. A region containing a

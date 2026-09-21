@@ -277,7 +277,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		// api_base (a private/VPC endpoint), which wins outright.
 		catRow, _ := CatalogProvider(cfg.Provider)
 		region := bedrock.ResolveRegion(cfg.Region, os.Getenv("AWS_REGION"), catRow.Region)
-		group := bedrockGroupForRegion(catRow.Regions, region)
+		group := BedrockGroupForRegion(catRow.Regions, region)
 		// The runtime model id reads ONLY catalog data — the selected
 		// region's group and the model's own inference_profiles — never a
 		// hand-typed Go list, and never auto-selects "global"
