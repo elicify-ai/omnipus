@@ -473,8 +473,15 @@ func TestCreateProviderFromConfig_BedrockDefaultBuild(t *testing.T) {
 	if want := "https://bedrock-runtime.us-east-1.amazonaws.com"; got.Endpoint() != want {
 		t.Fatalf("endpoint = %q, want %q", got.Endpoint(), want)
 	}
-	if modelID != "anthropic.claude-opus-4-6-v1" {
-		t.Fatalf("modelID = %q, want the configured Bedrock model verbatim", modelID)
+	// Region resolution (issue #800): with no row region and no AWS_REGION the
+	// catalog default us-east-1 applies, whose cross-region group is "us". The
+	// embedded amazon-bedrock entry, synced to the published catalog
+	// v2026.9.21.2, lists inference_profiles ["us","eu","au","global"] for this
+	// model, so the region contract sends the "us." profile id. This used to
+	// assert the id verbatim, which held only while the embedded entry was a
+	// trimmed stand-in with no profiles for this model.
+	if want := "us.anthropic.claude-opus-4-6-v1"; modelID != want {
+		t.Fatalf("modelID = %q, want %q (us-east-1 is group us; the catalog lists a us profile)", modelID, want)
 	}
 }
 
