@@ -114,9 +114,9 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/team/WorkspaceTeamGraph.tsx",
       "syntax": "<div role=\"button\">",
-      "owner": "C2 Lane 2: Calendar and workspace management/team/settings",
-      "replacement": "Replace raw `<div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
-      "expiryCheckpoint": "C2"
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 2: Calendar and workspace management/team/settings",
+      "replacement": "No replacement planned: this is the AgentNode React Flow drag surface, holding connection Handles and nested IconButton actions (edit/remove) plus AgentDelegatePicker. A native <button> cannot contain nested interactive buttons per the HTML content model, so the Button primitive cannot wrap this root. Reviewed and retained, not scheduled debt.",
+      "expiryCheckpoint": "C6"
     },
     {
       "fingerprint": "090dc63868cddf90a976dd1b4767e886656b4bc0e29e74c8d7f7727be01068de",
@@ -375,9 +375,9 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/ChatImage.tsx",
       "syntax": "<img role=\"button\">",
-      "owner": "C2 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "Replace raw `<img role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
-      "expiryCheckpoint": "C2"
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 3: Chat, sessions and conversation surfaces",
+      "replacement": "No replacement planned: the enlarge trigger is the image itself, not a separate control wrapping it. Wrapping the <img> in the Button primitive (including via asChild) would apply buttonVariants' background/padding/typography classes onto the thumbnail, visibly altering its appearance. Reviewed and retained, not scheduled debt.",
+      "expiryCheckpoint": "C6"
     },
     {
       "fingerprint": "2357ce56588ea17f3f477eff90189e828de8317f07315d454988dd06b9da8c72",
@@ -537,9 +537,9 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/graph/TaskNode.tsx",
       "syntax": "<motion.div role=\"button\">",
-      "owner": "C2 Lane 1: Workspace board, list, graph and task/plan controls",
-      "replacement": "Replace raw `<motion.div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
-      "expiryCheckpoint": "C2"
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 1: Workspace board, list, graph and task/plan controls",
+      "replacement": "No replacement planned: this is the task's React Flow node root, holding target/source connection Handles and a nested TaskActionButton. A native <button> cannot contain a nested button per the HTML content model, so the Button primitive cannot wrap this root. Reviewed and retained, not scheduled debt.",
+      "expiryCheckpoint": "C6"
     },
     {
       "fingerprint": "3688e8fe48bfca2d380b1fda244de2c60a1ff0a85271d4113cec8e30ca2c36d1",
@@ -1149,9 +1149,9 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/chat/ChatScreen.tsx",
       "syntax": "<button>",
-      "owner": "C2 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "Replace raw `<button>` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
-      "expiryCheckpoint": "C2"
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 3: Chat, sessions and conversation surfaces",
+      "replacement": "No replacement planned: this <button> is a row in the slash/mention menu's ARIA listbox (role=\"option\"). The Button primitive always renders an adjacent role=\"status\" live-region sibling (ActionAnnouncement), which would sit between listbox rows and pollute the listbox's expected child structure. Reviewed and retained, not scheduled debt.",
+      "expiryCheckpoint": "C6"
     },
     {
       "fingerprint": "66d5721c856b7a3c39dfdcd53916f21f4aa9c287df8c4c072b5d6613bcb4ed02",
@@ -1266,9 +1266,9 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/workspaces/TaskCard.tsx",
       "syntax": "<div role=\"button\">",
-      "owner": "C2 Lane 1: Workspace board, list, graph and task/plan controls",
-      "replacement": "Replace raw `<div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
-      "expiryCheckpoint": "C2"
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 1: Workspace board, list, graph and task/plan controls",
+      "replacement": "No replacement planned: this is the dnd-kit drag-activator root (ref={drag?.activatorRef}), containing nested real buttons (a subtask row's action button and its error-state Retry button). A native <button> cannot contain nested interactive buttons, so the Button primitive cannot wrap this root. Reviewed and retained, not scheduled debt.",
+      "expiryCheckpoint": "C6"
     },
     {
       "fingerprint": "6fe7eb1b1b642bcbc531e9e6a1742b78bd7a49eaacc2566dd74c1726fdf2bf58",
@@ -1284,9 +1284,9 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/settings/DiagnosticsSection.tsx",
       "syntax": "<div role=\"button\">",
-      "owner": "C2 Lane 6: Settings, providers, connectors and policy controls",
-      "replacement": "Replace raw `<div role=\"button\">` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
-      "expiryCheckpoint": "C2"
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 6: Settings, providers, connectors and policy controls",
+      "replacement": "No replacement planned: this IssueCard toggle wraps block content that, when expanded, includes a nested interactive <a> action-link (issue.action_link). A native <button> cannot contain interactive descendants like an anchor, so the toggle role is applied to the wrapping div instead. Reviewed and retained, not scheduled debt.",
+      "expiryCheckpoint": "C6"
     },
     {
       "fingerprint": "728b4cbcf4da3c1ea7297064073fb1f745afac04e2507b59d594c58bb57fa19f",
@@ -2472,9 +2472,9 @@
       "ruleId": "controls/raw-button",
       "path": "src/components/ui/button.tsx",
       "syntax": "<button>",
-      "owner": "C1 Lead—shared foundations: Catalog foundation/primitive/composite internals",
-      "replacement": "Replace raw `<button>` with the governed Button primitive (variant/size props), or an approved low-level wrapper where the primitive provably cannot apply.",
-      "expiryCheckpoint": "C1"
+      "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C1 Lead—shared foundations: Catalog foundation/primitive/composite internals",
+      "replacement": "No replacement planned: this is the Button primitive's own implementation. The catalogued Button component must render a native <button> somewhere — there is no other primitive to wrap it in without infinite recursion. Reviewed and retained as structurally required, not scheduled debt.",
+      "expiryCheckpoint": "C6"
     },
     {
       "fingerprint": "ce80eb823104c3e46f8a323d0a4375e376901401e3f789ba235907a24a7a1d3a",
