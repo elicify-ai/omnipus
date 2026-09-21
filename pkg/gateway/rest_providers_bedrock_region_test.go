@@ -71,6 +71,42 @@ func bedrockCatalog(t *testing.T) *catalog.Catalog {
 	return c
 }
 
+// TestRestProvidersCatalog_GET_RegionsAndInferenceProfilesSurvive is the
+// orchestrator-review regression: GET /api/v1/providers/catalog was
+// returning amazon-bedrock with `regions` absent, although the parsed
+// catalog Document had them and models carried `inference_profiles`.
+// pkg/providers/catalog's served_test.go proves the same thing package-
+// internally against the raw JSON body; this proves it at the REST layer,
+// through the actual handler, unmarshalled into the SAME generated type
+// (gen.ProvidersCatalog) the SPA's fetch client validates against — so a
+// field-name mismatch between served.go's private marshal shape and the
+// contract would fail here even if it silently dropped the value instead.
+func TestRestProvidersCatalog_GET_RegionsAndInferenceProfilesSurvive(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	api.providerCatalog = bedrockCatalog(t)
+
+	w := getProvidersCatalog(api, "")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	var got gen.ProvidersCatalog
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.Len(t, got.Providers, 1)
+
+	bedrock := got.Providers[0]
+	assert.Equal(t, "amazon-bedrock", bedrock.Id)
+	require.NotNil(t, bedrock.Regions, "CatalogProvider.regions must survive the served GET, not just ParseDocument")
+	require.Len(t, *bedrock.Regions, 2)
+	assert.Equal(t, "us-east-1", (*bedrock.Regions)[0].Id)
+	assert.Equal(t, gen.CatalogProviderRegionsGroup("us"), (*bedrock.Regions)[0].Group)
+	assert.Equal(t, "eu-central-1", (*bedrock.Regions)[1].Id)
+	assert.Equal(t, gen.CatalogProviderRegionsGroup("eu"), (*bedrock.Regions)[1].Group)
+
+	require.Len(t, bedrock.Models, 1)
+	model := bedrock.Models[0]
+	require.NotNil(t, model.InferenceProfiles, "CatalogModel.inference_profiles must survive the served GET")
+	assert.ElementsMatch(t, []gen.CatalogModelInferenceProfiles{"us", "eu"}, *model.InferenceProfiles)
+}
+
 func TestRestProviders_PUT_PersistsAndEchoesRegion(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	api.providerCatalog = bedrockCatalog(t)

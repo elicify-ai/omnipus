@@ -122,6 +122,121 @@ func TestServed_StaleComputedAtApply(t *testing.T) {
 	})
 }
 
+// Issue #800 (Bedrock region contract) — orchestrator-review defect: the
+// served GET /api/v1/providers/catalog body dropped provider.regions and
+// model.inference_profiles entirely. ParseDocument (bedrock_region_test.go)
+// already proves both fields round-trip into the Go Document; this proves
+// they ALSO survive the served-body marshal (providerJSON/modelJSON in
+// served.go), which is the actual body the REST handler writes verbatim and
+// the SPA's ProviderDetailPanel reads. A test built only on hand-made SPA
+// fixtures (as ProviderDetailPanel.awsRegion.test.tsx's CATALOG_PROVIDERS
+// fixture was) cannot catch this — it never round-trips through Go's own
+// marshal at all.
+func TestServed_RegionsAndInferenceProfilesSurvive(t *testing.T) {
+	m := fixtureMap(t)
+	p := provider(t, m, 0)
+	p["regions"] = []any{
+		map[string]any{"id": "us-east-1", "group": "us"},
+		map[string]any{"id": "eu-central-1", "group": "eu"},
+		map[string]any{"id": "us-gov-west-1", "group": ""},
+	}
+	model(t, p, 0)["inference_profiles"] = []any{"us", "eu"}
+
+	c := mustCatalog(t, encode(t, m))
+	s, ok := c.Served()
+	require.True(t, ok)
+
+	var env map[string]any
+	require.NoError(t, json.Unmarshal(s.Body, &env))
+
+	provs, ok := env["providers"].([]any)
+	require.True(t, ok, "envelope 'providers' is not a list: %T", env["providers"])
+	require.NotEmpty(t, provs)
+	row, ok := provs[0].(map[string]any)
+	require.True(t, ok, "provider[0] is not a map: %T", provs[0])
+
+	rawRegions, present := row["regions"]
+	require.True(t, present, "served provider JSON is missing 'regions' entirely (CatalogProvider.regions)")
+	regions, ok := rawRegions.([]any)
+	require.True(t, ok, "served 'regions' is not a list: %T", rawRegions)
+	require.Len(t, regions, 3, "all 3 regions must survive the served marshal")
+
+	first, ok := regions[0].(map[string]any)
+	require.True(t, ok, "regions[0] is not a map: %T", regions[0])
+	assert.Equal(t, "us-east-1", first["id"], "CatalogProviderRegion.id field name/value")
+	assert.Equal(t, "us", first["group"], "CatalogProviderRegion.group field name/value")
+
+	third, ok := regions[2].(map[string]any)
+	require.True(t, ok, "regions[2] is not a map: %T", regions[2])
+	assert.Equal(t, "", third["group"], "on-demand-only region keeps group \"\"")
+
+	modelRows, ok := row["models"].([]any)
+	require.True(t, ok, "provider 'models' is not a list: %T", row["models"])
+	require.NotEmpty(t, modelRows)
+	mrow, ok := modelRows[0].(map[string]any)
+	require.True(t, ok, "models[0] is not a map: %T", modelRows[0])
+
+	rawProfiles, present := mrow["inference_profiles"]
+	require.True(t, present, "served model JSON is missing 'inference_profiles' entirely (CatalogModel.inference_profiles)")
+	profiles, ok := rawProfiles.([]any)
+	require.True(t, ok, "served 'inference_profiles' is not a list: %T", rawProfiles)
+	require.Equal(t, []any{"us", "eu"}, profiles)
+}
+
+// TestServed_EmbeddedSnapshot_BedrockRegionsAndInferenceProfiles proves the
+// real embedded catalog — the one the running gateway actually serves — has
+// the same shape: 22 AWS regions on amazon-bedrock and at least one model
+// with a non-empty inference_profiles list. This is the exact defect a
+// Playwright run against a real gateway caught: the parsed Document had 22
+// regions (Provider.Regions) but the served HTTP body had zero.
+func TestServed_EmbeddedSnapshot_BedrockRegionsAndInferenceProfiles(t *testing.T) {
+	c := New()
+	c.nowFn = func() time.Time { return fixtureFreshNow }
+	require.NoError(t, c.Apply(EmbeddedSnapshot))
+
+	s, ok := c.Served()
+	require.True(t, ok)
+
+	var env map[string]any
+	require.NoError(t, json.Unmarshal(s.Body, &env))
+
+	provs, ok := env["providers"].([]any)
+	require.True(t, ok, "envelope 'providers' is not a list: %T", env["providers"])
+
+	var bedrock map[string]any
+	for _, p := range provs {
+		row, ok := p.(map[string]any)
+		require.True(t, ok, "provider entry is not a map: %T", p)
+		if row["id"] == "amazon-bedrock" {
+			bedrock = row
+			break
+		}
+	}
+	require.NotNil(t, bedrock, "amazon-bedrock missing from the served embedded catalog")
+
+	rawRegions, present := bedrock["regions"]
+	require.True(t, present, "served amazon-bedrock JSON has no 'regions' key at all")
+	regions, ok := rawRegions.([]any)
+	require.True(t, ok, "served amazon-bedrock 'regions' is not a list: %T", rawRegions)
+	assert.Len(t, regions, 22, "served amazon-bedrock must carry all 22 catalog regions")
+
+	modelRows, ok := bedrock["models"].([]any)
+	require.True(t, ok, "amazon-bedrock 'models' is not a list: %T", bedrock["models"])
+	require.NotEmpty(t, modelRows)
+
+	foundNonEmptyProfiles := false
+	for _, mm := range modelRows {
+		mrow, ok := mm.(map[string]any)
+		require.True(t, ok, "model entry is not a map: %T", mm)
+		if profiles, ok := mrow["inference_profiles"].([]any); ok && len(profiles) > 0 {
+			foundNonEmptyProfiles = true
+			break
+		}
+	}
+	assert.True(t, foundNonEmptyProfiles,
+		"at least one amazon-bedrock model must carry a non-empty served 'inference_profiles'")
+}
+
 // T34c (package half): under concurrent Apply, a reader can never observe
 // bytes from one apply paired with the ETag of another.
 func TestServed_AtomicPairUnderConcurrentApply(t *testing.T) {

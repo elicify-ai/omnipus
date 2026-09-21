@@ -12,8 +12,12 @@
  * `PickerCompanyRow.regions: string[]`). This one selects an AWS region
  * WITHIN one already-chosen row, from `CatalogProvider.regions:
  * CatalogProviderRegion[]`. Amazon Bedrock has exactly one catalog row, so
- * the existing group also renders (a single "us-east-1" button, from
- * CatalogProvider.region) — harmless and out of scope here.
+ * the sibling group would be a single "Us-east-1" button with nothing to
+ * choose between — confusing next to the real AWS region select above it
+ * (orchestrator-review UX defect). `ProviderDetailPanel` hides the sibling
+ * group whenever it has only one option or the row carries its own AWS
+ * `regions`; see `ProviderDetailPanel.test.tsx`'s
+ * "hides the sibling region group" suite for that coverage.
  */
 
 import { describe, it, expect } from 'vitest'

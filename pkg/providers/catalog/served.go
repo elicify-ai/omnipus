@@ -150,36 +150,47 @@ type endpointJSON struct {
 }
 
 type providerJSON struct {
-	ID                string           `json:"id"`
-	Name              string           `json:"name"`
-	Company           string           `json:"company"`
-	API               string           `json:"api"`
-	Protocol          Protocol         `json:"protocol,omitempty"`
-	Protocols         []endpointJSON   `json:"protocols,omitempty"`
-	Env               []string         `json:"env,omitempty"`
-	Region            string           `json:"region,omitempty"`
-	Plan              string           `json:"plan,omitempty"`
-	Tier              Tier             `json:"tier"`
-	UnsupportedReason string           `json:"unsupported_reason,omitempty"`
-	AuthMethods       []AuthMethod     `json:"auth_methods"`
-	Aliases           []string         `json:"aliases"`
-	Locality          Locality         `json:"locality"`
-	CLIKind           string           `json:"cli_kind,omitempty"`
-	TokenSource       string           `json:"token_source,omitempty"`
-	ResizeLimits      resizeLimitsJSON `json:"resize_limits"`
-	Models            []modelJSON      `json:"models"`
+	ID                string               `json:"id"`
+	Name              string               `json:"name"`
+	Company           string               `json:"company"`
+	API               string               `json:"api"`
+	Protocol          Protocol             `json:"protocol,omitempty"`
+	Protocols         []endpointJSON       `json:"protocols,omitempty"`
+	Env               []string             `json:"env,omitempty"`
+	Region            string               `json:"region,omitempty"`
+	Regions           []providerRegionJSON `json:"regions,omitempty"`
+	Plan              string               `json:"plan,omitempty"`
+	Tier              Tier                 `json:"tier"`
+	UnsupportedReason string               `json:"unsupported_reason,omitempty"`
+	AuthMethods       []AuthMethod         `json:"auth_methods"`
+	Aliases           []string             `json:"aliases"`
+	Locality          Locality             `json:"locality"`
+	CLIKind           string               `json:"cli_kind,omitempty"`
+	TokenSource       string               `json:"token_source,omitempty"`
+	ResizeLimits      resizeLimitsJSON     `json:"resize_limits"`
+	Models            []modelJSON          `json:"models"`
+}
+
+// providerRegionJSON mirrors contracts/components/schemas/
+// CatalogProviderRegion.yaml field-for-field (issue #800 / Bedrock region
+// contract): the regions offered in a provider's own region picker, each
+// with its cross-region inference profile group.
+type providerRegionJSON struct {
+	ID    string `json:"id"`
+	Group string `json:"group"`
 }
 
 type modelJSON struct {
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	ReleaseDate     string     `json:"release_date,omitempty"`
-	ContextWindow   int        `json:"context_window"`
-	MaxOutputTokens int        `json:"max_output_tokens"`
-	InputModalities []Modality `json:"input_modalities"`
-	ToolCall        bool       `json:"tool_call"`
-	Status          Status     `json:"status"`
-	Disputed        bool       `json:"disputed,omitempty"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	ReleaseDate       string     `json:"release_date,omitempty"`
+	ContextWindow     int        `json:"context_window"`
+	MaxOutputTokens   int        `json:"max_output_tokens"`
+	InputModalities   []Modality `json:"input_modalities"`
+	ToolCall          bool       `json:"tool_call"`
+	Status            Status     `json:"status"`
+	Disputed          bool       `json:"disputed,omitempty"`
+	InferenceProfiles []string   `json:"inference_profiles,omitempty"`
 }
 
 // buildServed serialises doc into the envelope with the given origin
@@ -222,6 +233,7 @@ func providerToJSON(p *Provider) providerJSON {
 		Env:               p.Env,
 		Region:            p.Region,
 		Plan:              p.Plan,
+		Regions:           providerRegionsToJSON(p.Regions),
 		Tier:              p.Tier,
 		UnsupportedReason: p.UnsupportedReason,
 		AuthMethods:       p.AuthMethods,
@@ -242,15 +254,16 @@ func providerToJSON(p *Provider) providerJSON {
 	for i := range p.Models {
 		m := &p.Models[i]
 		out.Models = append(out.Models, modelJSON{
-			ID:              m.ID,
-			Name:            m.Name,
-			ReleaseDate:     m.ReleaseDate,
-			ContextWindow:   m.ContextWindow,
-			MaxOutputTokens: m.MaxOutputTokens,
-			InputModalities: m.InputModalities,
-			ToolCall:        m.ToolCall,
-			Status:          m.Status,
-			Disputed:        m.Disputed,
+			ID:                m.ID,
+			Name:              m.Name,
+			ReleaseDate:       m.ReleaseDate,
+			ContextWindow:     m.ContextWindow,
+			MaxOutputTokens:   m.MaxOutputTokens,
+			InputModalities:   m.InputModalities,
+			ToolCall:          m.ToolCall,
+			Status:            m.Status,
+			Disputed:          m.Disputed,
+			InferenceProfiles: m.InferenceProfiles,
 		})
 	}
 	if len(p.Protocols) > 0 {
@@ -258,6 +271,21 @@ func providerToJSON(p *Provider) providerJSON {
 		for _, e := range p.Protocols {
 			out.Protocols = append(out.Protocols, endpointJSON(e))
 		}
+	}
+	return out
+}
+
+// providerRegionsToJSON converts the domain ProviderRegion slice (issue #800
+// / Bedrock region contract) to its served-shape mirror. Returns nil — never
+// an empty slice — so providerJSON's `omitempty` genuinely omits the key for
+// a provider with no region picker.
+func providerRegionsToJSON(regions []ProviderRegion) []providerRegionJSON {
+	if len(regions) == 0 {
+		return nil
+	}
+	out := make([]providerRegionJSON, 0, len(regions))
+	for _, r := range regions {
+		out = append(out, providerRegionJSON{ID: r.ID, Group: r.Group})
 	}
 	return out
 }

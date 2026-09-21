@@ -266,6 +266,20 @@ export function ProviderDetailPanel({
   // region is itself one of the offered choices, else the first offered
   // region — never invented.
   const awsRegionOptions = resolvedVariant.regions ?? []
+
+  // Orchestrator-review defect (issue #800): the SIBLING-row region group
+  // just below ("Detected: Us-east-1 — change" with a single "Us-east-1"
+  // button, driven by company.regions — SIBLING catalog ROWS, see the
+  // testid block's comment) is a single-option group for any company with
+  // exactly one catalog row, which is exactly Bedrock's shape. Rendered
+  // alongside the new AWS region <select> above, it reads as two competing
+  // region controls for the same decision. A single-option group carries no
+  // information (there is nothing to choose between), so it is hidden
+  // whenever there is only one option OR the resolved row already offers
+  // its own AWS region picker — either condition alone would fix Bedrock;
+  // both together also cover a hypothetical future row that has both a
+  // sibling split AND an AWS picker.
+  const showSiblingRegionGroup = company.regions.length > 1 && awsRegionOptions.length === 0
   const defaultAwsRegion = awsRegionOptions.some((r) => r.id === resolvedVariant.region)
     ? (resolvedVariant.region ?? '')
     : (awsRegionOptions[0]?.id ?? '')
@@ -344,7 +358,7 @@ export function ProviderDetailPanel({
       )}
 
       {/* ── Region, pre-selected from the locale (FR-027) ───────────────── */}
-      {company.regions.length > 0 && (
+      {showSiblingRegionGroup && (
         <div className="flex flex-col gap-1">
           <span
             id={regionGroupLabelId}
