@@ -51,6 +51,7 @@ import { MarkdownText } from './markdown-text'
 import { SubagentBlock } from './SubagentBlock'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -694,16 +695,16 @@ function AssistantMessageRetryButton() {
   }
 
   return (
-    <button tabIndex={0}
-      type="button"
+    <Button
+      variant="ghost"
       onClick={handleRetry}
       aria-label="Retry — resend the last user message"
-      className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
       title="Retry — resend the last user message"
     >
       <ArrowCounterClockwise size={11} />
       <span>Retry</span>
-    </button>
+    </Button>
   )
 }
 
@@ -1039,17 +1040,17 @@ function UserMessageRetryButton({ message }: { message: ChatMessage }) {
   return (
     <div className="flex items-center justify-end gap-[var(--space-2)] mt-[var(--space-1)]">
       <span className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">Send failed</span>
-      <button tabIndex={0}
-        type="button"
+      <Button
+        variant="ghost"
         data-testid="user-message-retry"
         onClick={handleRetry}
         aria-label="Retry — resend this message"
-        className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+        className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
         title="Retry — resend this message"
       >
         <ArrowCounterClockwise size={11} />
         <span>Retry</span>
-      </button>
+      </Button>
     </div>
   )
 }
@@ -1186,11 +1187,11 @@ function StaticCopyButton({ text }: { text: string }) {
     })
   }, [text])
   return (
-    <button tabIndex={0}
-      type="button"
+    <Button
+      variant="ghost"
       aria-label="Copy message"
       onClick={handleCopy}
-      className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
       title="Copy message"
     >
       {copied ? (
@@ -1204,7 +1205,7 @@ function StaticCopyButton({ text }: { text: string }) {
           <span>Copy</span>
         </>
       )}
-    </button>
+    </Button>
   )
 }
 
@@ -2011,10 +2012,10 @@ function AssistantMessage() {
         {!showEmptyPlaceholder && !isTerminalEmpty && (
           <ActionBarPrimitive.Root className="flex items-center gap-[var(--space-1)] opacity-70 hover:opacity-100 transition-opacity duration-150">
             <ActionBarPrimitive.Copy asChild>
-              <button tabIndex={0}
-                type="button"
+              <Button
+                variant="ghost"
                 aria-label="Copy message"
-                className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
                 title="Copy message"
               >
                 <AuiIf condition={(s) => s.message.isCopied}>
@@ -2025,7 +2026,7 @@ function AssistantMessage() {
                   <Copy size={11} />
                   <span>Copy</span>
                 </AuiIf>
-              </button>
+              </Button>
             </ActionBarPrimitive.Copy>
             <AssistantMessageRetryButton />
           </ActionBarPrimitive.Root>
@@ -2571,15 +2572,15 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
             Connection lost after all retry attempts.
           </span>
-          <button tabIndex={0}
-            type="button"
+          <Button
+            variant="ghost"
             onClick={reconnect}
-            className="flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
+            className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)] shrink-0"
             aria-label="Reconnect now"
           >
             <ArrowClockwise size={12} weight="bold" />
             Reconnect now
-          </button>
+          </Button>
         </div>
       )}
       {showTransientDisconnect && (reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
@@ -3071,8 +3072,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // so Stop keeps its own dedicated element rather than being
             // folded into a menu/toggle.
             <>
-              <button tabIndex={6}
-                type="button"
+              <Button
+                tabIndex={6}
+                variant="ghost"
                 data-testid="stop-btn"
                 onClick={() => {
                   // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
@@ -3085,20 +3087,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 className={cn(
                   // h-9 + mb-0.5: same footprint as the send button it replaces
                   // mid-stream (keeps the row from jumping on morph).
-                  'shrink-0 rounded-lg mb-[var(--space-0-5)] flex items-center justify-center transition-colors',
+                  'h-auto shrink-0 rounded-lg mb-[var(--space-0-5)]',
                   cancelState.stopLabel === 'stopping'
-                    ? 'px-[var(--space-2-5)] h-9 gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                    : 'w-9 h-9',
+                    ? 'px-[var(--space-2-5)] h-9 gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]'
+                    : 'w-9 h-9 p-0',
                   isStreaming
-                    ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
+                    ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]'
+                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-muted)] cursor-wait',
                 )}
                 aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
                 title="Stop (Escape)"
               >
                 <Stop size={15} weight="fill" />
                 {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
-              </button>
+              </Button>
               {/* Mid-turn steering Send — a PLAIN button, deliberately not
                   ComposerPrimitive.Send: verified (see submitMidStreamMessage's
                   doc comment above) that the primitive's own useComposerSend()
@@ -3113,23 +3115,24 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   empty composer has nothing to send, and Stop alone already
                   covers "I have nothing more to add, stop the response." */}
               {hasComposerText && (
-                <button tabIndex={6}
+                <IconButton
+                  tabIndex={6}
                   type="button"
                   data-testid="chat-send-mid-stream"
                   disabled={!inputEnabled}
                   onClick={submitMidStreamMessage}
                   className={cn(
-                    'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
+                    'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg',
                     inputEnabled
-                      ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)]'
-                      : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
+                      ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] hover:text-[var(--color-primary)]'
+                      : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-muted)] cursor-not-allowed',
                   )}
                   aria-label="Send into the running response"
                   title="Send into the running response"
                   aria-describedby="mid-stream-send-hint"
                 >
                   <PaperPlaneRight size={15} weight="bold" />
-                </button>
+                </IconButton>
               )}
             </>
           ) : (
