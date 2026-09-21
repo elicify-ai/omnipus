@@ -25,6 +25,8 @@ import {
   X,
 } from '@phosphor-icons/react'
 import { cn, initialOf } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { IconRenderer } from '@/components/shared/IconRenderer'
@@ -2576,6 +2578,7 @@ export function BrowserLiveView({
   }
 
   const resolvedClassName = cn(
+                      'h-auto w-auto justify-start rounded-none p-0 text-[length:inherit] font-[var(--font-weight-regular)] disabled:opacity-100',
                       'flex min-w-0 flex-1 items-center gap-[var(--space-1)]',
                       connected ? 'cursor-pointer' : 'cursor-not-allowed',
                       'disabled:cursor-not-allowed',
@@ -2584,18 +2587,23 @@ export function BrowserLiveView({
     <div data-input-mode="dedicated" data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
         <span>{inputError}</span>{' '}
-        <button type="button" tabIndex={0} disabled={inputState === 'paused' && !inputCanResume} onClick={() => {
-          if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
-          else if (viewportHandoffRef.current) {
-            if (!retryViewportRef.current()) setConnectionAttempt((attempt) => attempt + 1)
-          }
-          else if (inputState === 'paused') inputRef.current?.resume()
-          else inputRef.current?.start()
-        }}>{inputState === 'paused' ? 'Resume input' : 'Retry input'}</button>
+        <Button
+          variant="ghost"
+          disabled={inputState === 'paused' && !inputCanResume}
+          onClick={() => {
+            if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
+            else if (viewportHandoffRef.current) {
+              if (!retryViewportRef.current()) setConnectionAttempt((attempt) => attempt + 1)
+            }
+            else if (inputState === 'paused') inputRef.current?.resume()
+            else inputRef.current?.start()
+          }}
+          className="h-auto w-auto p-0 text-[length:inherit] font-[var(--font-weight-regular)] disabled:opacity-100"
+        >{inputState === 'paused' ? 'Resume input' : 'Retry input'}</Button>
       </div>}
       {viewportHandoffState !== 'idle' && (inputState === 'ready' || inputState === 'paused') && !inputError && !displayError && (
         <div role={viewportHandoffState === 'failed' ? 'alert' : 'status'} className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
-          {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <button type="button" tabIndex={0} onClick={() => setConnectionAttempt(attempt => attempt + 1)}>Retry browser</button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
+          {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <Button variant="ghost" onClick={() => setConnectionAttempt(attempt => attempt + 1)} className="h-auto w-auto p-0 text-[length:inherit] font-[var(--font-weight-regular)]">Retry browser</Button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
         </div>
       )}
       {/* == Row A: tabs + window controls =============================
@@ -2640,8 +2648,8 @@ export function BrowserLiveView({
                       : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
                   )}
                 >
-                  <button tabIndex={0}
-                    type="button"
+                  <Button
+                    variant="ghost"
                     aria-pressed={active}
                     disabled={!connected}
                     onClick={() => handleTabSwitch(tab.index)}
@@ -2651,57 +2659,53 @@ export function BrowserLiveView({
                   >
                     <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
                     <span className={cn('min-w-0 flex-1 truncate', active ? 'font-medium' : undefined)}>{label}</span>
-                  </button>
-                  <button tabIndex={0}
-                    type="button"
+                  </Button>
+                  <IconButton
                     onClick={() => handleTabClose(tab.index)}
                     disabled={!connected}
                     aria-label={`Close tab: ${label}`}
                     title="Close tab"
                     data-testid={`browser-tab-close-${tab.index}`}
-                    className="shrink-0 rounded p-[var(--space-0-5)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="h-auto w-auto shrink-0 rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     <X size={10} weight="bold" />
-                  </button>
+                  </IconButton>
                 </div>
               )
             })}
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               onClick={handleTabOpen}
               disabled={!connected}
               aria-label="Open new tab"
               title="Open a new tab"
               data-testid="browser-tab-new"
-              className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Plus size={13} />
-            </button>
+            </IconButton>
           </div>
         ) : (
           <div className="min-w-0 flex-1" />
         )}
         {onPopOut && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             onClick={onPopOut}
             aria-label="Pop out"
             title="Pop out into its own window"
             className={TOOLBAR_ICON_BTN}
           >
             <ArrowSquareOut size={16} />
-          </button>
+          </IconButton>
         )}
         {onClose && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             onClick={onClose}
             aria-label="Close live browser panel"
             title="Close"
             className={TOOLBAR_ICON_BTN}
           >
             <X size={16} />
-          </button>
+          </IconButton>
         )}
       </div>
 
@@ -2715,8 +2719,7 @@ export function BrowserLiveView({
           all the form was ever for, and keeping the toggles outside it avoids
           implying they take part in submission. */}
       <div className="flex h-chrome-header min-h-chrome-header shrink-0 items-center gap-[var(--space-1)] px-[var(--space-2)]">
-        <button tabIndex={0}
-          type="button"
+        <IconButton
           onClick={() => handleToolbarNav('navigate_back')}
           disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
           aria-label="Go back"
@@ -2724,9 +2727,8 @@ export function BrowserLiveView({
           className={TOOLBAR_ICON_BTN}
         >
           <CaretLeft size={16} weight="bold" />
-        </button>
-        <button tabIndex={0}
-          type="button"
+        </IconButton>
+        <IconButton
           onClick={() => handleToolbarNav('reload')}
           disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
           aria-label="Refresh page"
@@ -2734,10 +2736,8 @@ export function BrowserLiveView({
           className={TOOLBAR_ICON_BTN}
         >
           <ArrowsClockwise size={15} />
-        </button>
-        <button
-          type="button"
-          tabIndex={0}
+        </IconButton>
+        <IconButton
           onClick={() => handleToolbarNav('stop_loading')}
           disabled={!connected || annotateMode}
           aria-label="Stop loading"
@@ -2745,7 +2745,7 @@ export function BrowserLiveView({
           className={TOOLBAR_ICON_BTN}
         >
           <X size={15} />
-        </button>
+        </IconButton>
         {/* min-w floor is load-bearing, not cosmetic: with `min-w-0 flex-1`
             alone the field collapsed to 23px on a 575px row (measured on UAT
             v59) once the chips and toggles were added beside it — flex happily
@@ -2804,8 +2804,7 @@ export function BrowserLiveView({
           {driveChip.label}
         </span>
         {canAnnotate && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             onClick={handleToggleAnnotate}
             disabled={!connected}
             aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
@@ -2814,11 +2813,10 @@ export function BrowserLiveView({
             className={cn(TOOLBAR_ICON_BTN, annotateMode ? 'text-[var(--color-accent)]' : undefined)}
           >
             <ChatCircleDots size={16} weight={annotateMode ? 'fill' : 'regular'} />
-          </button>
+          </IconButton>
         )}
         {mediaStream && hasAudio && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             onClick={() => setVideoMuted((m) => !m)}
             aria-label={videoMuted ? 'Unmute audio' : 'Mute audio'}
             title={videoMuted ? 'Unmute audio' : 'Mute audio'}
@@ -2827,7 +2825,7 @@ export function BrowserLiveView({
             className={TOOLBAR_ICON_BTN}
           >
             {videoMuted ? <SpeakerSlash size={16} /> : <SpeakerHigh size={16} />}
-          </button>
+          </IconButton>
         )}
       </div>
 
@@ -2872,15 +2870,14 @@ export function BrowserLiveView({
               <>
                 <WarningCircle size={22} className="text-[var(--color-error)]" />
                 <p className="max-w-full [overflow-wrap:anywhere] text-[var(--color-error)]">{displayError}</p>
-                <button
-                  type="button"
-                  tabIndex={0}
+                <Button
+                  variant="outline"
                   onClick={retryWebRTC}
                   data-testid="browser-live-retry"
-                  className="mt-[var(--space-1)] rounded-full border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  className="h-auto mt-[var(--space-1)] rounded-full border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
                 >
                   Retry
-                </button>
+                </Button>
               </>
             ) : (
               <>
@@ -2996,15 +2993,14 @@ export function BrowserLiveView({
                   <>
                     <WarningCircle size={22} className="text-[var(--color-error)]" />
                     <p className="max-w-full [overflow-wrap:anywhere] text-[var(--color-error)]">{displayError}</p>
-                    <button
-                      type="button"
-                      tabIndex={0}
+                    <Button
+                      variant="outline"
                       onClick={retryWebRTC}
                       data-testid="browser-live-retry-overlay"
-                      className="pointer-events-auto mt-[var(--space-1)] rounded-full border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                      className="h-auto pointer-events-auto mt-[var(--space-1)] rounded-full border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
                     >
                       Retry
-                    </button>
+                    </Button>
                   </>
                 ) : (
                   <>
@@ -3041,8 +3037,8 @@ export function BrowserLiveView({
             connection; this button only requests the control status change. */}
         {visualState === 'agent-working' && (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
-            <button tabIndex={0}
-              type="button"
+            <Button
+              variant="outline"
               onClick={takeWheelIfNeeded}
               // No longer disabled by controlledByOther (2026-08-03): another
               // attached viewer must never make this button dead, since taking
@@ -3050,11 +3046,11 @@ export function BrowserLiveView({
               disabled={!connected}
               aria-label={takeOverLabel}
               title={takeOverLabel}
-              className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="h-auto pointer-events-auto gap-[var(--space-1)] rounded-full border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <HandGrabbing size={13} />
               Take over
-            </button>
+            </Button>
           </div>
         )}
 
@@ -3110,22 +3106,21 @@ export function BrowserLiveView({
                   </p>
                 )}
                 <div className="mt-[var(--space-2)] flex justify-end gap-[var(--space-2)]">
-                  <button tabIndex={0}
-                    type="button"
+                  <Button
+                    variant="ghost"
                     onClick={handleCancelAnnotation}
                     disabled={annotateSubmitting}
-                    className="rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+                    className="h-auto rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     Cancel
-                  </button>
-                  <button tabIndex={0}
-                    type="button"
+                  </Button>
+                  <Button
                     onClick={handleSendAnnotation}
                     disabled={annotateSubmitting || annotateComment.trim().length === 0}
-                    className="rounded bg-[var(--color-accent)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                    className="h-auto rounded bg-[var(--color-accent)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-primary)] hover:bg-[var(--color-accent)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                   >
                     {annotateSubmitting ? 'Sending…' : 'Send'}
-                  </button>
+                  </Button>
                 </div>
               </div>
             </div>
