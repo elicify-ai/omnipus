@@ -806,6 +806,38 @@ describe('OnboardingWizard — sign-in path', () => {
       model: ANTHROPIC_MODEL,
     })
   })
+
+  // Issue #800 (Bedrock region contract): the picker's second-level panel
+  // carries an AWS region control (ProviderDetailPanel.awsRegion.test.tsx)
+  // for any provider whose catalog row offers `regions`. This proves the
+  // wizard actually threads the operator's choice into the completion
+  // request as OnboardingProviderApiKey.region.
+  it('completion sends the selected AWS region as OnboardingProviderApiKey.region (issue #800)', async () => {
+    const BEDROCK_MODEL = 'anthropic.claude-sonnet-4-5-v1:0'
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: BEDROCK_MODEL })
+    await goToStep4()
+    await openPanelForCompany('Amazon', 'bedrock')
+
+    const awsRegionSelect = screen.getByTestId('provider-detail-panel-aws-region')
+    expect((awsRegionSelect as HTMLSelectElement).value).toBe('us-east-1')
+    fireEvent.change(awsRegionSelect, { target: { value: 'eu-central-1' } })
+
+    await confirmPanelWithKey('sk-bedrock-test')
+    await pickModel(BEDROCK_MODEL)
+    await waitFor(() => expect(finishButton()).not.toBeDisabled())
+
+    fireEvent.click(finishButton())
+    await waitFor(() => expect(completeOnboardingTransaction).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(completeOnboardingTransaction).mock.calls[0]![0]
+    expect(body.provider).toEqual({
+      auth_method: 'api_key',
+      id: 'amazon-bedrock',
+      api_key: 'sk-bedrock-test',
+      model: BEDROCK_MODEL,
+      region: 'eu-central-1',
+    })
+  })
 })
 
 // =====================================================================

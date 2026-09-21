@@ -125,6 +125,11 @@ type onboardingProviderChoice struct {
 	APIKey   string
 	Model    string
 	Endpoint string
+	// Region is issue #800's own field (Bedrock region contract): the
+	// selected region for a provider whose catalog entry carries `regions`
+	// (catalog.Provider.Regions). Only the api_key variant carries it on
+	// the wire — Bedrock is api_key-only (ADR-053).
+	Region string
 	// Preferences is step 1's name/tone/detail (FR-OB-010..-018), carried in
 	// the same request because onboarding has no per-step persistence.
 	// Optional (WP5, ADR-0010): a body may omit it entirely, in which case
@@ -302,6 +307,9 @@ func decodeOnboardingCompleteBody(
 	}
 	if variant.Endpoint != nil {
 		choice.Endpoint = *variant.Endpoint
+	}
+	if variant.Region != nil {
+		choice.Region = *variant.Region
 	}
 	return body, choice, true
 }
@@ -897,6 +905,11 @@ func (ro *restAPIHandleCompleteOnboarding) prepareProviderAndCredentials() bool 
 	if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 		ro.newProviderEntry["api_base"] = ep
 	}
+	// Issue #800 (Bedrock region contract): a per-provider-row region
+	// selected during onboarding, persisted verbatim as the row's `region`.
+	if region := strings.TrimSpace(ro.provider.Region); region != "" {
+		ro.newProviderEntry["region"] = region
+	}
 	if config.EditionAuthMode() == config.AuthModeLocal {
 		if ro.prepareLocalAdminCredentials() {
 			return true
@@ -1035,6 +1048,9 @@ func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[strin
 			entryMap["auth_method"] = ro.provider.AuthMethod
 			if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 				entryMap["api_base"] = ep
+			}
+			if region := strings.TrimSpace(ro.provider.Region); region != "" {
+				entryMap["region"] = region
 			}
 			providerList[i] = entryMap
 			found = true

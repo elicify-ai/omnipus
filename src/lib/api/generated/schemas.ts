@@ -42,6 +42,7 @@ type OnboardingProviderApiKey = {
   api_key: string;
   model?: string | undefined;
   endpoint?: string | undefined;
+  region?: string | undefined;
 };
 type OnboardingProviderSignIn = {
   auth_method: "sign_in";
@@ -1386,6 +1387,7 @@ type Provider = {
     | undefined;
   custom?: boolean | undefined;
   company?: string | undefined;
+  region?: string | undefined;
   locality?: ("local" | "cloud") | undefined;
   cli_kind?: ("codex" | "copilot") | undefined;
   auth_method: "api_key" | "sign_in";
@@ -1467,6 +1469,7 @@ type CatalogProvider = {
   protocols?: Array<CatalogProtocol> | undefined;
   env?: Array<string> | undefined;
   region?: string | undefined;
+  regions?: Array<CatalogProviderRegion> | undefined;
   plan?: string | undefined;
   tier: "popular" | "standard" | "unsupported";
   unsupported_reason?:
@@ -1490,6 +1493,10 @@ type CatalogProtocol = {
     | "bedrock";
   api: string;
 };
+type CatalogProviderRegion = {
+  id: string;
+  group: "" | "us" | "eu" | "apac" | "jp" | "au" | "global";
+};
 type CatalogModel = {
   id: string;
   name: string;
@@ -1500,6 +1507,9 @@ type CatalogModel = {
   tool_call: boolean;
   status: "active" | "retired";
   disputed?: boolean | undefined;
+  inference_profiles?:
+    | Array<"us" | "eu" | "apac" | "jp" | "au" | "global">
+    | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
 };
@@ -2787,6 +2797,7 @@ export const OnboardingProviderApiKey =
     api_key: z.string().min(1),
     model: z.string().min(1).max(256).optional(),
     endpoint: z.string().optional(),
+    region: z.string().max(128).optional(),
   }) satisfies z.ZodType<OnboardingProviderApiKey>;
 export const OnboardingProviderSignIn =
   z.object({
@@ -3886,6 +3897,7 @@ export const Provider: z.ZodType<Provider> = z.object({
     .optional(),
   custom: z.boolean().optional(),
   company: z.string().optional(),
+  region: z.string().optional(),
   locality: z.enum(["local", "cloud"]).optional(),
   cli_kind: z.enum(["codex", "copilot"]).optional(),
   auth_method: z.enum(["api_key", "sign_in"]),
@@ -3915,6 +3927,12 @@ export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
   ]),
   api: z.string(),
 });
+export const CatalogProviderRegion: z.ZodType<CatalogProviderRegion> = z.object(
+  {
+    id: z.string().min(1),
+    group: z.enum(["", "us", "eu", "apac", "jp", "au", "global"]),
+  }
+);
 export const CatalogModel: z.ZodType<CatalogModel> = z.object({
   id: z.string().min(1).max(256),
   name: z.string().min(1),
@@ -3927,6 +3945,9 @@ export const CatalogModel: z.ZodType<CatalogModel> = z.object({
   tool_call: z.boolean(),
   status: z.enum(["active", "retired"]),
   disputed: z.boolean().optional(),
+  inference_profiles: z
+    .array(z.enum(["us", "eu", "apac", "jp", "au", "global"]))
+    .optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
 });
@@ -3948,6 +3969,7 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   protocols: z.array(CatalogProtocol).optional(),
   env: z.array(z.string()).optional(),
   region: z.string().optional(),
+  regions: z.array(CatalogProviderRegion).optional(),
   plan: z.string().optional(),
   tier: z.enum(["popular", "standard", "unsupported"]),
   unsupported_reason: z
@@ -3995,6 +4017,7 @@ export const ProviderUpdateRequest = z
     ]),
     auth_method: z.enum(["api_key", "sign_in"]),
     api_base: z.string().max(2048),
+    region: z.string().max(128),
     api_key: z.string(),
     model: z.string(),
     models: z.array(z.string().min(1).max(256)).max(500),

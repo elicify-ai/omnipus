@@ -36,8 +36,21 @@ properties:
     maxLength: 2048
     description: >
       Explicit base URL. Required for a custom row; optional override for a
-      catalog provider (wins over the catalog row). SSRF-checked.
+      catalog provider (wins over the catalog row). SSRF-checked. For a
+      provider with a `regions` picker (e.g. amazon-bedrock), this is the
+      optional custom/private endpoint override (e.g. a VPC endpoint) — when
+      set it wins over the region-derived endpoint.
     example: "https://my-proxy.example.com/v1"
+  region:
+    type: string
+    maxLength: 128
+    description: >
+      Issue #800 (Bedrock region contract): the selected region for a
+      provider row whose catalog entry carries `regions`
+      (CatalogProvider.regions). Precedence at runtime is row setting →
+      `AWS_REGION` environment variable → the catalog's own default `region`.
+      Ignored for a provider whose catalog entry carries no `regions`.
+    example: "eu-central-1"
   api_key:
     type: string
     description: >

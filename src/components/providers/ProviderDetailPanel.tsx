@@ -115,6 +115,13 @@ export interface ProviderDetailSelection {
   plan?: string
   /** The chosen region code, when the company has region variants. */
   region?: string
+  /**
+   * Issue #800 (Bedrock region contract): the selected AWS region, when the
+   * resolved catalog row carries its own `regions` picker
+   * (CatalogProvider.regions) — distinct from `region` above, which selects
+   * between SIBLING catalog rows, not an AWS region within one row.
+   */
+  awsRegion?: string
   /** The typed key — present only for `api_key`, never persisted by this panel. */
   apiKey?: string
 }
@@ -251,16 +258,30 @@ export function ProviderDetailPanel({
   // have had to invent.
   const isLocal = resolvedVariant.locality === 'local'
 
+  // Issue #800 (Bedrock region contract): the resolved catalog row's OWN
+  // region picker — a provider like amazon-bedrock offers no plan/region
+  // VARIANT split (company.regions above is at most one entry, its own
+  // `region` field), so this reads catalog DATA the picker above never
+  // touches. Defaults to the catalog row's own default region when that
+  // region is itself one of the offered choices, else the first offered
+  // region — never invented.
+  const awsRegionOptions = resolvedVariant.regions ?? []
+  const defaultAwsRegion = awsRegionOptions.some((r) => r.id === resolvedVariant.region)
+    ? (resolvedVariant.region ?? '')
+    : (awsRegionOptions[0]?.id ?? '')
+  const [awsRegion, setAwsRegion] = React.useState<string>(defaultAwsRegion)
+
   const selection: ProviderDetailSelection = {
     providerId: authMethod === 'sign_in' && signInProviderId ? signInProviderId : resolvedVariant.id,
     authMethod,
     plan: plan.length > 0 ? plan : undefined,
     region: company.regions.length > 0 ? region : undefined,
+    awsRegion: awsRegionOptions.length > 0 ? awsRegion : undefined,
     apiKey: authMethod === 'api_key' ? (isLocal ? LOCAL_PROVIDER_CREDENTIAL : apiKey) : undefined,
   }
 
   // `onChange` reports the live draft; it must not fire during render.
-  const selectionKey = `${selection.providerId}|${selection.authMethod}|${selection.plan ?? ''}|${selection.region ?? ''}|${selection.apiKey ?? ''}`
+  const selectionKey = `${selection.providerId}|${selection.authMethod}|${selection.plan ?? ''}|${selection.region ?? ''}|${selection.awsRegion ?? ''}|${selection.apiKey ?? ''}`
   const onChangeRef = React.useRef(onChange)
   onChangeRef.current = onChange
   const selectionRef = React.useRef(selection)
@@ -358,6 +379,34 @@ export function ProviderDetailPanel({
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── AWS region (issue #800), beside the API key entry ───────────── */}
+      {awsRegionOptions.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor={`${testId}-aws-region`}
+            className="text-xs uppercase"
+            style={{ color: 'var(--color-muted)' }}
+          >
+            AWS region
+          </label>
+          <select
+            id={`${testId}-aws-region`}
+            tabIndex={0}
+            data-testid={`${testId}-aws-region`}
+            value={awsRegion}
+            onChange={(event) => setAwsRegion(event.target.value)}
+            className="min-h-[32px] rounded border px-2 text-sm"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+          >
+            {awsRegionOptions.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.id}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 

@@ -7,6 +7,7 @@ package providers
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -267,11 +268,27 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if err := requireKey(cfg, row); err != nil {
 			return nil, "", err
 		}
+		// Issue #800 (Bedrock region contract): the region is a per-row
+		// setting, never hard-wired to the catalog's default. Precedence is
+		// exactly row -> AWS_REGION -> the catalog's own default region
+		// (bedrock.ResolveRegion); the derived host is
+		// https://bedrock-runtime.<region>.amazonaws.com
+		// (bedrock.WithRegion), overridden wholesale by an explicit
+		// api_base (a private/VPC endpoint), which wins outright.
+		catRow, _ := CatalogProvider(cfg.Provider)
+		region := bedrock.ResolveRegion(cfg.Region, os.Getenv("AWS_REGION"), catRow.Region)
+		group := bedrockGroupForRegion(catRow.Regions, region)
+		// The runtime model id reads ONLY catalog data — the selected
+		// region's group and the model's own inference_profiles — never a
+		// hand-typed Go list, and never auto-selects "global"
+		// (bedrock.ResolveModelID never invents that prefix on its own).
+		resolvedModelID := bedrock.ResolveModelID(modelID, group, ProviderCatalog().Resolve(cfg.Provider, modelID).InferenceProfiles())
+
 		opts := make([]bedrock.Option, 0, 2)
-		if strings.Contains(row.api, "://") {
-			opts = append(opts, bedrock.WithBaseEndpoint(row.api))
+		if customEndpoint := strings.TrimSpace(cfg.APIBase); customEndpoint != "" {
+			opts = append(opts, bedrock.WithBaseEndpoint(customEndpoint))
 		} else {
-			opts = append(opts, bedrock.WithRegion(row.api))
+			opts = append(opts, bedrock.WithRegion(region))
 		}
 		if cfg.RequestTimeout > 0 {
 			opts = append(opts, bedrock.WithRequestTimeout(time.Duration(cfg.RequestTimeout)*time.Second))
@@ -280,7 +297,7 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if err != nil {
 			return nil, "", err
 		}
-		return p, modelID, nil
+		return p, resolvedModelID, nil
 
 	case catalog.ProtocolCLI:
 		p, err := NewCliProviderForKind(row.cliKind, cfg.Home, "")

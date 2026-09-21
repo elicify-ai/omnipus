@@ -831,7 +831,29 @@
             "image"
           ],
           "tool_call": true,
-          "status": "active"
+          "status": "active",
+          "inference_profiles": [
+            "us",
+            "eu"
+          ]
+        }
+      ],
+      "regions": [
+        {
+          "id": "us-east-1",
+          "group": "us"
+        },
+        {
+          "id": "eu-central-1",
+          "group": "eu"
+        },
+        {
+          "id": "ap-northeast-1",
+          "group": "jp"
+        },
+        {
+          "id": "us-gov-west-1",
+          "group": ""
         }
       ]
     },

@@ -76,6 +76,28 @@ properties:
       beyond the tolerance and the last-known-good value was published
       (ADR-067 US-2.AC2). Informational.
     example: false
+  inference_profiles:
+    type: array
+    items:
+      type: string
+      enum:
+        - us
+        - eu
+        - apac
+        - jp
+        - au
+        - global
+    description: >
+      Issue #800 (Bedrock region contract): the cross-region inference
+      profile groups in which a cross-region inference profile exists for
+      this base model. Region-variant ids (e.g. models.dev's
+      `eu.anthropic.claude-sonnet-4-6`) are folded into this field on the
+      base model, never listed as a separate model. Runtime model-id
+      resolution prefixes the bare id with `<group>.` only when the
+      selected region's group is non-empty AND present in this list; a
+      `global` profile is never auto-selected. Absent or empty means only
+      on-demand (regional, unprefixed) access exists.
+    example: ["us", "eu"]
   window_source:
     $ref: './ContextWindowSource.yaml'
   window_unknown:

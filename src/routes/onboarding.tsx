@@ -305,6 +305,11 @@ type ProviderSelection = {
   apiKey: string
   apiBase?: string
   protocol?: 'openai-compatible' | 'anthropic'
+  /**
+   * Issue #800 (Bedrock region contract): the selected AWS region, when the
+   * picker's second level offered one (ProviderDetailSelection.awsRegion).
+   */
+  awsRegion?: string
   /** What the summary calls it: the company for a catalog row, the id otherwise. */
   displayName: string
 }
@@ -470,6 +475,7 @@ function OnboardingWizard() {
       authMethod: confirmed.authMethod,
       entry,
       apiKey: confirmed.apiKey ?? '',
+      awsRegion: confirmed.awsRegion,
       displayName: entry?.company ?? confirmed.providerId,
     })
     setSelectedModel('')
@@ -595,6 +601,7 @@ function OnboardingWizard() {
               api_key: selection.apiKey,
               model: selectedModel,
               ...(selection.apiBase ? { endpoint: selection.apiBase } : {}),
+              ...(selection.awsRegion ? { region: selection.awsRegion } : {}),
             }
       const resp = await completeOnboardingTransaction({
         provider,

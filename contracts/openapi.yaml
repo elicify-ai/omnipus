@@ -1512,6 +1512,8 @@ components:
       $ref: ./components/schemas/CatalogModel.yaml
     CatalogProtocol:
       $ref: ./components/schemas/CatalogProtocol.yaml
+    CatalogProviderRegion:
+      $ref: ./components/schemas/CatalogProviderRegion.yaml
     CatalogResizeLimits:
       $ref: ./components/schemas/CatalogResizeLimits.yaml
     ContextWindowSource:

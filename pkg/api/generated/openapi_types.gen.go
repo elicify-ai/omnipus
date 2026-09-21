@@ -1127,6 +1127,36 @@ func (e AuditLogResponseEntriesDecision) Valid() bool {
 	}
 }
 
+// Defines values for CatalogModelInferenceProfiles.
+const (
+	CatalogModelInferenceProfilesApac   CatalogModelInferenceProfiles = "apac"
+	CatalogModelInferenceProfilesAu     CatalogModelInferenceProfiles = "au"
+	CatalogModelInferenceProfilesEu     CatalogModelInferenceProfiles = "eu"
+	CatalogModelInferenceProfilesGlobal CatalogModelInferenceProfiles = "global"
+	CatalogModelInferenceProfilesJp     CatalogModelInferenceProfiles = "jp"
+	CatalogModelInferenceProfilesUs     CatalogModelInferenceProfiles = "us"
+)
+
+// Valid indicates whether the value is a known member of the CatalogModelInferenceProfiles enum.
+func (e CatalogModelInferenceProfiles) Valid() bool {
+	switch e {
+	case CatalogModelInferenceProfilesApac:
+		return true
+	case CatalogModelInferenceProfilesAu:
+		return true
+	case CatalogModelInferenceProfilesEu:
+		return true
+	case CatalogModelInferenceProfilesGlobal:
+		return true
+	case CatalogModelInferenceProfilesJp:
+		return true
+	case CatalogModelInferenceProfilesUs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CatalogModelInputModalities.
 const (
 	CatalogModelInputModalitiesAudio CatalogModelInputModalities = "audio"
@@ -1280,6 +1310,36 @@ func (e CatalogProviderLocality) Valid() bool {
 	}
 }
 
+// Defines values for CatalogProviderModelsInferenceProfiles.
+const (
+	CatalogProviderModelsInferenceProfilesApac   CatalogProviderModelsInferenceProfiles = "apac"
+	CatalogProviderModelsInferenceProfilesAu     CatalogProviderModelsInferenceProfiles = "au"
+	CatalogProviderModelsInferenceProfilesEu     CatalogProviderModelsInferenceProfiles = "eu"
+	CatalogProviderModelsInferenceProfilesGlobal CatalogProviderModelsInferenceProfiles = "global"
+	CatalogProviderModelsInferenceProfilesJp     CatalogProviderModelsInferenceProfiles = "jp"
+	CatalogProviderModelsInferenceProfilesUs     CatalogProviderModelsInferenceProfiles = "us"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderModelsInferenceProfiles enum.
+func (e CatalogProviderModelsInferenceProfiles) Valid() bool {
+	switch e {
+	case CatalogProviderModelsInferenceProfilesApac:
+		return true
+	case CatalogProviderModelsInferenceProfilesAu:
+		return true
+	case CatalogProviderModelsInferenceProfilesEu:
+		return true
+	case CatalogProviderModelsInferenceProfilesGlobal:
+		return true
+	case CatalogProviderModelsInferenceProfilesJp:
+		return true
+	case CatalogProviderModelsInferenceProfilesUs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CatalogProviderModelsInputModalities.
 const (
 	CatalogProviderModelsInputModalitiesAudio CatalogProviderModelsInputModalities = "audio"
@@ -1409,6 +1469,39 @@ func (e CatalogProviderProtocolsProtocol) Valid() bool {
 	}
 }
 
+// Defines values for CatalogProviderRegionsGroup.
+const (
+	CatalogProviderRegionsGroupApac   CatalogProviderRegionsGroup = "apac"
+	CatalogProviderRegionsGroupAu     CatalogProviderRegionsGroup = "au"
+	CatalogProviderRegionsGroupEmpty  CatalogProviderRegionsGroup = ""
+	CatalogProviderRegionsGroupEu     CatalogProviderRegionsGroup = "eu"
+	CatalogProviderRegionsGroupGlobal CatalogProviderRegionsGroup = "global"
+	CatalogProviderRegionsGroupJp     CatalogProviderRegionsGroup = "jp"
+	CatalogProviderRegionsGroupUs     CatalogProviderRegionsGroup = "us"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderRegionsGroup enum.
+func (e CatalogProviderRegionsGroup) Valid() bool {
+	switch e {
+	case CatalogProviderRegionsGroupApac:
+		return true
+	case CatalogProviderRegionsGroupAu:
+		return true
+	case CatalogProviderRegionsGroupEmpty:
+		return true
+	case CatalogProviderRegionsGroupEu:
+		return true
+	case CatalogProviderRegionsGroupGlobal:
+		return true
+	case CatalogProviderRegionsGroupJp:
+		return true
+	case CatalogProviderRegionsGroupUs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CatalogProviderTier.
 const (
 	CatalogProviderTierPopular     CatalogProviderTier = "popular"
@@ -1445,6 +1538,39 @@ func (e CatalogProviderUnsupportedReason) Valid() bool {
 	case CatalogProviderUnsupportedReasonDeploymentUrl:
 		return true
 	case CatalogProviderUnsupportedReasonWithdrawn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CatalogProviderRegionGroup.
+const (
+	CatalogProviderRegionGroupApac   CatalogProviderRegionGroup = "apac"
+	CatalogProviderRegionGroupAu     CatalogProviderRegionGroup = "au"
+	CatalogProviderRegionGroupEmpty  CatalogProviderRegionGroup = ""
+	CatalogProviderRegionGroupEu     CatalogProviderRegionGroup = "eu"
+	CatalogProviderRegionGroupGlobal CatalogProviderRegionGroup = "global"
+	CatalogProviderRegionGroupJp     CatalogProviderRegionGroup = "jp"
+	CatalogProviderRegionGroupUs     CatalogProviderRegionGroup = "us"
+)
+
+// Valid indicates whether the value is a known member of the CatalogProviderRegionGroup enum.
+func (e CatalogProviderRegionGroup) Valid() bool {
+	switch e {
+	case CatalogProviderRegionGroupApac:
+		return true
+	case CatalogProviderRegionGroupAu:
+		return true
+	case CatalogProviderRegionGroupEmpty:
+		return true
+	case CatalogProviderRegionGroupEu:
+		return true
+	case CatalogProviderRegionGroupGlobal:
+		return true
+	case CatalogProviderRegionGroupJp:
+		return true
+	case CatalogProviderRegionGroupUs:
 		return true
 	default:
 		return false
@@ -5945,6 +6071,36 @@ func (e ProvidersCatalogProvidersLocality) Valid() bool {
 	}
 }
 
+// Defines values for ProvidersCatalogProvidersModelsInferenceProfiles.
+const (
+	ProvidersCatalogProvidersModelsInferenceProfilesApac   ProvidersCatalogProvidersModelsInferenceProfiles = "apac"
+	ProvidersCatalogProvidersModelsInferenceProfilesAu     ProvidersCatalogProvidersModelsInferenceProfiles = "au"
+	ProvidersCatalogProvidersModelsInferenceProfilesEu     ProvidersCatalogProvidersModelsInferenceProfiles = "eu"
+	ProvidersCatalogProvidersModelsInferenceProfilesGlobal ProvidersCatalogProvidersModelsInferenceProfiles = "global"
+	ProvidersCatalogProvidersModelsInferenceProfilesJp     ProvidersCatalogProvidersModelsInferenceProfiles = "jp"
+	ProvidersCatalogProvidersModelsInferenceProfilesUs     ProvidersCatalogProvidersModelsInferenceProfiles = "us"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersModelsInferenceProfiles enum.
+func (e ProvidersCatalogProvidersModelsInferenceProfiles) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersModelsInferenceProfilesApac:
+		return true
+	case ProvidersCatalogProvidersModelsInferenceProfilesAu:
+		return true
+	case ProvidersCatalogProvidersModelsInferenceProfilesEu:
+		return true
+	case ProvidersCatalogProvidersModelsInferenceProfilesGlobal:
+		return true
+	case ProvidersCatalogProvidersModelsInferenceProfilesJp:
+		return true
+	case ProvidersCatalogProvidersModelsInferenceProfilesUs:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProvidersCatalogProvidersModelsInputModalities.
 const (
 	ProvidersCatalogProvidersModelsInputModalitiesAudio ProvidersCatalogProvidersModelsInputModalities = "audio"
@@ -6068,6 +6224,39 @@ func (e ProvidersCatalogProvidersProtocolsProtocol) Valid() bool {
 	case ProvidersCatalogProvidersProtocolsProtocolOllama:
 		return true
 	case ProvidersCatalogProvidersProtocolsProtocolOpenaiCompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ProvidersCatalogProvidersRegionsGroup.
+const (
+	ProvidersCatalogProvidersRegionsGroupApac   ProvidersCatalogProvidersRegionsGroup = "apac"
+	ProvidersCatalogProvidersRegionsGroupAu     ProvidersCatalogProvidersRegionsGroup = "au"
+	ProvidersCatalogProvidersRegionsGroupEmpty  ProvidersCatalogProvidersRegionsGroup = ""
+	ProvidersCatalogProvidersRegionsGroupEu     ProvidersCatalogProvidersRegionsGroup = "eu"
+	ProvidersCatalogProvidersRegionsGroupGlobal ProvidersCatalogProvidersRegionsGroup = "global"
+	ProvidersCatalogProvidersRegionsGroupJp     ProvidersCatalogProvidersRegionsGroup = "jp"
+	ProvidersCatalogProvidersRegionsGroupUs     ProvidersCatalogProvidersRegionsGroup = "us"
+)
+
+// Valid indicates whether the value is a known member of the ProvidersCatalogProvidersRegionsGroup enum.
+func (e ProvidersCatalogProvidersRegionsGroup) Valid() bool {
+	switch e {
+	case ProvidersCatalogProvidersRegionsGroupApac:
+		return true
+	case ProvidersCatalogProvidersRegionsGroupAu:
+		return true
+	case ProvidersCatalogProvidersRegionsGroupEmpty:
+		return true
+	case ProvidersCatalogProvidersRegionsGroupEu:
+		return true
+	case ProvidersCatalogProvidersRegionsGroupGlobal:
+		return true
+	case ProvidersCatalogProvidersRegionsGroupJp:
+		return true
+	case ProvidersCatalogProvidersRegionsGroupUs:
 		return true
 	default:
 		return false
@@ -12113,6 +12302,9 @@ type CatalogModel struct {
 	// Id Bare model id as the provider's API expects it (e.g. "glm-5.2", "z-ai/glm-5.2" on OpenRouter).
 	Id string `json:"id"`
 
+	// InferenceProfiles Issue #800 (Bedrock region contract): the cross-region inference profile groups in which a cross-region inference profile exists for this base model. Region-variant ids (e.g. models.dev's `eu.anthropic.claude-sonnet-4-6`) are folded into this field on the base model, never listed as a separate model. Runtime model-id resolution prefixes the bare id with `<group>.` only when the selected region's group is non-empty AND present in this list; a `global` profile is never auto-selected. Absent or empty means only on-demand (regional, unprefixed) access exists.
+	InferenceProfiles *[]CatalogModelInferenceProfiles `json:"inference_profiles,omitempty"`
+
 	// InputModalities Input modalities the model accepts. MUST include "text".
 	InputModalities []CatalogModelInputModalities `json:"input_modalities"`
 
@@ -12137,6 +12329,9 @@ type CatalogModel struct {
 	// WindowUnknown ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
 	WindowUnknown *bool `json:"window_unknown,omitempty"`
 }
+
+// CatalogModelInferenceProfiles defines model for CatalogModel.InferenceProfiles.
+type CatalogModelInferenceProfiles string
 
 // CatalogModelInputModalities defines model for CatalogModel.InputModalities.
 type CatalogModelInputModalities string
@@ -12201,6 +12396,15 @@ type CatalogProvider struct {
 	// Region Deployment region when the provider has a regional split (e.g. "intl", "china", "us").
 	Region *string `json:"region,omitempty"`
 
+	// Regions Issue #800 (Bedrock region contract): the regions offered in this provider's own region picker, each with its cross-region inference profile group. Distinct from `region` above (a company's plan x region VARIANT split, a different provider id per region) — this field lists the regions ONE provider row itself can be pointed at, e.g. Bedrock's AWS regions. Absent or empty on a provider with no such picker.
+	Regions *[]struct {
+		// Group The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+		Group CatalogProviderRegionsGroup `json:"group"`
+
+		// Id The region identifier as the provider's API expects it (e.g. an AWS region code).
+		Id string `json:"id"`
+	} `json:"regions,omitempty"`
+
 	// ResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
 	ResizeLimits *CatalogResizeLimits `json:"resize_limits,omitempty"`
 
@@ -12223,6 +12427,9 @@ type CatalogProviderCliKind string
 // CatalogProviderLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
 type CatalogProviderLocality string
 
+// CatalogProviderModelsInferenceProfiles defines model for CatalogProvider.Models.InferenceProfiles.
+type CatalogProviderModelsInferenceProfiles string
+
 // CatalogProviderModelsInputModalities defines model for CatalogProvider.Models.InputModalities.
 type CatalogProviderModelsInputModalities string
 
@@ -12238,11 +12445,26 @@ type CatalogProviderProtocol string
 // CatalogProviderProtocolsProtocol defines model for CatalogProvider.Protocols.Protocol.
 type CatalogProviderProtocolsProtocol string
 
+// CatalogProviderRegionsGroup The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+type CatalogProviderRegionsGroup string
+
 // CatalogProviderTier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
 type CatalogProviderTier string
 
 // CatalogProviderUnsupportedReason Required when tier is "unsupported". "cloud-iam" = needs request signing (Bedrock, Vertex, watsonx, SAP AI Core); "deployment-url" = needs a per-deployment URL (Azure); "withdrawn" = vanished upstream. Never shown raw — the SPA maps it to copy.
 type CatalogProviderUnsupportedReason string
+
+// CatalogProviderRegion One region offered in a provider's region picker (issue #800 / Bedrock region contract). `group` names the cross-region inference profile group that region belongs to (`us`, `eu`, `apac`, `jp`, `au`, `global`), or the empty string when the region has no cross-region inference profile group (on-demand only). Runtime model-id resolution reads `group` against a model's `inference_profiles` (CatalogModel.yaml) — see "Runtime model-id resolution" in the Bedrock region contract.
+type CatalogProviderRegion struct {
+	// Group The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+	Group CatalogProviderRegionGroup `json:"group"`
+
+	// Id The region identifier as the provider's API expects it (e.g. an AWS region code).
+	Id string `json:"id"`
+}
+
+// CatalogProviderRegionGroup The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+type CatalogProviderRegionGroup string
 
 // CatalogResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
 type CatalogResizeLimits struct {
@@ -16104,6 +16326,9 @@ type OnboardingProviderApiKey struct {
 
 	// Model The model chosen for the first agent — the probe-validated pick from step 3, persisted as agents.defaults.default_model together with the provider id.
 	Model *string `json:"model,omitempty"`
+
+	// Region Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
+	Region *string `json:"region,omitempty"`
 }
 
 // OnboardingProviderApiKeyAuthMethod Discriminator — this variant authenticates with an API key.
@@ -17281,6 +17506,9 @@ type Provider struct {
 	// Protocol Wire protocol this configured row uses (ADR-067 D11/FR-013). Absent → the catalog provider's primary protocol. Always present on custom rows.
 	Protocol *ProviderProtocol `json:"protocol,omitempty"`
 
+	// Region Issue #800 (Bedrock region contract): the selected region for a row whose catalog entry carries `regions` (CatalogProvider.regions), echoed back from ProviderUpdateRequest.region. Absent when the row has no region setting.
+	Region *string `json:"region,omitempty"`
+
 	// Status One enumeration of exactly six values, shared verbatim by the ADR-067 and ADR-068 specs (ADR-068 FR-038). "connected" when an API key is configured and resolvable. "disconnected" when no key is available. "error" when the provider is configured but the upstream returned a non-retryable error. "unknown-provider" (ADR-067 FR-016) when the configured id is neither a catalog id nor a custom row — the row's models are [] and agents bound to it carry degraded_reason "needs_provider". "signed_in" / "expired" (ADR-068 FR-034) for sign-in providers with a live / lapsed session. The per-model "no context length" state is CatalogModel.window_unknown, never a seventh status.
 	Status ProviderStatus `json:"status"`
 
@@ -17356,7 +17584,7 @@ type ProviderDependentRole string
 
 // ProviderUpdateRequest Request body for PUT /api/v1/providers/{id}. Adds or updates an LLM provider configuration. On new providers, api_key is required. On existing providers, api_key may be omitted to keep the current key.
 type ProviderUpdateRequest struct {
-	// ApiBase Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked.
+	// ApiBase Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
 	ApiBase *string `json:"api_base,omitempty"`
 
 	// ApiKey API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
@@ -17373,6 +17601,9 @@ type ProviderUpdateRequest struct {
 
 	// Protocol Wire protocol to use (ADR-067 FR-013/FR-014). For a catalog provider: optional; absent → the catalog's primary; a protocol the provider does not offer → 400. For a custom row (id not in the catalog): required and restricted to openai-compatible | anthropic (400 otherwise).
 	Protocol *ProviderUpdateRequestProtocol `json:"protocol,omitempty"`
+
+	// Region Issue #800 (Bedrock region contract): the selected region for a provider row whose catalog entry carries `regions` (CatalogProvider.regions). Precedence at runtime is row setting → `AWS_REGION` environment variable → the catalog's own default `region`. Ignored for a provider whose catalog entry carries no `regions`.
+	Region *string `json:"region,omitempty"`
 }
 
 // ProviderUpdateRequestAuthMethod Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
@@ -17424,6 +17655,9 @@ type ProvidersCatalogProvidersCliKind string
 // ProvidersCatalogProvidersLocality Derived on load by the gateway (FR-039); the only local/cloud classification ADR-066/ADR-068 consume.
 type ProvidersCatalogProvidersLocality string
 
+// ProvidersCatalogProvidersModelsInferenceProfiles defines model for ProvidersCatalog.Providers.Models.InferenceProfiles.
+type ProvidersCatalogProvidersModelsInferenceProfiles string
+
 // ProvidersCatalogProvidersModelsInputModalities defines model for ProvidersCatalog.Providers.Models.InputModalities.
 type ProvidersCatalogProvidersModelsInputModalities string
 
@@ -17438,6 +17672,9 @@ type ProvidersCatalogProvidersProtocol string
 
 // ProvidersCatalogProvidersProtocolsProtocol defines model for ProvidersCatalog.Providers.Protocols.Protocol.
 type ProvidersCatalogProvidersProtocolsProtocol string
+
+// ProvidersCatalogProvidersRegionsGroup The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+type ProvidersCatalogProvidersRegionsGroup string
 
 // ProvidersCatalogProvidersTier Picker tier (ADR-067 FR-018, data not code). The popular set is rendered as pinned tiles in catalog order; "unsupported" rows are visible but disabled with unsupported_reason.
 type ProvidersCatalogProvidersTier string

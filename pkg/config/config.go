@@ -1314,6 +1314,14 @@ type ModelConfig struct {
 	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
 
+	// Region is issue #800's own per-provider-row setting (Bedrock region
+	// contract): the selected region for a provider whose catalog entry
+	// carries `regions` (catalog.Provider.Regions). Runtime precedence is
+	// this field -> the AWS_REGION environment variable -> the catalog's
+	// own default region. Ignored for a provider whose catalog entry
+	// carries no `regions`.
+	Region string `json:"region,omitempty"`
+
 	// UpdatedAt is stamped on every PUT of this row (ADR-068 MAJ-015) and is
 	// the picker's *Recent* ordering key (Provider.updated_at on the wire).
 	// Mirrors AgentConfig.UpdatedAt. Nil for rows never written through the

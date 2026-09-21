@@ -109,6 +109,30 @@ type Endpoint struct {
 	API      string
 }
 
+// The closed cross-region inference profile group set (issue #800 / Bedrock
+// region contract). "" (used only on ProviderRegion.Group, never on
+// Model.InferenceProfiles) means the region offers on-demand access only —
+// no cross-region inference profile.
+const (
+	RegionGroupUS     = "us"
+	RegionGroupEU     = "eu"
+	RegionGroupAPAC   = "apac"
+	RegionGroupJP     = "jp"
+	RegionGroupAU     = "au"
+	RegionGroupGlobal = "global"
+)
+
+// ProviderRegion is one region offered in a provider's own region picker
+// (issue #800 / Bedrock region contract) — distinct from Provider.Region (a
+// company's plan x region VARIANT split, a different provider id per
+// region). Group is the cross-region inference profile group this region
+// belongs to, or "" when the region has no cross-region inference profile
+// (on-demand only).
+type ProviderRegion struct {
+	ID    string
+	Group string
+}
+
 // Provider is one catalog provider row with its nested models.
 type Provider struct {
 	ID      string
@@ -139,7 +163,12 @@ type Provider struct {
 	Custom bool
 	// Locality is derived on load (FR-039) — the field in the JSON, if any,
 	// is ignored.
-	Locality     Locality
+	Locality Locality
+	// Regions is issue #800's own region picker (Bedrock region contract):
+	// the regions this provider row may be pointed at, each with its
+	// cross-region inference profile group. Empty on a provider with no
+	// such picker.
+	Regions      []ProviderRegion
 	ResizeLimits ResizeLimits
 	Models       []Model
 }
@@ -159,4 +188,10 @@ type Model struct {
 	// Disputed marks a row whose upstream registries disagreed beyond the
 	// tolerance and the last-known-good value was kept (A-22).
 	Disputed bool
+	// InferenceProfiles is issue #800's own field (Bedrock region contract):
+	// the cross-region inference profile groups (a subset of us|eu|apac|
+	// jp|au|global) in which a cross-region inference profile exists for
+	// this base model. Empty means on-demand (regional, unprefixed) access
+	// only.
+	InferenceProfiles []string
 }

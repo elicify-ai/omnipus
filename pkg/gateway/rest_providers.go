@@ -353,6 +353,15 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 		customCopy := true
 		p.Custom = &customCopy
 	}
+	// Issue #800 (Bedrock region contract): echo the row's own selected
+	// region — the representative config row's persisted `region`, when
+	// set. Ignored (never rendered) for a provider whose catalog entry
+	// carries no `regions` would be the ideal gate, but the field is
+	// harmless data on any other row, so it is simply echoed verbatim.
+	if firstRow := agg.firstRow[name]; firstRow != nil && firstRow.Region != "" {
+		regionCopy := firstRow.Region
+		p.Region = &regionCopy
+	}
 	if src.known {
 		if company := src.row.Company; company != "" {
 			companyCopy := company
@@ -426,15 +435,18 @@ func (a *restAPI) deleteProviderHTTP(w http.ResponseWriter, r *http.Request, sub
 // providerPut carries one PUT /api/v1/providers/{id} request through its stages.
 // Each stage writes its own error response and returns false to stop.
 type providerPut struct {
-	w                   http.ResponseWriter
-	r                   *http.Request
-	cfg                 *config.Config
-	providerID          string
-	req                 gen.ProviderUpdateRequest
-	validateEnabled     bool
-	wantsSignIn         bool
-	reqAPIBase          string
-	reqProtocol         string
+	w               http.ResponseWriter
+	r               *http.Request
+	cfg             *config.Config
+	providerID      string
+	req             gen.ProviderUpdateRequest
+	validateEnabled bool
+	wantsSignIn     bool
+	reqAPIBase      string
+	reqProtocol     string
+	// reqRegion is issue #800's own field (Bedrock region contract): the
+	// per-provider-row selected region, persisted verbatim when non-empty.
+	reqRegion           string
 	isCustomRow         bool
 	keyChanged          bool
 	putValidationResult providers_pkg.ValidationResult
@@ -564,6 +576,7 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 	// looks saved and never resolves a model.
 	p.reqAPIBase = derefStr(p.req.ApiBase)
 	p.reqProtocol = derefStr((*string)(p.req.Protocol))
+	p.reqRegion = derefStr(p.req.Region)
 	var admitErr error
 	p.isCustomRow, admitErr = providerAdmission(a.providerCatalog, p.providerID, p.reqAPIBase, p.reqProtocol)
 	if admitErr != nil {
@@ -759,7 +772,7 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 				if p.req.AuthMethod != nil {
 					model["auth_method"] = string(*p.req.AuthMethod)
 				}
-				applyProviderIdentity(model, p.reqAPIBase, p.reqProtocol, p.isCustomRow)
+				applyProviderIdentity(model, p.reqAPIBase, p.reqProtocol, p.reqRegion, p.isCustomRow)
 				updated = true
 				break
 			}
@@ -784,7 +797,7 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 			if len(p.userModelsJSON) > 0 {
 				newEntry["models"] = p.userModelsJSON
 			}
-			applyProviderIdentity(newEntry, p.reqAPIBase, p.reqProtocol, p.isCustomRow)
+			applyProviderIdentity(newEntry, p.reqAPIBase, p.reqProtocol, p.reqRegion, p.isCustomRow)
 			m["providers"] = append(providerList, newEntry)
 		}
 		return nil
@@ -879,6 +892,10 @@ func (a *restAPI) providerPutRespond(p *providerPut) {
 	}
 	if p := providerWireProtocol(catalog.Protocol(p.reqProtocol)); p != nil {
 		providerResp.Protocol = p
+	}
+	if p.reqRegion != "" {
+		regionCopy := p.reqRegion
+		providerResp.Region = &regionCopy
 	}
 	// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 	// Valid outcome and key-absent PUTs carry no validation field.

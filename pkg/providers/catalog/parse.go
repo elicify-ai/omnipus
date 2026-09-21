@@ -62,36 +62,45 @@ type endpointDTO struct {
 }
 
 type providerDTO struct {
-	ID                string           `json:"id"`
-	Name              string           `json:"name"`
-	Company           string           `json:"company"`
-	API               string           `json:"api"`
-	Protocol          string           `json:"protocol"`
-	Protocols         []endpointDTO    `json:"protocols"`
-	Env               []string         `json:"env"`
-	Region            string           `json:"region"`
-	Plan              string           `json:"plan"`
-	Tier              string           `json:"tier"`
-	UnsupportedReason string           `json:"unsupported_reason"`
-	AuthMethods       []string         `json:"auth_methods"`
-	Aliases           []string         `json:"aliases"`
-	CLIKind           string           `json:"cli_kind"`
-	TokenSource       string           `json:"token_source"`
-	ResizeLimits      *resizeLimitsDTO `json:"resize_limits"`
-	Models            []modelDTO       `json:"models"`
+	ID                string              `json:"id"`
+	Name              string              `json:"name"`
+	Company           string              `json:"company"`
+	API               string              `json:"api"`
+	Protocol          string              `json:"protocol"`
+	Protocols         []endpointDTO       `json:"protocols"`
+	Env               []string            `json:"env"`
+	Region            string              `json:"region"`
+	Regions           []providerRegionDTO `json:"regions"`
+	Plan              string              `json:"plan"`
+	Tier              string              `json:"tier"`
+	UnsupportedReason string              `json:"unsupported_reason"`
+	AuthMethods       []string            `json:"auth_methods"`
+	Aliases           []string            `json:"aliases"`
+	CLIKind           string              `json:"cli_kind"`
+	TokenSource       string              `json:"token_source"`
+	ResizeLimits      *resizeLimitsDTO    `json:"resize_limits"`
+	Models            []modelDTO          `json:"models"`
 	// locality, if published, is ignored: it is derived on load (FR-039).
 }
 
+// providerRegionDTO is one entry of the issue #800 (Bedrock region
+// contract) `regions` array.
+type providerRegionDTO struct {
+	ID    string `json:"id"`
+	Group string `json:"group"`
+}
+
 type modelDTO struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	ReleaseDate     string   `json:"release_date"`
-	ContextWindow   int      `json:"context_window"`
-	MaxOutputTokens int      `json:"max_output_tokens"`
-	InputModalities []string `json:"input_modalities"`
-	ToolCall        bool     `json:"tool_call"`
-	Status          string   `json:"status"`
-	Disputed        bool     `json:"disputed"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	ReleaseDate       string   `json:"release_date"`
+	ContextWindow     int      `json:"context_window"`
+	MaxOutputTokens   int      `json:"max_output_tokens"`
+	InputModalities   []string `json:"input_modalities"`
+	ToolCall          bool     `json:"tool_call"`
+	Status            string   `json:"status"`
+	Disputed          bool     `json:"disputed"`
+	InferenceProfiles []string `json:"inference_profiles"`
 }
 
 // invalid builds a rejection naming path.
@@ -172,6 +181,84 @@ func parseResizeLimits(path string, dto *resizeLimitsDTO, inherit *ResizeLimits)
 		return ResizeLimits{}, invalid(path+".max_bytes", "must be positive, got %d", dto.MaxBytes)
 	}
 	return ResizeLimits{LongEdgePx: dto.LongEdgePx, MaxBytes: dto.MaxBytes}, nil
+}
+
+// isKnownRegionGroup reports whether s is one of the closed cross-region
+// inference profile groups, or "" (on-demand only — legal on
+// ProviderRegion.Group, never as an inference_profiles entry).
+func isKnownRegionGroup(s string) bool {
+	switch s {
+	case "", RegionGroupUS, RegionGroupEU, RegionGroupAPAC, RegionGroupJP, RegionGroupAU, RegionGroupGlobal:
+		return true
+	}
+	return false
+}
+
+// parseProviderRegions validates the issue #800 `regions` array: every
+// entry needs a non-empty, unique id and a group drawn from the closed set
+// (including "" for on-demand-only). Absent/empty input returns a nil
+// slice — the field is optional (FR-002-style).
+func parseProviderRegions(path string, dtos []providerRegionDTO) ([]ProviderRegion, error) {
+	if len(dtos) == 0 {
+		return nil, nil
+	}
+	out := make([]ProviderRegion, 0, len(dtos))
+	seen := make(map[string]struct{}, len(dtos))
+	for i, r := range dtos {
+		rpath := path + "[" + strconv.Itoa(i) + "]"
+		if r.ID == "" {
+			return nil, invalid(rpath+".id", "must be non-empty")
+		}
+		if _, dup := seen[r.ID]; dup {
+			return nil, invalid(rpath+".id", "duplicate region id %q", r.ID)
+		}
+		seen[r.ID] = struct{}{}
+		if !isKnownRegionGroup(r.Group) {
+			return nil, invalid(rpath+".group", "%q is not one of \"\"|us|eu|apac|jp|au|global", r.Group)
+		}
+		out = append(out, ProviderRegion{ID: r.ID, Group: r.Group})
+	}
+	return out, nil
+}
+
+// parseInferenceProfiles validates the issue #800 `inference_profiles`
+// array: every entry must be a non-empty group from the closed set — unlike
+// ProviderRegion.Group, "" is never legal here (a model cannot carry a
+// cross-region profile in "no group"). Absent/empty input returns a nil
+// slice.
+func parseInferenceProfiles(path string, values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(values))
+	for i, v := range values {
+		if v == "" || !isKnownRegionGroup(v) {
+			return nil, invalid(path+"["+strconv.Itoa(i)+"]", "%q is not one of us|eu|apac|jp|au|global", v)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// parseAuthMethods validates a provider row's `auth_methods` array: at
+// least one entry, each drawn from the closed api_key|sign_in set. Extracted
+// out of parseProvider (gocyclo budget: scripts/budgets/gocyclo.txt pins
+// parseProvider at 33; this loop's own branches counted separately here
+// instead of pushing parseProvider over its listed budget).
+func parseAuthMethods(path string, values []string) ([]AuthMethod, error) {
+	if len(values) == 0 {
+		return nil, invalid(path, "must contain at least one of api_key|sign_in")
+	}
+	out := make([]AuthMethod, 0, len(values))
+	for i, a := range values {
+		switch m := AuthMethod(a); m {
+		case AuthAPIKey, AuthSignIn:
+			out = append(out, m)
+		default:
+			return nil, invalid(path+"["+strconv.Itoa(i)+"]", "%q is not one of api_key|sign_in", a)
+		}
+	}
+	return out, nil
 }
 
 func parseProtocol(s string) (Protocol, bool) {
@@ -275,20 +362,17 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		}
 	}
 
-	if len(dto.AuthMethods) == 0 {
-		return Provider{}, invalid(path+".auth_methods", "must contain at least one of api_key|sign_in")
-	}
-	auth := make([]AuthMethod, 0, len(dto.AuthMethods))
-	for i, a := range dto.AuthMethods {
-		switch m := AuthMethod(a); m {
-		case AuthAPIKey, AuthSignIn:
-			auth = append(auth, m)
-		default:
-			return Provider{}, invalid(path+".auth_methods["+strconv.Itoa(i)+"]", "%q is not one of api_key|sign_in", a)
-		}
+	auth, err := parseAuthMethods(path+".auth_methods", dto.AuthMethods)
+	if err != nil {
+		return Provider{}, err
 	}
 
 	limits, err := parseResizeLimits(path+".resize_limits", dto.ResizeLimits, &defaults)
+	if err != nil {
+		return Provider{}, err
+	}
+
+	regions, err := parseProviderRegions(path+".regions", dto.Regions)
 	if err != nil {
 		return Provider{}, err
 	}
@@ -315,6 +399,7 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		CLIKind:           dto.CLIKind,
 		TokenSource:       dto.TokenSource,
 		Locality:          locality,
+		Regions:           regions,
 		ResizeLimits:      limits,
 		Models:            make([]Model, 0, len(dto.Models)),
 	}
@@ -373,16 +458,21 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 	default:
 		return Model{}, invalid(path+".status", "%q is not one of active|retired", dto.Status)
 	}
+	profiles, err := parseInferenceProfiles(path+".inference_profiles", dto.InferenceProfiles)
+	if err != nil {
+		return Model{}, err
+	}
 	return Model{
-		ID:              dto.ID,
-		Name:            dto.Name,
-		ReleaseDate:     dto.ReleaseDate,
-		ContextWindow:   dto.ContextWindow,
-		MaxOutputTokens: dto.MaxOutputTokens,
-		InputModalities: mods,
-		ToolCall:        dto.ToolCall,
-		Status:          status,
-		Disputed:        dto.Disputed,
+		ID:                dto.ID,
+		Name:              dto.Name,
+		ReleaseDate:       dto.ReleaseDate,
+		ContextWindow:     dto.ContextWindow,
+		MaxOutputTokens:   dto.MaxOutputTokens,
+		InputModalities:   mods,
+		ToolCall:          dto.ToolCall,
+		Status:            status,
+		Disputed:          dto.Disputed,
+		InferenceProfiles: profiles,
 	}, nil
 }
 

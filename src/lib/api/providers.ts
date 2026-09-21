@@ -194,7 +194,10 @@ export function configureProvider(
   // ADR-068 FR-037: an operator-named custom endpoint carries its own base URL
   // and wire protocol — both are contract fields on ProviderUpdateRequest, and
   // the server requires the pair to admit an id that is not in the catalog.
-  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>,
+  // `region` is issue #800's own field (Bedrock region contract): the
+  // per-provider-row selected region, sent whenever the caller has one —
+  // independent of whether this row is custom.
+  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol' | 'region'>,
 ): Promise<Provider> {
   // ProviderUpdateRequest (contract): api_key/model are strings, models is the
   // operator-supplied slug catalogue for endpoint-less providers. `endpoint` is
@@ -207,6 +210,7 @@ export function configureProvider(
   if (models !== undefined) body.models = models
   if (custom?.api_base !== undefined) body.api_base = custom.api_base
   if (custom?.protocol !== undefined) body.protocol = custom.protocol
+  if (custom?.region !== undefined) body.region = custom.region
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
