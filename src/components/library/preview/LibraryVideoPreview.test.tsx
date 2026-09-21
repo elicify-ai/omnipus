@@ -77,6 +77,45 @@ describe('LibraryVideoPreview — no width modifier surface (EMB-030)', () => {
   })
 })
 
+describe('LibraryVideoPreview — fullscreen button', () => {
+  it('renders a fullscreen button with the correct aria-label', () => {
+    render(<LibraryVideoPreview workspaceId="ws-1" entry={ENTRY} />)
+    const button = screen.getByRole('button', { name: /open full screen/i })
+    expect(button).toBeInTheDocument()
+    expect(button).toHaveAttribute('data-testid', 'library-video-fullscreen')
+  })
+
+  it('calls requestFullscreen when the button is clicked', () => {
+    render(<LibraryVideoPreview workspaceId="ws-1" entry={ENTRY} />)
+    const mockRequestFullscreen = vi.fn()
+    const videoElement = screen.getByTestId('library-video-element') as HTMLVideoElement
+    videoElement.requestFullscreen = mockRequestFullscreen
+
+    const button = screen.getByRole('button', { name: /open full screen/i })
+    fireEvent.click(button)
+
+    expect(mockRequestFullscreen).toHaveBeenCalled()
+  })
+
+  it('does not crash if requestFullscreen is unavailable', () => {
+    render(<LibraryVideoPreview workspaceId="ws-1" entry={ENTRY} />)
+    const videoElement = screen.getByTestId('library-video-element') as HTMLVideoElement
+    const original = videoElement.requestFullscreen
+    Object.defineProperty(videoElement, 'requestFullscreen', {
+      value: undefined,
+      configurable: true,
+    })
+
+    const button = screen.getByRole('button', { name: /open full screen/i })
+    expect(() => fireEvent.click(button)).not.toThrow()
+
+    Object.defineProperty(videoElement, 'requestFullscreen', {
+      value: original,
+      configurable: true,
+    })
+  })
+})
+
 // ── An undecodable source is stated, not rendered as a dead player (M6) ─────
 //
 // The element's own fallback CHILDREN fire only when the browser does not
