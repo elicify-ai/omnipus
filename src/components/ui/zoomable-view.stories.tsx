@@ -1,7 +1,14 @@
 import { useState } from 'react'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 import { expect, userEvent, waitFor, within } from 'storybook/test'
+import { Panel, ReactFlow, ReactFlowProvider, type Node } from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
 import { ZoomPill, ZoomableMediaSurface, clampZoomScale, useZoomableViewKeyboard } from './zoomable-view'
+import {
+  useZoomableCanvasOpeningFit,
+  useZoomableCanvasPill,
+  zoomableCanvasFlowProps,
+} from './zoomable-view-canvas'
 
 // Fixture mirrors the shape a Phase-2 consumer will actually wire: a
 // focusable frame owning the `+ − 0 1` shortcuts (D18: "while the view is
@@ -205,5 +212,140 @@ export const TallContentFitsFrame: Story = {
     expect(contentRect.top, evidence).toBeGreaterThanOrEqual(frameRect.top - 1)
     expect(contentRect.right, evidence).toBeLessThanOrEqual(frameRect.right + 1)
     expect(contentRect.bottom, evidence).toBeLessThanOrEqual(frameRect.bottom + 1)
+  },
+}
+
+// ── Canvas preset (React Flow face) — dynamic zoom floor (2026-09-21) ──────
+
+// 126 nodes on a 14x9 grid, 700px apart: a ~9250x5640 bounding box. Even
+// against the widest realistic browser-test viewport (1920x1080) with the
+// fitViewOptions 10% padding shrinking the usable frame further, the TRUE
+// fit-to-frame scale here is well under the shared 25% floor — the exact
+// "more nodes than fit at 25%" case the gap closed below.
+function hugeGraphNodes(): Node[] {
+  const nodes: Node[] = []
+  const cols = 14
+  const rows = 9
+  const spacing = 700
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      nodes.push({ id: `n${row}-${col}`, position: { x: col * spacing, y: row * spacing }, data: {} })
+    }
+  }
+  return nodes
+}
+const HUGE_GRAPH_NODES = hugeGraphNodes()
+const HUGE_GRAPH_FIT_OPTIONS = { padding: 0.1 }
+
+function HugeGraphFixture() {
+  const pill = useZoomableCanvasPill({ fitViewOptions: HUGE_GRAPH_FIT_OPTIONS })
+  useZoomableCanvasOpeningFit(HUGE_GRAPH_FIT_OPTIONS)
+  return (
+    <div data-testid="huge-graph-frame" style={{ width: '100%', height: '100%' }}>
+      <ReactFlow
+        nodes={HUGE_GRAPH_NODES}
+        edges={[]}
+        {...zoomableCanvasFlowProps}
+        minZoom={pill.min}
+        // Hides React Flow's own "React Flow" watermark link — its default
+        // styling fails axe color-contrast on its own (a third-party
+        // stylesheet this story doesn't control), unrelated to the fix this
+        // story proves. `WorkspaceTeamGraph.tsx` makes the same choice.
+        proOptions={{ hideAttribution: true }}
+      >
+        <Panel position="bottom-left">
+          <ZoomPill {...pill} aria-label="Zoom huge graph" />
+        </Panel>
+      </ReactFlow>
+    </div>
+  )
+}
+
+/** REAL-BROWSER regression guard for the canvas preset's own effective-floor
+ *  gap (2026-09-21, `docs/internal/design/components/zoomable-view.md`'s
+ *  "Canvas preset, effective-floor gap" note): React Flow's declarative
+ *  `fitView` boolean prop and a STATIC `minZoom` prop both read the
+ *  scaleExtent BEFORE any per-graph measurement is possible, so a graph
+ *  needing less than 25% to fit opened clipped at 25% (content cut off) and
+ *  could not be zoomed out any further with the pill, wheel, or pinch. Fixed
+ *  by `useZoomableCanvasOpeningFit` (the imperative opening fit) and passing
+ *  the reactive `useZoomableCanvasPill().min` as `<ReactFlow minZoom>`
+ *  instead of a static value. Before the fix (verified by temporarily
+ *  reverting to the pre-fix `zoomable-view-canvas.tsx` — static
+ *  `minZoom: 0.25` in `zoomableCanvasFlowProps`, the declarative `fitView`
+ *  boolean prop, no `useZoomableCanvasOpeningFit`): the opening percent
+ *  read 25% with nodes visibly clipped past the frame, and the zoom-out
+ *  button disabled at 25% instead of the true fit. */
+export const HugeGraphOpensFittedAndZoomsBelowFloor: Story = {
+  parameters: { layout: 'fullscreen' },
+  render: () => (
+    <div style={{ width: '100vw', height: '100vh' }}>
+      <ReactFlowProvider>
+        <HugeGraphFixture />
+      </ReactFlowProvider>
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const frame = await canvas.findByTestId('huge-graph-frame')
+    const percentEl = canvas.getByTestId('zoomable-view-percent')
+
+    // (a) Fit shows every node inside the frame — the opening-fit fix. Wait
+    // for the opening fit to settle (async: frame/node measurement, then
+    // useZoomableCanvasOpeningFit's imperative fitView call).
+    await waitFor(() => {
+      const nodeEls = frame.querySelectorAll<HTMLElement>('.react-flow__node')
+      expect(nodeEls.length).toBe(HUGE_GRAPH_NODES.length)
+      const openingPercent = Number(percentEl.textContent?.replace('%', ''))
+      expect(openingPercent).toBeGreaterThan(0)
+    })
+
+    const nodeEls = Array.from(frame.querySelectorAll<HTMLElement>('.react-flow__node'))
+    const frameRect = frame.getBoundingClientRect()
+    const contentBox = nodeEls.reduce(
+      (box, el) => {
+        const r = el.getBoundingClientRect()
+        return {
+          left: Math.min(box.left, r.left),
+          top: Math.min(box.top, r.top),
+          right: Math.max(box.right, r.right),
+          bottom: Math.max(box.bottom, r.bottom),
+        }
+      },
+      { left: Infinity, top: Infinity, right: -Infinity, bottom: -Infinity },
+    )
+    const openingPercent = Number(percentEl.textContent?.replace('%', ''))
+    const evidence = JSON.stringify({ frameRect, contentBox, openingPercent })
+    expect(contentBox.left, evidence).toBeGreaterThanOrEqual(frameRect.left - 1)
+    expect(contentBox.top, evidence).toBeGreaterThanOrEqual(frameRect.top - 1)
+    expect(contentBox.right, evidence).toBeLessThanOrEqual(frameRect.right + 1)
+    expect(contentBox.bottom, evidence).toBeLessThanOrEqual(frameRect.bottom + 1)
+    // The true fit for content this large needs LESS than the shared 25%
+    // floor — this is the case the fix exists for.
+    expect(openingPercent, evidence).toBeLessThan(25)
+
+    // (b) Zoom in first (100%) so the zoom-out walk below is a genuine
+    // descent, not a no-op already sitting at the floor.
+    await userEvent.click(percentEl)
+    await userEvent.click(within(document.body).getByRole('menuitem', { name: /100%/ }))
+    await waitFor(() => expect(percentEl).toHaveTextContent('100%'))
+
+    // Manual zoom-out (the pill's own stepper — the same scaleExtent wheel
+    // and pinch read) must be able to reach BELOW the static 25% floor, all
+    // the way down to the true fit.
+    const zoomOutButton = canvas.getByTestId('zoomable-view-zoom-out')
+    for (let i = 0; i < 40 && !zoomOutButton.hasAttribute('disabled'); i += 1) {
+      await userEvent.click(zoomOutButton)
+    }
+    await waitFor(() => expect(zoomOutButton).toBeDisabled())
+    const floorPercent = Number(percentEl.textContent?.replace('%', ''))
+    const floorEvidence = JSON.stringify({ openingPercent, floorPercent })
+    expect(floorPercent, floorEvidence).toBeLessThan(25)
+    expect(floorPercent, floorEvidence).toBe(openingPercent)
+
+    // The explicit "Fit" action reaches the SAME floor from any zoom level.
+    await userEvent.click(percentEl)
+    await userEvent.click(within(document.body).getByRole('menuitem', { name: /Fit/ }))
+    await waitFor(() => expect(percentEl).toHaveTextContent(`${floorPercent}%`))
   },
 }

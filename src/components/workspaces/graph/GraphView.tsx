@@ -22,6 +22,7 @@ import type { Task } from '@/lib/api'
 import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
 import {
   contentExceedsFrame,
+  useZoomableCanvasOpeningFit,
   useZoomableCanvasPill,
   zoomableCanvasFlowProps,
 } from '@/components/ui/zoomable-view-canvas'
@@ -47,13 +48,13 @@ function minimapNodeColor(node: TaskGraphNode): string {
   return statusVisual(node.data?.task?.status).color
 }
 
-// Shared fitView tuning (UAT #26/S3 fix) — module-scope so both the
-// mount-time `fitViewOptions` prop and every imperative `fitView()` call (our
-// own re-fit effect below, AND the shared ZoomPill's Fit action / `0`
-// keyboard shortcut, wired to these same options via useZoomableCanvasPill)
-// agree on one floor, and so it's a stable object identity rather than a
-// fresh literal every render — D18's own requirement that "Fit reproduces
-// the opening frame identically."
+// Shared fitView tuning (UAT #26/S3 fix) — module-scope so the OPENING fit
+// (useZoomableCanvasOpeningFit below), the own re-fit effect below, and every
+// imperative `fitView()` call the shared ZoomPill's Fit action / `0`
+// keyboard shortcut makes (wired to these same options via
+// useZoomableCanvasPill) all agree on one floor, and so it's a stable object
+// identity rather than a fresh literal every render — D18's own requirement
+// that "Fit reproduces the opening frame identically."
 //
 // `minZoom: 0.8` is the fix for "at 50 nodes auto-fit renders labels at
 // 3.22px, unreadable": the node title renders at ~14px at scale 1 (measured:
@@ -238,13 +239,13 @@ function GraphViewInner({
 
   // S2 UAT fix (#25) — re-fit the viewport whenever the rendered node SET
   // changes (the plan-scope filter narrowing "All" down to one plan, or
-  // widening back). `fitView` on <ReactFlow> below only ever applies once, at
-  // mount, so without this the canvas kept whatever scale/pan it had before
-  // the scope change: scoping 50 tasks down to 3 left the camera at the
-  // whole-workspace 0.23 zoom (the 3 nodes filling 0.5% of the canvas), and a
-  // manual fit-view on that 3-node scope followed by scoping back to "All"
-  // left the camera at that 3-node 1.40 zoom with 48 of 50 nodes clipped
-  // off-screen — no cue but the minimap.
+  // widening back). Fitting the viewport otherwise only happens once, at
+  // mount (`useZoomableCanvasOpeningFit` below), so without this the canvas
+  // kept whatever scale/pan it had before the scope change: scoping 50 tasks
+  // down to 3 left the camera at the whole-workspace 0.23 zoom (the 3 nodes
+  // filling 0.5% of the canvas), and a manual fit-view on that 3-node scope
+  // followed by scoping back to "All" left the camera at that 3-node 1.40
+  // zoom with 48 of 50 nodes clipped off-screen — no cue but the minimap.
   //
   // Keyed on the SET of node ids (sorted, so member order never matters),
   // not on `layout.nodes`/`nodesWithOpen` themselves — those are fresh
@@ -253,8 +254,8 @@ function GraphViewInner({
   // pan/zoom out from under them for no reason. Only an actual change in
   // WHICH tasks are visible re-fits; the previous key is tracked in a ref
   // (not state) so comparing it never itself triggers a render, and the
-  // very first run (mount, `prevKey === undefined`) is skipped — the
-  // `fitView` prop already frames the initial layout.
+  // very first run (mount, `prevKey === undefined`) is skipped —
+  // `useZoomableCanvasOpeningFit` already frames the initial layout.
   const nodeIdsKey = useMemo(
     () => layout.nodes.map((n) => n.id).sort().join('␟'),
     [layout.nodes],
@@ -356,8 +357,22 @@ function GraphViewInner({
   // ZoomableView canvas preset (D18, docs/internal/design/components/zoomable-view.md):
   // wires the shared ZoomPill to this live React Flow instance — zoom in/out,
   // percent-menu (Fit / 100% / Zoom to selection), reactive to the instance's
-  // own zoom/selection state.
+  // own zoom/selection state. `pill.min` is the DYNAMIC interactive floor
+  // (2026-09-21 fix): `min(25%, the true fit)`, recomputed for the current
+  // node set and frame — passed straight to `<ReactFlow minZoom>` below so
+  // manual zoom-out/wheel/pinch can always reach Fit on an oversized graph,
+  // not just the pill's own "Fit" action.
   const pill = useZoomableCanvasPill({ fitViewOptions: GRAPH_FIT_VIEW_OPTIONS })
+
+  // Drives the OPENING fit imperatively instead of the declarative `fitView`
+  // boolean prop (removed below), which read React Flow's STATIC minZoom
+  // before any per-graph measurement was possible. Uses GraphView's own
+  // tuned options UNMODIFIED — including the 0.8 legibility floor (S3 UAT
+  // fix #26) — so a huge graph opens at the smallest scale that keeps
+  // labels readable, anchored at the start of the content, per D18's
+  // "Opening size" rule; it is the explicit "Fit" action (`pill.onFit`)
+  // that reaches the TRUE fit below that floor, not the opening frame.
+  useZoomableCanvasOpeningFit(GRAPH_FIT_VIEW_OPTIONS)
 
   // D18 keyboard shortcuts ("+ − 0 1 while the view is focused"). Guarded
   // against an editable target so a shortcut key typed into some future
@@ -447,8 +462,7 @@ function GraphViewInner({
         edgesReconnectable={!!onReconnectDependency}
         isValidConnection={isValidConnection}
         {...zoomableCanvasFlowProps}
-        fitView
-        fitViewOptions={GRAPH_FIT_VIEW_OPTIONS}
+        minZoom={pill.min}
         proOptions={{ hideAttribution: false }}
         nodesConnectable={!!onConnectDependency}
         nodesDraggable

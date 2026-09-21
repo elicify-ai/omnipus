@@ -332,10 +332,11 @@ describe('GraphView — re-fits the viewport when the node SET changes (S2 UAT f
   // React Flow to re-fit" is the observable that stands in for "did the
   // camera reframe".
 
-  it('does not call fitView on mount — the fitView prop already frames the initial layout', () => {
+  it('calls fitView exactly once on mount, imperatively, with GraphView\'s own tuned options — the dynamic-floor fix (2026-09-21): the declarative `fitView` prop is gone, replaced by `useZoomableCanvasOpeningFit`', () => {
     const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })]
     renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
-    expect(fitViewCalls).toHaveLength(0)
+    expect(fitViewCalls).toHaveLength(1)
+    expect(fitViewCalls[0]).toMatchObject({ padding: 0.25, maxZoom: 1.1, minZoom: 0.8 })
   })
 
   it('re-fits when the plan-scope filter narrows "All" down to one plan', () => {
@@ -347,7 +348,12 @@ describe('GraphView — re-fits the viewport when the node SET changes (S2 UAT f
     const { rerender, client } = renderGraph(
       <GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} planId={null} />,
     )
-    expect(fitViewCalls).toHaveLength(0)
+    // The one opening-fit call the mount itself makes
+    // (`useZoomableCanvasOpeningFit`) — not zero, since that hook now drives
+    // the opening fit imperatively instead of the removed declarative
+    // `fitView` prop.
+    const callsAfterMount = fitViewCalls.length
+    expect(callsAfterMount).toBeGreaterThanOrEqual(1)
 
     rerender(
       <QueryClientProvider client={client}>
@@ -355,7 +361,7 @@ describe('GraphView — re-fits the viewport when the node SET changes (S2 UAT f
       </QueryClientProvider>,
     )
 
-    expect(fitViewCalls.length).toBeGreaterThanOrEqual(1)
+    expect(fitViewCalls.length).toBeGreaterThan(callsAfterMount)
   })
 
   it('re-fits again when the scope widens back to "All" (the exact regression the tester measured)', () => {
@@ -400,7 +406,12 @@ describe('GraphView — re-fits the viewport when the node SET changes (S2 UAT f
     const { rerender, client } = renderGraph(
       <GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />,
     )
-    expect(fitViewCalls).toHaveLength(0)
+    // The one opening-fit call the mount itself makes
+    // (`useZoomableCanvasOpeningFit`) — the assertion below is that a
+    // data-only rerender adds NO further call, not that there are zero
+    // calls at all.
+    const callsAfterMount = fitViewCalls.length
+    expect(callsAfterMount).toBeGreaterThanOrEqual(1)
 
     const sameIdsDifferentStatus = [
       makeTask({ id: 'a', status: 'in_progress' }),
@@ -412,7 +423,7 @@ describe('GraphView — re-fits the viewport when the node SET changes (S2 UAT f
       </QueryClientProvider>,
     )
 
-    expect(fitViewCalls).toHaveLength(0)
+    expect(fitViewCalls).toHaveLength(callsAfterMount)
   })
 
   it('clamps fitView to a minimum readable scale (S3 UAT fix #26) on every imperative re-fit', () => {
@@ -539,7 +550,7 @@ describe('GraphView — the shared ZoomPill replaces React Flow\'s own <Controls
     expect(screen.getByTestId('zoomable-view-menu-selection')).toBeInTheDocument()
   })
 
-  it('clicking Fit in the pill menu re-fits with GraphView\'s own tuned options — the SAME object the opening fitView prop uses (D18: "Fit reproduces the opening frame identically")', async () => {
+  it('clicking Fit in the pill menu re-fits with GraphView\'s own padding/maxZoom, but OVERRIDES the 0.8 legibility floor with the dynamic true-fit floor — the explicit "Fit" action must always be able to reach full fit (2026-09-21), unlike the opening fit\'s own 0.8-floored call (see the mount test above)', async () => {
     const tasks = [makeTask({ id: 'a' }), makeTask({ id: 'b', blocked_by: ['a'] })]
     renderGraph(<GraphView tasks={tasks} agents={[]} onTaskClick={() => {}} />)
     const user = userEvent.setup()
@@ -549,7 +560,11 @@ describe('GraphView — the shared ZoomPill replaces React Flow\'s own <Controls
     await user.click(screen.getByTestId('zoomable-view-menu-fit'))
 
     expect(fitViewCalls.length).toBeGreaterThan(callsBefore)
-    expect(fitViewCalls[fitViewCalls.length - 1]).toMatchObject({ padding: 0.25, maxZoom: 1.1, minZoom: 0.8 })
+    // This test's small, two-node content doesn't need less than 25% to
+    // fit, so the dynamic floor lands at the default 25% — the huge-graph
+    // case (dynamic floor BELOW 25%) is covered by
+    // zoomable-view-canvas.test.tsx's `useZoomableCanvasPill` unit tests.
+    expect(fitViewCalls[fitViewCalls.length - 1]).toMatchObject({ padding: 0.25, maxZoom: 1.1, minZoom: 0.25 })
   })
 
   it('clicking zoom-in moves the reported percentage up from its starting value', async () => {

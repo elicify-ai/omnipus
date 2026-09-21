@@ -360,6 +360,7 @@
       "exports": [
         "zoomableCanvasFlowProps",
         "useZoomableCanvasPill",
+        "useZoomableCanvasOpeningFit",
         "contentExceedsFrame",
         "UseZoomableCanvasPillOptions"
       ],

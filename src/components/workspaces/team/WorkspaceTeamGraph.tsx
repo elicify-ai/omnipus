@@ -35,6 +35,7 @@ import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
 import {
   contentExceedsFrame,
+  useZoomableCanvasOpeningFit,
   useZoomableCanvasPill,
   zoomableCanvasFlowProps,
 } from '@/components/ui/zoomable-view-canvas'
@@ -641,10 +642,23 @@ function WorkspaceTeamGraphInner({
   // driven by this live React Flow instance, `+ − 0 1` keyboard shortcuts
   // guarded against the delegation-depth number input (EdgeModeEditor.tsx)
   // so typing "0"/"1" there never gets hijacked into a zoom action, and the
-  // mini-map shown only when content exceeds the frame.
+  // mini-map shown only when content exceeds the frame. `pill.min` is the
+  // DYNAMIC interactive floor (2026-09-21 fix): `min(25%, the true fit)`,
+  // recomputed for the current node set and frame — passed straight to
+  // `<ReactFlow minZoom>` below so manual zoom-out/wheel/pinch can always
+  // reach Fit on an oversized team, not just the pill's own "Fit" action.
   const { getNodesBounds } = useReactFlow<AgentFlowNode>()
   const teamFitViewOptions = useMemo(() => ({ padding: 0.25, maxZoom: 1.1 }), [])
   const pill = useZoomableCanvasPill({ fitViewOptions: teamFitViewOptions })
+
+  // Drives the OPENING fit imperatively instead of the declarative `fitView`
+  // boolean prop (removed below), which read React Flow's STATIC minZoom
+  // before any per-graph measurement was possible. Unlike GraphView, the
+  // team graph sets no legibility floor of its own (`teamFitViewOptions` has
+  // no `minZoom`) — so per D18's "Opening size" rule an oversized team opens
+  // at its true fitted scale directly (`min(25%, fit)`), same as the media
+  // viewer face, rather than at some intermediate floor.
+  useZoomableCanvasOpeningFit(teamFitViewOptions)
   const zoomKeyboard = useZoomableViewKeyboard({
     onZoomIn: pill.onZoomIn,
     onZoomOut: pill.onZoomOut,
@@ -754,8 +768,7 @@ function WorkspaceTeamGraphInner({
           nodesFocusable={false}
           elementsSelectable
           {...zoomableCanvasFlowProps}
-          fitView
-          fitViewOptions={teamFitViewOptions}
+          minZoom={pill.min}
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{ type: 'delegation' }}
           colorMode="dark"
