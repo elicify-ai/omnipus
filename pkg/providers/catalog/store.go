@@ -103,6 +103,8 @@ func Boot(ctx context.Context, embedded []byte, puller Puller, store Store, log 
 		// E7: the committed snapshot itself is bad. Boot continues — the
 		// persisted last-known-good may still serve.
 		c.logError("catalog: embedded snapshot is invalid", "error", embErr)
+	} else {
+		c.logSkippedProviders(embDoc)
 	}
 
 	var perDoc *Document
@@ -120,6 +122,7 @@ func Boot(ctx context.Context, embedded []byte, puller Puller, store Store, log 
 					"file", PersistedFileName, "reason", reason, "error", perr)
 			} else {
 				perDoc = doc
+				c.logSkippedProviders(doc)
 			}
 		case errors.Is(err, fs.ErrNotExist):
 			// Fresh install — nothing persisted yet, nothing to say.
