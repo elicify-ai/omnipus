@@ -105,6 +105,70 @@ func absoluteShareTokens(cs config.ContextSettings) int {
 	return chars * 2 / 5
 }
 
+type midTurnBounds uint8
+
+const (
+	midTurnBoundBudget midTurnBounds = 1 << iota
+	midTurnBoundAbsoluteShare
+	allMidTurnBounds = midTurnBoundBudget | midTurnBoundAbsoluteShare
+)
+
+// midTurnResidueStatus describes the window-only residue after every result D5
+// may legally empty has been replaced by its recall mark. total deliberately
+// excludes ephemeral system-note overhead; share is the surviving tool-role
+// portion of that same window. checked records which independent triggers the
+// caller requires the residue to satisfy; breached derives the outcome from
+// these measurements so contradictory measurement/flag states are impossible.
+type midTurnResidueStatus struct {
+	total   int
+	share   int
+	checked midTurnBounds
+}
+
+func (r midTurnResidueStatus) breached(budget, absShare int) midTurnBounds {
+	var out midTurnBounds
+	if r.checked&midTurnBoundBudget != 0 && r.total > budget {
+		out |= midTurnBoundBudget
+	}
+	if r.checked&midTurnBoundAbsoluteShare != 0 && r.share > absShare {
+		out |= midTurnBoundAbsoluteShare
+	}
+	return out
+}
+
+// contextUnrecoverableResidueError reports the bound the protected residue
+// actually breaches. observedTotal/observedShare preserve the live trigger
+// measurements; residue carries the projected or actual post-emptying
+// window/share measurements and excludes ephemeral system-note overhead.
+func contextUnrecoverableResidueError(
+	observedTotal, budget, observedShare, absShare, noteTokens int,
+	residue midTurnResidueStatus,
+	agentID, sessionKey string,
+) error {
+	breached := residue.breached(budget, absShare)
+	var description string
+	switch breached {
+	case allMidTurnBounds:
+		description = "the un-emptiable residue exceeds the context budget and the absolute tool-result-share bound"
+	case midTurnBoundBudget:
+		description = "the un-emptiable residue exceeds the context budget"
+	case midTurnBoundAbsoluteShare:
+		description = "the un-emptiable tool-result residue exceeds the absolute tool-result-share bound"
+	default:
+		description = "internal context-bound accounting error: no breached bound recorded"
+	}
+
+	return fmt.Errorf(
+		"%w: %s "+
+			"(total=%d budget=%d share=%d absolute_share=%d window_residue_total=%d residue_share=%d note_tokens=%d "+
+			"agent_id=%s session_key=%s). "+
+			"Work completed before this stop may already be persisted; inspect the current persisted session/workspace state before retrying or re-delegating",
+		ErrContextUnrecoverable, description,
+		observedTotal, budget, observedShare, absShare, residue.total, residue.share, noteTokens,
+		agentID, sessionKey,
+	)
+}
+
 // ephemeralSystemNoteTokens estimates the token cost of the ephemeral
 // system notes runTurn injects into callMessages before the request that is
 // ACTUALLY sent to the provider (C1): the scratchpad note, the workspace
@@ -289,11 +353,13 @@ func (al *AgentLoop) midTurnWindowCheck(
 	// but a residue that is over budget ONLY because of the un-emptiable
 	// notes is not this guard's failure to report — see the final guard's
 	// own amendment note for where that case is actually surfaced.
-	if !al.midTurnPassCanSucceed(ts, messages, toolDefs, lineOf, archive, budget, absShare, totalFired, shareFired) {
-		return messages, fmt.Errorf(
-			"%w: the un-emptiable residue alone exceeds the budget "+
-				"(total=%d budget=%d share=%d absolute_share=%d agent_id=%s session_key=%s)",
-			ErrContextUnrecoverable, total, budget, share, absShare, ts.agent.ID, ts.sessionKey)
+	residue := al.midTurnPassCanSucceed(
+		ts, messages, toolDefs, lineOf, archive, budget, absShare, totalFired, shareFired,
+	)
+	if residue.breached(budget, absShare) != 0 {
+		return messages, contextUnrecoverableResidueError(
+			total, budget, share, absShare, noteTokens, residue, ts.agent.ID, ts.sessionKey,
+		)
 	}
 
 	// Target = 80 % of each condition that fired (FR-029). The un-fired
@@ -335,10 +401,15 @@ func (al *AgentLoop) midTurnWindowCheck(
 	windowTokens := requestTokens(messages, toolDefs)
 	total = windowTokens + noteTokens
 	share = toolResultShareTokens(messages)
-	if windowTokens > budget || share > absShare {
-		return messages, fmt.Errorf(
-			"%w: total=%d budget=%d share=%d absolute_share=%d (agent_id=%s session_key=%s)",
-			ErrContextUnrecoverable, total, budget, share, absShare, ts.agent.ID, ts.sessionKey)
+	residue = midTurnResidueStatus{
+		total:   windowTokens,
+		share:   share,
+		checked: allMidTurnBounds,
+	}
+	if residue.breached(budget, absShare) != 0 {
+		return messages, contextUnrecoverableResidueError(
+			total, budget, share, absShare, noteTokens, residue, ts.agent.ID, ts.sessionKey,
+		)
 	}
 	if total > budget {
 		contextResidueOverflowsTotal.Add(1)
@@ -353,10 +424,10 @@ func (al *AgentLoop) midTurnWindowCheck(
 	return messages, nil
 }
 
-// midTurnPassCanSucceed reports whether emptying every eligible result could
-// bring the fired trigger conditions back under their thresholds. See the
-// FR-032 pre-check in midTurnWindowCheck for why this runs BEFORE the pass
-// rather than as an after-the-fact guard.
+// midTurnPassCanSucceed projects the request after every eligible result is
+// emptied and reports which fired trigger conditions would remain above their
+// thresholds. See the FR-032 pre-check in midTurnWindowCheck for why this runs
+// BEFORE the pass rather than as an after-the-fact guard.
 //
 // M2: the residue models each candidate's post-emptying content as the SAME
 // recall mark emptyOldestFirst (empty_in_place.go) would build for it — the
@@ -381,9 +452,9 @@ func (al *AgentLoop) midTurnPassCanSucceed(
 	archive []memory.ArchivedMessage,
 	budget, absShare int,
 	totalFired, shareFired bool,
-) bool {
+) midTurnResidueStatus {
 	if ts.agent.Sessions == nil {
-		return true
+		return midTurnResidueStatus{}
 	}
 	set := ts.agent.Sessions.Projection(ts.sessionKey).Entries
 	candidates := eligibleToolResults(messages, lineOf, set)
@@ -412,11 +483,18 @@ func (al *AgentLoop) midTurnPassCanSucceed(
 	// requestTokens already folds in; the ephemeral system notes are a
 	// separate, non-window addend the final guard in midTurnWindowCheck
 	// accounts for on its own terms.
-	if totalFired && requestTokens(residue, toolDefs) > budget {
-		return false
+	residueTotal := requestTokens(residue, toolDefs)
+	residueShare := toolResultShareTokens(residue)
+	var checked midTurnBounds
+	if totalFired {
+		checked |= midTurnBoundBudget
 	}
-	if shareFired && toolResultShareTokens(residue) > absShare {
-		return false
+	if shareFired {
+		checked |= midTurnBoundAbsoluteShare
 	}
-	return true
+	return midTurnResidueStatus{
+		total:   residueTotal,
+		share:   residueShare,
+		checked: checked,
+	}
 }
