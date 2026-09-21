@@ -253,7 +253,7 @@ function ChannelInstanceRow({
           size="sm"
           variant="ghost"
           onClick={onDelete}
-          className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-red-400 transition-colors"
+          className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] transition-colors"
           aria-label={`Delete ${instanceId} instance`}
           data-testid={`channel-delete-btn-${instanceId}`}
         >
@@ -651,12 +651,12 @@ function CreateChannelSheet({
           {/* Server error */}
           {serverError && (
             <div
-              className="flex items-start gap-[var(--space-2)] rounded-md border border-red-500/30 bg-red-500/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
               data-testid="create-channel-server-error"
               role="alert"
             >
-              <Warning size={14} className="text-red-400 mt-[var(--space-0-5)] shrink-0" />
-              <p className="text-[length:var(--type-utility-xs-size)] text-red-400">{serverError}</p>
+              <Warning size={14} className="text-[var(--color-error)] mt-[var(--space-0-5)] shrink-0" />
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{serverError}</p>
             </div>
           )}
 
@@ -744,7 +744,7 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
             including its configuration, credentials, and per-instance state. This cannot be undone.
           </AlertDialogDescription>
           {isEnabled && (
-            <p className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-amber-400" data-testid="delete-instance-enabled-warning">
+            <p className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]" data-testid="delete-instance-enabled-warning">
               This channel is enabled; deleting will stop it and remove its credentials and state.
             </p>
           )}
@@ -753,12 +753,12 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
         {/* Inline error — keep dialog open on failure so the user knows the delete did not succeed */}
         {deleteError && (
           <div
-            className="flex items-start gap-[var(--space-2)] rounded-md border border-red-500/30 bg-red-500/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+            className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
             data-testid="delete-instance-error"
             role="alert"
           >
-            <Warning size={14} className="text-red-400 mt-[var(--space-0-5)] shrink-0" />
-            <p className="text-[length:var(--type-utility-xs-size)] text-red-400">{deleteError}</p>
+            <Warning size={14} className="text-[var(--color-error)] mt-[var(--space-0-5)] shrink-0" />
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{deleteError}</p>
           </div>
         )}
 
@@ -773,7 +773,7 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
           <AlertDialogAction
             disabled={isPending}
             onClick={() => { setDeleteError(null); doDelete() }}
-            className="bg-red-600 hover:bg-red-700 text-white"
+            className="bg-[var(--color-error)] hover:bg-[var(--color-destructive-action-hover)] text-[var(--color-primary)]"
             data-testid="delete-instance-confirm-btn"
           >
             {isPending ? 'Deleting…' : 'Delete'}

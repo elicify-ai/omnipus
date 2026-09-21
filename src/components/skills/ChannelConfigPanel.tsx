@@ -864,13 +864,13 @@ export function ChannelConfigPanel({
             <div
               data-testid="channel-config-fetch-error"
               role="alert"
-              className="flex flex-col items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2-5)] rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[length:var(--type-utility-xs-size)] font-medium"
+              className="flex flex-col items-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2-5)] rounded-md bg-[var(--color-warning)]/10 border border-[var(--color-warning)]/30 text-[var(--color-warning)] text-[length:var(--type-utility-xs-size)] font-medium"
             >
               <span>Couldn&apos;t load {channelName} configuration. Check your connection and try again.</span>
               <Button
                 type="button"
                 variant="link"
-                className="underline text-amber-400 hover:text-amber-400 hover:no-underline"
+                className="underline text-[var(--color-warning)] hover:text-[var(--color-warning)] hover:no-underline"
                 onClick={() => refetchConfig()}
               >
                 Retry
@@ -885,7 +885,7 @@ export function ChannelConfigPanel({
                 <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
                   How do you want to connect?
                 </p>
-                <p className="text-[length:var(--type-caption-size)] text-amber-400 leading-relaxed">
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-warning)] leading-relaxed">
                   Switching connection method clears any values already entered for the other method.
                 </p>
                 <div className="flex flex-col gap-[var(--space-2)]" role="radiogroup" aria-label="Connection method">

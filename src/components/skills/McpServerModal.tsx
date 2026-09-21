@@ -477,7 +477,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
               {/* Standing badge: shown while local-program mode is active */}
               {mode === 'local' && confirmedLocal && (
                 <div
-                  className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400"
+                  className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                   data-testid="stdio-standing-badge"
                   role="status"
                 >
@@ -509,7 +509,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   )}
                   {networkUrlIsInternal && networkUrlValid && (
                     <div
-                      className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400"
+                      className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                       data-testid="ssrf-caution"
                       role="status"
                     >

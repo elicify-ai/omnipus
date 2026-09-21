@@ -202,7 +202,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
         {result.model_dropped_reason && (
           <p
             data-testid={testId ? `${testId}-model-dropped-reason` : undefined}
-            className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
+            className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] leading-snug"
           >
             <WarningCircle size={11} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
             <span>
@@ -216,7 +216,7 @@ export function CommandPreview({ req, agentId, testId }: CommandPreviewProps) {
             {result.dropped_args.map((dropped, i) => (
               <p
                 key={`${dropped.flag}-${i}`}
-                className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400 leading-snug"
+                className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] leading-snug"
               >
                 <WarningCircle size={11} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
                 <span>
@@ -401,7 +401,7 @@ function SmokeTestResult({ result, testId }: { result: ExecutorSmokeTestResponse
 
   return (
     <div data-testid={testId ? `${testId}-success` : undefined} className="space-y-[var(--space-1)]">
-      <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-emerald-400">
+      <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-success)]">
         <CheckCircle size={11} weight="fill" />
         Responded in {formatSmokeTestDuration(result.duration_ms)}
       </p>

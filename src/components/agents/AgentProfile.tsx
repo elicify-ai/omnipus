@@ -1723,7 +1723,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           role="img"
                           aria-label="Provider not connected — fallback will not be used at runtime"
                           title="Provider not connected — fallback will not be used at runtime"
-                          className="inline-flex items-center text-amber-400"
+                          className="inline-flex items-center text-[var(--color-warning)]"
                         >
                           <Warning size={11} weight="fill" />
                         </span>
@@ -1948,7 +1948,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                                 {skill.id}
                               </span>
                               {skill.verified && (
-                                <span className="text-[length:var(--type-caption-size)] px-[var(--space-1)] rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                <span className="text-[length:var(--type-caption-size)] px-[var(--space-1)] rounded bg-[var(--color-success)]/20 text-[var(--color-success)] border border-[var(--color-success)]/30">
                                   verified
                                 </span>
                               )}

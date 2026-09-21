@@ -198,7 +198,7 @@ export function RiskySettingControl<T extends string>({
         {/* Standing amber badge — shown while PERSISTED value is risky */}
         {isCurrentRisky && (
           <div
-            className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400"
+            className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
             data-testid="risky-standing-badge"
             role="status"
             aria-live="polite"

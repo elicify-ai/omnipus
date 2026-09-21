@@ -265,9 +265,9 @@ function RunnerTestResult({ result }: { result: RunnerTestResponse }) {
   const Icon = status.tone === 'ok' ? CheckCircle : status.tone === 'warn' ? WarningCircle : XCircle
   const toneClass =
     status.tone === 'ok'
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+      ? 'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]'
       : status.tone === 'warn'
-        ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+        ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]'
         : 'border-[var(--color-error)]/40 bg-[var(--color-error)]/10 text-[var(--color-error)]'
 
   return (

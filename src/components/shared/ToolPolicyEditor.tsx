@@ -378,7 +378,7 @@ function CategorySection({
   const PILL_CLASS: Record<PolicySummary, string> = {
     mixed:        'bg-violet-500/20 text-violet-300 border-violet-500/40',
     allow:        'bg-[var(--color-status-done)]/20 text-[var(--color-status-done)] border-[var(--color-status-done)]/40',
-    ask:          'bg-amber-500/20 text-amber-400 border-amber-500/40',
+    ask:          'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/40',
     deny:         'bg-[var(--color-status-failed)]/20 text-[var(--color-status-failed)] border-[var(--color-status-failed)]/40',
     unconfigured: 'bg-[var(--color-surface-2)] text-[var(--color-warning)] border-[var(--color-border)]',
   }
@@ -486,7 +486,7 @@ function McpServerSection({
   const BULK_BUTTON_CLASS = (active: boolean, policy: ToolPolicy) => {
     const baseInactive = 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
     const activeAllow = 'bg-[var(--color-status-done)]/20 text-[var(--color-status-done)] border-[var(--color-status-done)]/40'
-    const activeAsk   = 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+    const activeAsk   = 'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/40'
     const activeDeny  = 'bg-[var(--color-status-failed)]/20 text-[var(--color-status-failed)] border-[var(--color-status-failed)]/40'
     if (!active) return baseInactive
     if (policy === 'allow') return activeAllow

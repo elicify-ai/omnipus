@@ -527,11 +527,11 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
           <div className="space-y-[var(--space-2-5)]">
             {/* Unverified notice */}
             <div
-              className="flex items-start gap-[var(--space-2)] rounded-md border border-amber-500/40 bg-amber-500/10 px-[var(--space-2-5)] py-[var(--space-2)]"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
               data-testid="unverified-notice"
             >
-              <ShieldWarning size={15} weight="fill" className="text-amber-400 mt-[var(--space-0-5)] shrink-0" />
-              <div className="text-[length:var(--type-utility-xs-size)] text-amber-300 leading-relaxed">
+              <ShieldWarning size={15} weight="fill" className="text-[var(--color-warning)] mt-[var(--space-0-5)] shrink-0" />
+              <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] leading-relaxed">
                 <span className="font-semibold">Unverified skill.</span> This skill has not been
                 reviewed or signed by the Omnipus team. Only install skills you trust.
               </div>
@@ -557,7 +557,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
                       key={cap}
                       className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
                     >
-                      <Warning size={11} className="text-amber-400 shrink-0" />
+                      <Warning size={11} className="text-[var(--color-warning)] shrink-0" />
                       {cap}
                     </li>
                   ))}

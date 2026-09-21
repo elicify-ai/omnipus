@@ -33,7 +33,7 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
 
   if (validation.kind === 'error') {
     return (
-      <p data-testid={testId} data-cli-status="error" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400">
+      <p data-testid={testId} data-cli-status="error" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <WarningCircle size={11} weight="fill" />
         Couldn't verify — you can still save. Will retry on the next edit.
       </p>
@@ -45,14 +45,14 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
     switch (reason) {
       case 'ok':
         return (
-          <p data-testid={testId} data-cli-status="ok" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-emerald-400">
+          <p data-testid={testId} data-cli-status="ok" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-success)]">
             <CheckCircle size={11} weight="fill" />
             CLI runs{version ? ` · v${version}` : ''}
           </p>
         )
       case 'unauthenticated':
         return (
-          <p data-testid={testId} data-cli-status="unauthenticated" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400">
+          <p data-testid={testId} data-cli-status="unauthenticated" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             <WarningCircle size={11} weight="fill" />
             Installed — not logged in. You can still save.
           </p>
@@ -75,7 +75,7 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
         // unknown-cli, or any future/stale reason value the SPA bundle
         // doesn't recognize (F-17 stale-bundle safety) — non-blocking.
         return (
-          <p data-testid={testId} data-cli-status="unknown" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-amber-400">
+          <p data-testid={testId} data-cli-status="unknown" className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
             <WarningCircle size={11} weight="fill" />
             Couldn't verify — you can still save.
           </p>
@@ -93,7 +93,7 @@ export function CliPathValidationHint({ validation, detectHint, testId }: CliPat
   }
   if (detectHint.kind === 'not-found') {
     return (
-      <p data-testid={testId} data-cli-status="not-found" className="text-[length:var(--type-caption-size)] text-amber-400">
+      <p data-testid={testId} data-cli-status="not-found" className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         Not found — enter manually.
       </p>
     )
