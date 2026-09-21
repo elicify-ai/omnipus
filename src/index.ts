@@ -66,3 +66,25 @@ export type { AvatarImageProps } from './components/ui/avatar'
 export type { TableProps } from './components/ui/table'
 export type { ProgressProps } from './components/ui/progress'
 export { useLoadingVisibility } from './design-system/use-loading-visibility'
+export {
+  ZoomPill,
+  ZoomableMediaSurface,
+  clampZoomScale,
+  computeFittedScale,
+  computeOpeningScale,
+  resolveSvgIntrinsicSize,
+  useZoomableViewKeyboard,
+  useZoomableMedia,
+  ZOOMABLE_VIEW_MIN_SCALE,
+  ZOOMABLE_VIEW_MAX_SCALE,
+  ZOOMABLE_VIEW_LABEL_FLOOR_PX,
+} from './components/ui/zoomable-view'
+export type {
+  ZoomPillProps,
+  ZoomableSize,
+  OpeningScaleParams,
+  ZoomableViewKeyboardHandlers,
+  ZoomableMediaController,
+  UseZoomableMediaOptions,
+  ZoomableMediaSurfaceProps,
+} from './components/ui/zoomable-view'

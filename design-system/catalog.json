@@ -307,6 +307,64 @@
       ]
     },
     {
+      "source": "src/components/ui/zoomable-view.tsx",
+      "classification": "composite",
+      "exports": [
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX",
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
+      ],
+      "publicExports": [
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX"
+      ],
+      "publicTypes": [
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/zoomable-view-canvas.tsx",
+      "classification": "domain",
+      "exports": [
+        "zoomableCanvasFlowProps",
+        "useZoomableCanvasPill",
+        "contentExceedsFrame",
+        "UseZoomableCanvasPillOptions"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
       "source": "src/components/ui/dropdown-menu.tsx",
       "classification": "primitive",
       "exports": [

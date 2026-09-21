@@ -94,6 +94,7 @@ test('public library dependency graph cannot reach application state or domain c
     'slider', 'smart-select', 'switch', 'table', 'tabs', 'textarea',
     'icon-button', 'field', 'confirm-dialog', 'skeleton', 'collection-state',
     'job-status', 'empty-state', 'error-state', 'query-error-state',
+    'zoomable-view',
   ].map((name) => `src/components/ui/${name}.tsx`))
   const foundations = new Set(['src/index.ts', 'src/lib/utils.ts', 'src/design-system/tokens.ts', 'src/design-system/status.ts', 'src/design-system/use-loading-visibility.ts', 'src/styles/library.css', 'src/styles/tokens.generated.css', 'src/styles/tokens.theme.generated.css'])
   const forbidden = paths.filter((file) => !controls.has(file) && !foundations.has(file))

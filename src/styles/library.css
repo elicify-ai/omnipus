@@ -48,6 +48,7 @@
 @source "../components/ui/radio-group.tsx";
 @source "../components/ui/segmented-control.tsx";
 @source "../components/ui/disclosure-row.tsx";
+@source "../components/ui/zoomable-view.tsx";
 
 @theme inline {
   --font-headline: var(--type-page-title-family);
