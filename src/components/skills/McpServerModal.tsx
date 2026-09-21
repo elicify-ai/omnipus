@@ -37,16 +37,7 @@ import {
   SheetDescription,
   SheetFooter,
 } from '@/components/ui/sheet'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -700,36 +691,22 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
         </SheetContent>
       </Sheet>
 
-      {/* Stdio safety confirmation dialog */}
-      <AlertDialog
+      {/* Stdio safety confirmation dialog — follows the RiskySettingControl
+          pattern (see file header): `emphasis="cancel"` favors the safe
+          "network address" path as the primary action, de-emphasizing the
+          "run a local program" confirm. */}
+      <ConfirmDialog
         open={pendingLocal}
         onOpenChange={(o) => {
           if (!o) handleCancelStdio()
         }}
-      >
-        <AlertDialogContent data-testid="stdio-confirm-dialog">
-          <AlertDialogHeader>
-            <AlertDialogTitle>This runs a program on your server</AlertDialogTitle>
-            <AlertDialogDescription>
-              A local-program MCP server launches an executable directly on the
-              machine running the Omnipus gateway. Only connect servers you trust.
-              The program will have access to the gateway process environment.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancelStdio}>
-              Use a network address instead
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleConfirmStdio}
-              className="bg-amber-600/20 text-amber-400 border border-amber-500/40 hover:bg-amber-600/30"
-              data-testid="stdio-confirm-accept"
-            >
-              I understand, continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="This runs a program on your server"
+        description="A local-program MCP server launches an executable directly on the machine running the Omnipus gateway. Only connect servers you trust. The program will have access to the gateway process environment."
+        cancelLabel="Use a network address instead"
+        confirmLabel="I understand, continue"
+        emphasis="cancel"
+        onConfirm={handleConfirmStdio}
+      />
     </>
   )
 }

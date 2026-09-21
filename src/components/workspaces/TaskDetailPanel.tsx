@@ -45,16 +45,7 @@ import { IconButton } from '@/components/ui/icon-button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { canDropTransition } from '@/components/workspaces/BoardView'
@@ -946,26 +937,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </Button>
       )}
 
-      <AlertDialog open={confirmStopLoop} onOpenChange={setConfirmStopLoop}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Stop this task's goal loop?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This winds down the attempt loop for “{task.title}”. In-flight work finishes gracefully; it will not restart automatically.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => doStopLoop()}
-              disabled={isStoppingLoop}
-              className="bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90"
-            >
-              {isStoppingLoop ? 'Stopping…' : 'Stop/Clear'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmStopLoop}
+        onOpenChange={setConfirmStopLoop}
+        title="Stop this task's goal loop?"
+        description={
+          <>
+            This winds down the attempt loop for &ldquo;{task.title}&rdquo;. In-flight work finishes gracefully; it will not restart automatically.
+          </>
+        }
+        confirmLabel={isStoppingLoop ? 'Stopping…' : 'Stop/Clear'}
+        destructive
+        pending={isStoppingLoop}
+        onConfirm={() => doStopLoop()}
+      />
 
       {/* Agent */}
       <Field label="Agent">
@@ -1265,26 +1250,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </Button>
       </div>
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes “{task.title}”. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => doDelete()}
-              disabled={isDeleting}
-              className="bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90"
-            >
-              {isDeleting ? 'Deleting…' : 'Delete'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this task?"
+        description={
+          <>
+            This permanently deletes &ldquo;{task.title}&rdquo;. This cannot be undone.
+          </>
+        }
+        confirmLabel={isDeleting ? 'Deleting…' : 'Delete'}
+        destructive
+        pending={isDeleting}
+        onConfirm={() => doDelete()}
+      />
     </div>
   )
 }

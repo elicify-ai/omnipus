@@ -16,16 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
@@ -433,27 +424,21 @@ function PlanFilterTile({
         </span>
       </Button>
 
-      <AlertDialog open={confirmClear} onOpenChange={setConfirmClear}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Clear this plan?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes “{plan.title}”. Member tasks are not deleted — any that
-              haven’t finished return to the Inbox for triage, and none of them start running.
-              This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => { setConfirmClear(false); onClear() }}
-              className="bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90"
-            >
-              Clear
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear this plan?"
+        description={
+          <>
+            This permanently deletes &ldquo;{plan.title}&rdquo;. Member tasks are not deleted — any that
+            haven&rsquo;t finished return to the Inbox for triage, and none of them start running.
+            This cannot be undone.
+          </>
+        }
+        confirmLabel="Clear"
+        destructive
+        onConfirm={() => { setConfirmClear(false); onClear() }}
+      />
     </div>
   )
 }

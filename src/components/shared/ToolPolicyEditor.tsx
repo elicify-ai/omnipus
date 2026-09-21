@@ -58,16 +58,7 @@ import {
   type RolePreset,
   type ToolPolicyValue,
 } from '@/lib/toolPolicyPresets'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -788,33 +779,31 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
       {/* ADR-052 FR-021/F6 — security affordance for an execute_plan "allow"
           grant. A concrete, testable confirm gate (modal presence), not
           styling: the edit is held in `pendingGrant` and only committed via
-          the Action button. Escape/overlay-dismiss (AlertDialog's
+          the Confirm button. Escape/overlay-dismiss (ConfirmDialog's
           onOpenChange(false)) discards the pending edit exactly like Cancel. */}
-      <AlertDialog open={pendingGrant != null} onOpenChange={(open) => { if (!open) setPendingGrant(null) }}>
-        <AlertDialogContent data-testid="execute-plan-grant-dialog">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-[var(--space-2)]">
-              <ShieldWarning size={18} weight="bold" className="text-[var(--color-warning)]" />
-              Confirm autonomous plan execution
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingGrant?.kind === 'preset'
-                ? `The "${POLICY_PRESETS[pendingGrant.role].label}" preset sets execute_plan to Allow. `
-                : ''}
-              Setting execute_plan to Allow enables autonomous multi-task execution without an approval prompt
-              {'  '}— once this resolves to Allow, the agent can author and run a full task plan end-to-end
-              with no human interlock. Guardrails (concurrency cap, per-task attempt limit, idle expiry,
-              required acceptance criteria) still apply, but no operator approval prompt will be raised.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="execute-plan-grant-cancel">Cancel</AlertDialogCancel>
-            <AlertDialogAction data-testid="execute-plan-grant-confirm" onClick={confirmPendingGrant}>
-              Allow autonomous execution
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={pendingGrant != null}
+        onOpenChange={(open) => { if (!open) setPendingGrant(null) }}
+        title={
+          <span className="flex items-center gap-[var(--space-2)]">
+            <ShieldWarning size={18} weight="bold" className="text-[var(--color-warning)]" />
+            Confirm autonomous plan execution
+          </span>
+        }
+        description={
+          <>
+            {pendingGrant?.kind === 'preset'
+              ? `The "${POLICY_PRESETS[pendingGrant.role].label}" preset sets execute_plan to Allow. `
+              : ''}
+            Setting execute_plan to Allow enables autonomous multi-task execution without an approval prompt
+            {'  '}— once this resolves to Allow, the agent can author and run a full task plan end-to-end
+            with no human interlock. Guardrails (concurrency cap, per-task attempt limit, idle expiry,
+            required acceptance criteria) still apply, but no operator approval prompt will be raised.
+          </>
+        }
+        confirmLabel="Allow autonomous execution"
+        onConfirm={confirmPendingGrant}
+      />
     </div>
   )
 }

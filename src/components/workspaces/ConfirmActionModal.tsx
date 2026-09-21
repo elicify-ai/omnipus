@@ -1,13 +1,4 @@
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 interface ConfirmActionModalProps {
   open: boolean
@@ -30,15 +21,16 @@ interface ConfirmActionModalProps {
  * Shared confirm-before-act modal (ADR-052 FR-020) — every ▶ Execute/Play and
  * ■ Stop affordance across Plan (PlansFilterBand) and Task (Board/List/Graph)
  * surfaces routes through this ONE component so the confirm UX (copy shape,
- * focus trap, dismissal channels) never drifts between surfaces. Dismissal,
- * per the underlying `AlertDialogContent` (`@/components/ui/alert-dialog.tsx`):
- * Cancel and Escape close it (Escape is Radix Dialog's own default here, not
- * overridden); clicking the overlay/outside the panel does NOT — that's
- * explicitly blocked there (`onPointerDownOutside`/`onInteractOutside`
+ * focus trap, dismissal channels) never drifts between surfaces. A thin
+ * wrapper over the catalogued `ConfirmDialog` (`@/components/ui/confirm-dialog.tsx`)
+ * rather than a second hand-rolled confirm pattern — its `pending` prop
+ * already disables both buttons and shows the in-flight state; the
+ * `destructive` prop already produces the same Ruby (`--color-error`)
+ * styling this file used to apply by hand. Dismissal: Cancel and Escape
+ * close it (Escape is Radix Dialog's own default, not overridden); clicking
+ * the overlay/outside the panel does NOT — that's explicitly blocked in
+ * `AlertDialogContent` (`onPointerDownOutside`/`onInteractOutside`
  * preventDefault) so a destructive confirm is never dismissed by accident.
- * Built on the existing `AlertDialog` primitives (already used by
- * PlansFilterBand's Stop/Clear confirms) rather than introducing a second
- * confirm pattern.
  */
 export function ConfirmActionModal({
   open,
@@ -52,37 +44,19 @@ export function ConfirmActionModal({
   destructive = false,
 }: ConfirmActionModalProps) {
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={isPending}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            // AlertDialogAction's own click does NOT auto-dismiss (unlike
-            // AlertDialogCancel, which IS wrapped in DialogPrimitive.Close) —
-            // this is specifically about the Confirm button's click, separate
-            // from Escape/overlay-click dismissal (handled entirely by
-            // `AlertDialogContent`, see the header comment above: Escape
-            // closes, overlay/outside click does not). The caller
-            // (PlanActionButton/TaskActionButton) closes this modal itself
-            // once the mutation settles (success or error), so the pending
-            // label stays visible for the duration of the call and the
-            // caller can decide the right moment to dismiss.
-            onClick={onConfirm}
-            disabled={isPending}
-            className={
-              destructive
-                ? 'bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90'
-                : undefined
-            }
-          >
-            {isPending ? pendingLabel : confirmLabel}
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <ConfirmDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      description={description}
+      // The caller (PlanActionButton/TaskActionButton) closes this modal
+      // itself once the mutation settles (success or error), so the pending
+      // label stays visible for the duration of the call and the caller
+      // can decide the right moment to dismiss.
+      confirmLabel={isPending ? pendingLabel : confirmLabel}
+      destructive={destructive}
+      pending={isPending}
+      onConfirm={onConfirm}
+    />
   )
 }

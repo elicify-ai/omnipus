@@ -6,16 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useUiStore } from '@/store/ui'
@@ -527,27 +518,21 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
       </div>
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this workspace?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes “{workspace.name}” and cascade-deletes its tasks and
-              session links. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
-              className="bg-[var(--color-error)] text-[var(--color-primary)] hover:bg-[var(--color-error)]/90"
-            >
-              {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this workspace?"
+        description={
+          <>
+            This permanently deletes &ldquo;{workspace.name}&rdquo; and cascade-deletes its tasks and
+            session links. This cannot be undone.
+          </>
+        }
+        confirmLabel={deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+        destructive
+        pending={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate()}
+      />
     </div>
   )
 }

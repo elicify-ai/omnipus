@@ -35,16 +35,7 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
@@ -2865,31 +2856,23 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         )}
       </div>
 
-      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog
-          (`AlertDialog` + `AlertDialogAction`) so the
-          destructive-confirm flow is identical across the app. The confirm
-          fires the deleteAgentMutation; on success the slide-over closes
-          and the agent is removed from the list cache. */}
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete {formData.name || agent.name}?</AlertDialogTitle>
-            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteAgentMutation.isPending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={deleteAgentMutation.isPending}
-              onClick={() => {
-                if (agentId) deleteAgentMutation.mutate(agentId)
-              }}
-            >
-              {deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog (catalogued
+          `ConfirmDialog`) so the destructive-confirm flow is identical
+          across the app. The confirm fires the deleteAgentMutation; on
+          success the slide-over closes and the agent is removed from the
+          list cache. */}
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete ${formData.name || agent.name}?`}
+        description="This cannot be undone."
+        confirmLabel={deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
+        destructive
+        pending={deleteAgentMutation.isPending}
+        onConfirm={() => {
+          if (agentId) deleteAgentMutation.mutate(agentId)
+        }}
+      />
 
     </ProfileSheet>
   )

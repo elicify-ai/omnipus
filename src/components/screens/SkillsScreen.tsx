@@ -23,16 +23,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Switch } from '@/components/ui/switch'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import {
   fetchSkills,
   fetchMcpServers,
@@ -440,60 +431,36 @@ export function SkillsScreen() {
 
       {/* Skill delete confirmation */}
 
-      <AlertDialog
+      <ConfirmDialog
         open={confirmDeleteSkill !== null}
         onOpenChange={(o) => !o && setConfirmDeleteSkill(null)}
-      >
-        <AlertDialogContent className="max-w-sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove skill</AlertDialogTitle>
-            <AlertDialogDescription>
-              Remove <span className="font-medium text-[var(--color-secondary)]">{confirmDeleteSkill}</span>? This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              size="sm"
-              onClick={() => {
-                if (confirmDeleteSkill) doDeleteSkill(confirmDeleteSkill)
-                setConfirmDeleteSkill(null)
-              }}
-            >
-              Remove
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Remove skill"
+        description={
+          <>
+            Remove <span className="font-medium text-[var(--color-secondary)]">{confirmDeleteSkill}</span>? This cannot be undone.
+          </>
+        }
+        confirmLabel="Remove"
+        destructive
+        onConfirm={() => {
+          if (confirmDeleteSkill) doDeleteSkill(confirmDeleteSkill)
+          setConfirmDeleteSkill(null)
+        }}
+      />
 
       {/* MCP server delete confirmation */}
-      <AlertDialog
+      <ConfirmDialog
         open={confirmDeleteMcp !== null}
         onOpenChange={(o) => !o && setConfirmDeleteMcp(null)}
-      >
-        <AlertDialogContent className="max-w-sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove MCP server</AlertDialogTitle>
-            <AlertDialogDescription>
-              Remove this MCP server? Any agents using it will lose access to its tools.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel size="sm">Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              size="sm"
-              onClick={() => {
-                if (confirmDeleteMcp) doDeleteMcp(confirmDeleteMcp)
-                setConfirmDeleteMcp(null)
-              }}
-            >
-              Remove
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Remove MCP server"
+        description="Remove this MCP server? Any agents using it will lose access to its tools."
+        confirmLabel="Remove"
+        destructive
+        onConfirm={() => {
+          if (confirmDeleteMcp) doDeleteMcp(confirmDeleteMcp)
+          setConfirmDeleteMcp(null)
+        }}
+      />
 
     </div>
     </div>

@@ -84,6 +84,18 @@ describe('overlay contracts', () => {
     expect(onOpenChange.mock.calls).toEqual([[false]])
   })
 
+  it('defaults confirm-dialog emphasis to the confirm button, and inverts it when asked', () => {
+    const onOpenChange = vi.fn()
+    const onConfirm = vi.fn()
+    const { rerender } = render(<ConfirmDialog open onOpenChange={onOpenChange} title="Weaken?" description="Lowers protection" confirmLabel="Weaken" cancelLabel="Keep safe" onConfirm={onConfirm} />)
+    expect(screen.getByRole('button', { name: 'Keep safe' }).className).toContain('border')
+    expect(screen.getByRole('button', { name: 'Weaken' }).className).toContain('bg-[var(--color-accent)]')
+    rerender(<ConfirmDialog open emphasis="cancel" onOpenChange={onOpenChange} title="Weaken?" description="Lowers protection" confirmLabel="Weaken" cancelLabel="Keep safe" onConfirm={onConfirm} />)
+    expect(screen.getByRole('button', { name: 'Keep safe' }).className).toContain('bg-[var(--color-accent)]')
+    expect(screen.getByRole('button', { name: 'Weaken' }).className).toContain('border')
+    expect(screen.getByRole('button', { name: 'Weaken' }).className).not.toContain('bg-[var(--color-accent)]')
+  })
+
   it('restores the opener when Escape dismisses a pending confirmation', async () => {
     const user = userEvent.setup()
     function Fixture() {

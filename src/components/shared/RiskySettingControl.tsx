@@ -26,16 +26,7 @@
 
 import { useState } from 'react'
 import { Warning } from '@phosphor-icons/react'
-import {
-  AlertDialog,
-  AlertDialogContent,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogCancel,
-  AlertDialogAction,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { cn } from '@/lib/utils'
 
@@ -218,28 +209,22 @@ export function RiskySettingControl<T extends string>({
         )}
       </div>
 
-      {/* Consequence AlertDialog — only opens when a risky value is pending */}
-      <AlertDialog open={pendingRiskyValue !== null} onOpenChange={(open) => { if (!open) handleCancelDialog() }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{copy.dialogTitle}</AlertDialogTitle>
-            <AlertDialogDescription>{copy.dialogDescription}</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            {/* Safe = the default / cancel button (AlertDialogCancel auto-closes) */}
-            <AlertDialogCancel onClick={handleCancelDialog}>
-              {copy.cancelLabel}
-            </AlertDialogCancel>
-            {/* Weaken = the secondary danger action */}
-            <AlertDialogAction
-              onClick={handleConfirmWeaken}
-              className="bg-amber-600/20 text-amber-400 border border-amber-500/40 hover:bg-amber-600/30"
-            >
-              {copy.confirmLabel}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Consequence dialog — only opens when a risky value is pending.
+          `emphasis="cancel"` inverts ConfirmDialog's default button weighting:
+          the safe/Cancel path is the primary (emphasized) action, the
+          weaken/Confirm path is the secondary (de-emphasized) one — the
+          correct semantics for a destructive-adjacent choice where the
+          confirm action should not read as the recommended CTA. */}
+      <ConfirmDialog
+        open={pendingRiskyValue !== null}
+        onOpenChange={(open) => { if (!open) handleCancelDialog() }}
+        title={copy.dialogTitle}
+        description={copy.dialogDescription}
+        cancelLabel={copy.cancelLabel}
+        confirmLabel={copy.confirmLabel}
+        emphasis="cancel"
+        onConfirm={handleConfirmWeaken}
+      />
     </>
   )
 }
