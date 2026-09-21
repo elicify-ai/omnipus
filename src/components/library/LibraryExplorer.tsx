@@ -35,7 +35,7 @@
 // still owns in both modes is the BROWSED FOLDER, which is derived from the
 // address rather than carried in it (see `browsedDir`).
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Buildings,
@@ -81,6 +81,7 @@ import {
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode, MountSkillsDisclosure } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
@@ -95,7 +96,12 @@ import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
-import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
+import {
+  confirmDiscardLibraryEdits,
+  getDiscardConfirmDialogOpen,
+  resolveDiscardConfirmDialog,
+  subscribeDiscardConfirmDialog,
+} from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
 /**
@@ -249,6 +255,14 @@ export function LibraryExplorer({
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // The in-app "discard unsaved changes?" dialog (replaces window.confirm —
+  // see preview/unsavedGuard.ts's own doc comment for why the store lives
+  // there rather than here). Both Library entry points always keep a
+  // LibraryExplorer mounted whenever a navigation guard could fire, so
+  // hosting the dialog here (rendered below, alongside the other dialogs)
+  // covers the docked panel AND the /library pop-out route's useBlocker.
+  const discardDialogOpen = useSyncExternalStore(subscribeDiscardConfirmDialog, getDiscardConfirmDialogOpen)
 
   // Uncontrolled fallbacks — used only when the caller does NOT address the
   // Library by URL. In addressed mode these are never read or written, so
@@ -844,37 +858,37 @@ export function LibraryExplorer({
     setNewFolderOpen(true)
   }
 
-  function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir('')
     goTo(node.id, null)
   }
-  function handleGoRoot() {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleGoRoot() {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir('')
     goTo(null, null)
   }
-  function handleGoWorkspaceRoot() {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleGoWorkspaceRoot() {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir('')
     goTo(workspaceId, null)
   }
-  function handleOpenDirectory(entry: LibraryEntry) {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleOpenDirectory(entry: LibraryEntry) {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir(entry.path)
     goTo(workspaceId, null)
   }
-  function handleBreadcrumbSegment(index: number, segments: string[]) {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleBreadcrumbSegment(index: number, segments: string[]) {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir(segments.slice(0, index + 1).join('/'))
     goTo(workspaceId, null)
   }
   // Selecting a file that's ALREADY selected is not navigation (no editor
   // would be discarded), so it skips the guard entirely rather than prompting
   // to confirm leaving the file the user is already looking at.
-  function handleSelectFile(entry: LibraryEntry) {
+  async function handleSelectFile(entry: LibraryEntry) {
     if (selectedPath === entry.path) return
-    if (!confirmDiscardLibraryEdits()) return
+    if (!(await confirmDiscardLibraryEdits())) return
     goTo(workspaceId, entry.path)
   }
   function handleDownload(entry: LibraryEntry) {
@@ -1036,8 +1050,8 @@ export function LibraryExplorer({
           />
           {onPopOut && (
             <IconButton
-              onClick={() => {
-                if (confirmDiscardLibraryEdits()) onPopOut()
+              onClick={async () => {
+                if (await confirmDiscardLibraryEdits()) onPopOut()
               }}
               aria-label="Open Library in a new tab"
               title="Open in new tab"
@@ -1049,8 +1063,8 @@ export function LibraryExplorer({
           )}
           {onClose && (
             <IconButton
-              onClick={() => {
-                if (confirmDiscardLibraryEdits()) onClose()
+              onClick={async () => {
+                if (await confirmDiscardLibraryEdits()) onClose()
               }}
               aria-label="Close Library"
               title="Close"
@@ -1208,18 +1222,18 @@ export function LibraryExplorer({
           <LibrarySearchBar
             workspaceId={workspaceId}
             folderPath={browsedDir}
-            onOpenNote={(workspacePath) => {
-              if (!confirmDiscardLibraryEdits()) return
+            onOpenNote={async (workspacePath) => {
+              if (!(await confirmDiscardLibraryEdits())) return
               goTo(workspaceId, workspacePath)
             }}
-            onOpenFolder={(workspacePath) => {
+            onOpenFolder={async (workspacePath) => {
               // Finding S1: report back whether navigation actually
               // happened. LibrarySearchBar only clears its query/results
               // once it KNOWS this returned true — a "Cancel" on the
               // discard-unsaved-edits prompt must leave the search exactly
               // as the user left it, not wipe it as a side effect of a
               // navigation that never occurred.
-              if (!confirmDiscardLibraryEdits()) return false
+              if (!(await confirmDiscardLibraryEdits())) return false
               setBrowsedDir(workspacePath)
               goTo(workspaceId, null)
               return true
@@ -1273,8 +1287,8 @@ export function LibraryExplorer({
           <LibraryPreviewPane
             workspaceId={workspaceId}
             entry={selectedEntry}
-            onClose={() => {
-              if (!confirmDiscardLibraryEdits()) return
+            onClose={async () => {
+              if (!(await confirmDiscardLibraryEdits())) return
               goTo(workspaceId, null)
             }}
             onDownload={handleDownload}
@@ -1282,8 +1296,8 @@ export function LibraryExplorer({
             // linked mention inside an open note swaps the pane to the target
             // AND updates the address, so the note the reader is looking at is
             // the note the URL names.
-            onOpenNote={(workspacePath) => {
-              if (!confirmDiscardLibraryEdits()) return
+            onOpenNote={async (workspacePath) => {
+              if (!(await confirmDiscardLibraryEdits())) return
               goTo(workspaceId, workspacePath)
             }}
           />
@@ -1524,6 +1538,24 @@ export function LibraryExplorer({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Discard-unsaved-edits guard (replaces window.confirm) ──────────
+          Hosted here rather than at each call site: confirmDiscardLibraryEdits()
+          (preview/unsavedGuard.ts) is called from plain navigation handlers,
+          not components, so it flips a module-level store and this is the ONE
+          dialog that answers every one of them — see that module's own doc
+          comment for why LibraryExplorer is the right (and only-needed) host. */}
+      <ConfirmDialog
+        open={discardDialogOpen}
+        onOpenChange={(next) => {
+          if (!next) resolveDiscardConfirmDialog(false)
+        }}
+        title="Discard unsaved changes?"
+        description="You have unsaved changes in the Library editor. Leaving now will discard them. Continue?"
+        confirmLabel="Discard"
+        destructive
+        onConfirm={() => resolveDiscardConfirmDialog(true)}
+      />
     </div>
   )
 }

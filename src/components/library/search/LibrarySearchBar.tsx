@@ -182,13 +182,15 @@ export interface LibrarySearchBarProps {
    *  addresses a container, so opening it as a file would select a directory
    *  in the preview pane instead of browsing it.
    *
-   *  Returns whether navigation actually happened. Finding S1: the caller
-   *  (LibraryExplorer) gates real navigation behind
+   *  Returns whether navigation actually happened — synchronously, or as a
+   *  Promise (confirmDiscardLibraryEdits() is async: the discard-unsaved-
+   *  edits dialog it opens can't return an answer synchronously). Finding
+   *  S1: the caller (LibraryExplorer) gates real navigation behind
    *  confirmDiscardLibraryEdits(), which the user can decline (an unsaved-
    *  edits "Cancel"). A caller that declined must report `false` so this bar
    *  knows NOT to clear the query and its results — a user who cancelled to
    *  avoid losing unsaved work must not lose their search instead. */
-  onOpenFolder?: (workspacePath: string) => boolean
+  onOpenFolder?: (workspacePath: string) => boolean | Promise<boolean>
   /** The file list to show while no query is active. Replaced entirely by
    *  grouped results while one is (library-b-c-design-2026-09-07 §C1). */
   children: ReactNode
@@ -777,13 +779,18 @@ export function LibrarySearchBar({
   // useFileSearch simply re-ran the SAME query scoped to the new
   // folderPath — a click on a folder produced ANOTHER result list, never
   // the folder itself.
-  function openFolder(path: string) {
+  async function openFolder(path: string) {
     // Finding S1: clearing unconditionally (before we know whether the
     // caller actually navigated) wiped the query even when the caller
     // declined — e.g. LibraryExplorer's onOpenFolder gates on
     // confirmDiscardLibraryEdits() and the user hit "Cancel" on that prompt.
     // Only clear once onOpenFolder itself reports navigation happened.
-    const navigated = onOpenFolder?.(path) ?? false
+    //
+    // `await` here is load-bearing, not decorative: onOpenFolder can return
+    // a Promise (LibraryExplorer's does), and a raw, un-awaited Promise
+    // object is itself truthy — `if (onOpenFolder?.(path))` would clear the
+    // query immediately regardless of what the user actually answers.
+    const navigated = await (onOpenFolder?.(path) ?? false)
     if (navigated) setText('')
   }
 
