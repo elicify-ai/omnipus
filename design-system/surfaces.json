@@ -7108,6 +7108,10 @@
       "lane": 1
     },
     {
+      "source": "src/components/workspaces/PriorityBadge.tsx",
+      "lane": 1
+    },
+    {
       "source": "src/components/workspaces/RollupBadge.tsx",
       "lane": 1
     },
