@@ -12,10 +12,12 @@
 package gateway
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -23,6 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -129,4 +132,89 @@ func TestRestProviders_PUT_OmittedRegion_LeavesPersistedValueAlone(t *testing.T)
 
 	persisted := persistedProviderRow(t, api, "amazon-bedrock")
 	assert.Equal(t, "eu-central-1", persisted["region"], "an omitted region field must not erase the persisted value")
+}
+
+// ── Orchestrator-approved scope addition (issue #800 follow-up): the live
+// AWS ListInferenceProfiles refresh, triggered when the Bedrock row's region
+// changes, cached on the row (non-secret), and gracefully degraded on 403.
+
+func newBedrockAPIWithCredStore(t *testing.T) (*restAPI, *credentials.Store) {
+	t.Helper()
+	api := newTestRestAPIWithHome(t)
+	api.providerCatalog = bedrockCatalog(t)
+	store := credentials.NewStore(filepath.Join(api.homePath, "credentials.json"))
+	key := make([]byte, 32)
+	_, err := rand.Read(key)
+	require.NoError(t, err)
+	require.NoError(t, store.UnlockWithKey(key))
+	api.credStore = store
+	return api, store
+}
+
+func TestRestProviders_PUT_RegionChange_RefreshesLiveInferenceProfileCache(t *testing.T) {
+	api, store := newBedrockAPIWithCredStore(t)
+	require.NoError(t, store.Set("T800_BEDROCK_LIVE_KEY", "test-bedrock-key"))
+	seedProviderConfig(t, api, map[string]any{
+		"provider": "amazon-bedrock", "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		"api_key_ref": "T800_BEDROCK_LIVE_KEY", "region": "us-east-1",
+	})
+
+	var gotHost, gotAuth string
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHost = r.Host
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"inferenceProfileSummaries": [
+				{
+					"inferenceProfileId": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+					"models": [{"modelArn": "arn:aws:bedrock:eu-central-1::foundation-model/anthropic.claude-sonnet-4-5-20250929-v1:0"}]
+				}
+			]
+		}`))
+	}))
+	defer controlPlane.Close()
+	api.bedrockControlPlaneBaseOverride = controlPlane.URL
+
+	// A region-only change — no api_key in the body — still refreshes the
+	// cache using the row's EXISTING stored key.
+	w := doPutProvider(t, api, "amazon-bedrock",
+		`{"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","region":"eu-central-1"}`)
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	require.NotEmpty(t, gotAuth, "the control-plane call must have been made")
+	assert.Equal(t, "Bearer test-bedrock-key", gotAuth)
+	assert.NotEmpty(t, gotHost)
+
+	persisted := persistedProviderRow(t, api, "amazon-bedrock")
+	profiles, ok := persisted["bedrock_inference_profiles"].(map[string]any)
+	require.True(t, ok, "bedrock_inference_profiles must be persisted: %#v", persisted)
+	assert.Equal(t, "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		profiles["anthropic.claude-sonnet-4-5-20250929-v1:0"])
+}
+
+func TestRestProviders_PUT_RegionChange_LookupForbidden_DegradesSilently(t *testing.T) {
+	api, store := newBedrockAPIWithCredStore(t)
+	require.NoError(t, store.Set("T800_BEDROCK_LIVE_KEY_2", "test-bedrock-key"))
+	seedProviderConfig(t, api, map[string]any{
+		"provider": "amazon-bedrock", "model": "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		"api_key_ref": "T800_BEDROCK_LIVE_KEY_2", "region": "us-east-1",
+	})
+
+	controlPlane := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"not authorized"}`))
+	}))
+	defer controlPlane.Close()
+	api.bedrockControlPlaneBaseOverride = controlPlane.URL
+
+	w := doPutProvider(t, api, "amazon-bedrock",
+		`{"model":"anthropic.claude-sonnet-4-5-20250929-v1:0","region":"eu-central-1"}`)
+	// A 403 from the control plane must never block the save itself.
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+
+	persisted := persistedProviderRow(t, api, "amazon-bedrock")
+	assert.Equal(t, "eu-central-1", persisted["region"], "the region change itself must still be saved")
+	assert.NotContains(t, persisted, "bedrock_inference_profiles",
+		"a failed lookup must not write a (possibly stale/empty) cache entry")
 }

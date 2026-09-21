@@ -107,6 +107,9 @@ func NewProvider(apiKey string, opts ...Option) (*Provider, error) {
 	}
 	endpoint := pc.baseEndpoint
 	if endpoint == "" {
+		if err := ValidateRegion(pc.region); err != nil {
+			return nil, err
+		}
 		endpoint = regionalEndpoint(pc.region)
 	}
 	if err := validateEndpoint(endpoint); err != nil {

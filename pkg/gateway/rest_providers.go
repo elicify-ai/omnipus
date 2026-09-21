@@ -845,6 +845,10 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 		slog.Warn("rest: reload after provider update did not confirm within the poll window; "+
 			"agents may still be served by the stale cached provider client", "provider_id", p.providerID)
 	}
+	// Issue #800 follow-up (orchestrator-approved): best-effort, never
+	// blocking — see rest_providers_bedrock_region.go's own doc comment.
+	a.refreshBedrockInferenceProfilesIfNeeded(p)
+
 	// The saved row is a catalog row unless admission classified it as
 	// an operator-named custom endpoint (FR-035); a catalog row's list
 	// is filled by the gateway, a custom row's is the operator's own.

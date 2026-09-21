@@ -111,6 +111,12 @@ type restAPI struct {
 	// classifies nothing — rows keep their credential-derived status. Wired
 	// at boot by T067-10; until then only tests set it.
 	providerCatalog *catalog.Catalog
+	// bedrockControlPlaneBaseOverride is issue #800's own follow-up (live
+	// AWS ListInferenceProfiles refresh, rest_providers.go): a test seam
+	// for the Bedrock control-plane base URL (httptest.Server), empty in
+	// every production path — production always derives
+	// bedrock.ControlPlaneEndpoint(region).
+	bedrockControlPlaneBaseOverride string
 	// entitlements is the ADR-067 FR-021 "Check with my account" cache:
 	// one annotated model list per (provider, credential ref NAME) for the
 	// life of the process, evicted on provider DELETE, on a key-changing

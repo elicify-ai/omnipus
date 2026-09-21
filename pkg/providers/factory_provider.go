@@ -282,7 +282,18 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		// region's group and the model's own inference_profiles — never a
 		// hand-typed Go list, and never auto-selects "global"
 		// (bedrock.ResolveModelID never invents that prefix on its own).
-		resolvedModelID := bedrock.ResolveModelID(modelID, group, ProviderCatalog().Resolve(cfg.Provider, modelID).InferenceProfiles())
+		// Orchestrator-approved scope addition (issue #800 follow-up): a
+		// cached live AWS ListInferenceProfiles answer (config.ModelConfig.
+		// BedrockInferenceProfiles, refreshed by the REST layer when the row
+		// is set up or its region changes — see rest_providers.go) wins over
+		// the catalog's own per-region-group approximation; nil when no live
+		// lookup ever succeeded, which falls straight through to the
+		// catalog-only rule (ResolveModelIDLive's own doc comment).
+		resolvedModelID := bedrock.ResolveModelIDLive(
+			modelID, group,
+			ProviderCatalog().Resolve(cfg.Provider, modelID).InferenceProfiles(),
+			cfg.BedrockInferenceProfiles,
+		)
 
 		opts := make([]bedrock.Option, 0, 2)
 		if customEndpoint := strings.TrimSpace(cfg.APIBase); customEndpoint != "" {

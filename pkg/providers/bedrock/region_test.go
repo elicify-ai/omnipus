@@ -87,6 +87,43 @@ func TestResolveModelID_NeverInventsGlobalPrefix(t *testing.T) {
 
 // TestResolveRegion pins the exact precedence CONTRACT.md specifies: row
 // setting -> AWS_REGION environment variable -> catalog default region.
+// TestNewProvider_RejectsMalformedRegion guards against a host-redirection
+// SSRF: region is operator-settable (issue #800), and regionalEndpoint built
+// its URL by naive string concatenation before this fix — a region carrying
+// a "/" could steer the constructed URL's host to an attacker-chosen domain
+// while still ending in the literal substring ".amazonaws.com" (as a PATH
+// segment, not the actual host), which net/url's own host/path split does
+// not catch on its own.
+func TestNewProvider_RejectsMalformedRegion(t *testing.T) {
+	cases := []string{
+		"us-east-1.evil.com/x",
+		"evil.com",
+		"us-east-1/../../evil.com",
+		"us-east-1#@evil.com",
+		"",
+		" ",
+		"US-EAST-1", // uppercase never appears in a real AWS region code
+	}
+	for _, region := range cases {
+		if _, err := NewProvider("test-key", WithRegion(region)); err == nil {
+			t.Errorf("NewProvider(WithRegion(%q)) = nil error, want a rejection", region)
+		}
+	}
+}
+
+func TestNewProvider_AcceptsWellFormedRegions(t *testing.T) {
+	for _, region := range []string{"us-east-1", "eu-central-1", "us-gov-west-1", "ap-northeast-1"} {
+		p, err := NewProvider("test-key", WithRegion(region))
+		if err != nil {
+			t.Errorf("NewProvider(WithRegion(%q)): unexpected error %v", region, err)
+			continue
+		}
+		if want := "https://bedrock-runtime." + region + ".amazonaws.com"; p.Endpoint() != want {
+			t.Errorf("Endpoint() = %q, want %q", p.Endpoint(), want)
+		}
+	}
+}
+
 func TestResolveRegion(t *testing.T) {
 	cases := []struct {
 		name       string

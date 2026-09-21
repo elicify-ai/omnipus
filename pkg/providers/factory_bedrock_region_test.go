@@ -153,6 +153,34 @@ func TestCreateProviderFromConfig_Bedrock_CustomEndpointOverrideWins(t *testing.
 	}
 }
 
+// Orchestrator-approved scope addition (issue #800 follow-up): when a live
+// AWS ListInferenceProfiles lookup succeeded and was cached on the row
+// (config.ModelConfig.BedrockInferenceProfiles), the runtime model id must
+// use that live result rather than the catalog's own inference_profiles
+// approximation — see bedrock.ResolveModelIDLive's own doc comment for why.
+func TestCreateProviderFromConfig_Bedrock_UsesCachedLiveInferenceProfileWhenPresent(t *testing.T) {
+	withBedrockRegionFixture(t)
+	t.Setenv("AWS_REGION", "")
+	_, modelID, err := CreateProviderFromConfig(&config.ModelConfig{
+		Provider:  "amazon-bedrock",
+		Model:     "amazon.nova-pro-v1:0", // catalog carries NO inference_profiles for this model
+		Region:    "eu-central-1",
+		APIKeyRef: keyRef(t, "FACTORY_BEDROCK_LIVE_PROFILE_TEST_KEY"),
+		BedrockInferenceProfiles: map[string]string{
+			// The live lookup found a profile the catalog approximation
+			// would have missed entirely (Nova Pro has no
+			// inference_profiles in the fixture).
+			"amazon.nova-pro-v1:0": "eu.amazon.nova-pro-v1:0",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateProviderFromConfig: %v", err)
+	}
+	if want := "eu.amazon.nova-pro-v1:0"; modelID != want {
+		t.Fatalf("modelID = %q, want the cached live profile id %q", modelID, want)
+	}
+}
+
 func TestCreateProviderFromConfig_Bedrock_ModelIDResolution(t *testing.T) {
 	tests := []struct {
 		name      string
