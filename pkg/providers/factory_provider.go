@@ -7,11 +7,14 @@ package providers
 
 import (
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/auth"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -260,6 +263,52 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 			row.api,
 			cfg.RequestTimeout,
 		), modelID, nil
+
+	case catalog.ProtocolBedrock:
+		if err := requireKey(cfg, row); err != nil {
+			return nil, "", err
+		}
+		// Issue #800 (Bedrock region contract): the region is a per-row
+		// setting, never hard-wired to the catalog's default. Precedence is
+		// exactly row -> AWS_REGION -> the catalog's own default region
+		// (bedrock.ResolveRegion); the derived host is
+		// https://bedrock-runtime.<region>.amazonaws.com
+		// (bedrock.WithRegion), overridden wholesale by an explicit
+		// api_base (a private/VPC endpoint), which wins outright.
+		catRow, _ := CatalogProvider(cfg.Provider)
+		region := bedrock.ResolveRegion(cfg.Region, os.Getenv("AWS_REGION"), catRow.Region)
+		group := BedrockGroupForRegion(catRow.Regions, region)
+		// The runtime model id reads ONLY catalog data — the selected
+		// region's group and the model's own inference_profiles — never a
+		// hand-typed Go list, and never auto-selects "global"
+		// (bedrock.ResolveModelID never invents that prefix on its own).
+		// Orchestrator-approved scope addition (issue #800 follow-up): a
+		// cached live AWS ListInferenceProfiles answer (config.ModelConfig.
+		// BedrockInferenceProfiles, refreshed by the REST layer when the row
+		// is set up or its region changes — see rest_providers.go) wins over
+		// the catalog's own per-region-group approximation; nil when no live
+		// lookup ever succeeded, which falls straight through to the
+		// catalog-only rule (ResolveModelIDLive's own doc comment).
+		resolvedModelID := bedrock.ResolveModelIDLive(
+			modelID, group,
+			ProviderCatalog().Resolve(cfg.Provider, modelID).InferenceProfiles(),
+			cfg.BedrockInferenceProfiles,
+		)
+
+		opts := make([]bedrock.Option, 0, 2)
+		if customEndpoint := strings.TrimSpace(cfg.APIBase); customEndpoint != "" {
+			opts = append(opts, bedrock.WithBaseEndpoint(customEndpoint))
+		} else {
+			opts = append(opts, bedrock.WithRegion(region))
+		}
+		if cfg.RequestTimeout > 0 {
+			opts = append(opts, bedrock.WithRequestTimeout(time.Duration(cfg.RequestTimeout)*time.Second))
+		}
+		p, err := bedrock.NewProvider(cfg.APIKey(), opts...)
+		if err != nil {
+			return nil, "", err
+		}
+		return p, resolvedModelID, nil
 
 	case catalog.ProtocolCLI:
 		p, err := NewCliProviderForKind(row.cliKind, cfg.Home, "")

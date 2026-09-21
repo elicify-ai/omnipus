@@ -171,6 +171,13 @@ interface ProviderConfigSheetProps {
   onOpenChange: (open: boolean) => void
   apiKeys: Record<string, string>
   setApiKeys: React.Dispatch<React.SetStateAction<Record<string, string>>>
+  /**
+   * Issue #800 (Bedrock region contract): the per-draft selected AWS
+   * region, keyed the same way apiKeys is. Only rendered/read for a row
+   * whose catalog entry carries `regions` (CatalogProvider.regions).
+   */
+  awsRegions: Record<string, string>
+  setAwsRegions: React.Dispatch<React.SetStateAction<Record<string, string>>>
   showKey: Record<string, boolean>
   setShowKey: React.Dispatch<React.SetStateAction<Record<string, boolean>>>
   /**
@@ -187,7 +194,13 @@ interface ProviderConfigSheetProps {
   saveValidation: Record<string, ProviderValidation | undefined>
   setSaveValidation: React.Dispatch<React.SetStateAction<Record<string, ProviderValidation | undefined>>>
   isSaving: boolean
-  requestChange: (id: string, draftKey: string, key: string, models?: string[]) => void
+  requestChange: (
+    id: string,
+    draftKey: string,
+    key: string,
+    models?: string[],
+    custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol' | 'region'>,
+  ) => void
   testing: Record<string, boolean>
   handleTest: (id: string) => void
   /**
@@ -203,6 +216,8 @@ function ProviderConfigSheet({
   onOpenChange,
   apiKeys,
   setApiKeys,
+  awsRegions,
+  setAwsRegions,
   showKey,
   setShowKey,
   keySaved,
@@ -244,13 +259,29 @@ function ProviderConfigSheet({
   const catalogMode = provider ? providerCatalogMode(provider) : 'live'
   const hint = PROVIDER_HINTS[providerId] ?? 'Enter your API key'
 
-  const sheetTitle = entry ? catalogLabel(entry) : displayName(provider, providerId)
+  // Issue #800 D2-addendum: `provider` is the configured row (null in
+  // 'connect' mode, where there is no configured region yet to prefer).
+  const sheetTitle = entry ? catalogLabel(entry, provider?.region) : displayName(provider, providerId)
   const sheetDescription =
     target.mode === 'connect'
       ? 'Enter your API key to connect this provider.'
       : 'Update the API key for this provider.'
 
   const resolvedSubmitId = resolveSubmitId(target)
+
+  // Issue #800 (Bedrock region contract): the catalog row's own region
+  // picker (CatalogProvider.regions) — distinct from the Plan/Region
+  // view-only pair above, which is the company's plan x region VARIANT
+  // (a different provider id per region, e.g. Zhipu AI intl vs china).
+  // Defaults to whatever is already persisted on the configured row
+  // (provider.region, issue #800's own echoed field), else the catalog's
+  // own default region when that default is itself offered, else the
+  // first offered region — never invented.
+  const awsRegionOptions = entry?.regions ?? []
+  const defaultAwsRegion =
+    provider?.region ??
+    (awsRegionOptions.some((r) => r.id === entry?.region) ? entry?.region : awsRegionOptions[0]?.id) ??
+    ''
 
   // The one place the sheet actually goes away. Clears every per-draft scrap,
   // the typed key included — FR-033 only ever reaches here on a decision that
@@ -378,6 +409,30 @@ function ProviderConfigSheet({
                   </span>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* AWS region (issue #800), beside the API key entry */}
+          {awsRegionOptions.length > 0 && (
+            <div>
+              <label htmlFor={`aws-region-input-${draftKey}`} className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+                AWS region
+              </label>
+              <select
+                id={`aws-region-input-${draftKey}`}
+                value={awsRegions[draftKey] ?? defaultAwsRegion}
+                onChange={(e) => {
+                  setAwsRegions((prev) => ({ ...prev, [draftKey]: e.target.value }))
+                }}
+                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 text-xs"
+                data-testid={`aws-region-input-${providerId}`}
+              >
+                {awsRegionOptions.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.id}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 
@@ -590,7 +645,12 @@ function ProviderConfigSheet({
                     catalogMode === 'manual' && provider
                       ? (draftModels[draftKey] ?? provider.models ?? [])
                       : undefined
-                  requestChange(resolvedSubmitId, draftKey, key, models)
+                  // Issue #800: send the selected AWS region whenever this
+                  // row's catalog entry offers a region picker — not only
+                  // for a custom row, so `custom` here means "extra
+                  // identity fields beyond key/model", not "custom endpoint".
+                  const region = awsRegionOptions.length > 0 ? (awsRegions[draftKey] ?? defaultAwsRegion) : undefined
+                  requestChange(resolvedSubmitId, draftKey, key, models, region ? { region } : undefined)
                 }}
                 disabled={isSaving || !canSave}
                 data-testid={`save-provider-${providerId}`}
@@ -636,6 +696,8 @@ export function ProvidersSection() {
   const [defaultFilterId, setDefaultFilterId] = useState<string | undefined>(undefined)
 
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
+  // Issue #800 (Bedrock region contract): per-draft selected AWS region.
+  const [awsRegions, setAwsRegions] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
   // FR-033 "saved = clean": true once the draft under this key has been saved,
   // cleared the moment the operator types again. Never holds the key itself.
@@ -717,7 +779,7 @@ export function ProvidersSection() {
       draftKey: string
       key: string
       models?: string[]
-      custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>
+      custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol' | 'region'>
       token?: string
     }) => configureProvider(id, key === '' ? undefined : key, undefined, undefined, token, models, custom),
     // Destructure `draftKey` (NOT `id`) — the draft-state key set by
@@ -779,7 +841,7 @@ export function ProvidersSection() {
     draftKey: string,
     key: string,
     models?: string[],
-    custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>,
+    custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol' | 'region'>,
   ) => {
     setSaveValidation((prev) => ({ ...prev, [draftKey]: undefined }))
     void stepUp
@@ -1118,7 +1180,9 @@ export function ProvidersSection() {
           {groups.map((group) => {
             if (group.items.length === 1) {
               const { provider, entry } = group.items[0]
-              const title = entry ? catalogLabel(entry) : displayName(provider, provider.id)
+              // Issue #800 D2-addendum: the provider card title must reflect
+              // the row's CONFIGURED AWS region, not the catalog's default.
+              const title = entry ? catalogLabel(entry, provider.region) : displayName(provider, provider.id)
               return (
                 <ProviderRow
                   key={provider.id}
@@ -1265,6 +1329,8 @@ export function ProvidersSection() {
         }}
         apiKeys={apiKeys}
         setApiKeys={setApiKeys}
+        awsRegions={awsRegions}
+        setAwsRegions={setAwsRegions}
         showKey={showKey}
         setShowKey={setShowKey}
         keySaved={keySaved}
@@ -1289,7 +1355,9 @@ export function ProvidersSection() {
           provider={removeTarget}
           displayName={(() => {
             const entry = catalogEntryById(catalog, removeTarget.id)
-            return entry ? catalogLabel(entry) : displayName(removeTarget, removeTarget.id)
+            return entry
+              ? catalogLabel(entry, removeTarget.region)
+              : displayName(removeTarget, removeTarget.id)
           })()}
           otherProviders={providers.filter((p) => p.id !== removeTarget.id)}
           catalog={catalogDoc}

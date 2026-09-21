@@ -8,6 +8,7 @@ package providers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -752,8 +754,16 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 	var outcome Outcome
 	var rawDetail string
 	var probedModel string
+	protocol := catalog.Protocol("")
+	if row, ok := CatalogProvider(in.ProviderID); ok {
+		protocol = row.Protocol
+	}
 	for i, model := range candidates {
-		outcome, rawDetail = probeCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		if protocol == catalog.ProtocolBedrock {
+			outcome, rawDetail = probeBedrockCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		} else {
+			outcome, rawDetail = probeCompletion(ctx, in.BaseURL, in.APIKey, model, checker)
+		}
 		probedModel = model
 		if i+1 < len(candidates) && outcome != OutcomeValid && isModelNotFound(rawDetail) {
 			slog.Debug("providers: probe model not found upstream; trying the next candidate",
@@ -769,6 +779,108 @@ func ValidateKey(ctx context.Context, in ValidateInput, checker URLChecker) Vali
 		RawDetail:   rawDetail,
 		ProbedModel: probedModel,
 	}
+}
+
+// probeBedrockCompletion validates a Bedrock API key through the same plain
+// HTTPS Converse transport used at runtime. It intentionally has no AWS SDK or
+// credential-chain fallback: issue #800 is API-key-only, with those other
+// credential sources deferred to issue #801.
+func probeBedrockCompletion(
+	ctx context.Context,
+	baseURL, apiKey, model string,
+	checker URLChecker,
+) (Outcome, string) {
+	opts := []bedrock.Option{
+		bedrock.WithBaseEndpoint(baseURL),
+		bedrock.WithRequestTimeout(15 * time.Second),
+	}
+	if checker != nil {
+		opts = append(opts, bedrock.WithHTTPClient(checker.SafeClient()))
+	}
+	provider, err := bedrock.NewProvider(apiKey, opts...)
+	if err != nil {
+		return OutcomeUnreachable, err.Error()
+	}
+	_, err = provider.Chat(ctx, []bedrock.Message{{Role: "user", Content: "hi"}}, nil, model, map[string]any{"max_tokens": 1})
+	if err == nil {
+		return OutcomeValid, ""
+	}
+	var httpErr *bedrock.HTTPError
+	if errors.As(err, &httpErr) {
+		detail := strings.TrimSpace(httpErr.Code + " " + httpErr.Message)
+		return classifyBedrockHTTPError(httpErr.StatusCode, httpErr.Code, httpErr.Message),
+			fmt.Sprintf("status=%d body=%s", httpErr.StatusCode, detail)
+	}
+	return classify(err, 0, nil), fmt.Sprintf("transport error: %v", err)
+}
+
+// ── Bedrock-specific classification (orchestrator review round 2, D3) ───────
+//
+// AWS Bedrock answers EVERY invalid-key case with the SAME HTTP status and
+// error type genuine model-access denial also uses — 403 AccessDeniedException
+// — so the generic R-A classifier's status-driven fallback (classify's step
+// 5: any 403 -> Restricted) is the wrong tool here: it was built for
+// providers whose invalid-key case is its OWN status (401) or its own
+// distinguishable body shape. Verified against real AWS via curl:
+//
+//	bad format:            {"Message":"Invalid API Key format: Must start with pre-defined prefix"}
+//	well-formed wrong key: {"Message":"Authentication failed: Please make sure your API Key is valid."}
+//	expired key:           {"Message":"Bearer Token has expired"}
+//	invalid security token (commonly UnrecognizedClientException):
+//	                       {"message":"The security token included in the request is invalid"}
+//	genuine model-access denial (stays Restricted):
+//	                       {"Message":"You don't have access to the model with the specified model ID."}
+//
+// Only the body Message (and, for UnrecognizedClientException, the error
+// TYPE alone) distinguishes an invalid key from a genuine access
+// restriction — so this classifier is message-first, falling back to the
+// unmodified generic status switch (classify(nil, status, nil)) for every
+// case it does not recognize as an invalid-key marker. This keeps every
+// OTHER outcome (429, 5xx, model-not-found 400, a genuine restriction) byte-
+// for-byte what classify() already produced.
+
+// bedrockInvalidKeyMessageMarkers are substrings of a Bedrock error Message
+// that unambiguously mean "the key itself is the problem", verified against
+// the real AWS response bodies above. Deliberately narrow and message-
+// content-driven, never status-driven — a genuine model-access denial is
+// also a 403 AccessDeniedException and must not match any of these.
+var bedrockInvalidKeyMessageMarkers = []errorPattern{
+	substr("invalid api key format"),
+	substr("authentication failed"),
+	substr("please make sure your api key is valid"),
+	substr("bearer token has expired"),
+	substr("security token included in the request is invalid"),
+}
+
+// bedrockInvalidKeyErrorTypes is the closed set of AWS error TYPES
+// (X-Amzn-Errortype / the body's __type, colon-suffix already stripped by
+// parseHTTPError) that mean "invalid key" regardless of the message text.
+// UnrecognizedClientException is AWS's own type for "the security token...
+// is invalid" (coordinator's D3 note) — AccessDeniedException is NOT listed
+// here because Bedrock reuses it for genuine model-access denial too; that
+// type is discriminated by message content only (the markers above).
+var bedrockInvalidKeyErrorTypes = map[string]bool{
+	"UnrecognizedClientException": true,
+}
+
+// classifyBedrockHTTPError classifies one Bedrock Runtime HTTP error
+// response into an Outcome (see this section's header comment for the
+// precedence and the real-AWS bodies this was built against).
+func classifyBedrockHTTPError(status int, errType, message string) Outcome {
+	if bedrockInvalidKeyErrorTypes[strings.TrimSpace(errType)] {
+		return OutcomeInvalidKey
+	}
+	if m := strings.ToLower(message); m != "" && matchesAny(m, bedrockInvalidKeyMessageMarkers) {
+		return OutcomeInvalidKey
+	}
+	// Every other case (including a genuine model-access denial, and every
+	// non-403 status) falls back to the SAME generic classification Bedrock
+	// used before this fix — classify's own body parsing never understood
+	// Bedrock's transport shape anyway (probeBedrockCompletion's old "Code
+	// Message" plain-text detail never parsed as the JSON parseErrorBody
+	// expects), so passing a nil body here changes nothing for any case
+	// this function does not explicitly recognize above.
+	return classify(nil, status, nil)
 }
 
 // probeCompletion fires a single minimal POST /chat/completions and classifies the result.

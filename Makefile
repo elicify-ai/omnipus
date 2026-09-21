@@ -21,7 +21,6 @@
 # Discretionary tags (append to GO_BUILD_TAGS, none are on by default):
 #   lite       drops WhatsApp native AND WebRTC live-browser video
 #   nogodmode  compiles out the sandbox-off ("god mode") toggle; for hosted
-#   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
 .PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts docs-reference lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards sync-agents-md spa-embed release-snapshot release-build golangci-lint-version-check

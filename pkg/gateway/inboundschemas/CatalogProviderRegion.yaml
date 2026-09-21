@@ -1,0 +1,34 @@
+title: CatalogProviderRegion
+description: >
+  One region offered in a provider's region picker (issue #800 / Bedrock
+  region contract). `group` names the cross-region inference profile group
+  that region belongs to (`us`, `eu`, `apac`, `jp`, `au`, `global`), or the
+  empty string when the region has no cross-region inference profile group
+  (on-demand only). Runtime model-id resolution reads `group` against a
+  model's `inference_profiles` (CatalogModel.yaml) — see
+  "Runtime model-id resolution" in the Bedrock region contract.
+type: object
+required:
+  - id
+  - group
+additionalProperties: false
+properties:
+  id:
+    type: string
+    minLength: 1
+    description: The region identifier as the provider's API expects it (e.g. an AWS region code).
+    example: "us-east-1"
+  group:
+    type: string
+    enum:
+      - ""
+      - us
+      - eu
+      - apac
+      - jp
+      - au
+      - global
+    description: >
+      The cross-region inference profile group this region belongs to, or ""
+      when the region offers on-demand access only (no cross-region profile).
+    example: "us"

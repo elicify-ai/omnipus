@@ -17,6 +17,7 @@ properties:
       - google
       - ollama
       - cli
+      - bedrock
     example: "anthropic"
   api:
     type: string

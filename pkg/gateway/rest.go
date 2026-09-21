@@ -111,6 +111,24 @@ type restAPI struct {
 	// classifies nothing — rows keep their credential-derived status. Wired
 	// at boot by T067-10; until then only tests set it.
 	providerCatalog *catalog.Catalog
+	// bedrockControlPlaneBaseOverride is issue #800's own follow-up (live
+	// AWS ListInferenceProfiles refresh, rest_providers.go): a test seam
+	// for the Bedrock control-plane base URL (httptest.Server), empty in
+	// every production path — production always derives
+	// bedrock.ControlPlaneEndpoint(region).
+	bedrockControlPlaneBaseOverride string
+	// bedrockRuntimeBaseOverride is a TEST-ONLY seam (orchestrator review
+	// round 2, D1), empty in every production path: when set, the onboarding
+	// probe (HandleOnboardingProbeProvider) and the PUT-triggered save-time
+	// key check (providerPutValidateKey) build the Bedrock RUNTIME (Converse)
+	// base as this value + "/" + the resolved region, instead of
+	// bedrock.RegionalEndpoint(region) — production always derives the real
+	// bedrock-runtime.<region>.amazonaws.com host. An httptest.Server's own
+	// host cannot BE a per-region AWS DNS name, so this lets a test's fake
+	// server observe which region a probe actually resolved to via the
+	// request PATH (r.URL.Path's leading segment), the same way
+	// bedrockControlPlaneBaseOverride above tests the control-plane call.
+	bedrockRuntimeBaseOverride string
 	// entitlements is the ADR-067 FR-021 "Check with my account" cache:
 	// one annotated model list per (provider, credential ref NAME) for the
 	// life of the process, evicted on provider DELETE, on a key-changing

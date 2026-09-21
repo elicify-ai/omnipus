@@ -29,7 +29,6 @@ import type { CatalogProvider, Provider, ProvidersCatalog } from '@/lib/api/gene
 import {
   ProviderPicker,
   PROVIDER_PICKER_OPEN_MARK,
-  UNSUPPORTED_REASON_COPY,
   type PickerSelection,
 } from './ProviderPicker'
 import { CUSTOM_ENDPOINT_LABEL } from './provider-picker-model'
@@ -221,21 +220,19 @@ describe('ProviderPicker — expanded, letter-grouped, virtualised list', () => 
   })
 })
 
-describe('ProviderPicker — unsupported providers (FR-025)', () => {
-  it('shows Amazon Bedrock disabled with its mapped reason, never the raw enum', async () => {
+describe('ProviderPicker — Bedrock (issue #800)', () => {
+  it('shows Amazon Bedrock enabled and selectable', async () => {
     const user = userEvent.setup()
     const { onSelect } = renderPicker()
 
     await user.type(screen.getByTestId('picker-search'), 'bedrock')
 
     const bedrock = screen.getByText('Amazon').closest('[role="option"]') as HTMLElement
-    expect(bedrock).toHaveAttribute('aria-disabled', 'true')
-    expect(bedrock).toHaveTextContent(UNSUPPORTED_REASON_COPY['cloud-iam'])
-    expect(bedrock).toHaveTextContent('needs request signing')
-    expect(bedrock.textContent).not.toContain('cloud-iam')
+    expect(bedrock).not.toHaveAttribute('aria-disabled')
+    expect(bedrock).not.toHaveTextContent('needs request signing')
 
     fireEvent.click(bedrock)
-    expect(onSelect).not.toHaveBeenCalled()
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ kind: 'row' }))
   })
 })
 

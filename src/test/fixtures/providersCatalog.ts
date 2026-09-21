@@ -17,8 +17,8 @@
 //   • exactly 8 `tier: "popular"` providers, each a DISTINCT `company`
 //     (openai, anthropic, google, openrouter, groq, deepseek, xai, zai) —
 //     FR-022's 8 Popular tiles;
-//   • `bedrock` is `tier: "unsupported"` with `unsupported_reason: "cloud-iam"`
-//     (FR-025), alongside `deployment-url` and `withdrawn` examples;
+//   • `amazon-bedrock` is a normal API-key provider using the `bedrock` protocol
+//     (issue #800); separate fixtures retain all unsupported-reason examples;
 //   • `zai` / `zai-coding-plan` / `zhipuai` / `zhipuai-coding-plan` share
 //     `company: "Zhipu AI"` and differ by `plan` × `region` — the L1→L2
 //     grouping dataset; aliases include `glm-coding` and `智谱`;

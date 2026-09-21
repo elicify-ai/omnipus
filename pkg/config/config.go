@@ -1314,6 +1314,26 @@ type ModelConfig struct {
 	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
 
+	// Region is issue #800's own per-provider-row setting (Bedrock region
+	// contract): the selected region for a provider whose catalog entry
+	// carries `regions` (catalog.Provider.Regions). Runtime precedence is
+	// this field -> the AWS_REGION environment variable -> the catalog's
+	// own default region. Ignored for a provider whose catalog entry
+	// carries no `regions`.
+	Region string `json:"region,omitempty"`
+
+	// BedrockInferenceProfiles caches AWS's own ListInferenceProfiles
+	// answer for this row's selected region (issue #800 follow-up,
+	// orchestrator-approved): base model id -> the region-specific
+	// inference profile id AWS reports as usable from that region for that
+	// model. Not secret — profile ids are not credentials — so it is
+	// persisted verbatim here, refreshed when the Bedrock provider row is
+	// created or its region changes. Absent (nil) whenever the live lookup
+	// has never succeeded (including every non-Bedrock row); a Bedrock row
+	// with no cached entry for a given model id falls back to the
+	// catalog's own inference_profiles rules (bedrock.ResolveModelIDLive).
+	BedrockInferenceProfiles map[string]string `json:"bedrock_inference_profiles,omitempty"`
+
 	// UpdatedAt is stamped on every PUT of this row (ADR-068 MAJ-015) and is
 	// the picker's *Recent* ordering key (Provider.updated_at on the wire).
 	// Mirrors AgentConfig.UpdatedAt. Nil for rows never written through the

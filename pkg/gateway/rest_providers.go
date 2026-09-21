@@ -353,6 +353,15 @@ func (a *restAPI) providerWireRow(ctx context.Context, authed bool, cfg *config.
 		customCopy := true
 		p.Custom = &customCopy
 	}
+	// Issue #800 (Bedrock region contract): echo the row's own selected
+	// region — the representative config row's persisted `region`, when
+	// set. Ignored (never rendered) for a provider whose catalog entry
+	// carries no `regions` would be the ideal gate, but the field is
+	// harmless data on any other row, so it is simply echoed verbatim.
+	if firstRow := agg.firstRow[name]; firstRow != nil && firstRow.Region != "" {
+		regionCopy := firstRow.Region
+		p.Region = &regionCopy
+	}
 	if src.known {
 		if company := src.row.Company; company != "" {
 			companyCopy := company
@@ -426,15 +435,18 @@ func (a *restAPI) deleteProviderHTTP(w http.ResponseWriter, r *http.Request, sub
 // providerPut carries one PUT /api/v1/providers/{id} request through its stages.
 // Each stage writes its own error response and returns false to stop.
 type providerPut struct {
-	w                   http.ResponseWriter
-	r                   *http.Request
-	cfg                 *config.Config
-	providerID          string
-	req                 gen.ProviderUpdateRequest
-	validateEnabled     bool
-	wantsSignIn         bool
-	reqAPIBase          string
-	reqProtocol         string
+	w               http.ResponseWriter
+	r               *http.Request
+	cfg             *config.Config
+	providerID      string
+	req             gen.ProviderUpdateRequest
+	validateEnabled bool
+	wantsSignIn     bool
+	reqAPIBase      string
+	reqProtocol     string
+	// reqRegion is issue #800's own field (Bedrock region contract): the
+	// per-provider-row selected region, persisted verbatim when non-empty.
+	reqRegion           string
 	isCustomRow         bool
 	keyChanged          bool
 	putValidationResult providers_pkg.ValidationResult
@@ -564,6 +576,7 @@ func (a *restAPI) providerPutAdmit(w http.ResponseWriter, r *http.Request, sub s
 	// looks saved and never resolves a model.
 	p.reqAPIBase = derefStr(p.req.ApiBase)
 	p.reqProtocol = derefStr((*string)(p.req.Protocol))
+	p.reqRegion = derefStr(p.req.Region)
 	var admitErr error
 	p.isCustomRow, admitErr = providerAdmission(a.providerCatalog, p.providerID, p.reqAPIBase, p.reqProtocol)
 	if admitErr != nil {
@@ -638,21 +651,60 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 		// Resolve the base URL to probe: the api_base this very
 		// request supplies wins (a custom row has no other source),
 		// then the persisted one, then the catalog's.
-		persistedAPIBase := p.reqAPIBase
-		if persistedAPIBase == "" {
+		explicitAPIBase := p.reqAPIBase
+		if explicitAPIBase == "" {
 			for _, m := range p.cfg.Providers {
 				if m.IsVirtual() {
 					continue
 				}
 				if strings.TrimSpace(m.Provider) == p.providerID {
-					persistedAPIBase = m.APIBase
+					explicitAPIBase = m.APIBase
 					break
 				}
 			}
 		}
+		persistedAPIBase := explicitAPIBase
 		if persistedAPIBase == "" {
 			persistedAPIBase = providers_pkg.APIBaseFor(p.providerID)
 		}
+
+		// Issue #800 D1 (orchestrator review round 2): this is Settings ->
+		// Providers' "test key" path — there is no separate probe endpoint,
+		// saving a new key here IS the key check. A Bedrock row's probe
+		// endpoint and model id are REGION-derived, same as the onboarding
+		// probe (rest_providers_bedrock_probe.go) and a real turn's factory
+		// construction — never the catalog's flat us-east-1 default,
+		// whatever AWS region this row is actually configured for.
+		var probeModels []string
+		if p.req.Model != nil && *p.req.Model != "" {
+			probeModels = []string{*p.req.Model}
+		}
+		var bedrockModelOriginal map[string]string
+		if catRow, isCatalogRow := providers_pkg.CatalogProvider(p.providerID); bedrockRegionsRow(catRow, isCatalogRow) {
+			if len(probeModels) == 0 {
+				probeModels = recommendedProbeModels(catRow)
+			}
+			// The row's own PERSISTED region — a key-only edit (this
+			// branch) carries no region field of its own; a request that
+			// DOES set region is handled by providerPutRespond's own
+			// p.reqRegion echo, but the probe here always runs against
+			// whatever region this save is ABOUT (the just-submitted one
+			// when present, else the row's existing one).
+			persistedRegion := p.reqRegion
+			if persistedRegion == "" {
+				persistedRegion = resolveBedrockPersistedRegion(p)
+			}
+			resolvedBase, resolvedModels, originalByResolved, rerr := bedrockProbeRegionResolution(
+				catRow, persistedRegion, explicitAPIBase, a.bedrockRuntimeBaseOverride, probeModels)
+			if rerr != nil {
+				jsonErrField(p.w, http.StatusUnprocessableEntity, rerr.Error(), "region")
+				return false
+			}
+			persistedAPIBase = resolvedBase
+			probeModels = resolvedModels
+			bedrockModelOriginal = originalByResolved
+		}
+
 		// SSRF-check the persisted api_base before any outbound probe.
 		if persistedAPIBase != "" && a.ssrfChecker != nil {
 			if err := a.ssrfChecker.CheckURL(p.r.Context(), persistedAPIBase); err != nil {
@@ -668,7 +720,11 @@ func (a *restAPI) providerPutValidateKey(p *providerPut) bool {
 			ProviderName: providers_pkg.DisplayName(p.providerID),
 			BaseURL:      persistedAPIBase,
 			APIKey:       *p.req.ApiKey,
+			ProbeModels:  probeModels,
 		}, a.ssrfChk())
+		if orig, ok := bedrockModelOriginal[p.putValidationResult.ProbedModel]; ok {
+			p.putValidationResult.ProbedModel = orig
+		}
 		slog.Debug("rest: PUT provider: key validation result",
 			"provider", p.providerID, "outcome", p.putValidationResult.Outcome,
 			"detail", p.putValidationResult.RawDetail)
@@ -759,7 +815,7 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 				if p.req.AuthMethod != nil {
 					model["auth_method"] = string(*p.req.AuthMethod)
 				}
-				applyProviderIdentity(model, p.reqAPIBase, p.reqProtocol, p.isCustomRow)
+				applyProviderIdentity(model, p.reqAPIBase, p.reqProtocol, p.reqRegion, p.isCustomRow)
 				updated = true
 				break
 			}
@@ -784,7 +840,7 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 			if len(p.userModelsJSON) > 0 {
 				newEntry["models"] = p.userModelsJSON
 			}
-			applyProviderIdentity(newEntry, p.reqAPIBase, p.reqProtocol, p.isCustomRow)
+			applyProviderIdentity(newEntry, p.reqAPIBase, p.reqProtocol, p.reqRegion, p.isCustomRow)
 			m["providers"] = append(providerList, newEntry)
 		}
 		return nil
@@ -832,6 +888,10 @@ func (a *restAPI) providerPutPersist(p *providerPut) bool {
 		slog.Warn("rest: reload after provider update did not confirm within the poll window; "+
 			"agents may still be served by the stale cached provider client", "provider_id", p.providerID)
 	}
+	// Issue #800 follow-up (orchestrator-approved): best-effort, never
+	// blocking — see rest_providers_bedrock_region.go's own doc comment.
+	a.refreshBedrockInferenceProfilesIfNeeded(p)
+
 	// The saved row is a catalog row unless admission classified it as
 	// an operator-named custom endpoint (FR-035); a catalog row's list
 	// is filled by the gateway, a custom row's is the operator's own.
@@ -879,6 +939,10 @@ func (a *restAPI) providerPutRespond(p *providerPut) {
 	}
 	if p := providerWireProtocol(catalog.Protocol(p.reqProtocol)); p != nil {
 		providerResp.Protocol = p
+	}
+	if p.reqRegion != "" {
+		regionCopy := p.reqRegion
+		providerResp.Region = &regionCopy
 	}
 	// R-D step 7 / FR-011: attach validation for warning outcomes (NoCredit/Unreachable/Restricted).
 	// Valid outcome and key-absent PUTs carry no validation field.

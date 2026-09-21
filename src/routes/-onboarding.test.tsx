@@ -806,6 +806,89 @@ describe('OnboardingWizard — sign-in path', () => {
       model: ANTHROPIC_MODEL,
     })
   })
+
+  // Issue #800 (Bedrock region contract): the picker's second-level panel
+  // carries an AWS region control (ProviderDetailPanel.awsRegion.test.tsx)
+  // for any provider whose catalog row offers `regions`. This proves the
+  // wizard actually threads the operator's choice into the completion
+  // request as OnboardingProviderApiKey.region.
+  it('completion sends the selected AWS region as OnboardingProviderApiKey.region (issue #800)', async () => {
+    const BEDROCK_MODEL = 'anthropic.claude-sonnet-4-5-v1:0'
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: BEDROCK_MODEL })
+    await goToStep4()
+    await openPanelForCompany('Amazon', 'bedrock')
+
+    const awsRegionSelect = screen.getByTestId('provider-detail-panel-aws-region')
+    expect((awsRegionSelect as HTMLSelectElement).value).toBe('us-east-1')
+    fireEvent.change(awsRegionSelect, { target: { value: 'eu-central-1' } })
+
+    await confirmPanelWithKey('sk-bedrock-test')
+    await pickModel(BEDROCK_MODEL)
+    await waitFor(() => expect(finishButton()).not.toBeDisabled())
+
+    fireEvent.click(finishButton())
+    await waitFor(() => expect(completeOnboardingTransaction).toHaveBeenCalledOnce())
+
+    const body = vi.mocked(completeOnboardingTransaction).mock.calls[0]![0]
+    expect(body.provider).toEqual({
+      auth_method: 'api_key',
+      id: 'amazon-bedrock',
+      api_key: 'sk-bedrock-test',
+      model: BEDROCK_MODEL,
+      region: 'eu-central-1',
+    })
+  })
+
+  // Orchestrator-review round 2, D1: a real gateway run (Playwright) showed
+  // POST /onboarding/probe-provider sent NO region at all, so the key check
+  // ran against the catalog's us-east-1 default however far the operator's
+  // own AWS region picker said otherwise — while completion (the test just
+  // above) already sent it correctly. This proves the PROBE request carries
+  // the same region.
+  it('the probe sends the selected AWS region as ProbeProviderRequest.region (issue #800 D1)', async () => {
+    const BEDROCK_MODEL = 'anthropic.claude-sonnet-4-5-v1:0'
+    vi.mocked(probeProvider).mockResolvedValue({ success: true, probed_model: BEDROCK_MODEL })
+    await goToStep4()
+    await openPanelForCompany('Amazon', 'bedrock')
+
+    const awsRegionSelect = screen.getByTestId('provider-detail-panel-aws-region')
+    fireEvent.change(awsRegionSelect, { target: { value: 'eu-central-1' } })
+
+    await confirmPanelWithKey('sk-bedrock-test')
+    await pickModel(BEDROCK_MODEL)
+    await waitFor(() => expect(probeProvider).toHaveBeenCalled())
+
+    expect(lastProbeRequest()).toEqual(
+      expect.objectContaining({ id: 'amazon-bedrock', model: BEDROCK_MODEL, region: 'eu-central-1' }),
+    )
+  })
+
+  // The companion negative case: a provider with no AWS region picker at
+  // all must never send a region field (undefined, not "").
+  it('the probe sends no region field for a provider with no AWS region picker', async () => {
+    await goToStep4()
+    await connectProviderOnStep4()
+    expect(lastProbeRequest()).not.toHaveProperty('region')
+  })
+
+  // Orchestrator-review round 2, D2: after Continue, the confirmed-row
+  // summary card kept reading "Pay-as-you-go, per token ·
+  // bedrock-runtime.us-east-1.amazonaws.com ->
+  // bedrock-runtime.us-east-1.amazonaws.com" even after eu-central-1 was
+  // selected — both lines derive the host from the catalog's static
+  // default, never the operator's own pick.
+  it('the confirmed-row summary shows the SELECTED AWS region endpoint, not the catalog default', async () => {
+    await goToStep4()
+    await openPanelForCompany('Amazon', 'bedrock')
+    fireEvent.change(screen.getByTestId('provider-detail-panel-aws-region'), {
+      target: { value: 'eu-central-1' },
+    })
+    await confirmPanelWithKey('sk-bedrock-test')
+
+    const summary = screen.getByTestId('onboarding-provider-summary')
+    expect(within(summary).getAllByText(/bedrock-runtime\.eu-central-1\.amazonaws\.com/)).toHaveLength(2)
+    expect(within(summary).queryByText(/us-east-1/)).not.toBeInTheDocument()
+  })
 })
 
 // =====================================================================

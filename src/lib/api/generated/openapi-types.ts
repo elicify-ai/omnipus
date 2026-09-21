@@ -3834,6 +3834,11 @@ export interface components {
              * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
              */
             endpoint?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
+             * @example eu-central-1
+             */
+            region?: string;
         };
         /** @description The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in"). */
         OnboardingProviderSignIn: {
@@ -4003,6 +4008,11 @@ export interface components {
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions) — same name and semantics as ProviderUpdateRequest.region. The probe resolves the region-derived endpoint (bedrock.ValidateRegion, then the SSRF guard) and rewrites the probed model id with its cross-region inference profile group prefix when the model's inference_profiles lists it, so the key check runs against the region the operator actually picked rather than the catalog's default. `probed_model` still echoes the caller's own model id, never the AWS-facing rewritten one. Ignored for a provider whose catalog entry carries no `regions`.
+             * @example eu-central-1
+             */
+            region?: string;
             /**
              * @description Wire protocol for a custom row. Required with api_base when id is not a catalog id.
              * @example openai-compatible
@@ -9720,7 +9730,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description True iff this row's id is not in the catalog — an operator-named custom endpoint configured with api_base + protocol (ADR-067 FR-035, X-13). Every check keys on this flag, never on a literal id. Absent = false.
              * @example false
@@ -9731,6 +9741,11 @@ export interface components {
              * @example Z.ai
              */
             company?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a row whose catalog entry carries `regions` (CatalogProvider.regions), echoed back from ProviderUpdateRequest.region. Absent when the row has no region setting.
+             * @example eu-central-1
+             */
+            region?: string;
             /**
              * @description ADR-067 FR-039's single local/cloud predicate, derived by the gateway; the only such classification the UI uses.
              * @example cloud
@@ -9988,7 +10003,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /** @description Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol. */
             protocols?: components["schemas"]["CatalogProtocol"][];
             /**
@@ -10003,6 +10018,28 @@ export interface components {
              * @example intl
              */
             region?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the regions offered in this provider's own region picker, each with its cross-region inference profile group. Distinct from `region` above (a company's plan x region VARIANT split, a different provider id per region) — this field lists the regions ONE provider row itself can be pointed at, e.g. Bedrock's AWS regions. Absent or empty on a provider with no such picker.
+             * @example [
+             *       {
+             *         "id": "us-east-1",
+             *         "group": "us"
+             *       },
+             *       {
+             *         "id": "eu-central-1",
+             *         "group": "eu"
+             *       },
+             *       {
+             *         "id": "ap-northeast-1",
+             *         "group": "jp"
+             *       },
+             *       {
+             *         "id": "us-gov-west-1",
+             *         "group": ""
+             *       }
+             *     ]
+             */
+            regions?: components["schemas"]["CatalogProviderRegion"][];
             /**
              * @description Billing plan label when the provider has plan variants (e.g. "coding-plan").
              * @example coding-plan
@@ -10110,6 +10147,14 @@ export interface components {
              * @example false
              */
             disputed?: boolean;
+            /**
+             * @description Issue #800 (Bedrock region contract): the cross-region inference profile groups in which a cross-region inference profile exists for this base model. Region-variant ids (e.g. models.dev's `eu.anthropic.claude-sonnet-4-6`) are folded into this field on the base model, never listed as a separate model. Runtime model-id resolution prefixes the bare id with `<group>.` only when the selected region's group is non-empty AND present in this list; a `global` profile is never auto-selected. Absent or empty means only on-demand (regional, unprefixed) access exists.
+             * @example [
+             *       "us",
+             *       "eu"
+             *     ]
+             */
+            inference_profiles?: ("us" | "eu" | "apac" | "jp" | "au" | "global")[];
             window_source?: components["schemas"]["ContextWindowSource"];
             /**
              * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
@@ -10126,12 +10171,29 @@ export interface components {
              * @example anthropic
              * @enum {string}
              */
-            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
              * @example https://api.z.ai/api/anthropic
              */
             api: string;
+        };
+        /**
+         * CatalogProviderRegion
+         * @description One region offered in a provider's region picker (issue #800 / Bedrock region contract). `group` names the cross-region inference profile group that region belongs to (`us`, `eu`, `apac`, `jp`, `au`, `global`), or the empty string when the region has no cross-region inference profile group (on-demand only). Runtime model-id resolution reads `group` against a model's `inference_profiles` (CatalogModel.yaml) — see "Runtime model-id resolution" in the Bedrock region contract.
+         */
+        CatalogProviderRegion: {
+            /**
+             * @description The region identifier as the provider's API expects it (e.g. an AWS region code).
+             * @example us-east-1
+             */
+            id: string;
+            /**
+             * @description The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+             * @example us
+             * @enum {string}
+             */
+            group: "" | "us" | "eu" | "apac" | "jp" | "au" | "global";
         };
         /**
          * CatalogResizeLimits
@@ -12526,7 +12588,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
              * @example api_key
@@ -12534,10 +12596,15 @@ export interface components {
              */
             auth_method?: "api_key" | "sign_in";
             /**
-             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked.
+             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a provider row whose catalog entry carries `regions` (CatalogProvider.regions). Precedence at runtime is row setting → `AWS_REGION` environment variable → the catalog's own default `region`. Ignored for a provider whose catalog entry carries no `regions`.
+             * @example eu-central-1
+             */
+            region?: string;
             /**
              * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
              * @example sk-abc123
@@ -23479,6 +23546,7 @@ export type ProvidersCatalog = components["schemas"]["ProvidersCatalog"];
 export type CatalogProvider = components["schemas"]["CatalogProvider"];
 export type CatalogModel = components["schemas"]["CatalogModel"];
 export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
+export type CatalogProviderRegion = components["schemas"]["CatalogProviderRegion"];
 export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];
 export type ContextWindowSource = components["schemas"]["ContextWindowSource"];
 export type ContextModelOverride = components["schemas"]["ContextModelOverride"];

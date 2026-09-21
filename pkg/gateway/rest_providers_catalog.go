@@ -385,19 +385,23 @@ func providerWireCLIKind(kind string) *gen.ProviderCliKind {
 
 // applyProviderIdentity stamps the ADR-067 identity fields onto a
 // providers[] entry being written by PUT /api/v1/providers/{id}: the
-// explicit base URL, the selected protocol, and the custom flag (X-13 —
-// `custom: true` is what every later check reads, never the literal id).
+// explicit base URL, the selected protocol, the custom flag (X-13 —
+// `custom: true` is what every later check reads, never the literal id),
+// and the issue #800 (Bedrock region contract) per-row region.
 //
 // An absent request field leaves the persisted value alone; `custom` is
 // rewritten on every PUT because admission has just recomputed it against
 // the current catalog, and a row that stopped being custom (its id joined
 // the catalog) must stop claiming to be.
-func applyProviderIdentity(entry map[string]any, apiBase, protocol string, custom bool) {
+func applyProviderIdentity(entry map[string]any, apiBase, protocol, region string, custom bool) {
 	if apiBase != "" {
 		entry["api_base"] = apiBase
 	}
 	if protocol != "" {
 		entry["protocol"] = protocol
+	}
+	if region != "" {
+		entry["region"] = region
 	}
 	if custom {
 		entry["custom"] = true

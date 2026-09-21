@@ -1603,11 +1603,6 @@ jobs:
       - name: Run test-tagged approver escape-hatch test
         run: CGO_ENABLED=0 go test -tags goolm,stdjson,test -count=1 -p 1 -run '^TestNopApprover_TestApproverInstalled' ./pkg/agent/
 
-      - name: Build and test the Bedrock provider
-        run: |
-          CGO_ENABLED=0 go build -tags goolm,stdjson,bedrock ./pkg/providers/bedrock/...
-          CGO_ENABLED=0 go test -tags goolm,stdjson,bedrock -count=1 -p 1 ./pkg/providers/bedrock/...
-
       - name: Run pkg/sandbox Landlock tests
         # Same skip-detection + pass-floor pattern as browser-e2e's
         # pkg/tools/browser step, applied to a second silent-coverage-loss

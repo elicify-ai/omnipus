@@ -211,12 +211,12 @@ describe('TestPickerModel', () => {
       expect(companies).toEqual(['Zhipu AI'])
     })
 
-    it('dataset 7 — an unsupported provider still matches and is marked disabled with its reason', () => {
+    it('dataset 7 — Bedrock matches and remains selectable as a normal provider', () => {
       const rows = build('bedrock').letterGroups.flatMap((g) => g.rows)
       const amazon = rows.find((row) => row.company === 'Amazon')
       expect(amazon).toBeDefined()
-      expect(amazon!.disabled).toBe(true)
-      expect(amazon!.unsupportedReason).toBe('cloud-iam')
+      expect(amazon!.disabled).toBe(false)
+      expect(amazon!.unsupportedReason).toBeUndefined()
     })
 
     it('dataset 8 — regex metacharacters are matched literally, never compiled', () => {

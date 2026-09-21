@@ -115,6 +115,13 @@ export interface ProviderDetailSelection {
   plan?: string
   /** The chosen region code, when the company has region variants. */
   region?: string
+  /**
+   * Issue #800 (Bedrock region contract): the selected AWS region, when the
+   * resolved catalog row carries its own `regions` picker
+   * (CatalogProvider.regions) — distinct from `region` above, which selects
+   * between SIBLING catalog rows, not an AWS region within one row.
+   */
+  awsRegion?: string
   /** The typed key — present only for `api_key`, never persisted by this panel. */
   apiKey?: string
 }
@@ -251,16 +258,44 @@ export function ProviderDetailPanel({
   // have had to invent.
   const isLocal = resolvedVariant.locality === 'local'
 
+  // Issue #800 (Bedrock region contract): the resolved catalog row's OWN
+  // region picker — a provider like amazon-bedrock offers no plan/region
+  // VARIANT split (company.regions above is at most one entry, its own
+  // `region` field), so this reads catalog DATA the picker above never
+  // touches. Defaults to the catalog row's own default region when that
+  // region is itself one of the offered choices, else the first offered
+  // region — never invented.
+  const awsRegionOptions = resolvedVariant.regions ?? []
+
+  // Orchestrator-review defect (issue #800): the SIBLING-row region group
+  // just below ("Detected: Us-east-1 — change" with a single "Us-east-1"
+  // button, driven by company.regions — SIBLING catalog ROWS, see the
+  // testid block's comment) is a single-option group for any company with
+  // exactly one catalog row, which is exactly Bedrock's shape. Rendered
+  // alongside the new AWS region <select> above, it reads as two competing
+  // region controls for the same decision. A single-option group carries no
+  // information (there is nothing to choose between), so it is hidden
+  // whenever there is only one option OR the resolved row already offers
+  // its own AWS region picker — either condition alone would fix Bedrock;
+  // both together also cover a hypothetical future row that has both a
+  // sibling split AND an AWS picker.
+  const showSiblingRegionGroup = company.regions.length > 1 && awsRegionOptions.length === 0
+  const defaultAwsRegion = awsRegionOptions.some((r) => r.id === resolvedVariant.region)
+    ? (resolvedVariant.region ?? '')
+    : (awsRegionOptions[0]?.id ?? '')
+  const [awsRegion, setAwsRegion] = React.useState<string>(defaultAwsRegion)
+
   const selection: ProviderDetailSelection = {
     providerId: authMethod === 'sign_in' && signInProviderId ? signInProviderId : resolvedVariant.id,
     authMethod,
     plan: plan.length > 0 ? plan : undefined,
     region: company.regions.length > 0 ? region : undefined,
+    awsRegion: awsRegionOptions.length > 0 ? awsRegion : undefined,
     apiKey: authMethod === 'api_key' ? (isLocal ? LOCAL_PROVIDER_CREDENTIAL : apiKey) : undefined,
   }
 
   // `onChange` reports the live draft; it must not fire during render.
-  const selectionKey = `${selection.providerId}|${selection.authMethod}|${selection.plan ?? ''}|${selection.region ?? ''}|${selection.apiKey ?? ''}`
+  const selectionKey = `${selection.providerId}|${selection.authMethod}|${selection.plan ?? ''}|${selection.region ?? ''}|${selection.awsRegion ?? ''}|${selection.apiKey ?? ''}`
   const onChangeRef = React.useRef(onChange)
   onChangeRef.current = onChange
   const selectionRef = React.useRef(selection)
@@ -323,7 +358,7 @@ export function ProviderDetailPanel({
       )}
 
       {/* ── Region, pre-selected from the locale (FR-027) ───────────────── */}
-      {company.regions.length > 0 && (
+      {showSiblingRegionGroup && (
         <div className="flex flex-col gap-1">
           <span
             id={regionGroupLabelId}
@@ -358,6 +393,34 @@ export function ProviderDetailPanel({
               </button>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── AWS region (issue #800), beside the API key entry ───────────── */}
+      {awsRegionOptions.length > 0 && (
+        <div className="flex flex-col gap-1">
+          <label
+            htmlFor={`${testId}-aws-region`}
+            className="text-xs uppercase"
+            style={{ color: 'var(--color-muted)' }}
+          >
+            AWS region
+          </label>
+          <select
+            id={`${testId}-aws-region`}
+            tabIndex={0}
+            data-testid={`${testId}-aws-region`}
+            value={awsRegion}
+            onChange={(event) => setAwsRegion(event.target.value)}
+            className="min-h-[32px] rounded border px-2 text-sm"
+            style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+          >
+            {awsRegionOptions.map((r) => (
+              <option key={r.id} value={r.id}>
+                {r.id}
+              </option>
+            ))}
+          </select>
         </div>
       )}
 

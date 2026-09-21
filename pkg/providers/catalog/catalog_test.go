@@ -369,8 +369,8 @@ func TestParseDocument_Rejects(t *testing.T) {
 		{name: "DS-1.10 provider with models [] accepted", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["models"] = []any{} }},
 		{name: "DS-1.12 unicode name preserved", mutate: func(t *testing.T, m map[string]any) { provider(t, m, 0)["name"] = "智谱 AI" }},
 		{name: "DS-1.24 protocols omitted", mutate: func(t *testing.T, m map[string]any) { delete(provider(t, m, 0), "protocols") }},
-		{name: "DS-1.25 bedrock empty protocol, tier unsupported", mutate: func(t *testing.T, m map[string]any) {
-			b := provider(t, m, providerIndex(t, m, "amazon-bedrock"))
+		{name: "DS-1.25 unsupported row accepts an empty protocol", mutate: func(t *testing.T, m map[string]any) {
+			b := provider(t, m, providerIndex(t, m, "cloud-iam-example"))
 			b["protocol"] = ""
 			b["tier"] = "unsupported"
 			b["unsupported_reason"] = "cloud-iam"
@@ -610,7 +610,7 @@ func TestParseDocument_APIURLValidation(t *testing.T) {
 		{"ollama localhost http", "ollama", "http://localhost:11434/v1", ""},
 		{"hosted https public", "zai", "https://api.z.ai/api/paas/v4", ""},
 		{"hosted https public ip", "zai", "https://8.8.8.8/v1", ""},
-		{"DS-1.25 unsupported empty api", "amazon-bedrock", "", ""},
+		{"DS-1.25 unsupported empty api", "cloud-iam-example", "", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -682,7 +682,7 @@ func TestResolve_SameModelIDTwoProviders(t *testing.T) {
 // T4 — DS-1.9, US-1.AC5: unknown limits are 0 and the handle is usable.
 func TestResolve_UnknownLimitsAreZero(t *testing.T) {
 	c := mustCatalog(t, loadFixture(t))
-	h := c.Resolve("amazon-bedrock", "anthropic.claude-opus-4")
+	h := c.Resolve("cloud-iam-example", "anthropic.claude-opus-4")
 	if !h.Found() {
 		t.Fatal("row must resolve")
 	}
@@ -821,7 +821,7 @@ func TestCatalog_LocalityPredicate(t *testing.T) {
 		{"openai-chatgpt", "openai-chatgpt", ProtocolOpenAICompatible, false, "https://chatgpt.com/backend-api/codex", LocalityCloud},
 		{"codex-cli", "codex-cli", ProtocolCLI, false, "", LocalityCloud},
 		{"hosted row with private host is still cloud (rejected elsewhere)", "zai", ProtocolOpenAICompatible, false, "https://10.0.0.5/v1", LocalityCloud},
-		{"unsupported", "amazon-bedrock", "", false, "", LocalityCloud},
+		{"unsupported", "cloud-iam-example", "", false, "", LocalityCloud},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -835,7 +835,7 @@ func TestCatalog_LocalityPredicate(t *testing.T) {
 	c := mustCatalog(t, loadFixture(t))
 	for id, want := range map[string]Locality{
 		"ollama": LocalityLocal, "lmstudio": LocalityLocal,
-		"zai": LocalityCloud, "openrouter": LocalityCloud, "minimax": LocalityCloud, "amazon-bedrock": LocalityCloud,
+		"zai": LocalityCloud, "openrouter": LocalityCloud, "minimax": LocalityCloud, "cloud-iam-example": LocalityCloud,
 	} {
 		p, ok := c.Provider(id)
 		if !ok {
