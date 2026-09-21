@@ -1,8 +1,12 @@
 // LibraryImagePreview — plain <img> for the Library preview pane
-// (library-spec.md section 4). Deliberately simple: no lightbox, no
-// annotate/crop — those belong to the chat attachment surface
-// (chat/ChatImage.tsx), which this pane must NOT reach into (file
-// ownership boundary). Sensible max sizing + a dark canvas + real alt text.
+// (library-spec.md section 4), plus a full-screen action that opens the SAME
+// zoomable media viewer chat images use (D18 scope extension,
+// docs/internal/design/components/zoomable-view.md: "Library image preview
+// gets a new full-screen button that opens the same media viewer ... already
+// used for chat images"). No annotate/crop — those belong to the chat
+// attachment surface (chat/ChatImage.tsx), which this pane must NOT reach
+// into (file ownership boundary). Sensible max sizing + a dark canvas + real
+// alt text.
 //
 // Also the "image" kind's inline embed renderer (ADR-083 spec, US-3 /
 // EMB-025..EMB-031) — the SAME component the pane uses, per EMB-027. Only
@@ -13,14 +17,20 @@
 // applies to pictures only) — the resolver that parses that notation is out
 // of this file's scope; this component only ever applies a width it is
 // handed, and never on the `pane` variant, where the pane's own bounds — not
-// the embed notation — decide size.
+// the embed notation — decide size. The full-screen action is `pane`-only —
+// portalled into the Library preview pane's single header row
+// (previewHeaderSlot), which an inline note embed never provides, so it
+// renders nothing there rather than a stray button per embedded picture.
 
 import { useEffect, useState } from 'react'
-import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowsOutSimple, WarningCircle } from '@phosphor-icons/react'
 import { libraryDownloadUrl } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { PreviewHeaderPortal } from './previewHeaderSlot'
+import { useUiStore } from '@/store/ui'
 
 interface LibraryImagePreviewProps {
   workspaceId: string
@@ -34,6 +44,7 @@ interface LibraryImagePreviewProps {
 
 export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', width }: LibraryImagePreviewProps) {
   const inline = variant === 'inline'
+  const openMediaLightbox = useUiStore((s) => s.openMediaLightbox)
   // UAT D-107 (2026-09-13): a row for a file another tab had deleted opened
   // to the BROWSER'S OWN broken-image glyph beside the alt text — no message,
   // no placeholder. Row thumbnails already had an onError fallback; the pane
@@ -93,6 +104,22 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
       data-testid="library-image-preview"
       data-variant={variant}
     >
+      {/* pane-only: portals into the Library preview pane's single header
+          row (previewHeaderSlot). No-ops for the inline embed variant,
+          which has no such slot to portal into. */}
+      {!inline && (
+        <PreviewHeaderPortal>
+          <IconButton
+            onClick={() => openMediaLightbox({ kind: 'image', src, alt: entry.name, filename: entry.name })}
+            aria-label="Open full screen"
+            title="Open full screen"
+            data-testid="library-image-preview-fullscreen"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          >
+            <ArrowsOutSimple size={15} />
+          </IconButton>
+        </PreviewHeaderPortal>
+      )}
       <img
         src={src}
         alt={entry.name}
