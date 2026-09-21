@@ -44,6 +44,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { WarningCircle } from "@phosphor-icons/react";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { Button } from "@/components/ui/button";
 import {
   KnowledgeRailPanelHeader,
   type KnowledgeRailQualifier,
@@ -252,9 +253,9 @@ export function KnowledgeOutline({
                 const label = heading.text.trim();
                 return (
                   <li key={`${heading.slug}-${i}`}>
-                    <button
+                    <Button
                       type="button"
-                      tabIndex={0}
+                      variant="ghost"
                       data-testid="knowledge-outline-heading"
                       data-slug={heading.slug}
                       data-level={heading.level}
@@ -266,10 +267,9 @@ export function KnowledgeOutline({
                         paddingLeft: 'calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))',
                       } as import('react').CSSProperties}
                       className={
-                        "flex w-full items-baseline gap-[var(--space-2)] py-[var(--space-1)] pr-[var(--space-2-5)] text-left text-[length:var(--type-utility-xs-size)] transition-colors " +
-                        "hover:bg-[var(--color-surface-2)] " +
+                        "h-auto w-full items-baseline justify-start gap-[var(--space-2)] rounded-none px-0 py-[var(--space-1)] pr-[var(--space-2-5)] text-left text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] " +
                         (isActive
-                          ? "text-[var(--color-accent)]"
+                          ? "text-[var(--color-accent)] hover:text-[var(--color-accent)]"
                           : "text-[var(--color-secondary)] hover:text-[var(--color-secondary)]")
                       }
                     >
@@ -290,7 +290,7 @@ export function KnowledgeOutline({
                       >
                         {label || "Untitled heading"}
                       </span>
-                    </button>
+                    </Button>
                   </li>
                 );
               })}

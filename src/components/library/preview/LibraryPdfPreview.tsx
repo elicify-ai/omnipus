@@ -110,6 +110,7 @@
 // then match nothing and pass.
 
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X,
   MagnifyingGlassMinus,
   MagnifyingGlassPlus,
@@ -1486,14 +1487,14 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       ctx.stroke()
     }
 
-    const removeBtn = document.createElement('button')
-    removeBtn.type = 'button'
-    removeBtn.className = 'omnipus-pdf-signature-remove'
-    removeBtn.setAttribute('aria-label', 'Remove signature')
-    removeBtn.setAttribute('data-testid', `library-pdf-signature-remove-${key}`)
-    removeBtn.textContent = '×'
-    removeBtn.addEventListener('click', () => handleRemoveSignature(key))
-    wrapper.appendChild(removeBtn)
+    // The remove affordance itself is NOT built here as a raw DOM node — a
+    // catalogued `IconButton` is portalled into `wrapper` from this
+    // component's own render (see the `placedSignatures.map(...)` block near
+    // the JSX return) once `handleInsertSignature` commits this key to
+    // `placedSignatures` state. `wrapper` is registered in
+    // `signaturePreviewElsRef` synchronously, just below, before that state
+    // update is dispatched, so the portal target always exists by the time
+    // React looks for it.
 
     pageEl.appendChild(wrapper)
     signaturePreviewElsRef.current.set(key, wrapper)
@@ -1958,6 +1959,36 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         defaultPageNumber={signatureDefaultPage}
         onInsert={handleInsertSignature}
       />
+
+      {/* The per-signature remove button drawn on the page canvas
+          (`renderSignaturePreview`'s `wrapper`, above) is a catalogued
+          `IconButton`, portalled into that imperatively-created DOM node —
+          `wrapper` is not part of the React tree at all (PDF.js's own pages
+          are built with `document.createElement`, not JSX), so a real
+          `<button>` element inside it can only be React's if React is told
+          to render there via a portal rather than by hand-building one.
+          `.omnipus-pdf-signature-remove` (this file's own <style> block
+          above) is unlayered CSS, so it still wins over every conflicting
+          Tailwind utility Button/IconButton bring along (Tailwind's own
+          utilities are emitted inside `@layer utilities`, which always loses
+          to unlayered CSS regardless of specificity or source order) — the
+          button keeps its exact prior size, shape, color and position. */}
+      {placedSignatures.map((sig) => {
+        const portalTarget = signaturePreviewElsRef.current.get(sig.key)
+        if (!portalTarget) return null
+        return createPortal(
+          <IconButton
+            aria-label="Remove signature"
+            data-testid={`library-pdf-signature-remove-${sig.key}`}
+            className="omnipus-pdf-signature-remove"
+            onClick={() => handleRemoveSignature(sig.key)}
+          >
+            ×
+          </IconButton>,
+          portalTarget,
+          sig.key,
+        )
+      })}
     </div>
   )
 }
