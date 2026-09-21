@@ -39,14 +39,18 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
   const bindingCopy = providerBindingCopy(agent)
 
   return (
-    <div className="relative group/card">
+    <div className="relative group/card h-full">
       <Button
         type="button"
         variant="ghost"
         data-testid={`agent-card-${agent.id}`}
         onClick={handleOpen}
         className={cn(
-          'block h-auto w-full whitespace-normal rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left',
+          'block h-full w-full whitespace-normal rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left',
+          // pb reserves the strip the absolute "Set as default" occupies: without it
+          // a two-line description pushes the chips row under that button and the two
+          // overlap. h-full (not h-auto) makes every card in a grid row the same height.
+          'pb-[var(--space-8)]',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
           'focus-visible:border-[var(--color-accent)]'
         )}

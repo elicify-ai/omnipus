@@ -434,7 +434,15 @@ export function Sidebar() {
                 placeholder="Workspace name…"
                 aria-label="New workspace name"
                 disabled={createWorkspaceMut.isPending}
-                className="flex-1 min-w-0 rounded border border-[var(--color-accent)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)] disabled:opacity-50"
+                // border is --color-border, NOT --color-accent: the accent border
+                // was permanent decoration meaning "you are editing", and the
+                // global :focus-visible rule paints a gold outline 2px outside
+                // it, so an autofocused field showed two concentric gold rings.
+                // `outline-none` here does not prevent that — the global rule's
+                // `:focus-visible:not([data-no-focus-ring])` outranks a single
+                // utility class. With a neutral border the gold ring means one
+                // thing only: this field has focus.
+                className="flex-1 min-w-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] disabled:opacity-50"
               />
             </div>
           )}

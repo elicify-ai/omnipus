@@ -46,7 +46,12 @@ const Field = React.forwardRef<HTMLDivElement, FieldProps>(function Field(
   const control = typeof children === 'function' ? children(controlProps) : React.cloneElement(children, controlProps)
 
   return (
-    <div ref={ref} className={cn(className)} {...props}>
+    // space-y: Field previously stacked label, control, description and error
+    // with NO vertical rhythm at all, and Label carries `leading-none`, so the
+    // label sat flush on top of its input in every form using this component.
+    // One gap token here fixes every call site at once rather than each form
+    // re-deriving its own margin.
+    <div ref={ref} className={cn('space-y-[var(--space-2)]', className)} {...props}>
       <Label htmlFor={controlId}>
         {label}
         {resolvedRequired && <span aria-hidden="true"> *</span>}

@@ -361,7 +361,7 @@ function AgentsLibraryView({
                 className="gap-[var(--space-1)] shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                 data-testid="add-main-button"
               >
-                <Plus size={12} weight="bold" /> + New Main
+                <Plus size={12} weight="bold" /> New Main
               </Button>
             </div>
             {mainAgents.length === 0 ? (
@@ -407,7 +407,7 @@ function AgentsLibraryView({
                   className="gap-[var(--space-1)] shrink-0 text-[var(--color-muted)] hover:text-[var(--color-accent)]"
                   data-testid="add-subagent-button"
                 >
-                  <Plus size={12} weight="bold" /> + New Subagent
+                  <Plus size={12} weight="bold" /> New Subagent
                 </Button>
                 {/* W4 of agent-form-requirements: third +Add with CLI sub-options. */}
                 <Popover open={externalMenuOpen} onOpenChange={setExternalMenuOpen}>
@@ -420,7 +420,7 @@ function AgentsLibraryView({
                       aria-haspopup="dialog"
                       aria-expanded={externalMenuOpen}
                     >
-                      <Plus size={12} weight="bold" /> + Add Subagent (External)
+                      <Plus size={12} weight="bold" /> Add Subagent (External)
                       <CaretDown size={10} weight="bold" />
                     </Button>
                   </PopoverTrigger>

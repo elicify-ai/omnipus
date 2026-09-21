@@ -3,8 +3,8 @@
   "clean": true,
   "chunks": [
     {
-      "file": "assets/index-B_vSJrU5.js",
-      "sha256": "ff8c67fcb4c110fde69247a6285def0156a166b67e0cf8aa0691507bf37204c1",
+      "file": "assets/index-RRXW-O0P.js",
+      "sha256": "2b5318e725a89f6831122a970d4947807908244870d6df5ad9ca386cd1478bcc",
       "modules": [
         "\u0000vite/modulepreload-polyfill.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/index.html",
@@ -63,15 +63,15 @@
       ]
     },
     {
-      "file": "assets/AdvancedDisclosure-CBXZaglF.js",
-      "sha256": "7d072207756073dfee346fa8e9e5e87b76ba66f5ba9c24b38ff1241176b00925",
+      "file": "assets/AdvancedDisclosure-DMVi1f3S.js",
+      "sha256": "3cd7b123d0fd748b3ff93125f8da624217166ddf2ad0eec662b8dbb209008d41",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/shared/AdvancedDisclosure.tsx"
       ]
     },
     {
-      "file": "assets/AgentProfile-Cr9rdKqH.js",
-      "sha256": "ff6626e8c3772c207886bb755b466eddbd2e6a223961b682ab35798dcb716ba5",
+      "file": "assets/AgentProfile-DytMtNDQ.js",
+      "sha256": "542ba05e71ad37f0bd630b2dd4cabf278795af811e50975eea77f647a3fb01b1",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/agents/AgentProfile.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/agents/ExecutorSelector.tsx",
@@ -80,15 +80,15 @@
       ]
     },
     {
-      "file": "assets/AutoSaveIndicator-BDv0Hfox.js",
-      "sha256": "591a890ab40a7ee4aff5caa3f2eedf1940c1122c506b63c01a987c44139b161c",
+      "file": "assets/AutoSaveIndicator-ORXp5h_j.js",
+      "sha256": "a2aac476a58fb89670d29793896f238fa159c4135c6b60408e5e4bcad2decb8e",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/AutoSaveIndicator.tsx"
       ]
     },
     {
-      "file": "assets/BrowserLiveView-CNU0BGaB.js",
-      "sha256": "f9aaae047b60700f26320db9695f5589a880fbb415df4305ea79bfa6958e7352",
+      "file": "assets/BrowserLiveView-DVqJL8_l.js",
+      "sha256": "6496f8d9a7362ce8f00b69cac55758ac52b0713d244d380d215f2fb684afa632",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/browser/BrowserLiveView.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/browser/useBrowserTextComposition.ts",
@@ -106,8 +106,8 @@
       ]
     },
     {
-      "file": "assets/BrowserTool-nNDP2-7F.js",
-      "sha256": "e974a5bd89c4713bb630dd3bcc7c2d8ad289b174e59b4df67ba68066c91a9d93",
+      "file": "assets/BrowserTool-DoknZ4qQ.js",
+      "sha256": "79bc92143ea2aa7a1b531b3080d4d0122997acfbbb1ceb2c69a76a97999aee35",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/core/dist/adapters/attachment.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/core/dist/model-context/interactable-composer-metadata.js",
@@ -164,8 +164,8 @@
       ]
     },
     {
-      "file": "assets/ChatScreen-DvlsSOCr.js",
-      "sha256": "6627399ab66679074702667e56a9bb896c4165a43d8f08043760285fd5bcf9b8",
+      "file": "assets/ChatScreen-Bawl6qBv.js",
+      "sha256": "212bf583a72d0cb0f250474e5213f4e16d0ff4cd831fb5c6a34cd67a99f951b9",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/core/dist/adapters/directive-formatter.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/core/dist/react/primitive-hooks/useActionBarCopy.js",
@@ -341,8 +341,8 @@
       ]
     },
     {
-      "file": "assets/Combination-CEb-9t9W.js",
-      "sha256": "7801906d73e651a2f05c72c61af842b29dbbc3072b4951d2c349e596508b842b",
+      "file": "assets/Combination-ChzScvG7.js",
+      "sha256": "8c60b3c54df07f773fbd819ff72b134acf8e07f88d8972211993e9dbdec4b998",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dismissable-layer/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -382,30 +382,30 @@
       ]
     },
     {
-      "file": "assets/ContextSection-BbwlSfdS.js",
-      "sha256": "30b15277378f4732684e60b000d1e6bda1bc9265ed40f49b30248f3a62a9b35e",
+      "file": "assets/ContextSection-S2bCgIIt.js",
+      "sha256": "427b2341eae9352d9ecd81de04d3d055739735e63d8b40eb774e003dfdbe9f7d",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/settings/ContextSection.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/settings/SaveStatus.tsx"
       ]
     },
     {
-      "file": "assets/CriteriaBreakdown-CtWVa9up.js",
-      "sha256": "3a04ecd096bf5d15aeb5d7644fe635c4f87b14c096acecdf757549bebc9127bd",
+      "file": "assets/CriteriaBreakdown-C85ndkpR.js",
+      "sha256": "299ea7668dad43fa9d557065593cd7895a55d67c8648ceb96261c03519b6e75d",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/shared/CriteriaBreakdown.tsx"
       ]
     },
     {
-      "file": "assets/DefaultWorkspaceRedirect-CmFDDUZt.js",
-      "sha256": "204afcb5dc23c82680e84a18dc389cd22347001f87b59aba03023a1fdbbd84d9",
+      "file": "assets/DefaultWorkspaceRedirect-Chnqb5-_.js",
+      "sha256": "3dbd093284af0490c8c1e551288cf304ff548983b0a440f387152349f61e7932",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/DefaultWorkspaceRedirect.tsx"
       ]
     },
     {
-      "file": "assets/FormError-DIeseLAf.js",
-      "sha256": "9c3a9239992d4ee4c7122d99224a5f2ad70a49ee8706951437db0feb758d9bcb",
+      "file": "assets/FormError-B57t2Ohm.js",
+      "sha256": "a549fa58ba7f30e18e42c9d5bfcbdf6a5966959fd85a408ac1af362d1d725eb5",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/FormError.tsx"
       ]
@@ -418,8 +418,8 @@
       ]
     },
     {
-      "file": "assets/LibraryExplorer-B4fayCCD.js",
-      "sha256": "819bb73b264b83f334bdefdf6be52282e9df9919894a5858a173935ee702be92",
+      "file": "assets/LibraryExplorer-BNTGJJko.js",
+      "sha256": "68b700f499f3dd41577b5f8acb2c6167a43b7f3562efd7898163fad129390a89",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@tanstack/query-core/build/modern/queriesObserver.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@tanstack/react-query/build/modern/useQueries.js",
@@ -511,8 +511,8 @@
       ]
     },
     {
-      "file": "assets/ProviderPicker-Bo15hljz.js",
-      "sha256": "4269bcf27058efe341a8b0e15b6ea646f7d0e844e39dc50caa84eb2d762625a7",
+      "file": "assets/ProviderPicker-CwQxpf2k.js",
+      "sha256": "b3aac3720323651b6d13e68ee883004a640ebf50957fadd0e06e440d5547b6e5",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/providers/AuthMethodControl.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/providers/CustomEndpointPanel.tsx",
@@ -528,23 +528,23 @@
       ]
     },
     {
-      "file": "assets/QueryErrorState-DN3xlMtb.js",
-      "sha256": "6506981fc36414f4885a4c292c5f337e15836da85df4759ce31e1336fbb35b98",
+      "file": "assets/QueryErrorState-CWf_hbst.js",
+      "sha256": "14072fecde09c70ef4436808523fe2734f490e66da39c6ff0bce45fd6eb3ed9c",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/shared/QueryErrorState.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/query-error-state.tsx"
       ]
     },
     {
-      "file": "assets/ScreenHeader-CnD_UuQy.js",
-      "sha256": "2559e3cd9a0b7b5c52f3a3b8457d795929ac9bc410ef5d6bde2fc682e42a96c4",
+      "file": "assets/ScreenHeader-XFLsa2uI.js",
+      "sha256": "4468b54daca8d47d2521c5ce4a3b4dbdd7e1135557eb47877ca7203d2da1fea9",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/layout/ScreenHeader.tsx"
       ]
     },
     {
-      "file": "assets/ShellDenyPatternsEditor-C5VgVKxg.js",
-      "sha256": "60df21bcb1414570888c9a3d7cfe84e55ae5f6d0d61606220aba406d8f109894",
+      "file": "assets/ShellDenyPatternsEditor-DTgJxUEv.js",
+      "sha256": "1d22bf19e3959d09d7e3592558a4aeb15e81e554bbc6dcb558fbd3a5a923deae",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/agents/ShellDenyPatternsEditor.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/shared/PolicyBadge.tsx",
@@ -554,8 +554,8 @@
       ]
     },
     {
-      "file": "assets/TaskDetailSlideOver-DR6ZVY11.js",
-      "sha256": "6b7a754818fc718fad087d339cb85cd9466368813328f52650ea7d8a1bf0a7ac",
+      "file": "assets/TaskDetailSlideOver-B7ndpZpP.js",
+      "sha256": "e0f39619fd210609e4a8fb1f04e1ca1faf4e70c0487eb40c2677ea6c296fbd35",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@date-fns/tz/date/index.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@date-fns/tz/date/mini.js",
@@ -782,6 +782,7 @@
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/TaskRunsList.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/taskFormFields.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/taskStatusConfig.ts",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/design-system/status.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/hooks/useWorkspaceTeamIds.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/lib/calendar/recurrence.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/lib/statusColors.ts",
@@ -798,8 +799,8 @@
       ]
     },
     {
-      "file": "assets/WorkspaceTabContainer-BMk3NfcJ.js",
-      "sha256": "592d7e88321dc7d38d0ba3ade19da1b5a6a0b16f4922c8605cfcae282d8ac9d7",
+      "file": "assets/WorkspaceTabContainer-a4T3fkYG.js",
+      "sha256": "1d9a60b59c1450dc40fd92e7131e20eb903bca866a1c874e4e2c702071287755",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/chat/ChatControls.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/WorkspaceTabBar.tsx",
@@ -808,8 +809,8 @@
       ]
     },
     {
-      "file": "assets/_app-DjVgFnNG.js",
-      "sha256": "e1bc9c5b2c2f6f499d0b3d1c0b7bc94a61e35d6f199e74d3005047f86695f07c",
+      "file": "assets/_app-Dug8YdpQ.js",
+      "sha256": "8fcbad97ccadbed1ce8ac1b59a449e8298efcae85223d49514d0544aa63397cc",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/core/dist/react/AssistantProvider.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/core/dist/react/RuntimeAdapter.js",
@@ -895,8 +896,8 @@
       ]
     },
     {
-      "file": "assets/_app-wRmEm41p.js",
-      "sha256": "8f1f2cc55939a4fd97bc773850c886f8f2683f5824e744fc2e5b3444df58e95a",
+      "file": "assets/_app-MozUrPS2.js",
+      "sha256": "27c5d97b6c008e94bc5547cb4a553eaafca8b096b3283dce20e1c8132b67eafe",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/index.tsx?tsr-split=component"
       ]
@@ -916,8 +917,8 @@
       ]
     },
     {
-      "file": "assets/accordion-CNoBncfb.js",
-      "sha256": "8c938fc2e335493fe114887194e080f8662174cae486c7ee5c0b5f3b1cd6d480",
+      "file": "assets/accordion-BbOOH2zq.js",
+      "sha256": "00555953014a042d2cf1425b6f0672b75b3bc358acca34675c12e0b338cd8209",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-accordion/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-accordion/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -959,36 +960,36 @@
       ]
     },
     {
-      "file": "assets/agents-BGr7cHgq.js",
-      "sha256": "c25ca0213ec323db6190b514541dc560858faabe03c8a97d910887d084e24f73",
-      "modules": [
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/agents.tsx?tsr-split=component"
-      ]
-    },
-    {
-      "file": "assets/agents-BfqRZA9q.js",
-      "sha256": "455f0d8402a03ff382c7dfd3dd08628a638eb1875e475926158cc673c2da6c60",
+      "file": "assets/agents-B0osuXv2.js",
+      "sha256": "a4a865cf2aa6aaa2518831a402de0e0c641e5214ac75c4f489a952684699ff18",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/agents.tsx?tsr-split=errorComponent"
       ]
     },
     {
-      "file": "assets/agents-BgPla6F5.js",
-      "sha256": "6e7ae6fd01c0e481983ebabb4ef050088f33a58b5501c7d2b49b4d8728d64057",
+      "file": "assets/agents-DTmWGcnF.js",
+      "sha256": "21b9148902d489b0c5f96a3857b2cf40237f2df0556307c9bc7881d5bdc212bb",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/agents.tsx?tsr-split=notFoundComponent"
       ]
     },
     {
-      "file": "assets/agents._agentId-B6aZ2mo0.js",
-      "sha256": "a77f80684a4f06b80f35c2565efcc1a6bc15656b3ffa6160ad147ea6efcdce18",
+      "file": "assets/agents-Ioq3X9e1.js",
+      "sha256": "9ef4014d9e181b841dc33eb056549f67c37323acb10b2b19c5de2b7eef0da394",
+      "modules": [
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/agents.tsx?tsr-split=component"
+      ]
+    },
+    {
+      "file": "assets/agents._agentId-C2DaSYVu.js",
+      "sha256": "a602f943dd974954b827fdebc694e99b6f802533f559e916d3b37df05e3dcecd",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/agents.$agentId.tsx?tsr-split=component"
       ]
     },
     {
-      "file": "assets/agents.index-BzeTE2uq.js",
-      "sha256": "48044cc8b851efa9a2e30d2bf767e454aa3dce3006c3100b2658bc6456ab9bc3",
+      "file": "assets/agents.index-ergjteTw.js",
+      "sha256": "067baede2d734c67612e5635c3cc70a10405934780fd389b0dfdd80e1b212ef5",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/agents/AgentCard.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/agents/CreateAgentModal.tsx",
@@ -1004,8 +1005,8 @@
       ]
     },
     {
-      "file": "assets/alert-dialog-BAMBXq9M.js",
-      "sha256": "a3434d36ccae64ec9f501dcbdf99b350e5ac71bcf0be5b1d2b1a48acdb20e7e8",
+      "file": "assets/alert-dialog-Rz0mrrZL.js",
+      "sha256": "1377d668e1346ed847ca593bc06335d141e2d690a6a42d2551a2400f7412f46b",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/alert-dialog.tsx"
       ]
@@ -1231,8 +1232,8 @@
       ]
     },
     {
-      "file": "assets/automations-xLwmqRx7.js",
-      "sha256": "aeee9350f233bf6ba0c83ec04b12d0c0b22c23513adf6e904ec721742ca79ad1",
+      "file": "assets/automations-Dp8RNip_.js",
+      "sha256": "c2f7fa753ea33072bbcb95e317a2d5edec3cb32dd0c0fa7e1380e2ef470b9b00",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/automations.tsx?tsr-split=component"
       ]
@@ -1266,8 +1267,8 @@
       ]
     },
     {
-      "file": "assets/badge-BUspfqYX.js",
-      "sha256": "65305e9b2e17aa2ec4ff4055927f93ba1642eb3cbaade1cce15c954f37883180",
+      "file": "assets/badge-B0rkN1xp.js",
+      "sha256": "49fa5fc8822e1f9abb929dfc6743b10af1dc90a6f8bd2112041337a1ddc8cd45",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/badge.tsx"
       ]
@@ -1338,8 +1339,8 @@
       ]
     },
     {
-      "file": "assets/brand-disclaimer-CsgshdS6.js",
-      "sha256": "4b7b89b371330b4f2c96a4eb3278d6bd2fa0d93c947635d0d94888556be926d6",
+      "file": "assets/brand-disclaimer-ZpUl16r_.js",
+      "sha256": "fa4153d3c08049b8f76343b1aaaabba1baac116c8e2b5a5d3929f181807da1a3",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/assets/brand-logos/c_discord.svg?raw",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/assets/brand-logos/c_googlechat.svg?raw",
@@ -1366,8 +1367,8 @@
       ]
     },
     {
-      "file": "assets/browser-live-BovirYNf.js",
-      "sha256": "85058a07c23c4aab92c899bf70673b0197f8858a2d3f34eee1e960e669af610b",
+      "file": "assets/browser-live-C3KS4g_g.js",
+      "sha256": "c351eb5d59bc95eedceee026f37c9613a2bb987114e0280a684e38b567b3be4c",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/browser-live.tsx?tsr-split=component"
       ]
@@ -1380,9 +1381,12 @@
       ]
     },
     {
-      "file": "assets/button-Bti0o2qU.js",
-      "sha256": "725fdc9bb39b03f4c9f0856c8968af097c47edc7dd049a2ece6646f47c1c36e4",
+      "file": "assets/button-DE3XcHUt.js",
+      "sha256": "1e6fe3a842b7f83881143cd84fbe88e094f1a7d98f376ada8f6695c1d444fd84",
       "modules": [
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-compose-refs/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-slot/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/class-variance-authority/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/button.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/design-system/tokens.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/design-system/use-loading-visibility.ts"
@@ -1459,8 +1463,8 @@
       ]
     },
     {
-      "file": "assets/chat-zhLJ3J85.js",
-      "sha256": "0d6048c9412650125410533dae6d73b7683446d44fa37acf8a522307a5ddd56a",
+      "file": "assets/chat-Ol1KsJm3.js",
+      "sha256": "4103e19def4a7630b5f02d0b0d59aaf590822487ad0b492ac099d9ff6bf4ee95",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/immer/dist/immer.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/lib/api/generated/llm-error-messages.ts",
@@ -1806,8 +1810,8 @@
       ]
     },
     {
-      "file": "assets/command-Bq7KmVsa.js",
-      "sha256": "130bf83892f7d678569922cb753a17e7f9826bc296773412d74289e2b7a4c658",
+      "file": "assets/command-DiFJESJF.js",
+      "sha256": "c050a837fdde01c6ecdb3e01f646fb007d23bb457220f861136412f0670cbff4",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-popover/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-popover/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -1825,8 +1829,8 @@
       ]
     },
     {
-      "file": "assets/connectors-D6iNF_Dl.js",
-      "sha256": "ab84f7a9cc542632d2394d09919eda47a27116c694d111603e3b1c966346a68e",
+      "file": "assets/connectors-N6DIfcwb.js",
+      "sha256": "4743fa1e24a905b3e67f7724ac1aab0a7151624bde970214e5da898c07f65a6d",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/qrcode.react/lib/esm/index.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/connectors/EmailMailboxPanel.tsx",
@@ -2180,8 +2184,8 @@
       ]
     },
     {
-      "file": "assets/dialog-BirbtcRR.js",
-      "sha256": "21795cc0c90e59c5aed168fe7e8eb8f7a91c0752476d11d2c91a2198bb5e5c22",
+      "file": "assets/dialog-Cbqa3r2D.js",
+      "sha256": "3c3d8dc1d9fb20e1ff0747411f0fb9874b5e67de6513dd0d75a23ef765774d03",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/dialog.tsx"
       ]
@@ -2194,34 +2198,18 @@
       ]
     },
     {
-      "file": "assets/dist-B-Ebg1z4.js",
-      "sha256": "57b41b6d99fe42c621d2c5cd41f430d0cef65d126bb389ea070036d5fe9797c0",
+      "file": "assets/disclosure-row-CB--8AqM.js",
+      "sha256": "e832b180d53aea1f021de5856fb5cb10e67c65631d0fce825945c5d7e088a5eb",
       "modules": [
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/core/dist/floating-ui.core.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/react-dom/dist/floating-ui.react-dom.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-popper/dist/index.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-popper/node_modules/@radix-ui/react-primitive/dist/index.mjs"
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/disclosure-row.tsx"
       ]
     },
     {
-      "file": "assets/dist-BOtcDxsO.js",
-      "sha256": "04cc872a81d135b0c1ac85c1cc4a2c3ff2f2941b82379543457b2245576efb9a",
+      "file": "assets/dist-B3BxZyvc.js",
+      "sha256": "55bc09895fd3dfdf5e3bdb00bcbdafab2e6595243fccdf28e033c781342b7b19",
       "modules": [
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-roving-focus/dist/index.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-roving-focus/node_modules/@radix-ui/react-primitive/dist/index.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-use-is-hydrated/dist/index.mjs"
-      ]
-    },
-    {
-      "file": "assets/dist-BYAB1344.js",
-      "sha256": "0e811027b95d1355c5872a4cced23900ddca19002cffef1773d03153257f5cfa",
-      "modules": [
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-compose-refs/dist/index.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-slot/dist/index.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/class-variance-authority/dist/index.mjs"
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dialog/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dialog/node_modules/@radix-ui/react-primitive/dist/index.mjs"
       ]
     },
     {
@@ -2229,14 +2217,6 @@
       "sha256": "645c0492dde5436e9560b4618579ab40d9489cc29abb1c6d63f94aa63f6ea818",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@codemirror/lang-sql/dist/index.js"
-      ]
-    },
-    {
-      "file": "assets/dist-Br5rW0LG.js",
-      "sha256": "012c228ff8fa74c86af0ecf999f720d9d6ac28efa8c9c905ef77bd73dad5c8d7",
-      "modules": [
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-collection/dist/index.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-direction/dist/index.mjs"
       ]
     },
     {
@@ -2349,6 +2329,19 @@
       ]
     },
     {
+      "file": "assets/dist-DgBpG7iT.js",
+      "sha256": "40fb423d26954c8b639ff903c428e8d62ea8bc3aab00b2af65da622b5ac501db",
+      "modules": [
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/core/dist/floating-ui.core.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/react-dom/dist/floating-ui.react-dom.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-popper/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-popper/node_modules/@radix-ui/react-primitive/dist/index.mjs"
+      ]
+    },
+    {
       "file": "assets/dist-DizGJWsp.js",
       "sha256": "40240f0c152f39a2805377552e61dbec07b2a9c897619247ef678940d09e011f",
       "modules": [
@@ -2379,19 +2372,20 @@
       ]
     },
     {
-      "file": "assets/dist-DxsfcIZC.js",
-      "sha256": "505582a7deedc03621e992525fd359805f2acc92ce220338c73f39de6ee7e2bc",
-      "modules": [
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dialog/dist/index.mjs",
-        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dialog/node_modules/@radix-ui/react-primitive/dist/index.mjs"
-      ]
-    },
-    {
       "file": "assets/dist-M0bLM-SD.js",
       "sha256": "0ee15c19043ef75683d99deaf5d468c5541953da76040491efce49a24ec29505",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@codemirror/lang-java/dist/index.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@lezer/java/dist/index.js"
+      ]
+    },
+    {
+      "file": "assets/dist-gFCVx6v1.js",
+      "sha256": "969a6cfb0d22f1c26658fd6c9d47788ad44a5c6a2e95f2fbd63852412b93f2da",
+      "modules": [
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-roving-focus/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-roving-focus/node_modules/@radix-ui/react-primitive/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-use-is-hydrated/dist/index.mjs"
       ]
     },
     {
@@ -2445,8 +2439,8 @@
       ]
     },
     {
-      "file": "assets/dropdown-menu-CrpmDFRb.js",
-      "sha256": "2a83faf1edea21fa95d723203411fb6058d39bd5e646a1e067c9876f5bc58d66",
+      "file": "assets/dropdown-menu-p3MIf1eD.js",
+      "sha256": "a730858c394c84d119ab97f877a97943d415c81efd94b56006e79397bb837fa5",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dropdown-menu/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-dropdown-menu/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -3146,6 +3140,15 @@
       ]
     },
     {
+      "file": "assets/icon-button-CDDfDtTY.js",
+      "sha256": "01ab658a77ff19615dc01b754ef2bb95d250a090986d1ebb3239f839cf61c92e",
+      "modules": [
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-collection/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-direction/dist/index.mjs",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/icon-button.tsx"
+      ]
+    },
+    {
       "file": "assets/icons-D802gPVw.js",
       "sha256": "be5f9067e3f57cae1d5141595100ccc147a114c59f2c3d9f3e02d4b4ac0ddf19",
       "modules": [
@@ -3609,8 +3612,8 @@
       ]
     },
     {
-      "file": "assets/input-zAuucs0N.js",
-      "sha256": "aa25c3be91331d9322e2e7efdced24a7b6a669c6d2d2fcc2ae97eb2939ac07d8",
+      "file": "assets/input-CL6I8BQ5.js",
+      "sha256": "9dc596bc6e55cbc6b872d987aa50131285490ba5b809f6db8766524a052e778a",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/input.tsx"
       ]
@@ -3764,8 +3767,8 @@
       ]
     },
     {
-      "file": "assets/knowledgeIndex-BlmaDGZm.js",
-      "sha256": "3eac8002557eedfdf8c418576fc0ee2de03586dd8ba771e8a76b8860d03ba2a3",
+      "file": "assets/knowledgeIndex-CeKB5_a8.js",
+      "sha256": "e63ec32d5b1448987972775534ffe36a75c2834a6118283d030b31b1dd395e6f",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/store/knowledgeIndex.ts"
       ]
@@ -3785,8 +3788,8 @@
       ]
     },
     {
-      "file": "assets/label-mAnzEcNE.js",
-      "sha256": "1339d61c94272e4ae9db8e234823e8f01bfaafabafdf2a4dfc949bd929e45214",
+      "file": "assets/label-cfdEaTlj.js",
+      "sha256": "b919d02af1fff1834b855818f7a2d30ab9e1ae2b9987eb22548da8470532aa5a",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-label/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-label/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -3794,8 +3797,8 @@
       ]
     },
     {
-      "file": "assets/landing-3SzciD3U.js",
-      "sha256": "38a60f50c12be29c60da0887aef2f0c07ef6ac40ab77b38cc99649d7c5e961fd",
+      "file": "assets/landing-BjFZwT5n.js",
+      "sha256": "dbb610f7d8a8a8bbac1aea8d5b69671203796c8d2079bf5c2afc4c6da1c8445c",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/card.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/landing.tsx?tsr-split=component"
@@ -3830,8 +3833,8 @@
       ]
     },
     {
-      "file": "assets/library-CgKWaI3k.js",
-      "sha256": "5b4234a78375b130ac03fce6188cdb8a5f9046ed9f1ec16412811964cd42e34d",
+      "file": "assets/library-CZZ0gUvf.js",
+      "sha256": "2ae3209692fd44c1651a5f51a0e42acc66f7f8ad65b166ed4f0025260c5b3148",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/library.tsx?tsr-split=component"
       ]
@@ -3901,8 +3904,8 @@
       ]
     },
     {
-      "file": "assets/login-osobzkeH.js",
-      "sha256": "a8bfc437ac3928ded8f1f296f96444fd8ddc0f0d8fc1f41826bbe762c34257b0",
+      "file": "assets/login-HReLNgAa.js",
+      "sha256": "41040f556e669a570dd9302c17e9766ff6089bdef2d83721af09ae0254ff561f",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/login.tsx?tsr-split=component"
       ]
@@ -4088,8 +4091,8 @@
       ]
     },
     {
-      "file": "assets/model-selector-jQkR9KMX.js",
-      "sha256": "06e11a91e032fc2eaba1d509280a6feed18bc2308532243bd8eb10114a399c21",
+      "file": "assets/model-selector-qTL-Y1Tk.js",
+      "sha256": "083f24ef5830d4dcc8564a6d8ac81838d1496a41760126e2323ab9c3273b4605",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/model-ordering.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/model-selector.tsx",
@@ -4505,8 +4508,8 @@
       ]
     },
     {
-      "file": "assets/onboarding-E3HSljyN.js",
-      "sha256": "6ded2aeb65150d0558a65e77629948a0a5b7f2a9f5c99b857c663ee9a98227ba",
+      "file": "assets/onboarding-CagzzCRY.js",
+      "sha256": "85a8f8fea5c5b08ef38a8e6034fcaacec3c627800934e1adf85b84b91e14d05a",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/onboarding.tsx?tsr-split=component"
       ]
@@ -4693,8 +4696,8 @@
       ]
     },
     {
-      "file": "assets/profile-K566AC-M.js",
-      "sha256": "465763aecd860c04e3c00a36465117a870ca249597bcf8bd4382d44d71228016",
+      "file": "assets/profile-DnSY85b3.js",
+      "sha256": "71585654faf4503738e902f1c554e5332b2f823dc4b4d2949d7c9db1dd28862c",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-slider/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-slider/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -4705,8 +4708,8 @@
       ]
     },
     {
-      "file": "assets/progress-C2BYNI0f.js",
-      "sha256": "a764a9e5879217478b55a2d6f47c5fa609caff48db2381c155c3d26862685e57",
+      "file": "assets/progress-Mdkv1eVi.js",
+      "sha256": "eb91314f5b648a5c977309ad1f98122da785c0e82dd0c635aff4512507c59d90",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-progress/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-progress/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -4873,7 +4876,7 @@
       ]
     },
     {
-      "file": "assets/reactflow-theme-ChwEX0X3.js",
+      "file": "assets/reactflow-theme-h5SG__AA.js",
       "sha256": "fe736a0d5c50a2a2591cfbd73cbf5be15d08e0fa782f64163b5ce44f53dc873b",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@dagrejs/dagre/index.js",
@@ -5175,8 +5178,15 @@
       ]
     },
     {
-      "file": "assets/select-CeNhC4XB.js",
-      "sha256": "b05347cebdcfa3b6d08045ced71f8e3deee643264c86e171d75b11fee7ea032f",
+      "file": "assets/segmented-control-NkQqdWwW.js",
+      "sha256": "85871e8c90a63c230712b0a67d876bd5f286d4a5398812931e6b3a40d017f4ce",
+      "modules": [
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/segmented-control.tsx"
+      ]
+    },
+    {
+      "file": "assets/select-CIkCseeY.js",
+      "sha256": "fcc564f62a91c5fe8eb31fcd65cde72bdb83d16702c6e4771c7df3f91c8e1605",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/number/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-select/dist/index.mjs",
@@ -5187,8 +5197,8 @@
       ]
     },
     {
-      "file": "assets/separator-s3lC8L-O.js",
-      "sha256": "87ee392ee154955124b48bc5433507cd07fb8b2daaab45788abb6e650b63fe74",
+      "file": "assets/separator-Vb-8ogoO.js",
+      "sha256": "e7e1f7a4af414c398af217d4bc6423418fce0edd9e31e8108234a9175980ce81",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-separator/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-separator/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -5203,15 +5213,15 @@
       ]
     },
     {
-      "file": "assets/sessions._sessionId-cRdoEelW.js",
-      "sha256": "8d0d27bb7bd5e567f088b03d8d1671cb0897391f4120152da2ed2cf69e0f51b9",
+      "file": "assets/sessions._sessionId-CFTkShqq.js",
+      "sha256": "5da87070deaa08c4dad6e42bd525e4f520aa88c20e437dbccb932fbaadbb037f",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/sessions.$sessionId.tsx?tsr-split=component"
       ]
     },
     {
-      "file": "assets/settings-DkMvc7fX.js",
-      "sha256": "61ee8157fe44c9799ea23b8e31479f2d7c24839214898d5661b4c24d875edc99",
+      "file": "assets/settings-DbalPILC.js",
+      "sha256": "5bf618a43f5234cb0fc076b94f5deed71007a893f9e7ae9bc2662f12ab057b9a",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/assets/logo/omnipus-logo.svg",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/providers/ManageSignInDialog.tsx",
@@ -5243,6 +5253,7 @@
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/settings/SsrfEditor.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/shared/RiskySettingControl.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/RestartConfirmDialog.tsx",
+        "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/radio-group.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/table.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/hooks/restart.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/hooks/use-draft-guard.ts",
@@ -5261,8 +5272,8 @@
       ]
     },
     {
-      "file": "assets/sheet-CIChkbzx.js",
-      "sha256": "3399a37f81c454ab7f5b88034e1670666b9b66783ccd5fd4d8470660b5414efd",
+      "file": "assets/sheet-oeu93fOu.js",
+      "sha256": "852a420e355ec1284459c6fbb3916f19901cbc24c3c1ae4447f9c888d08e2134",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/sheet.tsx"
       ]
@@ -5282,8 +5293,8 @@
       ]
     },
     {
-      "file": "assets/shiki-highlighter-C2z2T3q1.js",
-      "sha256": "571262b9fdc5092df6ae0bbfdd3f0e04f540e77a56df3fec30da7a4c90504fa0",
+      "file": "assets/shiki-highlighter-CHZtvVTn.js",
+      "sha256": "a4141db0844c49ae590fbc0dc72326eac73ff978f29058b22076d4dcbe77d9bd",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/react/dist/context/react/utils/createStateHookForRuntime.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@assistant-ui/react/dist/context/react/utils/ensureBinding.js",
@@ -5606,8 +5617,8 @@
       ]
     },
     {
-      "file": "assets/sidebar-B2TJAP0c.js",
-      "sha256": "011c57f561246cff42d5a420b52ebadbf8f4d6dfa011967e8c07a740eb97ad3a",
+      "file": "assets/sidebar-C9y9WJsJ.js",
+      "sha256": "33a0062ed02bbbcdc83c378c9fe81a2ef9cf136c1e101156646fd9b2ddd428b1",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/store/sidebar.ts"
       ]
@@ -5620,8 +5631,8 @@
       ]
     },
     {
-      "file": "assets/skills-U21k7Ion.js",
-      "sha256": "2412639ed35b5e652e2c504706ed08fdfb1b9bf1144f9ea75fd0a760efa041f0",
+      "file": "assets/skills-_AVXHxLC.js",
+      "sha256": "ffce9e1f09ab1b50c6b355cd6a6c958da541d9962419a20dbbd1a770691a12f5",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/screens/SkillsScreen.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/skills/McpServerModal.tsx",
@@ -5651,8 +5662,8 @@
       ]
     },
     {
-      "file": "assets/smart-select-Ce0t0QKG.js",
-      "sha256": "c81e214754500b8e4481e98a41b8820adb9d907266d57b0f5d4f08bb9a882e13",
+      "file": "assets/smart-select-C84CmBRd.js",
+      "sha256": "07a64444fd9d97ca584fd27976f952861e8160f23974b886609da61d1af3a715",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/smart-select.tsx"
       ]
@@ -5902,8 +5913,8 @@
       ]
     },
     {
-      "file": "assets/switch-DxOFS09X.js",
-      "sha256": "ef4a3f5c394b8baed2ffc2dc4db0a1de66f1e74276a0545c5e3f159b155e86b6",
+      "file": "assets/switch-4lfRJFIb.js",
+      "sha256": "e31a01828d75bc53baa182a90a382c036e35acd38f248a7c0e144026e2b2e5f4",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-switch/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-switch/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -5932,8 +5943,8 @@
       ]
     },
     {
-      "file": "assets/tabs-DgSbgeUm.js",
-      "sha256": "10d8496ddc4501c98952e30b2154bf0083cdecfd43671b679f84de58e258b8a0",
+      "file": "assets/tabs-DybNtF1F.js",
+      "sha256": "3764f7440c11e5b437d64cb44d1e3a7e04d23b0d264b889b47c2ec8b9d5ff916",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-tabs/dist/index.mjs",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@radix-ui/react-tabs/node_modules/@radix-ui/react-primitive/dist/index.mjs",
@@ -5948,8 +5959,8 @@
       ]
     },
     {
-      "file": "assets/tasks-Cg0bOs3O.js",
-      "sha256": "ae1faa07ac753d5e0edca37df16fe03dea9e706bfd3575b7e5181caa05523598",
+      "file": "assets/tasks-C_lx25RI.js",
+      "sha256": "cb15f1a70254dacf0decb1b6b4c682bd01bef6014371165bb850b17acfbecedd",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/tasks.tsx?tsr-split=component"
       ]
@@ -5990,8 +6001,8 @@
       ]
     },
     {
-      "file": "assets/textarea-BMn6H0I0.js",
-      "sha256": "acd6b48ffbc45caebd1364700a462f75c9abbdeb440c388eb92fae2a63c51ad6",
+      "file": "assets/textarea-BIco9nn9.js",
+      "sha256": "bb9370a4eaaa3d1a430ca84ffa75d0521f00c2b5632d45b9efc41c52fc1a8c9b",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/ui/textarea.tsx"
       ]
@@ -6018,8 +6029,8 @@
       ]
     },
     {
-      "file": "assets/toolApproval-Dq0gq0GT.js",
-      "sha256": "eb8603bc4bf72a2f6027217a407179c43552766e354306052f637ff030d0a1ce",
+      "file": "assets/toolApproval-BwfRHhEQ.js",
+      "sha256": "050a6a4661c8ffe87dc1a4464bf57244e0168b77c0bddf669ccdd4f3bd557c18",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/store/toolApproval.ts"
       ]
@@ -6107,24 +6118,24 @@
       ]
     },
     {
-      "file": "assets/ui-B4TKuDLo.js",
-      "sha256": "b4768dd86fde70222d4789bf143d98896b6aef3d926350f5cf16a12f0ac8c99c",
+      "file": "assets/ui-BzCyOKll.js",
+      "sha256": "26598299d3166d298ac29d346e395db80c7884ccc27ad505b528d489952e5b5b",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/lib/constants.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/store/ui.ts"
       ]
     },
     {
-      "file": "assets/usage-DgYTSn3J.js",
-      "sha256": "e03a0983a2367e18a9ca4543a3f0e2515dd49cfce3bb9bc173762c1486b18e2b",
+      "file": "assets/usage-D2kXB_RG.js",
+      "sha256": "b205a2e95d542ce2488d456151a16202b051ff93840e66cb31152c8bb0e61ff9",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/screens/UsageScreen.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/usage.tsx?tsr-split=component"
       ]
     },
     {
-      "file": "assets/useAutoSave-B8sEvLDx.js",
-      "sha256": "4bcb5d28111fd9dcdc607fd40ee021dbf72e77a394b6aa7b6acbfab508c3c419",
+      "file": "assets/useAutoSave-DlM_awkH.js",
+      "sha256": "5a3d507b3feda7e2dca500d9df9eab176985a763f719c58e93fffb2ef372a788",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/settings/ReAuthDialog.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/settings/useReAuthGate.tsx",
@@ -6132,23 +6143,23 @@
       ]
     },
     {
-      "file": "assets/useChatAgents-CumB3GAw.js",
-      "sha256": "0173bfe15081c74c966d61b8d0d407f339856dec540ba8601631d45bf16a875b",
+      "file": "assets/useChatAgents-DB3I31Iz.js",
+      "sha256": "dd84600af678e97d986139b73330e6fd2d6d2fc47b574e9e362ae0257292b833",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/hooks/useChatAgents.ts"
       ]
     },
     {
-      "file": "assets/useMutation-Eo8KH9kV.js",
-      "sha256": "a8506ec6f546110289d3d5c2b05dddc699caabc584f92d81aae7404de57130da",
+      "file": "assets/useMutation-7hi24H-o.js",
+      "sha256": "c919ddcd20f5e04a03cd6ae2fe96942bc73f2d6a1baff88fba9a2682ada81042",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@tanstack/query-core/build/modern/mutationObserver.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@tanstack/react-query/build/modern/useMutation.js"
       ]
     },
     {
-      "file": "assets/useQuery-ZHOdOCAW.js",
-      "sha256": "859aeaed703bf7420260535e3c37f0a79e830a7fbf8b2d6231f1f79efa0b8fc2",
+      "file": "assets/useQuery-DQTgmflQ.js",
+      "sha256": "d3d20b78ea757cf090301d19dadd674670fb4f0b0e8297dd92a371099d005394",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@tanstack/query-core/build/modern/queryObserver.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js",
@@ -6334,8 +6345,8 @@
       ]
     },
     {
-      "file": "assets/whatsappPairing-E3lXp2sr.js",
-      "sha256": "cba1c39f6f7302cb08c6c82c1ee35b46d2ebbbedddca8c269858278c4b82dbe6",
+      "file": "assets/whatsappPairing-Ko-ex7qu.js",
+      "sha256": "c08203749da390baacb854653a1ed23dcc4083c771b45ffdf942d8f2b37c2aa3",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/store/connection.ts",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/store/whatsappPairing.ts"
@@ -6363,15 +6374,15 @@
       ]
     },
     {
-      "file": "assets/workspaces._workspaceId-lG8U_Sqe.js",
-      "sha256": "449248c28002d64b4ee122c9ef3aa15776929dc160e43b3a4d0eb1afb93ab9e5",
+      "file": "assets/workspaces._workspaceId-ePOX8M8u.js",
+      "sha256": "ec13b2e9c681c97cdd711e27c448f9cbd189a918fbd39fd3fbed411f366596b1",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/workspaces.$workspaceId.tsx?tsr-split=component"
       ]
     },
     {
-      "file": "assets/workspaces._workspaceId.board-BVC7exmT.js",
-      "sha256": "c898f21c62d1a0dcf5e298e4c2de68fae725d99c6ba62691b96eb052ad5994d3",
+      "file": "assets/workspaces._workspaceId.board-C4TAIuYq.js",
+      "sha256": "a2f6438915655694dbfa44cf71c9da0e4b1a80cf41fa91b52f63ace1077f3c2b",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/CreatePlanSlideOver.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/CreateTaskSlideOver.tsx",
@@ -6393,8 +6404,8 @@
       ]
     },
     {
-      "file": "assets/workspaces._workspaceId.calendar-CSeeZKEL.js",
-      "sha256": "8c5a5371b490fd5399eca993b6df5f3c4aee328788b8128152645ba366f551a6",
+      "file": "assets/workspaces._workspaceId.calendar-D-XJpWim.js",
+      "sha256": "e930993b6eb9525796c09d4c0051897ddb6c8a9d529d8d3292e09532a70e0edd",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@fullcalendar/core/index.js",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/node_modules/@fullcalendar/core/internal-common.js",
@@ -6424,31 +6435,31 @@
       ]
     },
     {
-      "file": "assets/workspaces._workspaceId.chat-DdbdLlrG.js",
-      "sha256": "8153adf18350e7b76de5e55f0ba09b165103699bf19c71d377065b8077c499ee",
+      "file": "assets/workspaces._workspaceId.chat-CxZvN7mM.js",
+      "sha256": "5c66cfbfdfa61dc443670707648e25e43eaabc0cd8ffcd9475cff75559d5c135",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/WorkspaceChatTab.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/workspaces.$workspaceId.chat.tsx?tsr-split=component"
       ]
     },
     {
-      "file": "assets/workspaces._workspaceId.media-BVx7Fz-L.js",
-      "sha256": "e1467395018f7411913c4b15aa3da3e753a66a971e349668563ffeef83dc7cc5",
+      "file": "assets/workspaces._workspaceId.media-ip3eEo-7.js",
+      "sha256": "0b18d794066b3339c54375e25c3bfd2524c8ea7bcf2a26b3a2c4d90f4b19130c",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/workspaces.$workspaceId.media.tsx?tsr-split=component"
       ]
     },
     {
-      "file": "assets/workspaces._workspaceId.settings-Dw5sRuHn.js",
-      "sha256": "14ffb33ddc59793abcd16d1c7726b98544a8b4da48e9234641291b5d77991a34",
+      "file": "assets/workspaces._workspaceId.settings-BCMRlfvh.js",
+      "sha256": "281ecdb417fba37db47bfc7b6c1c84d2c96a83d44c358127c846f9191628a0b9",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/WorkspaceSettingsTab.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/routes/_app/workspaces.$workspaceId.settings.tsx?tsr-split=component"
       ]
     },
     {
-      "file": "assets/workspaces._workspaceId.team-DLxSj2nf.js",
-      "sha256": "243765c0751e84a19b3cfb90f44273499c20365256131c3f567f394f4409efea",
+      "file": "assets/workspaces._workspaceId.team-ztFP0HJl.js",
+      "sha256": "ab0afb716cb0a8882e5558c3542dfcd17f6202d1982e9a250b2511fa606f17e8",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/WorkspaceTeamTab.tsx",
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/components/workspaces/team/AddAgentPicker.tsx",
@@ -6460,8 +6471,8 @@
       ]
     },
     {
-      "file": "assets/workspacesStore-yXJGDJ0v.js",
-      "sha256": "a8fbb98c6591f194503953faeb227f8907d4dbda45889c07fbf58101a9a3f1d7",
+      "file": "assets/workspacesStore-i1AXM_RJ.js",
+      "sha256": "fc176cca3e216f830949e03f189fd059dce75776509fded7a0bd2091842f0244",
       "modules": [
         "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/src/store/workspacesStore.ts"
       ]

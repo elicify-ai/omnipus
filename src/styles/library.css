@@ -123,3 +123,34 @@
     outline-color: Highlight !important;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Skeleton shimmer                                                    */
+/* Replaces Tailwind's `animate-pulse`, which throbs opacity 1 -> .5    */
+/* -> 1 on the whole block. That reads as blinking rather than          */
+/* loading, and at 2s it feels sluggish. A gradient sweeping across a   */
+/* static surface reads as "content on its way" and keeps the block's   */
+/* silhouette stable, so the layout does not appear to breathe.         */
+/* Motion-reduce drops to a flat surface with no animation at all.      */
+@keyframes ds-skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+@utility skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-surface-2) 0%,
+    var(--color-surface-2) 35%,
+    var(--color-surface-3) 50%,
+    var(--color-surface-2) 65%,
+    var(--color-surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: ds-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    background-image: none;
+    animation: none;
+  }
+}
