@@ -61,6 +61,14 @@ type MetaStore interface {
 	SetMeta(sessionID string, patch session.MetaPatch) error
 }
 
+// transcriptRecordStore is implemented by the production UnifiedStore. It is
+// kept separate from MetaStore so metadata-only test seams and adapters do not
+// inherit a broad new requirement merely because human card answers need a
+// durable chat record.
+type transcriptRecordStore interface {
+	AppendTranscriptStrict(sessionID string, entry session.TranscriptEntry) error
+}
+
 // ResumeDispatcher starts the RESUME turn (§0.2): a correlated user-role
 // message beginning `Answers to your questions (card_id=<id>): {...}`. The
 // gateway wires an implementation that publishes into the owner session's
@@ -354,7 +362,7 @@ func (r *Registry) Submit(cardID, sessionID, user string, answers []SubmittedAns
 	// Terminal state-change emission (spec §3): the SPA collapses the card
 	// to the answered record and unlocks the composer on this frame.
 	r.sink.EmitCard(consumed.Clone())
-	return markResumeDispatchError(r.dispatchResume(consumed))
+	return markResumeDispatchError(r.dispatchResume(consumed, true))
 }
 
 // CancelByUser cancels the pending set from the card's Cancel affordance
@@ -365,7 +373,7 @@ func (r *Registry) CancelByUser(cardID, sessionID string) error {
 	if err != nil {
 		return err
 	}
-	return markResumeDispatchError(r.dispatchResume(set))
+	return markResumeDispatchError(r.dispatchResume(set, true))
 }
 
 // CancelOnSessionStop cancels any pending set reachable by the given key —
@@ -607,7 +615,7 @@ func (r *Registry) fireDefaultSafeSet(cardID string) {
 		r.stopTimers(cardID)
 		r.persistTerminal(consumed)
 		r.sink.EmitCard(consumed.Clone())
-		if err := r.dispatchResume(consumed); err != nil {
+		if err := r.dispatchResume(consumed, false); err != nil {
 			slog.Warn("askuser: server auto-submit resume dispatch failed",
 				"card_id", cardID,
 				"session_id", sessionID,
@@ -685,16 +693,12 @@ func (r *Registry) persistTerminal(set *PendingSet) {
 	}
 }
 
-// dispatchResume builds and dispatches the §0.2 resume message.
-func (r *Registry) dispatchResume(set *PendingSet) error {
-	if r.resume == nil {
-		slog.Warn("askuser: resume dispatch completed",
-			"card_id", set.CardID,
-			"answer_count", len(set.Answers),
-			"outcome", "stranded",
-			"reason", "no_dispatcher")
-		return fmt.Errorf("askuser: no resume dispatcher wired — answers recorded but the session cannot resume")
-	}
+// dispatchResume builds and dispatches the §0.2 resume message. Human card
+// actions persist that same canonical message as a user-role transcript entry
+// before dispatch, so the agent never acts on an answer missing from history.
+// Server default-safe auto-submit passes persistUserRecord=false because no
+// person supplied that answer and a user-role record would misstate its origin.
+func (r *Registry) dispatchResume(set *PendingSet, persistUserRecord bool) error {
 	text, err := ResumeMessage(set)
 	if err != nil {
 		slog.Warn("askuser: resume dispatch completed",
@@ -705,7 +709,44 @@ func (r *Registry) dispatchResume(set *PendingSet) error {
 			"error_type", fmt.Sprintf("%T", err))
 		return err
 	}
+	if persistUserRecord {
+		if err := r.persistUserResumeRecord(set, text); err != nil {
+			slog.Warn("askuser: resume dispatch completed",
+				"card_id", set.CardID,
+				"answer_count", len(set.Answers),
+				"outcome", "stranded",
+				"reason", "transcript_persist_failed",
+				"error_type", fmt.Sprintf("%T", err))
+			return err
+		}
+	}
+	if r.resume == nil {
+		slog.Warn("askuser: resume dispatch completed",
+			"card_id", set.CardID,
+			"answer_count", len(set.Answers),
+			"outcome", "stranded",
+			"reason", "no_dispatcher")
+		return fmt.Errorf("askuser: no resume dispatcher wired — answers recorded but the session cannot resume")
+	}
 	return r.resume.DispatchResume(set.Clone(), text)
+}
+
+func (r *Registry) persistUserResumeRecord(set *PendingSet, text string) error {
+	if r.meta == nil {
+		return nil
+	}
+	store, ok := r.meta.(transcriptRecordStore)
+	if !ok {
+		return errors.New("askuser: configured metadata store cannot persist transcript records")
+	}
+	now := r.now().UTC()
+	return store.AppendTranscriptStrict(set.TranscriptSessionID, session.TranscriptEntry{
+		ID:        fmt.Sprintf("ask-user-answer-%s-%d", set.CardID, now.UnixNano()),
+		Role:      "user",
+		AgentID:   set.AgentID,
+		Content:   text,
+		Timestamp: now,
+	})
 }
 
 // resumePayload is the JSON payload embedded in the resume message (spec §2:
