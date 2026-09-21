@@ -175,6 +175,13 @@ const (
 	// while waiting on the provider. Attribution `provider`; retryable.
 	CodeTurnTimedOut LLMErrorCode = "turn_timed_out"
 
+	// CodeDelegatedTaskLimit identifies a controller-authored notice for a
+	// delegated task that reached timeout_seconds or max_tool_iterations.
+	// Unlike CodeTurnTimedOut, this is not a provider error. Its only variable
+	// fields are normalized task correlation identifiers and the limit; its
+	// producers must never include child output or file contents.
+	CodeDelegatedTaskLimit LLMErrorCode = "delegated_task_limit"
+
 	// CodeContextUnrecoverable (ADR-066 D6/D7, FR-032, FR-034): the mid-turn
 	// window guard fired — after emptying every eligible tool result a
 	// trigger condition still held, so no further provider call is made.

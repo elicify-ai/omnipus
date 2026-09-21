@@ -427,6 +427,20 @@ func (ts *turnState) appendDetachedTerminalError(kind, stage string, llm LLMErro
 	ts.writeErrorTranscriptWithAbandonment(kind, stage, llm.Message, llm.Code, true)
 }
 
+// appendDelegatedTaskLimitNotice is the sole persistence entry point for the
+// identifier-rich delegated-task notice. Its current producers restrict
+// variable content to bounded correlation fields, so this method can preserve
+// that copy without opening the generic classified-error path to arbitrary
+// child output.
+func (ts *turnState) appendDelegatedTaskLimitNotice(notice delegatedTaskLimitNotice) {
+	kind := EventKindError.String()
+	stage := string(notice.stage)
+	if !ts.canWriteErrorTranscript(kind, stage, notice.message, false) {
+		return
+	}
+	ts.persistErrorTranscript(kind, stage, notice.llmError(), notice.message)
+}
+
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
 	ts.writeErrorTranscriptWithAbandonment(kind, stage, message, code, false, pe...)
 }
@@ -437,25 +451,7 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 	allowAbandoned bool,
 	pe ...*ProviderError,
 ) {
-	if ts == nil {
-		return
-	}
-	if ts.abandoned.Load() && !allowAbandoned {
-		abandonedWritesSuppressed.Add(1)
-		ts.warnAbandonedTranscriptWrite("appendErrorTranscript")
-		return
-	}
-	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
-		transcriptSuppressedErrors.Add(1)
-		logger.WarnCF(
-			"agent",
-			"appendErrorTranscript: suppressed (no transcript store wired) — error event will NOT appear in replay",
-			map[string]any{
-				"event_kind":  kind,
-				"stage":       stage,
-				"message_len": len(message),
-			},
-		)
+	if !ts.canWriteErrorTranscript(kind, stage, message, allowAbandoned) {
 		return
 	}
 
@@ -477,6 +473,7 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 	// classifier still stamps a typed code on the entry for replay routing,
 	// but the user-visible text is the caller-provided copy verbatim.
 	llm := TranslateLLMError(providerErr, message)
+	trustedMessage := isTrustedInternalStage(stage, kind)
 
 	// Prefer the caller's already-classified code. Catalogue sentences do
 	// not contain the classifier substrings, so a second TranslateLLMError
@@ -484,7 +481,7 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 	if code != "" {
 		llm.Code = code
 		llm.Retryable = isRetryable(code)
-		if allowAbandoned || isTrustedInternalStage(stage, kind) {
+		if allowAbandoned || trustedMessage {
 			llm.Message = message
 		} else {
 			llm.Message = defaultUserMessage(code)
@@ -507,7 +504,7 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 	}
 
 	written := message
-	if !allowAbandoned && !isTrustedInternalStage(stage, kind) {
+	if !allowAbandoned && !trustedMessage {
 		// Friendly short-circuit for rate-limit messages whose caller-supplied
 		// copy is already generic and safe (rate_limit: policyRule (retry
 		// after Ns)); translation reuses it. This is the ADR-051 §RD5
@@ -521,12 +518,40 @@ func (ts *turnState) writeErrorTranscriptWithAbandonment(
 		}
 	}
 
-	agentID := ts.resolveActiveAgentID()
+	ts.persistErrorTranscript(kind, stage, llm, written)
+}
+
+func (ts *turnState) canWriteErrorTranscript(kind, stage, message string, allowAbandoned bool) bool {
+	if ts == nil {
+		return false
+	}
+	if ts.abandoned.Load() && !allowAbandoned {
+		abandonedWritesSuppressed.Add(1)
+		ts.warnAbandonedTranscriptWrite("appendErrorTranscript")
+		return false
+	}
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" {
+		transcriptSuppressedErrors.Add(1)
+		logger.WarnCF(
+			"agent",
+			"appendErrorTranscript: suppressed (no transcript store wired) — error event will NOT appear in replay",
+			map[string]any{
+				"event_kind":  kind,
+				"stage":       stage,
+				"message_len": len(message),
+			},
+		)
+		return false
+	}
+	return true
+}
+
+func (ts *turnState) persistErrorTranscript(kind, stage string, llm LLMError, content string) {
 	entry := session.TranscriptEntry{
 		ID:             uuid.New().String(),
 		Type:           session.EntryTypeSystem,
-		AgentID:        agentID,
-		Content:        written,
+		AgentID:        ts.resolveActiveAgentID(),
+		Content:        content,
 		Timestamp:      time.Now().UTC(),
 		ErrorCode:      string(llm.Code),
 		ErrorRetryable: llm.Retryable,

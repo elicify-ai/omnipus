@@ -981,13 +981,15 @@ func TestProviderError_FormatCompatForClassifyError(t *testing.T) {
 func TestTranslateError_TypedExitsAndAttributions(t *testing.T) {
 	assert.Equal(t, LLMErrorCode("turn_canceled"), CodeTurnCanceled)
 	assert.Equal(t, LLMErrorCode("turn_timed_out"), CodeTurnTimedOut)
+	assert.Equal(t, LLMErrorCode("delegated_task_limit"), CodeDelegatedTaskLimit)
 	assert.Equal(t, LLMErrorCode("context_unrecoverable"), CodeContextUnrecoverable)
 
 	// B-41: attribution is contract-defined; `user` is in the vocabulary.
 	assert.Equal(t, LLMErrorAttribution("user"), AttributionForCode(CodeTurnCanceled))
 	assert.Equal(t, LLMErrorAttribution("provider"), AttributionForCode(CodeTurnTimedOut))
+	assert.Equal(t, LLMErrorAttribution("config"), AttributionForCode(CodeDelegatedTaskLimit))
 	assert.Equal(t, LLMErrorAttribution("product"), AttributionForCode(CodeContextUnrecoverable))
-	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut, CodeContextUnrecoverable} {
+	for _, c := range []LLMErrorCode{CodeTurnCanceled, CodeTurnTimedOut, CodeDelegatedTaskLimit, CodeContextUnrecoverable} {
 		assert.NotEqual(t, UserMessageForCode(CodeUnknown), UserMessageForCode(c),
 			"%s must have its own catalogue copy", c)
 	}

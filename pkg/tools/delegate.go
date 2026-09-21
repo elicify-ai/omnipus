@@ -63,6 +63,10 @@ type SubTurnConfig struct {
 	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
 	// Populated from delegate's "label" argument. Used in the subagent_start WS frame.
 	TaskLabel string
+	// TaskID is DelegateTool's operator-visible handle for this run (for
+	// example, "delegate-12"). It is internal correlation metadata, not child
+	// prompt content, and lets terminal notices name the exact task that ended.
+	TaskID string
 	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
 	// cap the delegation-policy gate already authorized this specific call
 	// against (the tighter of a matched delegation-graph edge's own Depth and

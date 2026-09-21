@@ -214,6 +214,11 @@ type SubTurnConfig struct {
 	// Used in SubTurnSpawnPayload.TaskLabel for the WS subagent_start frame.
 	TaskLabel string
 
+	// TaskID is DelegateTool's operator-visible handle for this run. It is
+	// carried only so controller-owned terminal notices can identify the task;
+	// it is never added to the child's prompt.
+	TaskID string
+
 	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
 	// cap the delegation-graph gate (enforceEdgeModeAndDepth, via
 	// buildDelegationDepthResolver) already authorized THIS specific delegation
@@ -422,6 +427,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Timeout:            cfg.Timeout,
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TaskLabel:          cfg.TaskLabel,
+		TaskID:             cfg.TaskID,
 		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
 		DelegateSessionID:  cfg.DelegateSessionID,
 		IsResume:           cfg.IsResume,
@@ -961,17 +967,34 @@ func spawnSubTurn(
 		result = extResult
 		err = extErr
 		if ex.forceCancelFired {
-			result, err = subTurnTimedOutResult(ex.ss.st.al, ex.ss.st.childTS, ex.ss.timeout, extErr, false)
+			result, err = subTurnTimedOutResult(
+				ex.ss.st.al,
+				ex.ss.st.childTS,
+				ex.ss.st.cfg.TaskID,
+				ex.ss.st.cfg.TaskLabel,
+				ex.ss.st.childID,
+				ex.ss.timeout,
+				extErr,
+				false,
+			)
 		}
 		return result, err
 	}
 
 	ex.executeNativeChildTurn()
+	ex.publishSettledNativeTimeout()
 
 	// Convert turnResult to tools.ToolResult
 	if ex.forceCancelFired {
 		result, err = subTurnTimedOutResult(
-			ex.ss.st.al, ex.ss.st.childTS, ex.ss.timeout, ex.turnErr, ex.detachedOnTimeout,
+			ex.ss.st.al,
+			ex.ss.st.childTS,
+			ex.ss.st.cfg.TaskID,
+			ex.ss.st.cfg.TaskLabel,
+			ex.ss.st.childID,
+			ex.ss.timeout,
+			ex.turnErr,
+			ex.detachedOnTimeout,
 		)
 		return result, err
 	}
@@ -991,6 +1014,9 @@ func spawnSubTurn(
 			IsError: true,
 		}
 	} else {
+		if ex.turnRes.finalContent == toolLimitResponse {
+			emitSubTurnIterationLimitNotice(ex.ss.st.al, ex.ss.st.childTS, ex.ss.st.cfg)
+		}
 		result = &tools.ToolResult{
 			ForLLM:  ex.turnRes.finalContent,
 			ForUser: ex.turnRes.finalContent,
@@ -1019,6 +1045,21 @@ func spawnSubTurn(
 	}
 
 	return result, err
+}
+
+// publishSettledNativeTimeout publishes the live generic timeout only after
+// executeNativeChildTurn has settled timer ownership. A delegation-owned
+// timeout is published later as the identified delegated-task limit notice.
+func (ex *spawnSubTurnExecutionState) publishSettledNativeTimeout() {
+	if ex.forceCancelFired || !errors.Is(ex.turnErr, ErrTurnTimedOut) {
+		return
+	}
+	ex.ss.st.al.emitErrorEvent(
+		ex.ss.st.childTS,
+		ex.ss.st.childTS.eventMeta("runTurn", "turn.error"),
+		"llm",
+		TranslateTurnError(ex.turnErr),
+	)
 }
 
 func (ex *spawnSubTurnExecutionState) clearActiveTurnAfterCoordinator() {

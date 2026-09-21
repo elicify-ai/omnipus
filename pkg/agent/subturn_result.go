@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -14,6 +15,28 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+const delegatedTaskNoticeLabelMaxRunes = 160
+
+type delegatedTaskLimitStage string
+
+const (
+	delegatedTaskTimeoutStage   delegatedTaskLimitStage = "subturn_timeout"
+	delegatedTaskIterationStage delegatedTaskLimitStage = "subturn_limit"
+)
+
+// delegatedTaskLimitNotice is controller-authored correlation data. Current
+// producers centralize construction below and restrict variable content to
+// normalized task/session identifiers and the named limit. Future producers
+// must not include child prompts, output, or file contents.
+type delegatedTaskLimitNotice struct {
+	stage   delegatedTaskLimitStage
+	message string
+}
+
+func (n delegatedTaskLimitNotice) llmError() LLMError {
+	return LLMError{Code: CodeDelegatedTaskLimit, Message: n.message, Retryable: false}
+}
 
 // subTurnForceCancel is one sub-turn's time limit, enforced as a hard abort.
 type subTurnForceCancel struct {
@@ -27,8 +50,9 @@ type subTurnForceCancel struct {
 // Documented intent (pkg/tools/delegate.go DelegateTool.Description and the
 // timeout_seconds schema): "A delegation is force-cancelled after
 // timeout_seconds ... if it has not finished by then." A force-cancel must
-// therefore stop the child the way a hard cancel does. requestHardAbort sets
-// turnState.hardAbort under ts.mu BEFORE it fires turnCancel/providerCancel, so
+// therefore stop the child the way a hard cancel does.
+// requestHardAbort sets turnState.hardAbort under ts.mu BEFORE it fires
+// turnCancel/providerCancel, so
 // a tool call that returns because its context ended finds
 // hardAbortRequested() already true, and runTurn's tool loop aborts instead of
 // dispatching the next queued call. runTurn's deferred
@@ -77,14 +101,18 @@ func (fc *subTurnForceCancel) disarm() bool {
 // context.Canceled from the hard abort — is logged, never wrapped: wrapping a
 // context.Canceled would make a timeout read as a user cancellation downstream.
 //
-// It also records the timeout in the child's own transcript and on the event
-// bus when the turn's own exit did not already (a hard abort exits through
-// abortTurn's Case 1, which deliberately records nothing), so the child's
-// session shows why it stopped — and says so truthfully: the delegation's time
-// limit, not the model provider.
+// It always publishes an identified operator notice to the root conversation.
+// It also records the timeout in the child's own transcript unless
+// typedTurnExit already wrote that child-local record. The two transcripts
+// serve different readers: the child keeps its terminal turn reason, while the
+// root conversation survives reload with the task identifiers the operator
+// needs.
 func subTurnTimedOutResult(
 	al *AgentLoop,
 	childTS *turnState,
+	taskID string,
+	taskLabel string,
+	childSessionID string,
 	limit time.Duration,
 	cause error,
 	detached bool,
@@ -95,15 +123,11 @@ func subTurnTimedOutResult(
 		err = fmt.Errorf("%w: reached its %s time limit (%w: %w)",
 			tools.ErrDelegationDetached, limit, ErrTurnTimedOut, context.DeadlineExceeded)
 	}
-	message := fmt.Sprintf("This delegated task reached its %s time limit and was force-cancelled. "+
-		"It made no further tool calls or changes after that point.", limit)
+	notice := newDelegatedTimeoutNotice(childTS, taskLabel, taskID, childSessionID, limit, detached)
 	resultMessage := fmt.Sprintf("SubTurn timed out: it reached its %s time limit and was force-cancelled. "+
 		"It is stopped and will make no further tool calls or changes; work it completed before the "+
 		"limit may remain.", limit)
 	if detached {
-		message = fmt.Sprintf("This delegated task reached its %s time limit, ignored cancellation, and was detached. "+
-			"The parent stopped waiting. No new model or tool call will be dispatched, but the already-running "+
-			"operation may still be unwinding.", limit)
 		resultMessage = fmt.Sprintf("SubTurn timed out: it reached its %s time limit, ignored cancellation, and "+
 			"was detached. The parent stopped waiting. No new model or tool call will be dispatched, but the "+
 			"already-running operation may still be unwinding; work completed before the limit may remain.", limit)
@@ -116,21 +140,26 @@ func subTurnTimedOutResult(
 		"exit_cause", cause,
 	)
 
+	childLLM := TranslateTurnError(err)
+	childLLM.Message = notice.message
+	// The live frame uses the child's event identity and inherited route,
+	// while its durable copy belongs to the root chat transcript. Keeping
+	// that split inside emitDelegatedTaskLimitNotice avoids turning
+	// routingSessionID into a persistence key (ADR-057 FR-014). This notice
+	// is unconditional: cause may be ErrTurnTimedOut when the child's own
+	// backstop races the delegation force-cancel, but that child-owned exit
+	// never writes the identified notice to the root chat.
+	meta := childTS.eventMeta("spawnSubTurn", "subturn.force_cancel")
+	al.emitDelegatedTaskLimitNotice(childTS, meta, notice)
+	// Preserve the pre-existing child-session terminal record without
+	// emitting a second live error frame. A child-owned timeout already wrote
+	// that record through typedTurnExit, so only this duplicate write is
+	// suppressed in the race described above.
 	if !errors.Is(cause, ErrTurnTimedOut) {
-		llm := TranslateTurnError(err)
-		llm.Message = message
-		// The same error frame and transcript record typedTurnExit writes for
-		// a turn that timed out on its own, through the same emitter: before
-		// the force-cancel existed, a timed-out child exited through
-		// typedTurnExit, and this is that record with truthful wording. The
-		// frame's session id is stamped inside emitTurnErrorFrame (loop.go),
-		// so this function never reads routingSessionID and adds no consumer
-		// to ADR-057 FR-014's closed set.
-		meta := childTS.eventMeta("spawnSubTurn", "subturn.force_cancel")
 		if detached {
-			al.emitDetachedTurnErrorFrame(childTS, meta, "subturn_timeout", "subturn_timeout", llm)
+			childTS.appendDetachedTerminalError(EventKindError.String(), string(notice.stage), childLLM)
 		} else {
-			al.emitTurnErrorFrame(childTS, meta, "subturn_timeout", "subturn_timeout", llm)
+			childTS.appendClassifiedError(EventKindError.String(), string(notice.stage), childLLM)
 		}
 	}
 
@@ -139,6 +168,80 @@ func subTurnTimedOutResult(
 		ForLLM:  resultMessage,
 		IsError: true,
 	}, err
+}
+
+func newDelegatedTimeoutNotice(
+	childTS *turnState,
+	taskLabel, taskID, childSessionID string,
+	limit time.Duration,
+	detached bool,
+) delegatedTaskLimitNotice {
+	identity := delegatedTaskNoticeIdentity(childTS, taskLabel, taskID, childSessionID)
+	message := fmt.Sprintf("This delegated task reached its time limit and was force-cancelled.\n%s\n"+
+		"Limit: timeout_seconds (%s)\nIt made no further tool calls or changes after that point.", identity, limit)
+	if detached {
+		message = fmt.Sprintf("This delegated task reached its time limit, ignored cancellation, and was detached.\n%s\n"+
+			"Limit: timeout_seconds (%s)\nThe parent stopped waiting. No new model or tool call will be dispatched, "+
+			"but the already-running operation may still be unwinding.", identity, limit)
+	}
+	return delegatedTaskLimitNotice{stage: delegatedTaskTimeoutStage, message: message}
+}
+
+func delegatedTaskNoticeIdentity(childTS *turnState, taskLabel, taskID, childSessionID string) string {
+	taskLabel = strings.Join(strings.Fields(taskLabel), " ")
+	labelRunes := []rune(taskLabel)
+	if len(labelRunes) > delegatedTaskNoticeLabelMaxRunes {
+		taskLabel = string(labelRunes[:delegatedTaskNoticeLabelMaxRunes-1]) + "…"
+	}
+	if taskLabel == "" {
+		taskLabel = "(unnamed)"
+	}
+	if taskID == "" || childSessionID == "" {
+		slog.Error("delegated task notice: required correlation identifier unavailable",
+			"task_id_missing", taskID == "",
+			"session_id_missing", childSessionID == "",
+			"child_turn_id", childTS.turnID,
+			"agent_id", childTS.agentID,
+		)
+	}
+	if taskID == "" {
+		taskID = "(unavailable)"
+	}
+	if childSessionID == "" {
+		childSessionID = "(unavailable)"
+	}
+	return fmt.Sprintf("Label: %s\nTask ID: %s\nSession: %s", taskLabel, taskID, childSessionID)
+}
+
+func rootTurnState(ts *turnState) *turnState {
+	for ts != nil && ts.parentTurnState != nil {
+		ts = ts.parentTurnState
+	}
+	return ts
+}
+
+func newDelegatedIterationLimitNotice(childTS *turnState, cfg SubTurnConfig) delegatedTaskLimitNotice {
+	childSessionID := cfg.DelegateSessionID
+	if childSessionID == "" {
+		childSessionID = childTS.sessionKey
+	}
+	identity := delegatedTaskNoticeIdentity(childTS, cfg.TaskLabel, cfg.TaskID, childSessionID)
+	return delegatedTaskLimitNotice{
+		stage: delegatedTaskIterationStage,
+		message: fmt.Sprintf(
+			"This delegated task reached max_tool_iterations without a final response.\n%s\nLimit: max_tool_iterations (%d)",
+			identity,
+			childTS.agent.MaxIterations,
+		),
+	}
+}
+
+func emitSubTurnIterationLimitNotice(al *AgentLoop, childTS *turnState, cfg SubTurnConfig) {
+	al.emitDelegatedTaskLimitNotice(
+		childTS,
+		childTS.eventMeta("spawnSubTurn", "subturn.limit"),
+		newDelegatedIterationLimitNotice(childTS, cfg),
+	)
 }
 
 // updateToolCallStatusRetryDelays is the bounded backoff schedule
