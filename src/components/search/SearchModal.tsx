@@ -15,6 +15,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   MagnifyingGlass, Calendar, PencilSimple, Trash, Check, X,
   CaretRight, CaretDown, Folder, ArrowRight,
@@ -205,10 +207,10 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
 }) {
   return (
     <div className={cn('flex items-center w-full rounded-md', isHighlighted && 'bg-[var(--color-surface-2)]')}>
-      <button tabIndex={0}
-        type="button"
+      <Button
+        variant="ghost"
         onClick={onToggle}
-        className="min-w-0 flex-1 flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
+        className="h-auto min-w-0 flex-1 justify-start gap-[var(--space-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] uppercase tracking-wider hover:bg-transparent hover:text-[var(--color-secondary)]"
         aria-expanded={!isCollapsed}
         aria-controls={panelId}
       >
@@ -218,10 +220,9 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
         {isHighlighted && (
           <span className="shrink-0 rounded border border-[var(--color-border)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
         )}
-      </button>
+      </Button>
       {onSwitch && (
-        <button tabIndex={0}
-          type="button"
+        <IconButton
           onClick={onSwitch}
           data-testid="workspace-switch-arrow"
           aria-label={`Switch to workspace ${name}`}
@@ -230,10 +231,10 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
           // 24px, and the collapse toggle is flush-adjacent so the spacing
           // exception can't cover an undersized target). Matches the file's
           // rename/delete icon-button sizing.
-          className="shrink-0 mr-[var(--space-2)] flex items-center justify-center rounded p-[var(--space-1)] text-[var(--color-accent)] opacity-80 hover:opacity-100 transition-all"
+          className="h-auto w-auto shrink-0 mr-[var(--space-2)] rounded p-[var(--space-1)] text-[var(--color-accent)] opacity-80 hover:opacity-100 hover:bg-transparent"
         >
           <ArrowRight size={13} />
-        </button>
+        </IconButton>
       )}
     </div>
   )
@@ -243,10 +244,10 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
 
 function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: Agent | undefined; name: string; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
-    <button tabIndex={0}
-      type="button"
+    <Button
+      variant="ghost"
       onClick={onToggle}
-      className="w-full flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+      className="h-auto w-full justify-start gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
       aria-expanded={!isCollapsed}
       aria-controls={panelId}
     >
@@ -263,7 +264,7 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
         )}
       </span>
       <span className="flex-1 text-left truncate">{name}</span>
-    </button>
+    </Button>
   )
 }
 
@@ -327,8 +328,8 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
             if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setVal(session.title || '') }
           }}
           className="h-7 flex-1 text-[length:var(--type-body-compact-size)]" />
-        <button tabIndex={0} onClick={commit} className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></button>
-        <button tabIndex={0} onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></button>
+        <IconButton onClick={commit} className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></IconButton>
+        <IconButton onClick={() => { setEditing(false); setVal(session.title || '') }} className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></IconButton>
       </div>
     )
   }
@@ -338,21 +339,21 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
     return (
       <div className="flex items-center gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] py-[var(--space-2)] bg-[var(--color-surface-2)] mx-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
         <span className="flex-1 truncate text-[var(--color-secondary)]">Delete "{session.title || 'Untitled session'}"?</span>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onClick={() => { setConfirmDelete(false); onDelete() }}
           disabled={deleting}
-          className="shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10 disabled:opacity-50"
+          className="h-auto shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
         >
           Delete
-        </button>
-        <button tabIndex={0}
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           onClick={() => setConfirmDelete(false)}
-          className="shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+          className="h-auto shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     )
   }
@@ -363,7 +364,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
       // Keyboard highlight = what Enter selects; follows ArrowUp/Down.
       isHighlighted && 'bg-[var(--color-surface-2)]',
     )}>
-      <button tabIndex={0} type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
+      <Button variant="ghost" onClick={onSelect} className="h-auto min-w-0 flex-1 justify-start p-0 text-left hover:bg-transparent">
         <div className={cn('truncate text-[length:var(--type-body-compact-size)] font-medium flex items-center gap-[var(--space-1)]', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
           <span className="truncate">{session.title || 'Untitled session'}</span>
           {isHighlighted && (
@@ -381,14 +382,14 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
           {session.total_tokens ? (<span className="hidden min-[400px]:inline"><span aria-hidden>· </span><span className="font-mono">{formatTokens(session.total_tokens)}</span></span>) : null}
           {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[length:var(--type-caption-size)]">HB</span></>)}
         </div>
-      </button>
+      </Button>
       {/* Hover-revealed on pointer devices; always visible on touch ([@media(hover:none)]). */}
-      <button tabIndex={0} ref={renameButtonRef} type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
-        className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
-        aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></button>
-      <button tabIndex={0} type="button" onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
-        className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-        aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : 'Delete'}><Trash size={13} /></button>
+      <IconButton ref={renameButtonRef} onClick={() => { setVal(session.title || ''); setEditing(true) }}
+        className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+        aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></IconButton>
+      <IconButton onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
+        className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] disabled:opacity-30 disabled:cursor-not-allowed"
+        aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : 'Delete'}><Trash size={13} /></IconButton>
     </div>
   )
 }
@@ -840,9 +841,9 @@ export function SearchModal() {
             {mode === 'sessions' && wsFilter && (
               <span className="ml-[var(--space-1)] inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-secondary)]">
                 {workspaces.find((w) => w.id === wsFilter)?.name ?? 'Filtered'}
-                <button tabIndex={0} type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
+                <IconButton onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
                   <X size={10} />
-                </button>
+                </IconButton>
               </span>
             )}
           </DialogTitle>
@@ -880,12 +881,14 @@ export function SearchModal() {
               }}
               className="pl-[var(--space-5)]" aria-label={mode === 'workspaces' ? 'Filter workspaces' : 'Search sessions'} />
             {mode === 'sessions' && (
-              <button tabIndex={0} type="button" onClick={() => setShowDateFilter((v) => !v)}
-                className={cn('absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded transition-colors',
-                  showDateFilter ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]')}
+              <IconButton onClick={() => setShowDateFilter((v) => !v)}
+                className={cn('absolute right-2 top-1/2 h-7 w-7 p-0 -translate-y-1/2 rounded',
+                  showDateFilter
+                    ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]')}
                 title="Date range filter" aria-label="Toggle date range filter" aria-pressed={showDateFilter}>
                 <Calendar size={15} />
-              </button>
+              </IconButton>
             )}
           </div>
 
@@ -894,7 +897,15 @@ export function SearchModal() {
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="max-w-[180px]" aria-label="From date" />
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">to</span>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="max-w-[180px]" aria-label="To date" />
-              {(fromDate || toDate) && <button tabIndex={0} type="button" onClick={() => { setFromDate(''); setToDate('') }} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:underline">Clear</button>}
+              {(fromDate || toDate) && (
+                <Button
+                  variant="ghost"
+                  onClick={() => { setFromDate(''); setToDate('') }}
+                  className="h-auto p-0 font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] hover:underline"
+                >
+                  Clear
+                </Button>
+              )}
             </div>
           )}
         </DialogHeader>
@@ -919,22 +930,22 @@ export function SearchModal() {
               )}
               {mode === 'workspaces' ? (
                 debouncedSearch && (
-                  <button tabIndex={0}
-                    type="button"
+                  <Button
+                    variant="link"
                     onClick={() => setSearchText('')}
-                    className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
+                    className="mt-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)]"
                   >
                     Clear filter
-                  </button>
+                  </Button>
                 )
               ) : (wsFilter || debouncedSearch || fromDate || toDate) && (
-                <button tabIndex={0}
-                  type="button"
+                <Button
+                  variant="link"
                   onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); useUiStore.setState({ searchModalWorkspaceFilter: null }) }}
-                  className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
+                  className="mt-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)]"
                 >
                   Clear all filters
-                </button>
+                </Button>
               )}
             </div>
           ) : (

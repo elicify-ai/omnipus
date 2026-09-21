@@ -42,6 +42,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { cn } from '@/lib/utils'
 import { Wordmark } from '@/components/shared/Wordmark'
 
@@ -359,27 +361,25 @@ export function Sidebar() {
       <div className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] h-chrome-header min-h-chrome-header shrink-0">
         <Wordmark className="text-base" />
         {/* Search icon — opens the cross-workspace session search modal */}
-        <button tabIndex={0}
-          type="button"
+        <IconButton
           onClick={() => useUiStore.getState().openSearchModal()}
           aria-label="Search sessions"
           title="Search sessions"
-          className="ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+          className="h-auto w-auto ml-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
         >
           <MagnifyingGlass size={16} />
-        </button>
+        </IconButton>
         {/* Pin toggle — icon-only in the brand row (not a full-width bottom button) */}
         {canPin && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             onClick={togglePin}
             aria-label={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
             aria-pressed={isPinned}
             title={isPinned ? 'Unpin sidebar' : 'Pin sidebar'}
-            className="shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
           >
             {isPinned ? <PushPinSlash size={16} /> : <PushPin size={16} />}
-          </button>
+          </IconButton>
         )}
       </div>
 
@@ -397,14 +397,13 @@ export function Sidebar() {
             <span className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
               Workspaces
             </span>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               onClick={() => setCreatingWorkspace(true)}
               aria-label="New workspace"
-              className="rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+              className="h-auto w-auto rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
             >
               <Plus size={14} />
-            </button>
+            </IconButton>
           </div>
 
           {/* Inline workspace creation — name is the only required field.
@@ -452,14 +451,13 @@ export function Sidebar() {
             <div className="px-[var(--space-3)] py-[var(--space-1)] flex items-center gap-[var(--space-1)]">
               <WarningCircle size={14} className="text-[var(--color-error)] flex-shrink-0" />
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">Could not load workspaces</span>
-              <button tabIndex={0}
-                type="button"
+              <IconButton
                 onClick={() => queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })}
                 aria-label="Retry loading workspaces"
-                className="rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                className="h-auto w-auto rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
                 <ArrowClockwise size={12} />
-              </button>
+              </IconButton>
             </div>
           )}
 
@@ -480,13 +478,13 @@ export function Sidebar() {
           {!projectsLoading && !projectsError && projects.length === 0 && (
             <div className="px-[var(--space-3)] py-[var(--space-1)]">
               <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No workspaces yet — </span>
-              <button tabIndex={0}
-                type="button"
+              <Button
+                variant="link"
                 onClick={() => setCreatingWorkspace(true)}
-                className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:underline"
+                className="text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)]"
               >
                 New workspace
-              </button>
+              </Button>
             </div>
           )}
 
@@ -537,15 +535,20 @@ export function Sidebar() {
                       : 'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
                   )}
                 >
-                  <button tabIndex={0}
-                    type="button"
+                  <Button
+                    variant="ghost"
                     onClick={() => {
                       setActiveWorkspaceId(project.id)
                       navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                       if (!effectivelyPinned) close()
                     }}
                     aria-current={isActive ? 'page' : undefined}
-                    className="flex items-center gap-[var(--space-2)] flex-1 min-w-0 text-left"
+                    className={cn(
+                      'h-auto flex-1 min-w-0 justify-start gap-[var(--space-2)] p-0 text-left font-[var(--font-weight-regular)] hover:bg-transparent',
+                      isActive
+                        ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
+                        : 'text-[var(--color-secondary)] hover:text-[var(--color-secondary)]',
+                    )}
                   >
                     {/* One icon for every workspace (icon-consistency pass,
                         2026-09-07: Buildings, the same glyph every other
@@ -559,34 +562,33 @@ export function Sidebar() {
                       className={cn('flex-shrink-0', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')}
                     />
                     <span className="flex-1 truncate">{project.name}</span>
-                  </button>
-                  <button tabIndex={0}
-                    type="button"
+                  </Button>
+                  <IconButton
                     onClick={(e) => { e.stopPropagation(); toggleWorkspaceExpansion(project.id) }}
                     aria-expanded={isExpanded}
                     aria-label={isExpanded ? `Collapse ${project.name} sessions` : `Expand ${project.name} sessions`}
-                    className="shrink-0 rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+                    className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
                   >
                     {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-                  </button>
+                  </IconButton>
                 </div>
                 {isExpanded && (
                   /* Hierarchy via a connector rail (border-l) instead of deep
                      pl-8 indentation — communicates "children of the workspace"
                      by connectedness while reclaiming ~14px of row width. */
                   <div className="pb-[var(--space-1)] ml-[var(--space-3)] border-l border-[var(--color-border)]">
-                    <button tabIndex={0}
-                      type="button"
+                    <Button
+                      variant="ghost"
                       onClick={() => {
                         setActiveWorkspaceId(project.id)
                         useSessionStore.getState().startNewSession()
                         navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                         if (!effectivelyPinned) close()
                       }}
-                      className="flex items-center gap-[var(--space-2)] w-full pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] transition-colors"
+                      className="h-auto w-full justify-start gap-[var(--space-2)] pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]"
                     >
                       <Plus size={12} /> New chat
-                    </button>
+                    </Button>
                     {sessionsError ? (
                       <p className="pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">Could not load sessions</p>
                     ) : workspaceSessions.length === 0 ? (
@@ -607,13 +609,13 @@ export function Sidebar() {
                     )}
                     {/* Always the last entry — opens the session search pre-filtered to this workspace */}
                     {workspaceSessions.length > 0 && (
-                      <button tabIndex={0}
-                        type="button"
+                      <Button
+                        variant="ghost"
                         onClick={() => useUiStore.getState().openSearchModal(project.id)}
-                        className="flex items-center gap-[var(--space-1)] w-full pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+                        className="h-auto w-full justify-start gap-[var(--space-1)] pl-[var(--space-2-5)] pr-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-transparent"
                       >
                         More…
-                      </button>
+                      </Button>
                     )}
                   </div>
                 )}
@@ -623,56 +625,56 @@ export function Sidebar() {
 
           {/* Show more / less toggle */}
           {!projectsLoading && hasMore && (
-            <button tabIndex={0}
-              type="button"
+            <Button
+              variant="ghost"
               onClick={() => setProjectsExpanded((v) => !v)}
-              className="flex items-center gap-[var(--space-2)] w-full px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+              className="h-auto w-full justify-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-transparent"
             >
               {projectsExpanded
                 ? 'Show fewer'
                 : `${unpinnedProjects.length - PROJECT_COLLAPSE_THRESHOLD} more…`}
-            </button>
+            </Button>
           )}
 
           {/* Archive section (Fix 9) */}
-          <button tabIndex={0}
-            type="button"
+          <Button
+            variant="ghost"
             onClick={() => setArchiveOpen((v) => !v)}
-            className="flex items-center gap-[var(--space-1)] w-full px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-[var(--space-1)]"
+            className="h-auto w-full justify-start gap-[var(--space-1)] px-[var(--space-3)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-transparent mt-[var(--space-1)]"
             aria-expanded={archiveOpen}
           >
             {archiveOpen ? <CaretDown size={10} /> : <CaretRight size={10} />}
             Archive
-          </button>
+          </Button>
 
           {archiveOpen && archivedError && (
             <div className="flex items-center justify-between gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
               <span>Could not load archived workspaces</span>
-              <button tabIndex={0}
-                type="button"
+              <Button
+                variant="link"
                 onClick={() => refetchArchived()}
-                className="text-[var(--color-accent)] hover:underline flex-shrink-0"
+                className="p-0 h-auto flex-shrink-0 font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)]"
               >
                 Retry
-              </button>
+              </Button>
             </div>
           )}
 
           {archiveOpen && archivedProjects.map((project) => {
             return (
-              <button tabIndex={0}
+              <Button
+                variant="ghost"
                 key={project.id}
-                type="button"
                 onClick={() => {
                   setActiveWorkspaceId(project.id)
                   navigate({ to: '/workspaces/$workspaceId/chat', params: { workspaceId: project.id } })
                   if (!effectivelyPinned) close()
                 }}
-                className="flex items-center gap-[var(--space-2)] w-full px-[var(--space-3)] py-[var(--space-2)] mx-0 text-[length:var(--type-body-compact-size)] transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
+                className="h-auto w-full justify-start gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] mx-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
                 <Buildings size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 <span className="flex-1 truncate">{project.name}</span>
-              </button>
+              </Button>
             )
           })}
         </div>
@@ -726,30 +728,29 @@ export function Sidebar() {
             docked LibraryPanel (mounted once in AppShell) at the virtual
             root, same as clicking a workspace opens it scoped (D-3). The
             /_app/library ROUTE exists only for the panel's pop-out button. */}
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="ghost"
           data-testid="sidebar-library-button"
           aria-label="Library"
           onClick={() => {
             useUiStore.getState().openLibraryPanel()
             if (!effectivelyPinned) close()
           }}
-          className="flex items-center gap-[var(--space-2-5)] w-[calc(100%-16px)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg text-[length:var(--type-body-compact-size)] transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+          className="h-auto justify-start gap-[var(--space-2-5)] w-[calc(100%-16px)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
         >
           <FolderOpen size={18} />
           <span className="flex-1 text-left">Library</span>
-        </button>
+        </Button>
       </div>
 
       {/* Username — stable at the very bottom, opens a popup menu */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button tabIndex={0}
-            type="button"
+          <Button
+            variant="ghost"
             aria-label="Open user menu"
             data-testid="sidebar-profile-trigger"
-            className="flex items-center gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors w-[calc(100%-16px)]"
+            className="h-auto justify-start gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2)] mx-[var(--space-2)] rounded-lg font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] w-[calc(100%-16px)]"
           >
             <UserCircle size={18} weight="regular" />
             <span className="flex-1 text-left truncate">{username ?? 'User'}</span>
@@ -761,7 +762,7 @@ export function Sidebar() {
                 {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
-          </button>
+          </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           side="top"
@@ -978,14 +979,14 @@ function SidebarSessionRow({
         ) : (
           <span className="w-[var(--space-3)] shrink-0" aria-hidden="true" />
         )}
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onClick={onSelect}
           aria-current={isActive ? 'page' : undefined}
           className={cn(
-            'flex items-center gap-[var(--space-1)] flex-1 min-w-0 py-[var(--space-1)] pl-[var(--space-1)] text-[length:var(--type-caption-size)] transition-colors text-left',
+            'h-auto flex-1 min-w-0 justify-start gap-[var(--space-1)] py-[var(--space-1)] pl-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-left',
             isActive
-              ? 'text-[var(--color-accent)] font-medium'
+              ? 'text-[var(--color-accent)] font-medium hover:bg-transparent hover:text-[var(--color-accent)]'
               : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
           )}
         >
@@ -999,7 +1000,7 @@ function SidebarSessionRow({
               {session.child_count}
             </span>
           )}
-        </button>
+        </Button>
       </div>
       {/* childrenEmpty: expanded, fetched, and the fetch came back with zero
           rows despite child_count > 0 — a stale/incorrect server count must
@@ -1019,15 +1020,15 @@ function SidebarSessionRow({
           rendered; this is the explicit "load the rest" affordance rather
           than silently capping the fan-out at one page. */}
       {isExpanded && hasMore && (
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           onClick={onLoadMore}
           disabled={isLoading}
           style={{ '--sidebar-indent-depth': depth, paddingLeft: 'calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))' } as import('react').CSSProperties}
-          className="flex items-center gap-[var(--space-1)] py-[var(--space-1)] pr-[var(--space-3)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
+          className="h-auto gap-[var(--space-1)] pl-0 py-[var(--space-1)] pr-[var(--space-3)] font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] disabled:no-underline"
         >
           {isLoading ? 'Loading…' : 'Load more'}
-        </button>
+        </Button>
       )}
     </>
   )
