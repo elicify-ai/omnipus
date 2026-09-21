@@ -16,7 +16,6 @@ import { Eye, PencilSimple, FloppyDisk } from '@phosphor-icons/react'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { cn } from '@/lib/utils'
 import { PreviewHeaderPortal } from './previewHeaderSlot'
-import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { IconButton } from '@/components/ui/icon-button'
 import { useLibraryFileEditor } from './useLibraryFileEditor'
@@ -102,7 +101,10 @@ export function LibraryTextPreview({
           aria-label={status === 'saving' ? 'Saving' : 'Save'}
           title={status === 'saving' ? 'Saving…' : 'Save'}
           data-testid="library-preview-save"
-          className={cn(LIBRARY_ICON_BTN, isDirty && status !== 'saving' ? 'text-[var(--color-accent)]' : undefined)}
+          className={cn(
+            'flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]',
+            isDirty && status !== 'saving' ? 'text-[var(--color-accent)]' : undefined,
+          )}
         >
           <FloppyDisk size={15} weight={isDirty ? 'fill' : 'regular'} />
         </IconButton>

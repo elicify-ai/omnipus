@@ -15,15 +15,15 @@
 
 export type LibraryPreviewVariant = 'pane' | 'inline'
 
-/**
- * Shared height bound for an inline embed whose content can run arbitrarily
- * long (a PDF's pages, a saved view's rows) — a fixed, self-determined box
- * with its own internal scroll, so the embed sits in the note's text flow
- * instead of trying to fill an ancestor's height the way `h-full`/`flex-1`
- * do. `min-h-0` is required alongside it so the flex children inside CAN
- * shrink to scroll rather than overflowing the box.
- *
- * Deliberately NOT used by the image renderer — a picture is content that
- * should size to its own aspect ratio, not be boxed into a fixed height.
- */
-export const INLINE_PREVIEW_BOX_CLASS = 'h-[28rem] max-h-[70vh] min-h-0'
+// Shared height bound for an inline embed whose content can run arbitrarily
+// long (a PDF's pages, a saved view's rows): `h-[28rem] max-h-[70vh]
+// min-h-0`, a fixed, self-determined box with its own internal scroll, so
+// the embed sits in the note's text flow instead of trying to fill an
+// ancestor's height the way `h-full`/`flex-1` do. `min-h-0` is required
+// alongside it so the flex children inside CAN shrink to scroll rather than
+// overflowing the box. BasePreview.tsx and LibraryPdfPreview.tsx write these
+// three classes literally at their own inline-variant `className` sites —
+// keep every site byte-identical by hand if this height ever changes.
+//
+// Deliberately NOT used by the image renderer — a picture is content that
+// should size to its own aspect ratio, not be boxed into a fixed height.

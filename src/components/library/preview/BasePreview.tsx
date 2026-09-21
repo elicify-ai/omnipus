@@ -76,7 +76,6 @@ import {
   type KnowledgeGraphLoader,
 } from '../knowledge/KnowledgeBacklinks'
 import type { KbLinkResolution } from './knowledgeMarkdown'
-import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
 import { viewEvaluationPool, VIEW_EVALUATION_POOL_CEILING } from './viewEvaluationPool'
 
@@ -301,13 +300,15 @@ export function BasePreview({
   onOpenNote,
 }: BasePreviewProps) {
   // The ONE layout switch (EMB-028) — every state below still renders
-  // through whichever of these two class strings is active; nothing about
-  // WHICH state renders, or what it fetches, reads `variant` at all. `embed`
-  // additionally opts the container into `group`, the hook the hidden-until-
-  // hover tab list below hangs off (EMB-046) — harmless when there is no
-  // such tab list to reveal (embed.showViewSwitcher === false).
-  const containerClass =
-    variant === 'inline' ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)]${(embed ? ' group' : '')}` : `flex h-full min-h-0 flex-col${(embed ? ' group' : '')}`
+  // through whichever of these two class strings is active. Each of the
+  // three `className` sites below repeats the same literal ternary in full
+  // — the design-system scanners require a literal string at the JSX site
+  // itself, not a shared variable — so keep all three byte-identical by
+  // hand if the layout ever changes. Nothing about WHICH state renders, or
+  // what it fetches, reads `variant` at all. `embed` additionally opts the
+  // container into `group`, the hook the hidden-until-hover tab list below
+  // hangs off (EMB-046) — harmless when there is no such tab list to
+  // reveal (embed.showViewSwitcher === false).
   // ── 1. Which views this .base owns, and where they run ────────────────────
   const viewsQuery = useQuery({
     queryKey: ['library', workspaceId, 'knowledge', 'base-views', entry.path],
@@ -583,7 +584,19 @@ export function BasePreview({
         }
         if (readable) {
           return (
-            <div className={containerClass} data-testid="base-preview-raw" data-variant={variant}>
+            <div
+              className={
+                variant === 'inline'
+                  ? embed
+                    ? 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)] group'
+                    : 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)]'
+                  : embed
+                    ? 'flex h-full min-h-0 flex-col group'
+                    : 'flex h-full min-h-0 flex-col'
+              }
+              data-testid="base-preview-raw"
+              data-variant={variant}
+            >
               <LibraryCodePreview workspaceId={workspaceId} entry={entry} content={raw.content as string} />
             </div>
           )
@@ -633,7 +646,19 @@ export function BasePreview({
 
   if (stateBody !== undefined) {
     return (
-      <div className={containerClass} data-testid="base-preview" data-variant={variant}>
+      <div
+        className={
+          variant === 'inline'
+            ? embed
+              ? 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)] group'
+              : 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)]'
+            : embed
+              ? 'flex h-full min-h-0 flex-col group'
+              : 'flex h-full min-h-0 flex-col'
+        }
+        data-testid="base-preview"
+        data-variant={variant}
+      >
         {stateBody}
       </div>
     )
@@ -641,7 +666,15 @@ export function BasePreview({
 
   return (
     <div
-      className={containerClass}
+      className={
+        variant === 'inline'
+          ? embed
+            ? 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)] group'
+            : 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)]'
+          : embed
+            ? 'flex h-full min-h-0 flex-col group'
+            : 'flex h-full min-h-0 flex-col'
+      }
       data-testid="base-preview"
       data-variant={variant}
       {...(embed

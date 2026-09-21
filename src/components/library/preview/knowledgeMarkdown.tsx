@@ -1582,9 +1582,9 @@ function EmbedFallback({
 // LazyEmbedMount's own tests, not re-implemented per kind here.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Matches INLINE_PREVIEW_BOX_CLASS's 28rem (libraryPreviewVariant.ts) — the
-// height BasePreview's own inline box settles to, so mounting causes no
-// reflow at all, not merely "one accepted reflow" (EMB-066).
+// Matches the `h-[28rem]` BasePreview.tsx's own inline box settles to, so
+// mounting causes no reflow at all, not merely "one accepted reflow"
+// (EMB-066).
 const BASE_EMBED_RESERVED_HEIGHT_PX = 448
 // EMB-066's own words: "a transclusion's reserved height is a fixed three
 // lines" — three lines at this reader's body line-height.

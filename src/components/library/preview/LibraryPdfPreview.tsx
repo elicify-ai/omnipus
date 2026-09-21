@@ -119,7 +119,6 @@ import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/store/ui'
 import { PreviewHeaderPortal } from './previewHeaderSlot'
-import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { IconButton } from '@/components/ui/icon-button'
 import { Button } from '@/components/ui/button'
@@ -132,7 +131,6 @@ import type { SignatureStroke } from './pdfInkAnnotation'
 import { uint8ArrayToBase64 } from './pdfBinaryEncoding'
 import { pdfWorkerPool, PDF_WORKER_POOL_CEILING } from './pdfWorkerPool'
 import type { PdfWorkerLease } from './pdfWorkerPool'
-import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
 
 // Type-only: erased at build time, so it does not pull pdfjs-dist into the
@@ -1510,6 +1508,11 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     // is attached to the page.
     if (!ctx) return false
     ctx.scale(ratio, ratio)
+    // No fitting design-system colour token: `--color-primary` (Deep Space
+    // Black, #0A0A0B) is the nearest by meaning but is not byte-identical to
+    // this ink colour, and a canvas `strokeStyle` needs a real CSS <color>
+    // value it can parse, not a `var(--token)` reference. Reported to the
+    // token lane — see LibrarySignaturePad.tsx's identical ink colour.
     ctx.strokeStyle = '#111111'
     ctx.lineWidth = 2
     ctx.lineCap = 'round'
@@ -1642,7 +1645,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     <div
       className={
         inline
-          ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-0)]`
+          ? 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-0)]'
           : 'flex flex-1 min-h-0 flex-col overflow-hidden bg-[var(--color-surface-0)]'
       }
       data-testid="library-pdf-preview"
@@ -1818,7 +1821,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             aria-label="Add signature"
             title="Draw and place a signature"
             data-testid="library-pdf-add-signature"
-            className={LIBRARY_ICON_BTN}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
           >
             <Signature size={15} />
           </IconButton>
@@ -1831,7 +1834,10 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             aria-label={saveStatus === 'saving' ? 'Saving' : 'Save'}
             title={saveStatus === 'saving' ? 'Saving…' : 'Save'}
             data-testid="library-pdf-save"
-            className={cn(LIBRARY_ICON_BTN, dirty && saveStatus !== 'saving' ? 'text-[var(--color-accent)]' : undefined)}
+            className={cn(
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]',
+              dirty && saveStatus !== 'saving' ? 'text-[var(--color-accent)]' : undefined,
+            )}
           >
             <FloppyDisk size={15} weight={dirty ? 'fill' : 'regular'} />
           </IconButton>

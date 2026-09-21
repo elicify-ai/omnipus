@@ -71,11 +71,6 @@ import { Button } from '@/components/ui/button'
 
 // Every control in the single header row is a bare icon, matching the browser
 // panel's toolbar treatment: no border, no fill, hover as the only chrome.
-export const LIBRARY_ICON_BTN =
-  'flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors ' +
-  'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] ' +
-  'disabled:cursor-not-allowed disabled:opacity-40 ' +
-  'pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]'
 
 /**
  * Mints a preview token (`POST /api/v1/library/preview-token`,
@@ -302,7 +297,7 @@ export function LibraryPreviewPane({
           aria-label="Close preview"
           title="Close preview"
           data-testid="library-preview-close"
-          className={LIBRARY_ICON_BTN}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
         >
           <X size={15} />
         </IconButton>

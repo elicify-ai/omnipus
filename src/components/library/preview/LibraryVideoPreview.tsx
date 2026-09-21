@@ -26,7 +26,7 @@ import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
 import { IconButton } from '@/components/ui/icon-button'
-import { MediaUnplayableNotice, mediaPreviewContainerClass } from './mediaPreviewStates'
+import { MediaUnplayableNotice } from './mediaPreviewStates'
 
 interface LibraryVideoPreviewProps {
   workspaceId: string
@@ -51,7 +51,13 @@ export function LibraryVideoPreview({ workspaceId, entry, variant = 'pane' }: Li
 
   return (
     <div
-      className={cn(mediaPreviewContainerClass(variant), 'relative')}
+      // Same container as LibraryAudioPreview — keep both literal strings in sync by hand.
+      className={cn(
+        variant === 'inline'
+          ? 'flex items-center justify-center'
+          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]',
+        'relative',
+      )}
       data-testid="library-video-preview"
       data-variant={variant}
     >

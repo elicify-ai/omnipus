@@ -99,6 +99,11 @@ export function LibrarySignaturePad({
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.lineWidth = STROKE_WIDTH_CSS_PX
+    // No fitting design-system colour token: `--color-primary` (Deep Space
+    // Black, #0A0A0B) is the nearest by meaning but is not byte-identical to
+    // this ink colour, and a canvas `strokeStyle` needs a real CSS <color>
+    // value it can parse, not a `var(--token)` reference. Reported to the
+    // token lane — see LibraryPdfPreview.tsx's identical ink colour.
     ctx.strokeStyle = '#111111'
   }
 

@@ -1,6 +1,5 @@
 // mediaPreviewStates.tsx — the non-happy path `LibraryAudioPreview` and
-// `LibraryVideoPreview` share, plus the container class they already shared
-// by copy.
+// `LibraryVideoPreview` share.
 //
 // WHY THIS EXISTS AT ALL. Both players used to say, in their own headers,
 // that there IS no non-happy path: "the raw authenticated download URL IS
@@ -26,18 +25,6 @@
 // thing that still works: downloading the file.
 
 import { DownloadSimple, Warning } from '@phosphor-icons/react'
-import type { LibraryPreviewVariant } from './libraryPreviewVariant'
-
-/** The container both media players wrap their element in. Identical in both
- *  by copy before this; one definition now, so an audio-only or video-only
- *  layout change has to be a deliberate divergence rather than a missed
- *  second edit. `LibraryImagePreview`/`LibraryPdfPreview` have genuinely
- *  different class strings and deliberately do NOT use this. */
-export function mediaPreviewContainerClass(variant: LibraryPreviewVariant): string {
-  return variant === 'inline'
-    ? 'flex items-center justify-center'
-    : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]'
-}
 
 /** Shown in place of a player whose source the browser refused. Names the
  *  file, says plainly that THIS BROWSER could not play it (rather than
