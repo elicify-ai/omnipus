@@ -53,6 +53,7 @@ import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
 import type { PickerCompanyRow } from './provider-picker-model'
 import { inferRegionFromLocale, regionLabel } from './region-inference'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /**
@@ -373,7 +374,7 @@ export function ProviderDetailPanel({
               Runs on your machine — no API key needed.
             </p>
           ) : (
-            <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-key-input`}>
+            <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-api-key-input`}>
               API key
               <input
                 id={`${testId}-api-key-input`}
@@ -385,7 +386,7 @@ export function ProviderDetailPanel({
                 className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                 style={{ borderColor: 'var(--color-border)' }}
               />
-            </label>
+            </Label>
           ))
         }
       />

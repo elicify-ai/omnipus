@@ -4,6 +4,7 @@ import { Brain, ArrowUp, ArrowDown, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { Switch } from '@/components/ui/switch'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
@@ -39,9 +40,9 @@ function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps
   return (
     <div className="flex items-start justify-between gap-[var(--space-3)]">
       <div className="flex-1 min-w-0">
-        <label htmlFor={id} className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] cursor-pointer">
+        <Label htmlFor={id} className="cursor-pointer">
           {label}
-        </label>
+        </Label>
         {description && (
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-relaxed">{description}</p>
         )}
@@ -71,10 +72,10 @@ interface NumberRowProps {
 
 function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onChange }: NumberRowProps) {
   return (
-    <div className="space-y-[var(--space-1)]">
-      <label htmlFor={id} className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
+    <div className="space-y-[var(--space-2)]">
+      <Label htmlFor={id}>
         {label}
-      </label>
+      </Label>
       {description && (
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">{description}</p>
       )}

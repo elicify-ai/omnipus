@@ -65,12 +65,12 @@ export function WriteSetField({
   return (
     <div className="flex flex-col gap-[var(--space-1)]">
       {labelStyle === 'section' ? (
-        <label
+        <Label
           htmlFor={id}
           className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]"
         >
           {WRITE_SET_LABEL}
-        </label>
+        </Label>
       ) : (
         <Label htmlFor={id} className="text-[var(--color-secondary)]">
           {WRITE_SET_LABEL}
@@ -141,9 +141,9 @@ export function JoinMemberCheckbox({
           onCheckedChange={(v) => onCheckedChange(v === true)}
           className="mt-[var(--border-width-hairline)]"
         />
-        <label htmlFor={id} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] cursor-pointer">
+        <Label htmlFor={id} className="cursor-pointer">
           {JOIN_LABEL}
-        </label>
+        </Label>
       </div>
       <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">{JOIN_HELP}</p>
     </div>

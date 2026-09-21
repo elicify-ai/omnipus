@@ -34,6 +34,7 @@
 import * as React from 'react'
 import { Key, SignIn } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /** The closed auth-method set (contract `Provider.auth_method`, X-25). */
@@ -214,11 +215,11 @@ export function AuthMethodControl({
                   const inputId = `${testId}-signin-${option.providerId}`
                   const helperId = helper ? `${inputId}-helper` : undefined
                   return (
-                    <label
+                    <Label
                       key={option.providerId}
                       htmlFor={inputId}
                       data-testid={`${testId}-signin-option-${option.providerId}`}
-                      className="flex cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
+                      className="flex cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)]"
                       style={{ borderColor: 'var(--color-border)' }}
                     >
                       <input
@@ -244,7 +245,7 @@ export function AuthMethodControl({
                           </span>
                         )}
                       </span>
-                    </label>
+                    </Label>
                   )
                 })}
               </div>

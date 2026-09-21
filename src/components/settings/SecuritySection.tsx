@@ -61,6 +61,7 @@ import {
 import { useUiStore } from '@/store/ui'
 import { DiagnosticsSection } from './DiagnosticsSection'
 import { SandboxSection } from './SandboxSection'
+import { Label } from '@/components/ui/label'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { RiskySettingControl } from '@/components/shared/RiskySettingControl'
@@ -436,7 +437,7 @@ export function SecuritySection() {
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="exec-timeout-seconds" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Exec timeout (seconds)</label>
+                  <Label htmlFor="exec-timeout-seconds">Exec timeout (seconds)</Label>
                   <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Max time for a single command, 0 = no limit</p>
                 </div>
                 <Input
@@ -454,7 +455,7 @@ export function SecuritySection() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="max-background-seconds" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Background timeout (seconds)</label>
+                  <Label htmlFor="max-background-seconds">Background timeout (seconds)</Label>
                   <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Max time for background processes, 0 = no limit</p>
                 </div>
                 <Input
@@ -541,7 +542,7 @@ export function SecuritySection() {
             <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-2-5)]">
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="agent-llm-calls-per-hour" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">LLM calls / hour</label>
+                  <Label htmlFor="agent-llm-calls-per-hour">LLM calls / hour</Label>
                   <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
                 </div>
                 <Input
@@ -556,7 +557,7 @@ export function SecuritySection() {
               </div>
               <div className="flex items-center justify-between">
                 <div>
-                  <label htmlFor="agent-tool-calls-per-minute" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Tool calls / minute</label>
+                  <Label htmlFor="agent-tool-calls-per-minute">Tool calls / minute</Label>
                   <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Default limit per agent</p>
                 </div>
                 <Input
@@ -679,8 +680,8 @@ export function SecuritySection() {
               Re-encrypts the entire credential vault under a new passphrase. Back up the new
               passphrase — it&apos;s required to unlock the vault next time.
             </p>
-            <div className="space-y-[var(--space-1)]">
-              <label htmlFor="rotate-passphrase" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">New passphrase</label>
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="rotate-passphrase">New passphrase</Label>
               <Input
                 id="rotate-passphrase"
                 type="password"
@@ -714,8 +715,8 @@ export function SecuritySection() {
             <DialogTitle className="font-headline text-base">Add Credential</DialogTitle>
           </DialogHeader>
           <div className="space-y-[var(--space-2-5)] py-[var(--space-2)]">
-            <div className="space-y-[var(--space-1)]">
-              <label htmlFor="cred-key" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Key name</label>
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="cred-key">Key name</Label>
               <Input
                 id="cred-key"
                 value={credKey}
@@ -725,8 +726,8 @@ export function SecuritySection() {
                 autoFocus
               />
             </div>
-            <div className="space-y-[var(--space-1)]">
-              <label htmlFor="cred-value" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Value</label>
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="cred-value">Value</Label>
               <Input
                 id="cred-value"
                 type="password"

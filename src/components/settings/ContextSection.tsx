@@ -22,6 +22,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Sliders, Plus, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { getContextSettings, putContextSettings, getErrorMessage, isApiError } from '@/lib/api'
 import type { ContextSettings, ContextSettingsUpdate, ContextModelOverride, ContextWindowSource } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -417,10 +418,10 @@ export function ContextSection({ prefillOverride }: ContextSectionProps): React.
           const id = `context-${f.key.replace(/_/g, '-')}`
           const err = errors[f.key]
           return (
-            <div key={f.key} className="space-y-[var(--space-1)]">
-              <label htmlFor={id} className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
+            <div key={f.key} className="space-y-[var(--space-2)]">
+              <Label htmlFor={id}>
                 {f.label}
-              </label>
+              </Label>
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">{f.description}</p>
               <div className="flex items-center gap-[var(--space-2)]">
                 <Input

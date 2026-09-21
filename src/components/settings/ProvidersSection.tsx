@@ -38,6 +38,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import {
   Sheet,
@@ -422,9 +423,9 @@ function ProviderConfigSheet({
 
           {/* API Key input */}
           <div>
-            <label htmlFor={`api-key-input-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)] block">
+            <Label htmlFor={`api-key-input-${draftKey}`} className="mb-[var(--space-1)] block">
               API Key
-            </label>
+            </Label>
             <div className="relative">
               <Input
                 id={`api-key-input-${draftKey}`}
@@ -474,9 +475,9 @@ function ProviderConfigSheet({
             }
             return (
               <div>
-                <label htmlFor={`add-model-input-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)] mb-[var(--space-1)] block">
+                <Label htmlFor={`add-model-input-${draftKey}`} className="mb-[var(--space-1)] block">
                   Models
-                </label>
+                </Label>
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-2)]">
                   This provider has no live model list — add the model slugs you want available in the picker.
                 </p>

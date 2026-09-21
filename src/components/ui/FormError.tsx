@@ -23,7 +23,7 @@
 // renders the string.
 //
 // Usage:
-//   <label htmlFor="x">Name</label>
+//   <Label htmlFor="x">Name</Label>
 //   <Input id="x" aria-describedby={error ? nameErrorId : undefined} aria-invalid={!!error} required />
 //   <FormError id={nameErrorId} error={error} />
 

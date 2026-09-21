@@ -4,6 +4,7 @@ import { motion } from 'framer-motion'
 import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key, Info } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { login, fetchAppState, isApiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
@@ -178,10 +179,9 @@ function LoginScreen() {
 
         <form onSubmit={handleSubmit} className="space-y-[var(--space-3)]">
           <div>
-            <label htmlFor="login-username" className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-1)] block"
-              style={{ color: 'var(--color-muted)' }}>
+            <Label htmlFor="login-username" className="mb-[var(--space-1)] block">
               Username
-            </label>
+            </Label>
             <div className="relative">
               <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-muted)' }} />
               <Input
@@ -198,10 +198,9 @@ function LoginScreen() {
           </div>
 
           <div>
-            <label htmlFor="login-password" className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-1)] block"
-              style={{ color: 'var(--color-muted)' }}>
+            <Label htmlFor="login-password" className="mb-[var(--space-1)] block">
               Password
-            </label>
+            </Label>
             <div className="relative">
               <Key size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-muted)' }} />
               <Input

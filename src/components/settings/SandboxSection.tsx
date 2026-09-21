@@ -12,6 +12,7 @@ import {
   Warning,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 import {
   Dialog,
   DialogContent,
@@ -1042,7 +1043,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
               <fieldset className="space-y-[var(--space-2)]">
                 <legend className="sr-only">Sandbox mode</legend>
                 {SANDBOX_MODES.map((m) => (
-                  <label
+                  <Label
                     key={m.value}
                     className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                       effectiveMode === m.value
@@ -1063,7 +1064,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                       <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{m.label}</p>
                       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">{m.desc}</p>
                     </div>
-                  </label>
+                  </Label>
                 ))}
               </fieldset>
             )}
@@ -1087,7 +1088,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                   writes stay inside the workspace and any folders you have mounted.
                 </p>
                 {FILESYSTEM_MODELS.map((m) => (
-                  <label
+                  <Label
                     key={m.value}
                     className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                       currentFsModel === m.value
@@ -1110,7 +1111,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                       <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{m.label}</p>
                       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">{m.desc}</p>
                     </div>
-                  </label>
+                  </Label>
                 ))}
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   Takes effect after a restart — the kernel profile is built once at startup.
@@ -1178,7 +1179,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                 {WORKSPACE_LIMIT_OPTIONS.map((o) => {
                   const selected = currentWorkspaceLimit === (o.value === 'on')
                   return (
-                    <label
+                    <Label
                       key={o.value}
                       className={`flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border cursor-pointer transition-colors ${
                         selected
@@ -1201,7 +1202,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                         <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{o.label}</p>
                         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-snug">{o.desc}</p>
                       </div>
-                    </label>
+                    </Label>
                   )
                 })}
               </fieldset>

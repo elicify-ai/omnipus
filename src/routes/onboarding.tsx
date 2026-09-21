@@ -17,6 +17,7 @@ import {
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ModelSelector, type ModelCatalogGroup } from '@/components/ui/model-selector'
 import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
@@ -797,10 +798,9 @@ function NameStep({
         className="w-full space-y-[var(--space-3)]"
       >
         <div>
-          <label htmlFor="admin-username" className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-1)] block"
-            style={{ color: 'var(--color-muted)' }}>
+          <Label htmlFor="admin-username" className="mb-[var(--space-1)] block">
             Username
-          </label>
+          </Label>
           <Input
             id="admin-username"
             type="text"
@@ -921,10 +921,9 @@ function PasswordStep({
       >
         {/* Password */}
         <div>
-          <label htmlFor="admin-password" className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-1)] block"
-            style={{ color: 'var(--color-muted)' }}>
+          <Label htmlFor="admin-password" className="mb-[var(--space-1)] block">
             Password
-          </label>
+          </Label>
           <div className="relative">
             <Input
               id="admin-password"
@@ -978,10 +977,9 @@ function PasswordStep({
 
         {/* Confirm Password */}
         <div>
-          <label htmlFor="admin-password-confirm" className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-1)] block"
-            style={{ color: 'var(--color-muted)' }}>
+          <Label htmlFor="admin-password-confirm" className="mb-[var(--space-1)] block">
             Confirm Password
-          </label>
+          </Label>
           <div className="relative">
             <Input
               id="admin-password-confirm"

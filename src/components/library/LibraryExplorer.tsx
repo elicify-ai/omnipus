@@ -46,6 +46,7 @@ import {
   FolderOpen,
 } from '@phosphor-icons/react'
 import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -970,9 +971,9 @@ export function LibraryExplorer({
 
         <div className="flex items-center gap-[var(--space-1)] shrink-0">
           {workspaceId !== null && (
-            <label
+            <Label
               htmlFor="library-show-hidden"
-              className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mr-[var(--space-1)] select-none cursor-pointer"
+              className="flex items-center gap-[var(--space-1)] mr-[var(--space-1)] select-none cursor-pointer"
             >
               <Switch
                 id="library-show-hidden"
@@ -981,7 +982,7 @@ export function LibraryExplorer({
                 onCheckedChange={setIncludeHidden}
               />
               Show hidden
-            </label>
+            </Label>
           )}
           {/* Status indicator only — the ACTION that used to live on this
               pill ("Manage mounted folders") moved into the unified "+"

@@ -13,6 +13,7 @@
 import * as React from 'react'
 import { Plug } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 
 /** The wire protocols a custom endpoint may declare (generated enum subset). */
 export const CUSTOM_ENDPOINT_PROTOCOLS = ['openai-compatible', 'anthropic'] as const
@@ -72,7 +73,7 @@ export function CustomEndpointPanel({
         Custom endpoint
       </div>
 
-      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-id`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-id`}>
         Provider id
         <input
           id={`${testId}-id`}
@@ -83,9 +84,9 @@ export function CustomEndpointPanel({
           className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
-      </label>
+      </Label>
 
-      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-base`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-api-base`}>
         API base URL
         <input
           id={`${testId}-api-base`}
@@ -96,9 +97,9 @@ export function CustomEndpointPanel({
           className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
-      </label>
+      </Label>
 
-      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-protocol`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-protocol`}>
         Protocol
         <select
           id={`${testId}-protocol`}
@@ -115,9 +116,9 @@ export function CustomEndpointPanel({
             </option>
           ))}
         </select>
-      </label>
+      </Label>
 
-      <label className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]" htmlFor={`${testId}-api-key`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-api-key`}>
         API key
         <input
           id={`${testId}-api-key`}
@@ -129,7 +130,7 @@ export function CustomEndpointPanel({
           className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
-      </label>
+      </Label>
 
       {error && (
         <div role="alert" aria-live="assertive" data-testid="custom-endpoint-error" className="text-[length:var(--type-utility-xs-size)]">

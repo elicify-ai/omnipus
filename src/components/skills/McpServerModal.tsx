@@ -48,6 +48,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
@@ -439,8 +440,8 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
 
           <div className="flex-1 px-[var(--space-4)] py-[var(--space-3)] space-y-[var(--space-3)]">
             {/* Server name */}
-            <div className="space-y-[var(--space-1)]">
-              <label htmlFor="mcp-name" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Name</label>
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="mcp-name">Name</Label>
               {editMode ? (
                 <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] px-[var(--space-1)] py-[var(--space-2)]">{name}</p>
               ) : (
@@ -498,10 +499,10 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             {/* Network mode: URL field + Headers (G9) */}
             {mode === 'network' && (
               <>
-                <div className="space-y-[var(--space-1)]">
-                  <label htmlFor="mcp-url" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                <div className="space-y-[var(--space-2)]">
+                  <Label htmlFor="mcp-url">
                     Server URL
-                  </label>
+                  </Label>
                   <Input
                     id="mcp-url"
                     data-testid="network-url"
@@ -605,10 +606,10 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                 defaultOpen
               >
                 <div className="space-y-[var(--space-2-5)]">
-                  <div className="space-y-[var(--space-1)]">
-                    <label htmlFor="mcp-command" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-command">
                       Command
-                    </label>
+                    </Label>
                     <Input
                       id="mcp-command"
                       data-testid="local-command"
@@ -619,10 +620,10 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                     />
                   </div>
 
-                  <div className="space-y-[var(--space-1)]">
-                    <label htmlFor="mcp-args" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-args">
                       Args (comma-separated, optional)
-                    </label>
+                    </Label>
                     <Input
                       id="mcp-args"
                       value={args}
@@ -632,10 +633,10 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                     />
                   </div>
 
-                  <div className="space-y-[var(--space-1)]">
-                    <label htmlFor="mcp-env" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-env">
                       Environment variables (KEY=value, one per line, optional)
-                    </label>
+                    </Label>
                     {(initialServer?.env_keys?.length ?? 0) > 0 && (
                       <p
                         className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
@@ -656,10 +657,10 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   </div>
 
                   {/* G9: Env file (stdio only) */}
-                  <div className="space-y-[var(--space-1)]">
-                    <label htmlFor="mcp-env-file" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-env-file">
                       Env file path (optional)
-                    </label>
+                    </Label>
                     <Input
                       id="mcp-env-file"
                       data-testid="env-file"

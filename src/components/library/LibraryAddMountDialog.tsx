@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { fetchHostFolders, type HostFolderListing, type HostFolderEntry } from '@/lib/api'
 
 /** Lexically canonicalize a typed host path — collapse `//` runs, drop `.`
@@ -246,9 +247,9 @@ export function LibraryAddMountDialog({
         </DialogHeader>
 
         <div className="flex flex-col gap-[var(--space-2-5)]">
-          <label htmlFor="mount-path" className="text-[length:var(--type-utility-xs-size)] uppercase tracking-wide text-[var(--color-muted)]">
+          <Label htmlFor="mount-path" className="uppercase tracking-wide">
             Folder on your Mac
-          </label>
+          </Label>
           <Input
             id="mount-path"
             value={path}

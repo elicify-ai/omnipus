@@ -891,7 +891,7 @@ export function ChannelConfigPanel({
                 </p>
                 <div className="flex flex-col gap-[var(--space-2)]" role="radiogroup" aria-label="Connection method">
                   {GCHAT_AUTH_OPTIONS.map((opt) => (
-                    <label
+                    <Label
                       key={opt.value}
                       className={`flex items-start gap-[var(--space-2-5)] p-[var(--space-2-5)] rounded-md border cursor-pointer transition-colors ${
                         gChatAuthMethod === opt.value
@@ -913,7 +913,7 @@ export function ChannelConfigPanel({
                         <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{opt.label}</p>
                         <p id={`gchat-auth-desc-${opt.value}`} className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">{opt.description}</p>
                       </div>
-                    </label>
+                    </Label>
                   ))}
                 </div>
               </div>

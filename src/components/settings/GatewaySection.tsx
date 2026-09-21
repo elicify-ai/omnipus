@@ -26,6 +26,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
@@ -332,7 +333,7 @@ export function GatewaySection() {
         {/* Port */}
         <div className="flex items-center justify-between">
           <div>
-            <label htmlFor="gateway-port" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Port</label>
+            <Label htmlFor="gateway-port">Port</Label>
           </div>
           <Input
             id="gateway-port"
