@@ -1655,6 +1655,139 @@
         "Badge error",
         "Badge destructive"
       ]
+    },
+    {
+      "id": "primitive.color.priority-1",
+      "css": "--primitive-color-priority-1",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#FF6467"
+    },
+    {
+      "id": "primitive.color.priority-1-background",
+      "css": "--primitive-color-priority-1-background",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#FB2C3633"
+    },
+    {
+      "id": "primitive.color.priority-2",
+      "css": "--primitive-color-priority-2",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#FF8904"
+    },
+    {
+      "id": "primitive.color.priority-2-background",
+      "css": "--primitive-color-priority-2-background",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#FF690033"
+    },
+    {
+      "id": "primitive.color.priority-3",
+      "css": "--primitive-color-priority-3",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#FDC700"
+    },
+    {
+      "id": "primitive.color.priority-3-background",
+      "css": "--primitive-color-priority-3-background",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#F0B10033"
+    },
+    {
+      "id": "primitive.color.priority-4",
+      "css": "--primitive-color-priority-4",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#50A2FF"
+    },
+    {
+      "id": "primitive.color.priority-4-background",
+      "css": "--primitive-color-priority-4-background",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#2B7FFF33"
+    },
+    {
+      "id": "primitive.color.priority-5-background",
+      "css": "--primitive-color-priority-5-background",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#9CA3AF33"
+    },
+    {
+      "id": "color.priority.1",
+      "css": "--color-priority-1",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-1"
+    },
+    {
+      "id": "color.priority.1.background",
+      "css": "--color-priority-1-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-1-background"
+    },
+    {
+      "id": "color.priority.2",
+      "css": "--color-priority-2",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-2"
+    },
+    {
+      "id": "color.priority.2.background",
+      "css": "--color-priority-2-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-2-background"
+    },
+    {
+      "id": "color.priority.3",
+      "css": "--color-priority-3",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-3"
+    },
+    {
+      "id": "color.priority.3.background",
+      "css": "--color-priority-3-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-3-background"
+    },
+    {
+      "id": "color.priority.4",
+      "css": "--color-priority-4",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-4"
+    },
+    {
+      "id": "color.priority.4.background",
+      "css": "--color-priority-4-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-4-background"
+    },
+    {
+      "id": "color.priority.5",
+      "css": "--color-priority-5",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.grey"
+    },
+    {
+      "id": "color.priority.5.background",
+      "css": "--color-priority-5-background",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.priority-5-background"
     }
   ]
 }

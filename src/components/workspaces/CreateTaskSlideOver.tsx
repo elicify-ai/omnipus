@@ -40,8 +40,7 @@ import type { Task, TaskCreateRequest, Todo, AcceptanceCriterion } from '@/lib/a
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
-import { cn } from '@/lib/utils'
-import { PRIORITY_BADGE } from './TaskCard'
+import { PriorityBadge } from './PriorityBadge'
 import { TagInput } from './TagInput'
 import { JoinMemberCheckbox, WriteSetField } from './PlanMemberFields'
 import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
@@ -455,7 +454,6 @@ export function CreateTaskSlideOver({
   }
 
   const isPending = createMutation.isPending || createAndRunMutation.isPending
-  const priorityBadge = PRIORITY_BADGE[form.priority] ?? PRIORITY_BADGE[3]
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -513,9 +511,10 @@ export function CreateTaskSlideOver({
           <div className="flex flex-col gap-[var(--space-2)]">
             <Label htmlFor="ct-priority">
               Priority
-              <span className={cn('ml-[var(--space-2)] rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold', priorityBadge.className)}>
-                {priorityBadge.label}
-              </span>
+              <PriorityBadge
+                priority={form.priority}
+                className="ml-[var(--space-2)] rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold"
+              />
             </Label>
             <Select
               value={String(form.priority)}

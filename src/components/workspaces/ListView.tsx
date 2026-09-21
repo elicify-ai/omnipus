@@ -8,7 +8,7 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { PRIORITY_BADGE } from './TaskCard'
+import { PriorityBadge } from './PriorityBadge'
 import { TaskActionButton } from './TaskActionButton'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -31,7 +31,7 @@ type AgentRef = Pick<Agent, 'id' | 'name'>
 const UNTAGGED = '\u0000untagged'
 const UNASSIGNED = '\u0000unassigned'
 
-// Priority domain: PRIORITY_BADGE's own keys (TaskCard.tsx), kept in the
+// Priority domain: PRIORITY_BADGE's own keys (PriorityBadge.tsx), kept in the
 // exact insertion/ascending order that record declares (1 through 5) --
 // spelled out as a literal rather than Object.keys(PRIORITY_BADGE) because
 // the design-system spacing scanner's record-safety proof treats
@@ -438,7 +438,6 @@ function TaskRow({
   onClick: () => void
 }) {
   const priority = task.priority ?? 3
-  const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const tags = task.tags ?? []
   const agentName = resolveAgentName(task, agents)
 
@@ -448,7 +447,10 @@ function TaskRow({
     // actionable). Borderless — separation is padding + hover, not a rule.
     <tr onClick={onClick} className="cursor-pointer transition-colors hover:bg-[var(--color-surface-2)]/40">
       <td className="px-[var(--space-3)] py-[var(--space-2)]">
-        <span className={cn('rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold', badge.className)}>{badge.label}</span>
+        <PriorityBadge
+          priority={priority}
+          className="rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold"
+        />
       </td>
       <td className="px-[var(--space-2)] py-[var(--space-2)]">
         <Button

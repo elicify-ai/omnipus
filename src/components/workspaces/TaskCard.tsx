@@ -6,6 +6,7 @@ import { RollupBadge } from './RollupBadge'
 import { TaskChildren } from './TaskChildren'
 import { TaskActionButton } from './TaskActionButton'
 import { TaskActivityChip } from './TaskActivityChip'
+import { PriorityBadge } from './PriorityBadge'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -74,15 +75,11 @@ export function goalLoopStatusLabel(
   return `${parts.join(' · ')}${paused ? ' · paused' : ''}`
 }
 
-// Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
-// Flat priority pills — tint fill + colour, no outline (minimalist flat design).
-export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
-  1: { label: 'P1', className: 'bg-red-500/20 text-red-400' },
-  2: { label: 'P2', className: 'bg-orange-500/20 text-orange-400' },
-  3: { label: 'P3', className: 'bg-yellow-500/20 text-yellow-400' },
-  4: { label: 'P4', className: 'bg-blue-500/20 text-blue-400' },
-  5: { label: 'P5', className: 'bg-[var(--color-muted)]/20 text-[var(--color-muted)]' },
-}
+// Priority badge (P1 red, P2 orange, P3 yellow, P4 blue, P5 muted) is
+// `PriorityBadge` (./PriorityBadge.tsx) — a component with a literal,
+// per-priority `className` the design-system static scanners can read,
+// instead of a `className` string built from data. `PRIORITY_BADGE` (the
+// label-only lookup) lives there too now.
 
 /**
  * dnd-kit drag wiring for a single card — all three fields come from one
@@ -156,7 +153,6 @@ export function TaskCard({
   showActions = true,
 }: TaskCardProps) {
   const priority = task.priority ?? 3
-  const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const tags = task.tags ?? []
   const visibleTags = tags.slice(0, 3)
   const overflowTagCount = tags.length - visibleTags.length
@@ -253,14 +249,10 @@ export function TaskCard({
 
       {/* Top row: priority badge + title */}
       <div className="flex items-start gap-[var(--space-2)]">
-        <span
-          className={cn(
-            'flex-shrink-0 rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight mt-[var(--space-0-5)]',
-            badge.className,
-          )}
-        >
-          {badge.label}
-        </span>
+        <PriorityBadge
+          priority={priority}
+          className="flex-shrink-0 rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight mt-[var(--space-0-5)]"
+        />
         {/* UAT Finding 2 fix: a long UNBROKEN title (no spaces — e.g. the
             200-char maxLength case) used to blow out this flex chain. `<p>`
             is a flex item (`flex-1`) whose default `min-width: auto`

@@ -12,6 +12,16 @@
   --color-mount: var(--primitive-color-mount);
   --color-muted: var(--primitive-color-grey);
   --color-primary: var(--primitive-color-surface-0);
+  --color-priority-1: var(--primitive-color-priority-1);
+  --color-priority-1-background: var(--primitive-color-priority-1-background);
+  --color-priority-2: var(--primitive-color-priority-2);
+  --color-priority-2-background: var(--primitive-color-priority-2-background);
+  --color-priority-3: var(--primitive-color-priority-3);
+  --color-priority-3-background: var(--primitive-color-priority-3-background);
+  --color-priority-4: var(--primitive-color-priority-4);
+  --color-priority-4-background: var(--primitive-color-priority-4-background);
+  --color-priority-5: var(--primitive-color-grey);
+  --color-priority-5-background: var(--primitive-color-priority-5-background);
   --color-secondary: var(--primitive-color-silver);
   --color-status-blocked: var(--primitive-color-orange);
   --color-status-blocked-background: var(--primitive-color-orange-tint);
