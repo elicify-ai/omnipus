@@ -41,6 +41,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
 import { ReAuthDialog } from './ReAuthDialog'
 import { GatewayRestartModal } from './GatewayRestartModal'
 
@@ -249,15 +250,16 @@ export function GodModeControl() {
                       able to cancel a pending authorization without waiting
                       for (or triggering) a restart. Replays the existing
                       setGodMode(false, token) re-auth flow; no new endpoint. */}
-                  <button tabIndex={0}
+                  <Button
                     type="button"
+                    variant="link"
                     data-testid="god-mode-cancel-authorization"
                     disabled={busy || isLoading}
                     onClick={requestDisarm}
-                    className="text-[length:var(--type-caption-size)] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="text-[length:var(--type-caption-size)] font-medium disabled:opacity-40"
                   >
                     Cancel authorization
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
@@ -269,8 +271,15 @@ export function GodModeControl() {
               process). Binding to `enabled` made an armed-but-pending-
               restart switch render as OFF, and made requestToggle()'s
               `!enabled` negation re-arm instead of disarm on every click. */}
-          <button tabIndex={0}
+          {/* Kept on Button (not the catalogued Switch): the checked-state
+              track color here is danger red (--color-error), not the
+              Switch's accent gold, and the thumb hosts a busy spinner — both
+              are behaviour Switch doesn't express. Button with the same
+              role="switch"/aria-checked semantics preserves the D1/D19
+              contract exactly (see file header). */}
+          <Button
             type="button"
+            variant="ghost"
             role="switch"
             aria-checked={persisted}
             aria-label="God-mode"
@@ -279,9 +288,11 @@ export function GodModeControl() {
             disabled={knownUnsupported || busy || isLoading}
             onClick={requestToggle}
             className={[
-              'relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors',
-              'disabled:opacity-40 disabled:cursor-not-allowed',
-              persisted ? 'bg-[var(--color-error)]' : 'bg-[var(--color-surface-3)]',
+              'relative h-6 w-11 shrink-0 rounded-full p-0 transition-colors',
+              'disabled:opacity-40',
+              persisted
+                ? 'bg-[var(--color-error)] hover:bg-[var(--color-error)]'
+                : 'bg-[var(--color-surface-3)] hover:bg-[var(--color-surface-3)]',
             ].join(' ')}
           >
             <span
@@ -292,7 +303,7 @@ export function GodModeControl() {
             >
               {busy && <SpinnerGap size={11} className="animate-spin text-[var(--color-error)]" />}
             </span>
-          </button>
+          </Button>
         </div>
       </div>
 

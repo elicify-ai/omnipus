@@ -16,6 +16,7 @@ import {
   ChatCircle,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ModelSelector, type ModelCatalogGroup } from '@/components/ui/model-selector'
@@ -935,15 +936,15 @@ function PasswordStep({
               className="pr-[var(--space-5)]"
               autoFocus
             />
-            <button tabIndex={0}
+            <IconButton
               type="button"
               onClick={onToggleShowPassword}
-              className={EYE_TOGGLE_CLASS}
+              className={`${EYE_TOGGLE_CLASS} hover:bg-transparent`}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-            </button>
+            </IconButton>
           </div>
           {/* Inline password-strength meter — length + character-class heuristic. */}
           {strength && (
@@ -990,15 +991,15 @@ function PasswordStep({
               autoComplete="new-password"
               className="pr-[var(--space-5)]"
             />
-            <button tabIndex={0}
+            <IconButton
               type="button"
               onClick={onToggleShowPassword}
-              className={EYE_TOGGLE_CLASS}
+              className={`${EYE_TOGGLE_CLASS} hover:bg-transparent`}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -1212,28 +1213,26 @@ function ProviderStep({
                   the whole interaction, and it must be reachable again after
                   the row is confirmed (a session can lapse mid-onboarding). */}
               {signIn && (
-                <button
+                <Button
                   type="button"
-                  tabIndex={0}
+                  variant="outline"
                   data-testid="onboarding-sign-in-btn"
                   onClick={() => onSignIn(selection.providerId, selection.displayName)}
-                  className="mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium px-[var(--space-2)] py-[var(--space-1)] rounded border"
-                  style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
+                  className="mt-[var(--space-1)] h-auto rounded border-[var(--color-accent)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]"
                 >
                   Sign in
-                </button>
+                </Button>
               )}
             </div>
           </div>
-          <button
+          <Button
             type="button"
-            tabIndex={0}
+            variant="ghost"
             onClick={onChangeProvider}
-            className="shrink-0 text-[length:var(--type-utility-xs-size)] font-medium px-[var(--space-2)] py-[var(--space-1)] rounded transition-colors"
-            style={{ color: 'var(--color-accent)' }}
+            className="h-auto shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]"
           >
             Change
-          </button>
+          </Button>
         </div>
       )}
 

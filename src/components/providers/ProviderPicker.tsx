@@ -49,6 +49,7 @@ import * as React from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowClockwise, CircleNotch, Plus, Prohibit, WarningCircle } from '@phosphor-icons/react'
 import { Command, CommandInput, CommandList } from '@/components/ui/command'
+import { Button } from '@/components/ui/button'
 import type { CatalogProvider, Provider, ProvidersCatalog } from '@/lib/api/generated/openapi-types'
 import {
   buildPickerModel,
@@ -384,19 +385,19 @@ export function ProviderPicker({
         {model.popular.map((row) => {
           const key = refKey({ kind: 'popular', key: row.company })
           return (
-            <button
+            <Button
               key={row.company}
               type="button"
+              variant="outline"
               ref={(el) => registerRow(key, el)}
               data-testid={`picker-popular-${row.primary.id}`}
               tabIndex={-1}
               aria-disabled={row.disabled || undefined}
               onClick={() => select({ kind: 'popular', key: row.company })}
-              className="flex min-h-[44px] items-center justify-center rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
-              style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+              className="h-auto min-h-[44px] justify-center rounded-md px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
             >
               {row.company}
-            </button>
+            </Button>
           )
         })}
       </div>
@@ -457,18 +458,17 @@ export function ProviderPicker({
           aria-label="Search providers"
         />
 
-        <button
+        <Button
           type="button"
+          variant="ghost"
           data-testid="picker-all-toggle"
-          tabIndex={0}
           aria-expanded={model.expanded}
           aria-controls={listId}
           onClick={() => setExpandedByOperator((v) => !v)}
-          className="flex min-h-[32px] items-center justify-between rounded px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
-          style={{ color: 'var(--color-secondary)' }}
+          className="h-auto min-h-[32px] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
         >
           All providers ({model.allProvidersCount})
-        </button>
+        </Button>
 
         {status === 'loading' && (
           <div data-testid="picker-catalog-loading" className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]">
@@ -489,17 +489,16 @@ export function ProviderPicker({
           >
             <WarningCircle size={14} weight="fill" aria-hidden="true" />
             <span>Provider catalog unavailable. You can still add a custom endpoint.</span>
-            <button
+            <Button
               type="button"
+              variant="outline"
               data-testid="picker-catalog-retry"
-              tabIndex={0}
               onClick={() => onRetry?.()}
-              className="ml-auto flex min-h-[24px] items-center gap-[var(--space-1)] rounded border px-[var(--space-2)]"
-              style={{ borderColor: 'var(--color-border)' }}
+              className="ml-auto h-auto min-h-[24px] gap-[var(--space-1)] rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] hover:bg-transparent"
             >
               <ArrowClockwise size={12} aria-hidden="true" />
               Retry
-            </button>
+            </Button>
           </div>
         )}
 
