@@ -59,14 +59,14 @@ export function RateLimitIndicator({
       className={cn(
         'flex items-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border text-[length:var(--type-utility-xs-size)]',
         canRetry
-          ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400'
+          ? 'border-[color-mix(in_srgb,var(--color-success)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-success)_5%,transparent)] text-[var(--color-success)]'
           : 'border-amber-500/30 bg-amber-500/5 text-amber-400',
       )}
       role="status"
       aria-live="polite"
     >
       {canRetry ? (
-        <Clock size={13} className="mt-[var(--space-0-5)] shrink-0 text-emerald-400" />
+        <Clock size={13} className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-success)]" />
       ) : (
         <Warning size={13} className="mt-[var(--space-0-5)] shrink-0 text-amber-400" weight="fill" />
       )}

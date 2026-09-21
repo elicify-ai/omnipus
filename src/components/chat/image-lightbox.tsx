@@ -118,7 +118,7 @@ export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageL
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex flex-col bg-black/85 backdrop-blur-sm"
+      className="fixed inset-0 z-[200] flex flex-col bg-[var(--color-primary)]/85 backdrop-blur-sm"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal

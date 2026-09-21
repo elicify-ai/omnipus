@@ -119,10 +119,6 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
 
   const buttonDisabled = disabled || !workspaceId
 
-  const resolvedClassName = cn(
-                      'w-full h-auto justify-start gap-[var(--space-2-5)] px-[var(--space-2)] py-[var(--space-2)] text-left',
-                      'hover:bg-[var(--color-surface-2)]',
-                    )
   return (
     <>
       <Button
@@ -178,7 +174,10 @@ export function ComposerMediaLibraryButton({ disabled, tabIndex }: ComposerMedia
                     variant="ghost"
                     onClick={() => handleSelect(entry)}
                     disabled={attachingId !== null}
-                    className={resolvedClassName}
+                    className={cn(
+                      'w-full h-auto justify-start gap-[var(--space-2-5)] px-[var(--space-2)] py-[var(--space-2)] text-left',
+                      'hover:bg-[var(--color-surface-2)]',
+                    )}
                     data-testid={`library-pick-${entry.id}`}
                   >
                     <PickerRow entry={entry} busy={attachingId === entry.id} />
