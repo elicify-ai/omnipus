@@ -240,7 +240,7 @@ function RateLimitsFields({ payload, setField }: RateLimitsFieldsProps) {
   return (
     <div className="space-y-[var(--space-2)]">
       <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Rate limits</p>
-      <Label className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+      <Label className="flex items-center gap-[var(--space-2)]">
         <input tabIndex={0}
           type="checkbox"
           checked={rateLimits.use_global_defaults ?? true}

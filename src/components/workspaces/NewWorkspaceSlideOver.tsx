@@ -107,8 +107,8 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
 
         <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)]">
           {/* Name */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="new-workspace-name" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="new-workspace-name">
               Name <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
@@ -129,8 +129,8 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
           </div>
 
           {/* Description */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="new-workspace-desc" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="new-workspace-desc">
               Description
             </Label>
             <Textarea
@@ -151,8 +151,8 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
           </div>
 
           {/* Core team — agent multi-select (US-10 AC #5) */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="new-workspace-core-team" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="new-workspace-core-team">
               Core team
             </Label>
             {/* Selected agent chips */}

@@ -278,11 +278,10 @@ function ChannelFieldRow({
   const invalid = error ? true : undefined
 
   return (
-    <div className="space-y-[var(--space-1)]">
+    <div className="space-y-[var(--space-2)]">
       <Label
         htmlFor={`field-${field.key}`}
         id={`field-label-${field.key}`}
-        className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]"
       >
         {field.label}
         {field.required && (
@@ -989,10 +988,9 @@ export function ChannelConfigPanel({
                 ) : (
                   <div className="space-y-[var(--space-2-5)]">
                     {/* Workspace selector (US-1 / FR-001) */}
-                    <div className="space-y-[var(--space-1)]">
+                    <div className="space-y-[var(--space-2)]">
                       <Label
                         htmlFor="routing-workspace-select"
-                        className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]"
                       >
                         Workspace
                       </Label>
@@ -1030,8 +1028,8 @@ export function ChannelConfigPanel({
                     </div>
 
                     {/* Agent selector (US-2 / FR-002) — disabled until workspace chosen */}
-                    <div className="space-y-[var(--space-1)]">
-                      <Label className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
+                    <div className="space-y-[var(--space-2)]">
+                      <Label>
                         Default agent
                       </Label>
                       {agentsError ? (

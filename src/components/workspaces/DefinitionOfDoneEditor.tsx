@@ -26,8 +26,8 @@ interface DefinitionOfDoneEditorProps {
  */
 export function DefinitionOfDoneEditor({ dod, onChange, currentAuthor }: DefinitionOfDoneEditorProps) {
   return (
-    <div className="flex flex-col gap-[var(--space-1)]">
-      <Label className="text-[var(--color-secondary)]">
+    <div className="flex flex-col gap-[var(--space-2)]">
+      <Label>
         Definition of Done <span className="text-[var(--color-error)]">*</span>
       </Label>
       <AcceptanceCriteriaEditor

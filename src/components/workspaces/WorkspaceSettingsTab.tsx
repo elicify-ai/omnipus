@@ -415,7 +415,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Name */}
-        <div className="flex flex-col gap-[var(--space-1)]">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="ws-name">Name</Label>
           <Input
             id="ws-name"
@@ -431,7 +431,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Description */}
-        <div className="flex flex-col gap-[var(--space-1)]">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="ws-description">Description</Label>
           <Textarea
             id="ws-description"

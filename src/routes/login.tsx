@@ -179,7 +179,7 @@ function LoginScreen() {
 
         <form onSubmit={handleSubmit} className="space-y-[var(--space-3)]">
           <div>
-            <Label htmlFor="login-username" className="mb-[var(--space-1)] block">
+            <Label htmlFor="login-username" className="mb-[var(--space-2)] block">
               Username
             </Label>
             <div className="relative">
@@ -198,7 +198,7 @@ function LoginScreen() {
           </div>
 
           <div>
-            <Label htmlFor="login-password" className="mb-[var(--space-1)] block">
+            <Label htmlFor="login-password" className="mb-[var(--space-2)] block">
               Password
             </Label>
             <div className="relative">

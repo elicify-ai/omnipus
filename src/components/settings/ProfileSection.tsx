@@ -213,7 +213,7 @@ export function ProfileSection() {
         <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Identity</h3>
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between gap-[var(--space-3)]">
-            <Label htmlFor="pref-name" className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] shrink-0">
+            <Label htmlFor="pref-name" className="shrink-0">
               Display name
             </Label>
             <Input
@@ -301,8 +301,8 @@ export function ProfileSection() {
               handlePasswordChange()
             }}
           >
-            <div className="space-y-[var(--space-1)]">
-              <Label htmlFor="current-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="current-password">
                 Current password
               </Label>
               <Input
@@ -316,8 +316,8 @@ export function ProfileSection() {
               />
             </div>
 
-            <div className="space-y-[var(--space-1)]">
-              <Label htmlFor="new-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="new-password">
                 New password
               </Label>
               <Input
@@ -331,8 +331,8 @@ export function ProfileSection() {
               />
             </div>
 
-            <div className="space-y-[var(--space-1)]">
-              <Label htmlFor="confirm-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="confirm-password">
                 Confirm new password
               </Label>
               <Input

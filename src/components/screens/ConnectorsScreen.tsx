@@ -557,8 +557,8 @@ function CreateChannelSheet({
 
         <form onSubmit={handleSubmit} className="px-[var(--space-4)] pt-[var(--space-3)] space-y-[var(--space-3)]">
           {/* Channel type — locked when opened from a group's "Add another…" */}
-          <div className="space-y-[var(--space-1)]">
-            <Label htmlFor="channel-type-select" className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
+          <div className="space-y-[var(--space-2)]">
+            <Label htmlFor="channel-type-select">
               Channel
             </Label>
             {selection.mode === 'locked' ? (
@@ -593,8 +593,8 @@ function CreateChannelSheet({
           </div>
 
           {/* Workspace (ADR-029: an instance serves exactly one workspace) */}
-          <div className="space-y-[var(--space-1)]">
-            <Label htmlFor="channel-workspace-select" className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
+          <div className="space-y-[var(--space-2)]">
+            <Label htmlFor="channel-workspace-select">
               Workspace
             </Label>
             <Select
@@ -619,8 +619,8 @@ function CreateChannelSheet({
           </div>
 
           {/* Agent (member of the chosen workspace) */}
-          <div className="space-y-[var(--space-1)]">
-            <Label htmlFor="channel-agent-select" className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
+          <div className="space-y-[var(--space-2)]">
+            <Label htmlFor="channel-agent-select">
               Agent
             </Label>
             <Select

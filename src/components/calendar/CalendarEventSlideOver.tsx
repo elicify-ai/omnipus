@@ -500,8 +500,8 @@ export function CalendarEventSlideOver({
 
         <div className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)] overflow-y-auto">
           {/* Title */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ces-title" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ces-title">
               Title <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
@@ -518,8 +518,8 @@ export function CalendarEventSlideOver({
           </div>
 
           {/* Agent — required: a scheduled task's only executor. */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Agent <span className="text-[var(--color-error)]">*</span>
             </Label>
             <SmartSelect
@@ -574,8 +574,8 @@ export function CalendarEventSlideOver({
               instruction each time this task fires (Task.Prompt,
               pkg/agent/task_executor.go:462). Empty prompt → the agent gets
               only "# Task: <title>" and nothing to actually do. */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ces-prompt" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ces-prompt">
               Instruction <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Textarea
@@ -598,8 +598,8 @@ export function CalendarEventSlideOver({
           {/* Acceptance criteria (GOAL-FR-047/FR-053, D-C/R-26) — the same
               mandatory editor CreateTaskSlideOver has, on both this
               surface's create AND edit paths. */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Acceptance criteria <span className="text-[var(--color-error)]">*</span>
             </Label>
             <AcceptanceCriteriaEditor
@@ -629,8 +629,8 @@ export function CalendarEventSlideOver({
           </div>
 
           {/* Date & time (the recurrence anchor) */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ces-anchor" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ces-anchor">
               Date &amp; time
             </Label>
             <DateTimePicker

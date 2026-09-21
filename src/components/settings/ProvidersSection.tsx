@@ -423,7 +423,7 @@ function ProviderConfigSheet({
 
           {/* API Key input */}
           <div>
-            <Label htmlFor={`api-key-input-${draftKey}`} className="mb-[var(--space-1)] block">
+            <Label htmlFor={`api-key-input-${draftKey}`} className="mb-[var(--space-2)] block">
               API Key
             </Label>
             <div className="relative">
@@ -475,7 +475,7 @@ function ProviderConfigSheet({
             }
             return (
               <div>
-                <Label htmlFor={`add-model-input-${draftKey}`} className="mb-[var(--space-1)] block">
+                <Label htmlFor={`add-model-input-${draftKey}`} className="mb-[var(--space-2)] block">
                   Models
                 </Label>
                 <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-2)]">

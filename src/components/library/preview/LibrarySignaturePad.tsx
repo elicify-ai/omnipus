@@ -189,7 +189,7 @@ export function LibrarySignaturePad({
         />
 
         <div className="flex items-center gap-[var(--space-2-5)]">
-          <Label htmlFor="library-pdf-signature-page" className="shrink-0 text-[length:var(--type-utility-xs-size)]">
+          <Label htmlFor="library-pdf-signature-page" className="shrink-0">
             Place on page
           </Label>
           <Input

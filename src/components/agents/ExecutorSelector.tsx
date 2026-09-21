@@ -161,7 +161,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
       </div>
 
       {kind === 'external-cli' && (
-        <div className="space-y-[var(--space-1)]" data-testid="executor-cli-block">
+        <div className="space-y-[var(--space-2)]" data-testid="executor-cli-block">
           <Label htmlFor="executor-cli">
             CLI tool
           </Label>

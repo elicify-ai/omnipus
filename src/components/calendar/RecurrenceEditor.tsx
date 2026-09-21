@@ -226,7 +226,7 @@ export function RecurrenceEditor({
 
   return (
     <div className={cn('flex flex-col gap-[var(--space-3)]', className)}>
-      <div className="flex flex-col gap-[var(--space-1)]">
+      <div className="flex flex-col gap-[var(--space-2)]">
         <Label htmlFor="recurrence-preset">Repeat</Label>
         <Select value={selectedId} onValueChange={handlePresetChange} disabled={disabled}>
           <SelectTrigger id="recurrence-preset" aria-label="Repeat">

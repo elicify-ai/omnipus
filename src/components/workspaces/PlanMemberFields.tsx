@@ -72,7 +72,7 @@ export function WriteSetField({
           {WRITE_SET_LABEL}
         </Label>
       ) : (
-        <Label htmlFor={id} className="text-[var(--color-secondary)]">
+        <Label htmlFor={id}>
           {WRITE_SET_LABEL}
         </Label>
       )}

@@ -468,8 +468,8 @@ export function CreateTaskSlideOver({
 
         <div className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)] overflow-y-auto">
           {/* Title */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ct-title" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-title">
               Title <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
@@ -489,8 +489,8 @@ export function CreateTaskSlideOver({
 
           {/* Goal (GOAL-FR-056 — was "Prompt"; this becomes the goal record
               once the task starts its own session). Required. */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ct-prompt" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-prompt">
               Goal <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Textarea
@@ -510,8 +510,8 @@ export function CreateTaskSlideOver({
           </div>
 
           {/* Priority */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ct-priority" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-priority">
               Priority
               <span className={cn('ml-[var(--space-2)] rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold', priorityBadge.className)}>
                 {priorityBadge.label}
@@ -537,8 +537,8 @@ export function CreateTaskSlideOver({
           {/* Plan (GOAL-FR-059) — defaults to the inherited board plan
               filter, but is now a real, changeable picker instead of a
               silent inherit-only value. */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">Plan</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Plan</Label>
             <SmartSelect
               value={form.planId}
               onValueChange={handlePlanChange}
@@ -582,8 +582,8 @@ export function CreateTaskSlideOver({
           )}
 
           {/* Tags (ADR-049 — replaces the milestone selector) */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ct-tags" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-tags">
               Tags
             </Label>
             <TagInput
@@ -599,8 +599,8 @@ export function CreateTaskSlideOver({
               retired; a plain instruction replaces it (C-80: the `emptyHint`
               prop itself survives on AcceptanceCriteriaEditor, only this
               call site's attribute is removed). */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Acceptance criteria <span className="text-[var(--color-error)]">*</span>
             </Label>
             <AcceptanceCriteriaEditor
@@ -631,8 +631,8 @@ export function CreateTaskSlideOver({
           </div>
 
           {/* Agent */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">Agent</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Agent</Label>
             <SmartSelect
               value={form.agentId}
               onValueChange={(v) => setForm((s) => ({ ...s, agentId: v }))}
@@ -686,8 +686,8 @@ export function CreateTaskSlideOver({
               (joint delivery plan U4 row). */}
 
           {/* Depends on (blocked_by) */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">Depends on</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Depends on</Label>
             <Popover>
               <PopoverTrigger asChild>
                 <Button
@@ -761,8 +761,8 @@ export function CreateTaskSlideOver({
           </div>
 
           {/* Due date */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="ct-due" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-due">
               Due date
             </Label>
             <DateTimePicker
@@ -774,8 +774,8 @@ export function CreateTaskSlideOver({
           </div>
 
           {/* Todos */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">Todos</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Todos</Label>
             <div className="flex items-center gap-[var(--space-2)]">
               <Input
                 aria-label="New checklist item"

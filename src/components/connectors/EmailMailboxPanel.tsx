@@ -206,8 +206,8 @@ function FieldRow({
   helpText?: string
 }) {
   return (
-    <div className="space-y-[var(--space-1)]" id={`fieldrow-${id}`}>
-      <Label htmlFor={id} className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
+    <div className="space-y-[var(--space-2)]" id={`fieldrow-${id}`}>
+      <Label htmlFor={id}>
         {label}
         {required && <span className="text-[var(--color-error)] ml-[var(--space-0-5)]">*</span>}
       </Label>

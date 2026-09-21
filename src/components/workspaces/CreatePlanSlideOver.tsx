@@ -391,7 +391,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
         <div className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)] overflow-y-auto">
           <div className="flex flex-col gap-[var(--space-1)]">
             <div className="flex items-center justify-between gap-[var(--space-2)]">
-              <Label htmlFor="cp-title" className="text-[var(--color-secondary)]">
+              <Label htmlFor="cp-title">
                 Title <span className="text-[var(--color-error)]">*</span>
               </Label>
               <span
@@ -419,7 +419,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
 
           <div className="flex flex-col gap-[var(--space-1)]">
             <div className="flex items-center justify-between gap-[var(--space-2)]">
-              <Label htmlFor="cp-goal" className="text-[var(--color-secondary)]">Goal</Label>
+              <Label htmlFor="cp-goal">Goal</Label>
               <span
                 className={cn(
                   'text-[length:var(--type-caption-size)]',
@@ -441,8 +441,8 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             />
           </div>
 
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label htmlFor="cp-desc" className="text-[var(--color-secondary)]">Description</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="cp-desc">Description</Label>
             <Textarea
               id="cp-desc"
               value={form.description}
@@ -454,8 +454,8 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             />
           </div>
 
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Owner agent <span className="text-[var(--color-error)]">*</span>
             </Label>
             <SmartSelect
@@ -479,8 +479,8 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             )}
           </div>
 
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">Definition of Done</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Definition of Done</Label>
             <AcceptanceCriteriaEditor
               criteria={form.dod}
               onChange={(dod) => setForm((s) => ({ ...s, dod }))}
@@ -507,8 +507,8 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             unexercised by the primary client. Absence is the preservation
             mechanism; see `buildUpdateBody`.
           */}
-          <div className="flex flex-col gap-[var(--space-1)]">
-            <Label className="text-[var(--color-secondary)]">Bounds</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Bounds</Label>
             <div className="flex items-start gap-[var(--space-2)]">
               <div className="flex-1 flex flex-col gap-[var(--space-1)]">
                 <Input

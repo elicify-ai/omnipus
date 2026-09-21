@@ -798,7 +798,7 @@ function NameStep({
         className="w-full space-y-[var(--space-3)]"
       >
         <div>
-          <Label htmlFor="admin-username" className="mb-[var(--space-1)] block">
+          <Label htmlFor="admin-username" className="mb-[var(--space-2)] block">
             Username
           </Label>
           <Input
@@ -921,7 +921,7 @@ function PasswordStep({
       >
         {/* Password */}
         <div>
-          <Label htmlFor="admin-password" className="mb-[var(--space-1)] block">
+          <Label htmlFor="admin-password" className="mb-[var(--space-2)] block">
             Password
           </Label>
           <div className="relative">
@@ -977,7 +977,7 @@ function PasswordStep({
 
         {/* Confirm Password */}
         <div>
-          <Label htmlFor="admin-password-confirm" className="mb-[var(--space-1)] block">
+          <Label htmlFor="admin-password-confirm" className="mb-[var(--space-2)] block">
             Confirm Password
           </Label>
           <div className="relative">

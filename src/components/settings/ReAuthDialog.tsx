@@ -88,7 +88,7 @@ export function ReAuthDialog({
         </DialogHeader>
 
         <div className="space-y-[var(--space-2)]">
-          <Label htmlFor="reauth-password" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+          <Label htmlFor="reauth-password" className="text-[var(--color-muted)]">
             Password
           </Label>
           <div className="relative">
