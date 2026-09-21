@@ -7,3 +7,5 @@ const content = <><CardHeader><CardTitle>Sovereign workspace</CardTitle><CardDes
 export const Default: Story = { args: { children: content, className: 'max-w-md' } }
 export const Dense: Story = { args: { ...Default.args, className: 'max-w-sm [&>div]:p-[var(--space-3)]' } }
 export const NarrowViewport: Story = { args: { ...Default.args, className: 'w-full' }, parameters: { viewport: { defaultViewport: 'mobile1' } } }
+export const Inset: Story = { args: { ...Default.args, variant: 'inset' } }
+export const Floating: Story = { args: { ...Default.args, variant: 'floating' } }

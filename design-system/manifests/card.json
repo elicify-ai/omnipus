@@ -7,7 +7,8 @@
     "CardFooter",
     "CardTitle",
     "CardDescription",
-    "CardContent"
+    "CardContent",
+    "cardVariants"
   ],
   "category": "primitive",
   "source": "src/components/ui/card.tsx",
@@ -17,7 +18,9 @@
     "dark"
   ],
   "variants": [
-    "default"
+    "default",
+    "inset",
+    "floating"
   ],
   "sizes": [
     "default",
@@ -32,7 +35,9 @@
       "exports": [
         "Default",
         "Dense",
-        "NarrowViewport"
+        "NarrowViewport",
+        "Inset",
+        "Floating"
       ]
     }
   ],
@@ -41,7 +46,35 @@
       "id": "card-unit",
       "kind": "unit",
       "file": "src/components/ui/card.test.tsx",
-      "test": "Card \u2014 elevated dark surface renders children correctly",
+      "test": "Card \u2014 flat dark surface (default variant) renders children correctly",
+      "applicable": true
+    },
+    {
+      "id": "card-flat-default-unit",
+      "kind": "unit",
+      "file": "src/components/ui/card.test.tsx",
+      "test": "Card \u2014 flat dark surface (default variant) renders flat \u2014 no shadow utility on the default variant",
+      "applicable": true
+    },
+    {
+      "id": "card-radius-unit",
+      "kind": "unit",
+      "file": "src/components/ui/card.test.tsx",
+      "test": "Card \u2014 flat dark surface (default variant) renders with rounded-lg radius, matching the dominant hand-built pattern",
+      "applicable": true
+    },
+    {
+      "id": "card-variant-inset-unit",
+      "kind": "unit",
+      "file": "src/components/ui/card.test.tsx",
+      "test": "Card \u2014 variant prop inset variant uses surface-2 background, for nested panels",
+      "applicable": true
+    },
+    {
+      "id": "card-variant-floating-unit",
+      "kind": "unit",
+      "file": "src/components/ui/card.test.tsx",
+      "test": "Card \u2014 variant prop floating variant uses the elevation-floating token, not an invented shadow",
       "applicable": true
     },
     {
