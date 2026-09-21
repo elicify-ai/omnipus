@@ -15,8 +15,14 @@
 
 import * as React from 'react'
 import type { FitViewOptions, ReactFlowState } from '@xyflow/react'
-import { useReactFlow, useStore } from '@xyflow/react'
-import { ZOOMABLE_VIEW_MAX_SCALE, ZOOMABLE_VIEW_MIN_SCALE, clampZoomScale, type ZoomableSize } from './zoomable-view'
+import { getNodesBounds, getViewportForBounds, useReactFlow, useStore } from '@xyflow/react'
+import {
+  ZOOMABLE_VIEW_MAX_SCALE,
+  ZOOMABLE_VIEW_MIN_SCALE,
+  clampZoomScale,
+  effectiveMinScale,
+  type ZoomableSize,
+} from './zoomable-view'
 
 /** Spread onto `<ReactFlow>`. Range and gesture behaviour D18 requires for a
  *  full-frame canvas: wheel zooms, pinch (touch or trackpad ctrl-wheel)
@@ -35,6 +41,12 @@ export const zoomableCanvasFlowProps = {
 
 const selectZoom = (state: ReactFlowState) => state.transform[2]
 const selectHasSelectedNodes = (state: ReactFlowState) => state.nodes.some((node) => node.selected)
+// Two scalar selectors, not one object-returning selector: `useStore`
+// (zustand) compares by reference by default, and an object literal
+// selector would re-render on every store tick regardless of whether width
+// or height actually changed.
+const selectWidth = (state: ReactFlowState) => state.width
+const selectHeight = (state: ReactFlowState) => state.height
 
 export interface UseZoomableCanvasPillOptions {
   /** Passed to `fitView` for both "Fit" and the opening `fitView` prop —
@@ -55,7 +67,25 @@ export function useZoomableCanvasPill(options: UseZoomableCanvasPillOptions = {}
   const { fitViewOptions, min = ZOOMABLE_VIEW_MIN_SCALE, max = ZOOMABLE_VIEW_MAX_SCALE } = options
   const zoom = useStore(selectZoom)
   const hasSelection = useStore(selectHasSelectedNodes)
+  const width = useStore(selectWidth)
+  const height = useStore(selectHeight)
   const { zoomIn, zoomOut, fitView, getViewport, setViewport, getNodes } = useReactFlow()
+
+  // The effective Fit floor for the CURRENT nodes and frame (same rule as
+  // the media face's `effectiveMinScale`, founder-approved clarification
+  // 2026-09-21): `getViewportForBounds` with `minZoom: 0` returns the TRUE
+  // unclamped zoom `fitView` would compute — mirroring React Flow's own fit
+  // math instead of re-deriving it, so it stays exact if that algorithm or
+  // its default padding ever changes.
+  const effectiveFitMin = React.useMemo(() => {
+    if (!width || !height) return min
+    const nodes = getNodes()
+    if (nodes.length === 0) return min
+    const bounds = getNodesBounds(nodes)
+    if (bounds.width <= 0 || bounds.height <= 0) return min
+    const { zoom: rawFit } = getViewportForBounds(bounds, width, height, 0, max, fitViewOptions?.padding ?? 0.1)
+    return effectiveMinScale(rawFit, min)
+  }, [width, height, getNodes, max, fitViewOptions?.padding, min])
 
   const onZoomIn = React.useCallback(() => {
     void zoomIn()
@@ -63,9 +93,26 @@ export function useZoomableCanvasPill(options: UseZoomableCanvasPillOptions = {}
   const onZoomOut = React.useCallback(() => {
     void zoomOut()
   }, [zoomOut])
+  // `minZoom` overrides the store's static floor for THIS call only —
+  // `FitViewOptions.minZoom` is read by `fitViewport` in preference to the
+  // store's own value, so "Fit" reaches the true fit even when it needs
+  // less than the configured floor (25%) — same rule as the media face.
+  // NOTE (reported, not fixed here — see the component doc's "Scope
+  // extension" / this file's own header for the published/app-code split):
+  // `zoomIn`/`zoomOut` (manual zoom-out, wheel, pinch) take no such
+  // per-call override — React Flow reads its scaleExtent from the live
+  // store, which is set ONLY by the static `minZoom` prop on `<ReactFlow>`
+  // (`zoomableCanvasFlowProps.minZoom`). Making manual zoom-out/wheel/pinch
+  // — and the very first, declarative `fitView` prop's OPENING fit, which
+  // also reads that same static prop before this hook's first render can
+  // measure anything — honour a content-dependent floor needs the consumer
+  // (`GraphView.tsx` / `WorkspaceTeamGraph.tsx`) to pass a dynamic `minZoom`
+  // prop and drive the opening fit imperatively (`onInit` + `fitView`)
+  // instead of the declarative `fitView` boolean prop. Out of scope here —
+  // both consumers are a different lane's uncommitted work.
   const onFit = React.useCallback(() => {
-    void fitView(fitViewOptions)
-  }, [fitView, fitViewOptions])
+    void fitView({ ...fitViewOptions, minZoom: effectiveFitMin })
+  }, [fitView, fitViewOptions, effectiveFitMin])
   const onZoomTo100 = React.useCallback(() => {
     setViewport({ ...getViewport(), zoom: 1 })
   }, [getViewport, setViewport])
@@ -76,14 +123,18 @@ export function useZoomableCanvasPill(options: UseZoomableCanvasPillOptions = {}
   }, [getNodes, fitView, fitViewOptions])
 
   return {
-    zoom: clampZoomScale(zoom, min, max),
+    // Clamped by the effective floor, not the raw `min` — otherwise, once
+    // "Fit" (above) legitimately sets the store's zoom below 25%, this
+    // would clamp the DISPLAYED percentage back up to 25%, contradicting
+    // what "Fit" just did.
+    zoom: clampZoomScale(zoom, effectiveFitMin, max),
     onZoomIn,
     onZoomOut,
     onFit,
     onZoomTo100,
     onZoomToSelection,
     zoomToSelectionDisabled: !hasSelection,
-    min,
+    min: effectiveFitMin,
     max,
   }
 }

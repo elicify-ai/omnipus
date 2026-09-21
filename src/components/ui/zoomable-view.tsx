@@ -14,7 +14,11 @@
 //
 // Both faces share `ZoomPill` (below): zoom out, the current percentage (a
 // menu with Fit / 100% / Zoom to selection), zoom in. Range is 25%–400%
-// everywhere (`ZOOMABLE_VIEW_MIN_SCALE`/`ZOOMABLE_VIEW_MAX_SCALE`).
+// everywhere (`ZOOMABLE_VIEW_MIN_SCALE`/`ZOOMABLE_VIEW_MAX_SCALE`) — EXCEPT
+// that Fit must always be reachable: when content needs less than 25% to
+// fit, the fitted scale itself becomes the lower bound (`effectiveMinScale`,
+// founder-approved clarification, 2026-09-21). See the "Range" line in
+// `docs/internal/design/components/zoomable-view.md`.
 //
 // This is Phase 1 (2026-09-21, founder-approved): the component, its two
 // faces, and its publication. No consumer screen is migrated here — Phase 2
@@ -55,6 +59,22 @@ export function clampZoomScale(
 ): number {
   if (!Number.isFinite(scale)) return min
   return Math.min(max, Math.max(min, scale))
+}
+
+/** The effective lower zoom bound for a given fitted scale (founder-approved
+ *  clarification, 2026-09-21 — see the "Range" line in
+ *  `docs/internal/design/components/zoomable-view.md`): Fit must always be
+ *  reachable, so when content needs LESS than the configured floor (`min`,
+ *  25% by default) to fit, the fitted scale itself becomes the floor — the
+ *  user can zoom out no further than Fit. Otherwise the floor stays at
+ *  `min`. A non-finite or non-positive `fit` (fit not yet known) falls back
+ *  to `min` unchanged. This is the ONE place the floor is computed; every
+ *  opening scale, pill zoom-out step, "Fit" menu action, wheel, pinch and
+ *  keyboard `-` in the media face routes through it, so there is exactly one
+ *  floor rule, not a duplicated one. */
+export function effectiveMinScale(fit: number, min: number = ZOOMABLE_VIEW_MIN_SCALE): number {
+  if (!Number.isFinite(fit) || fit <= 0) return min
+  return Math.min(min, fit)
 }
 
 /** Plain fit-to-frame scale for arbitrary content: the largest scale that
@@ -332,6 +352,13 @@ ZoomPill.displayName = 'ZoomPill'
 export interface ZoomableMediaController {
   scale: number
   isFit: boolean
+  /** The effective lower bound for THIS content/frame pair — `min(min,
+   *  fitScale)` (`effectiveMinScale`). A caller wiring its own `<ZoomPill>`
+   *  (rather than `<ZoomableMediaSurface>`'s own toolbar-free frame) passes
+   *  this as the pill's `min` prop so the pill's zoom-out button disables at
+   *  the true floor and its percentage never displays a value the surface
+   *  itself refuses to go below. */
+  minScale: number
   zoomIn: () => void
   zoomOut: () => void
   zoomToFit: () => void
@@ -393,11 +420,24 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
   const pinchRef = React.useRef<{ startDistance: number; startScale: number } | null>(null)
   const openedRef = React.useRef(false)
 
+  // The RAW fit-to-frame scale, unclamped from below — the input the
+  // effective-floor rule (`effectiveMinScale`) needs. `null` while the frame
+  // or content size isn't known yet.
+  const rawFit = React.useMemo(() => {
+    if (!contentSize || !frameSize) return null
+    return getFitScale ? getFitScale(frameSize) : computeFittedScale(contentSize, frameSize)
+  }, [contentSize, frameSize, getFitScale])
+
+  // The effective floor for THIS content/frame pair (founder-approved
+  // clarification, 2026-09-21): `min(min, rawFit)`. Every clamp below
+  // routes through this single value, not the raw `min` prop, so Fit is
+  // always reachable.
+  const effectiveMin = React.useMemo(() => effectiveMinScale(rawFit ?? min, min), [rawFit, min])
+
   const fitScale = React.useMemo(() => {
-    if (!contentSize || !frameSize) return clampZoomScale(1, min, max)
-    const fit = getFitScale ? getFitScale(frameSize) : computeFittedScale(contentSize, frameSize)
-    return clampZoomScale(fit, min, max)
-  }, [contentSize, frameSize, getFitScale, min, max])
+    if (rawFit === null) return clampZoomScale(1, effectiveMin, max)
+    return clampZoomScale(rawFit, effectiveMin, max)
+  }, [rawFit, effectiveMin, max])
 
   // Frame measurement. ResizeObserver where available; jsdom (unit tests)
   // has none, so the surface simply keeps its initial `null` frame size
@@ -426,12 +466,12 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
     (next: number | ((prev: number) => number)) => {
       setScaleState((prev) => {
         const raw = typeof next === 'function' ? (next as (p: number) => number)(prev) : next
-        const clamped = clampZoomScale(raw, min, max)
+        const clamped = clampZoomScale(raw, effectiveMin, max)
         onScaleChange?.(clamped)
         return clamped
       })
     },
-    [min, max, onScaleChange],
+    [effectiveMin, max, onScaleChange],
   )
 
   const zoomIn = React.useCallback(() => setScale((s) => s * 1.25), [setScale])
@@ -465,7 +505,7 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
       const pointerY = event.clientY - rect.top - rect.height / 2
       const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
       setScaleState((prev) => {
-        const nextScale = clampZoomScale(prev * factor, min, max)
+        const nextScale = clampZoomScale(prev * factor, effectiveMin, max)
         const delta = nextScale / prev
         setTranslate((t) => ({
           x: pointerX - (pointerX - t.x) * delta,
@@ -477,7 +517,7 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
     }
     frame.addEventListener('wheel', onWheel, { passive: false })
     return () => frame.removeEventListener('wheel', onWheel)
-  }, [disabled, min, max, onScaleChange])
+  }, [disabled, effectiveMin, max, onScaleChange])
 
   const handlePointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -526,7 +566,7 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
         return
       }
       const frame = frameRef.current
-      const target = clampZoomScale(fitScale * 2, min, max)
+      const target = clampZoomScale(fitScale * 2, effectiveMin, max)
       if (!frame) {
         setScale(target)
         return
@@ -538,12 +578,12 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
       setTranslate((t) => ({ x: pointerX - (pointerX - t.x) * delta, y: pointerY - (pointerY - t.y) * delta }))
       setScale(target)
     },
-    [disabled, isFit, zoomToFit, fitScale, min, max, scale, setScale],
+    [disabled, isFit, zoomToFit, fitScale, effectiveMin, max, scale, setScale],
   )
 
   const onKeyDown = useZoomableViewKeyboard({ onZoomIn: zoomIn, onZoomOut: zoomOut, onFit: zoomToFit, onZoomTo100: zoomTo100 })
 
-  const controller: ZoomableMediaController = { scale, isFit, zoomIn, zoomOut, zoomToFit, zoomTo100 }
+  const controller: ZoomableMediaController = { scale, isFit, minScale: effectiveMin, zoomIn, zoomOut, zoomToFit, zoomTo100 }
 
   // Spread directly onto the element that should own drag/wheel/pinch/
   // keyboard — `touchAction: 'none'` stops the browser's own native pinch
@@ -568,7 +608,7 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
   // object literal directly at their own JSX call site instead (see
   // `ZoomableMediaSurface` below) — an inline literal at the render site is
   // the provable shape those locks require.
-  return { scale, translate, isFit, fitScale, controller, frameProps, frameRef }
+  return { scale, translate, isFit, fitScale, effectiveMin, controller, frameProps, frameRef }
 }
 
 export interface ZoomableMediaSurfaceProps extends UseZoomableMediaOptions {

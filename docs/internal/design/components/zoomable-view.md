@@ -22,7 +22,7 @@ Scope extended 2026-09-21 by founder decision.
 - **Wheel.** The mouse wheel zooms full-frame canvases and the media viewer, centred on the pointer. Inline previews in the chat stream never capture the wheel.
 - **Double-click and double-tap.** On a canvas, they zoom in at that point. In the media viewer, they toggle between fitted and zoomed at that point.
 
-**Range.** 25% to 400% on every surface.
+**Range.** 25% to 400% on every surface; when content needs less than 25% to fit, the fitted scale becomes the lower bound, so Fit is always reachable and content always opens fitted. (Founder-approved clarification, 2026-09-21.)
 
 **Mini-map.** Graph canvases show a mini-map whenever content exceeds the frame. Clicking it navigates: the single-pointer alternative to dragging.
 
@@ -55,3 +55,4 @@ Phase 2 (route-level, still required before this closes):
 - **The in-context touch check** runs pinch, pan and opening scale on the real routes (task graph, team graph, chat media viewer, Library previews) at phone and tablet sizes, and asserts the page's own zoom stays at 1 during a pinch.
 - **Regression tests** cover both defects above, on the real consumer routes.
 - **Before-and-after measurements** are compared with `docs/internal/design/evidence/zoom-live-2026-09-19/`.
+- **Canvas preset, effective-floor gap (2026-09-21).** `useZoomableCanvasPill`'s "Fit" action (and the `0` shortcut) already reach the true fit below 25% via a per-call `fitView({ minZoom })` override. Two related gaps remain, and both need `GraphView.tsx`/`WorkspaceTeamGraph.tsx` to pass a dynamic `minZoom` prop to `<ReactFlow>` (computed the same way) instead of `zoomableCanvasFlowProps`'s static `0.25`, plus drive the opening fit imperatively via `onInit`: (1) manual zoom-out, wheel and pinch are bounded by React Flow's live store `minZoom`, set only by that static prop — `zoomIn`/`zoomOut` take no per-call override, unlike `fitView`; (2) the very first, declarative `fitView` boolean prop performs the opening fit using that same static prop before any per-graph measurement is possible. Both are consumer-side changes, out of scope for `zoomable-view-canvas.tsx` alone.

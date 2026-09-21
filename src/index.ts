@@ -70,6 +70,7 @@ export {
   ZoomPill,
   ZoomableMediaSurface,
   clampZoomScale,
+  effectiveMinScale,
   computeFittedScale,
   computeOpeningScale,
   resolveSvgIntrinsicSize,

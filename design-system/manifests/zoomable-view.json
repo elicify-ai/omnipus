@@ -5,6 +5,7 @@
     "ZoomPill",
     "ZoomableMediaSurface",
     "clampZoomScale",
+    "effectiveMinScale",
     "computeFittedScale",
     "computeOpeningScale",
     "resolveSvgIntrinsicSize",
@@ -46,7 +47,8 @@
         "SelectFit",
         "ZoomToSelection",
         "KeyboardShortcuts",
-        "NarrowViewport"
+        "NarrowViewport",
+        "TallContentFitsFrame"
       ]
     }
   ],
@@ -96,6 +98,14 @@
       "file": "src/components/ui/zoomable-view.stories.tsx",
       "test": "AccessibleNames",
       "story": "AccessibleNames",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-tall-content-fits-frame-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "test": "TallContentFitsFrame",
+      "story": "TallContentFitsFrame",
       "applicable": true
     },
     {

@@ -19,6 +19,7 @@ import {
   clampZoomScale,
   computeFittedScale,
   computeOpeningScale,
+  effectiveMinScale,
   resolveSvgIntrinsicSize,
   useZoomableViewKeyboard,
 } from './zoomable-view'
@@ -49,6 +50,40 @@ describe('clampZoomScale — the shared 25%–400% range clamp', () => {
     expect(clampZoomScale(0.1, 0.5, 2)).toBe(0.5)
     expect(clampZoomScale(3, 0.5, 2)).toBe(2)
     expect(clampZoomScale(1, 0.5, 2)).toBe(1)
+  })
+})
+
+describe('effectiveMinScale — the effective-floor rule (founder-approved clarification, 2026-09-21)', () => {
+  it('floors to the FITTED scale, not 25%, when content needs less than 25% to fit', () => {
+    // The live probe regression: portrait 1500x5000 content fits at ~0.17 in
+    // a 1200x900-ish frame — well under the 25% floor. Fit must still open
+    // and remain reachable, so the floor becomes the fit itself.
+    expect(effectiveMinScale(0.17)).toBeCloseTo(0.17)
+    expect(effectiveMinScale(0.2)).toBeCloseTo(0.2)
+  })
+
+  it('stays at 25% (the configured min) when the fitted scale is AT OR ABOVE it', () => {
+    expect(effectiveMinScale(0.25)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+    expect(effectiveMinScale(0.5)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+    expect(effectiveMinScale(2)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+  })
+
+  it('honours a caller-narrowed `min` the same way as the default 25%', () => {
+    expect(effectiveMinScale(0.1, 0.5)).toBeCloseTo(0.1)
+    expect(effectiveMinScale(0.6, 0.5)).toBe(0.5)
+  })
+
+  it('falls back to `min` for a not-yet-known fit (non-finite, zero, or negative)', () => {
+    expect(effectiveMinScale(NaN)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+    expect(effectiveMinScale(Infinity)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+    expect(effectiveMinScale(0)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+    expect(effectiveMinScale(-1)).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+  })
+
+  it('composes with clampZoomScale so a below-floor fit passes through unclamped', () => {
+    const fit = 0.1684 // 842/5000, the live probe's binding axis
+    const floor = effectiveMinScale(fit)
+    expect(clampZoomScale(fit, floor, ZOOMABLE_VIEW_MAX_SCALE)).toBeCloseTo(fit)
   })
 })
 
@@ -253,6 +288,43 @@ describe('ZoomPill — range-clamped button disabling', () => {
     )
     expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled()
     expect(screen.getByRole('button', { name: 'Zoom in' })).not.toBeDisabled()
+  })
+
+  it('disables Zoom out exactly at the EFFECTIVE floor for oversized content, not at 25%', () => {
+    // Portrait content whose fit is ~17% — below the 25% configured min.
+    // The caller (useZoomableMedia / useZoomableCanvasPill) is responsible
+    // for passing `effectiveMinScale(fit)` as `min`, not the raw 25%.
+    const fit = 0.17
+    const floor = effectiveMinScale(fit)
+    const { rerender } = render(
+      <ZoomPill zoom={fit} min={floor} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onFit={vi.fn()} onZoomTo100={vi.fn()} />,
+    )
+    // At the effective floor (the fitted scale itself), Zoom out is disabled.
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled()
+    // Above the floor but still below the stock 25% min, Zoom out stays enabled.
+    rerender(
+      <ZoomPill zoom={0.2} min={floor} onZoomIn={vi.fn()} onZoomOut={vi.fn()} onFit={vi.fn()} onZoomTo100={vi.fn()} />,
+    )
+    expect(screen.getByRole('button', { name: 'Zoom out' })).not.toBeDisabled()
+    // The percentage reflects the true 17%/20% zoom, never clamped up to 25%.
+    expect(screen.getByTestId('zoomable-view-percent')).toHaveTextContent('20%')
+  })
+
+  it('still disables Zoom out at 25% when the fitted scale is above it (the ordinary case)', () => {
+    const fit = 0.6
+    const floor = effectiveMinScale(fit)
+    expect(floor).toBe(ZOOMABLE_VIEW_MIN_SCALE)
+    render(
+      <ZoomPill
+        zoom={ZOOMABLE_VIEW_MIN_SCALE}
+        min={floor}
+        onZoomIn={vi.fn()}
+        onZoomOut={vi.fn()}
+        onFit={vi.fn()}
+        onZoomTo100={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeDisabled()
   })
 
   it('omits "Zoom to selection" from the OPEN menu when the handler prop is not supplied (the media-viewer face)', async () => {

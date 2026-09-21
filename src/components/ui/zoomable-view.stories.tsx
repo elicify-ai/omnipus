@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { Meta, StoryObj } from '@storybook/react-vite'
-import { expect, userEvent, within } from 'storybook/test'
-import { ZoomPill, clampZoomScale, useZoomableViewKeyboard } from './zoomable-view'
+import { expect, userEvent, waitFor, within } from 'storybook/test'
+import { ZoomPill, ZoomableMediaSurface, clampZoomScale, useZoomableViewKeyboard } from './zoomable-view'
 
 // Fixture mirrors the shape a Phase-2 consumer will actually wire: a
 // focusable frame owning the `+ − 0 1` shortcuts (D18: "while the view is
@@ -152,3 +152,58 @@ export const KeyboardShortcuts: Story = {
 }
 
 export const NarrowViewport: Story = { parameters: { viewport: { defaultViewport: 'mobile1' } } }
+
+/** REAL-BROWSER regression guard (founder-approved clarification, 2026-09-21):
+ *  very tall/large content must still open FITTED, never overflowing its
+ *  frame. Before the effective-floor fix, `clampZoomScale` raised any fit
+ *  below 25% up to the 25% floor, so content whose fit is under 25% (this
+ *  portrait 1500x5000 into a viewport-sized frame fits at roughly 17%)
+ *  opened too large and overflowed the frame — reproduced live in Chromium,
+ *  Firefox and WebKit (`docs/internal/design/components/zoomable-view.md`,
+ *  "Range"). Modelled on the lead's throwaway probe
+ *  (`src/components/chat/zz-probe-lightbox.stories.tsx`, since deleted): a
+ *  fixed-size `<div>` (not an `<img>`) as content, so this check measures
+ *  ONLY `ZoomableMediaSurface`'s own fit math — never Tailwind's global
+ *  `img { max-width: 100%; height: auto }` preflight rule, which is a
+ *  SEPARATE, consumer-side factor (see the root-cause writeup) that a plain
+ *  `<img>` with no explicit size would additionally compound. */
+export const TallContentFitsFrame: Story = {
+  parameters: { layout: 'fullscreen' },
+  render: () => (
+    <div style={{ width: '100vw', height: '100vh' }}>
+      <ZoomableMediaSurface contentSize={{ width: 1500, height: 5000 }} aria-label="Tall content">
+        <div
+          data-testid="tall-content"
+          style={{
+            width: 1500,
+            height: 5000,
+            background: 'repeating-linear-gradient(45deg, #1a2b4a, #1a2b4a 20px, #2c4a7c 20px, #2c4a7c 40px)',
+          }}
+        />
+      </ZoomableMediaSurface>
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const surface = await canvas.findByTestId('zoomable-media-surface')
+    // The frame's ResizeObserver measurement and the D18 opening-scale
+    // effect are async — jsdom has no ResizeObserver (`useZoomableMedia`'s
+    // own comment), but this story runs in a REAL browser
+    // (`.storybook/vitest.config.ts`), where it settles within a frame or two.
+    await waitFor(() => expect(surface.getAttribute('data-fit')).toBe('true'))
+    const content = canvas.getByTestId('tall-content')
+    const frameRect = surface.getBoundingClientRect()
+    const contentRect = content.getBoundingClientRect()
+    const evidence = JSON.stringify({
+      frame: `${Math.round(frameRect.width)}x${Math.round(frameRect.height)}`,
+      content: `${Math.round(contentRect.width)}x${Math.round(contentRect.height)}`,
+      contentTop: Math.round(contentRect.top),
+      contentLeft: Math.round(contentRect.left),
+      scale: surface.getAttribute('data-scale'),
+    })
+    expect(contentRect.left, evidence).toBeGreaterThanOrEqual(frameRect.left - 1)
+    expect(contentRect.top, evidence).toBeGreaterThanOrEqual(frameRect.top - 1)
+    expect(contentRect.right, evidence).toBeLessThanOrEqual(frameRect.right + 1)
+    expect(contentRect.bottom, evidence).toBeLessThanOrEqual(frameRect.bottom + 1)
+  },
+}
