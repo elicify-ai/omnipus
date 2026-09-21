@@ -473,7 +473,7 @@ export function MemorySection(): React.ReactElement {
                           role="img"
                           aria-label="Provider not connected — fallback may not work at runtime"
                           title="Provider not connected — fallback may not work at runtime"
-                          className="inline-flex items-center text-amber-400 shrink-0"
+                          className="inline-flex items-center text-[var(--color-warning)] shrink-0"
                         >
                           <Warning size={12} weight="fill" />
                         </span>

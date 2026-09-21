@@ -195,7 +195,7 @@ export function GodModeControl() {
                 weight="fill"
                 // Keyed on `persisted` for the same reason as the card border
                 // above: S1 (armed, pending restart) must not render as calm.
-                className={persisted ? 'text-[var(--color-error)]' : 'text-amber-400'}
+                className={persisted ? 'text-[var(--color-error)]' : 'text-[var(--color-warning)]'}
               />
               <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">God-mode</p>
             </div>
@@ -297,7 +297,7 @@ export function GodModeControl() {
           >
             <span
               className={[
-                'inline-flex items-center justify-center h-5 w-5 rounded-full bg-white shadow transition-transform',
+                'inline-flex items-center justify-center h-5 w-5 rounded-full bg-[var(--color-secondary)] shadow transition-transform',
                 persisted ? 'translate-x-[22px]' : 'translate-x-0.5',
               ].join(' ')}
             >
@@ -362,12 +362,12 @@ export function GodModeActiveBanner() {
       <div
         role="alert"
         data-testid="god-mode-status-unknown-banner"
-        className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-amber-500/60 bg-amber-500/10 px-[var(--space-3)] py-[var(--space-2-5)]"
+        className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-warning)]/60 bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
       >
-        <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-amber-400" />
+        <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-warning)]" />
         <div className="space-y-[var(--space-1)]">
-          <p className="text-[length:var(--type-body-compact-size)] font-semibold text-amber-400">God-mode status unavailable</p>
-          <p className="text-[length:var(--type-utility-xs-size)] text-amber-400/80">
+          <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-warning)]">God-mode status unavailable</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/80">
             Could not fetch god-mode status from the gateway — it may be offline. If god-mode was
             previously active, sandboxing may still be disabled right now and this banner cannot
             confirm it either way. Check your connection and reload.

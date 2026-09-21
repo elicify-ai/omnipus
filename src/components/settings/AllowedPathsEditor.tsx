@@ -80,7 +80,7 @@ export function AllowedPathsEditor({
               </span>
               <ReadOnlyBadge />
               {restartedRows.has(i) && (
-                <span className="inline-block rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-yellow-400">
+                <span className="inline-block rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]">
                   restart required
                 </span>
               )}

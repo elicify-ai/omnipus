@@ -274,8 +274,8 @@ function Abi4Banner({
       role="alert"
       className="flex flex-col sm:flex-row sm:items-start gap-[var(--space-2)] rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
     >
-      <Warning size={14} className="mt-[var(--space-0-5)] shrink-0 text-yellow-400" weight="fill" />
-      <p className="flex-1 text-[length:var(--type-utility-xs-size)] text-yellow-200 leading-relaxed">
+      <Warning size={14} className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]" weight="fill" />
+      <p className="flex-1 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] leading-relaxed">
         Your Linux kernel uses Landlock v{abiVersion}, which is not yet supported (issue {issueRef}).
         Enforce mode will exit with code 78 at boot. Use &lsquo;permissive&rsquo; or &lsquo;off&rsquo; until Landlock support is upgraded.
       </p>
@@ -283,7 +283,7 @@ function Abi4Banner({
         variant="link"
         type="button"
         onClick={onDismiss}
-        className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-caption-size)] text-yellow-400 underline hover:text-yellow-300"
+        className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-caption-size)] text-[var(--color-warning)] underline hover:text-[var(--color-warning)]/80"
       >
         Dismiss for session
       </Button>
@@ -939,7 +939,7 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
         {statusData.notes && statusData.notes.length > 0 && (
           <div className="mt-[var(--space-2)] rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 p-[var(--space-2)] space-y-[var(--space-1)]">
             {statusData.notes.map((note, i) => (
-              <p key={i} className="text-[length:var(--type-caption-size)] text-yellow-400 leading-relaxed">
+              <p key={i} className="text-[length:var(--type-caption-size)] text-[var(--color-warning)] leading-relaxed">
                 <span className="font-semibold">Note:</span> {note}
               </p>
             ))}

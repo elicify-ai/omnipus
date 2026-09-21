@@ -132,7 +132,7 @@ export function ExecProxyStatusCard(): React.ReactElement {
           <div className="flex items-center gap-[var(--space-2)]">
             <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Enable SSRF Proxy</span>
             {restartPending && (
-              <span className="inline-flex items-center gap-[var(--space-1)] px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-medium bg-amber-500/20 text-amber-400 border border-amber-500/40">
+              <span className="inline-flex items-center gap-[var(--space-1)] px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-medium bg-[color-mix(in_srgb,var(--color-warning)_20%,transparent)] text-[var(--color-warning)] border border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)]">
                 <ArrowCounterClockwise size={10} weight="bold" />
                 Gateway restart required
               </span>
