@@ -2518,8 +2518,6 @@ type DelegateRunAction = {
   target_agent_id: string;
   task: string;
   label?: string | undefined;
-  wait?: boolean | undefined;
-  allow_blocking_question?: boolean | undefined;
   critical?: boolean | undefined;
   timeout_seconds?: number | undefined;
   snapshot?:
@@ -6476,8 +6474,6 @@ export const DelegateRunAction = z.object({
   target_agent_id: z.string().min(1),
   task: z.string().min(1).max(10000),
   label: z.string().max(100).optional(),
-  wait: z.boolean().optional(),
-  allow_blocking_question: z.boolean().optional(),
   critical: z.boolean().optional(),
   timeout_seconds: z.number().int().gte(0).optional(),
   snapshot: z
