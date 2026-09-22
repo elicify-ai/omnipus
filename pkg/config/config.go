@@ -364,8 +364,9 @@ type PerformanceConfig struct {
 	MaxDelegationDepth int `json:"max_delegation_depth,omitempty" env:"OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH"`
 
 	// DelegationTimeoutMinutes is the shared timeout for a delegated session.
-	// 0 means unset (the existing
-	// defaultSubTurnTimeout backstop applies); negative is a
+	// 0 means unset (the built-in 30-minute default applies — see
+	// pkg/agent's defaultSubTurnTimeout; founder raised it from 5 minutes,
+	// 2026-09-23); negative is a
 	// configuration error.
 	DelegationTimeoutMinutes int `json:"delegation_timeout_minutes,omitempty" env:"OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES"`
 }

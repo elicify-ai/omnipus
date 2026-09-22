@@ -14526,7 +14526,7 @@ type DelegateRunAction struct {
 	// Task The task prompt handed to the child as its first user message.
 	Task string `json:"task"`
 
-	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
 }
 

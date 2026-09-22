@@ -45,7 +45,7 @@ properties:
   timeout_seconds:
     type: integer
     minimum: 0
-    description: Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+    description: Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
     example: 300
   snapshot:
     type: object

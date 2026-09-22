@@ -15553,7 +15553,7 @@ export interface components {
              */
             critical?: boolean;
             /**
-             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
+             * @description Maximum seconds before this delegation is force-cancelled. 0 = default (30 min).
              * @example 300
              */
             timeout_seconds?: number;
