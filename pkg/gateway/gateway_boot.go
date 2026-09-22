@@ -1011,7 +1011,7 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 		stg.runningServices.ChannelManager.SetSteerAudienceResolver(resolver, observer)
 	}
 	if stg.wsHandler != nil && stg.wsHandler.askUserReg != nil {
-		stg.wsHandler.askUserReg.SetSteerAudienceResolver(resolver, observer)
+		stg.wsHandler.askUserReg.SetSteerAudienceResolver(resolver, observer, deliverer)
 	}
 	SetGatewaySteerAudienceDeps(resolver, observer)
 	if stg.tExecutor != nil {

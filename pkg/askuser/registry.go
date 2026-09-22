@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -131,8 +132,9 @@ type Registry struct {
 	// CreatePending's existing ParentSessionID-based EC-9 rejection is
 	// unaffected when unwired; wiring adds the Observe instrumentation and
 	// a second, edge-based confirmation of the same verdict.
-	steerAudience steer.AudienceResolver
-	steerObserver steer.BoundaryObserver
+	steerAudience  steer.AudienceResolver
+	steerObserver  steer.BoundaryObserver
+	steerDeliverer steer.UpwardDeliverer
 }
 
 // Options configures a Registry.
@@ -183,13 +185,17 @@ func NewRegistry(meta MetaStore, resume ResumeDispatcher, opts Options) *Registr
 // SetSteerAudienceResolver injects ADR-091 I-5's steer.AudienceResolver and
 // steer.BoundaryObserver (boundary 12, FR-B-012). A nil observer defaults to
 // steer.NopBoundaryObserver{}.
-func (r *Registry) SetSteerAudienceResolver(resolver steer.AudienceResolver, observer steer.BoundaryObserver) {
+func (r *Registry) SetSteerAudienceResolver(resolver steer.AudienceResolver, observer steer.BoundaryObserver, deliverers ...steer.UpwardDeliverer) {
 	if observer == nil {
 		observer = steer.NopBoundaryObserver{}
 	}
 	r.mu.Lock()
 	r.steerAudience = resolver
 	r.steerObserver = observer
+	r.steerDeliverer = nil
+	if len(deliverers) > 0 {
+		r.steerDeliverer = deliverers[0]
+	}
 	r.mu.Unlock()
 }
 
@@ -211,7 +217,7 @@ func (r *Registry) CreatePending(set *PendingSet) error {
 	}
 
 	r.mu.Lock()
-	resolver, observer := r.steerAudience, r.steerObserver
+	resolver, observer, deliverer := r.steerAudience, r.steerObserver, r.steerDeliverer
 	r.mu.Unlock()
 	if observer == nil {
 		observer = steer.NopBoundaryObserver{}
@@ -238,9 +244,15 @@ func (r *Registry) CreatePending(set *PendingSet) error {
 			return fmt.Errorf("askuser: CreatePending: cannot resolve session %s: %w", set.TranscriptSessionID, err)
 		}
 		if meta.ParentSessionID != "" || steered {
+			if relayErr := relaySteeredQuestions(deliverer, set); relayErr != nil {
+				return relayErr
+			}
 			return ErrDelegatedChild
 		}
 	} else if steered {
+		if relayErr := relaySteeredQuestions(deliverer, set); relayErr != nil {
+			return relayErr
+		}
 		return ErrDelegatedChild
 	}
 
@@ -299,6 +311,52 @@ func (r *Registry) CreatePending(set *PendingSet) error {
 		"question_count", len(snapshot.Questions),
 		"default_safe_count", defaultSafeCount)
 	r.sink.EmitCard(snapshot.Clone())
+	return nil
+}
+
+func relaySteeredQuestions(deliverer steer.UpwardDeliverer, set *PendingSet) error {
+	if deliverer == nil {
+		return fmt.Errorf("askuser: delegated question relay is not wired")
+	}
+	parts := make([]string, 0, len(set.Questions))
+	for _, question := range set.Questions {
+		line := strings.TrimSpace(question.Header + ": " + question.Question)
+		if len(question.Options) > 0 {
+			labels := make([]string, 0, len(question.Options))
+			for _, option := range question.Options {
+				labels = append(labels, option.Label)
+			}
+			line += " Options: " + strings.Join(labels, "; ")
+		}
+		parts = append(parts, line)
+	}
+	authority := generated.SessionMessageQuestionAuthority("self_ok")
+	created := set.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	var message generated.SessionMessage
+	if err := message.FromSessionMessageQuestion(generated.SessionMessageQuestion{
+		Authority:       &authority,
+		CorrelationId:   set.CardID,
+		CreatedAt:       created,
+		Depth:           1,
+		MessageId:       set.CardID + ":question",
+		SenderIdentity:  set.AgentID,
+		SessionId:       set.TranscriptSessionID,
+		Text:            strings.Join(parts, "\n"),
+		UntrustedOrigin: true,
+		Wait:            true,
+	}); err != nil {
+		return fmt.Errorf("askuser: encode delegated question relay: %w", err)
+	}
+	if _, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+		ChildSessionID: set.TranscriptSessionID,
+		Outcome:        steer.OutcomeParkedQuestion,
+		Message:        message,
+	}); err != nil {
+		return fmt.Errorf("askuser: relay delegated question upward: %w", err)
+	}
 	return nil
 }
 
