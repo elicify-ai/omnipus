@@ -115,7 +115,6 @@ describe('chat.dedup — T1.7: sendMessage merges duplicate tool_call ids', () =
           cancelStage: null,
           lastUserMessageAt: null,
           lastReceivedEventTime: null,
-          spanByParentCallId: {},
         }
         return {
           sessionsById: { [SID]: bucket },
@@ -183,7 +182,6 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
             cancelStage: null,
             lastUserMessageAt: null,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           },
         },
         messages: [],
@@ -245,7 +243,6 @@ describe('chat.dedup — T1.8: replay_message tail dedup drops identical re-emit
             cancelStage: null,
             lastUserMessageAt: null,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           },
         },
         messages: [],

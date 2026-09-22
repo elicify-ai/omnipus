@@ -80,7 +80,9 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
+// ADR-091 D7/D10: SubagentBlock is deleted — ChatScreen.tsx no longer
+// imports it (a child's own frames never arrive in the parent's bucket any
+// more), so there is nothing left to mock here.
 vi.mock('./ActivityBar', () => ({ ActivityBar: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({ GenericToolCall: () => null }))
 vi.mock('@/components/shared/IconRenderer', () => ({ IconRenderer: () => null }))
@@ -156,7 +158,6 @@ function seedStreamingAssistant(assistantContent: string): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },
@@ -235,7 +236,6 @@ function seedTerminalEmptyAssistant(): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },
@@ -304,7 +304,6 @@ function seedStreamingAssistantWithHiddenToolCall(toolCallStatus: 'running' | 's
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },

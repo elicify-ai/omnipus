@@ -51,10 +51,16 @@ function isFailedStatus(status: ActivityItem['status']): boolean {
 }
 
 export function ActivityBar() {
-  const { runningCount, running, recentlyFinished } = useRunningActivity()
+  // ADR-091 D7/FR-E-005 (founder decision, round 8): this is "the pill" the
+  // spec refers to — its running count and spin state now answer "how many
+  // sub-agents are running" (`runningChildren`), excluding background shell
+  // jobs. `runningCount` (agent spans + bash jobs together) still exists on
+  // the hook for any other consumer, but is no longer what THIS indicator's
+  // label/spin state is driven by.
+  const { runningChildren, running, recentlyFinished } = useRunningActivity()
   const [panelOpen, setPanelOpen] = useState(false)
 
-  const isRunning = runningCount > 0
+  const isRunning = runningChildren > 0
   const failedRecent = recentlyFinished.filter((item) => isFailedStatus(item.status))
   const hasFailedRecent = failedRecent.length > 0
 
@@ -64,7 +70,7 @@ export function ActivityBar() {
   const stackItems = running.slice(0, MAX_STACK_AVATARS)
 
   const label = isRunning
-    ? `${runningCount} running`
+    ? `${runningChildren} running`
     : hasFailedRecent
       ? `${failedRecent.length} failed`
       : 'Activity'

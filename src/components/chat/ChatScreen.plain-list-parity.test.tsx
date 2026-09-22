@@ -158,7 +158,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 // Distinguishable marker so B's assertions can prove GenericToolCall (the raw
 // JSON fallback) was NOT used for a browser tool call.
 vi.mock('./tools/GenericToolCall', () => ({
@@ -206,7 +205,6 @@ function seedBucket(messages: ChatMessage[], overrides: { isStreaming: boolean }
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },

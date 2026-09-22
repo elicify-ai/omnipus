@@ -26,6 +26,17 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
+// ADR-091 D7: ActivityPanel's ActivityRow calls useNavigate unconditionally
+// (for the open control agent rows carry) — the panel mounts inside
+// ActivityBar, so it needs a router context here too.
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    useNavigate: () => vi.fn(),
+  }
+})
+
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
 }
@@ -54,7 +65,6 @@ function runningSpan(overrides: Partial<SubagentSpan> = {}): SubagentSpan {
     spanId: 's1',
     parentCallId: 'c1',
     taskLabel: 'digging into logs',
-    steps: [],
     status: 'running',
     ...overrides,
   } as SubagentSpan
@@ -66,7 +76,6 @@ function finishedSpan(overrides: Partial<SubagentSpan> = {}): SubagentSpan {
     spanId: 's1',
     parentCallId: 'c1',
     taskLabel: 'digging into logs',
-    steps: [],
     status: 'error',
     durationMs: 1200,
     ...overrides,
@@ -131,8 +140,14 @@ describe('ActivityBar — 1 running', () => {
   })
 })
 
-describe('ActivityBar — N running', () => {
-  it('renders "2 running" for one agent span plus one background bash call', async () => {
+// ADR-091 D7/FR-E-005 (founder decision, round 8): the pill's count is now
+// direct AGENT children in `running` only — "The SPA must not count shell
+// jobs in the pill, because the pill answers 'how many sub-agents are
+// running'" (WP-E spec, explicit prohibitions). Replaces the old
+// "2 running" combined-count test, which pinned exactly the behavior this
+// ADR retires.
+describe('ActivityBar — N running (agent children only, ADR-091 FR-E-005)', () => {
+  it('renders "1 running" for one agent span plus one background bash call — the bash call is excluded from the count', async () => {
     act(() => {
       useChatStore.setState({
         messages: [makeAssistantMessage([runningSpan({ agentId: 'ray' })])],
@@ -150,13 +165,11 @@ describe('ActivityBar — N running', () => {
     })
     renderBar()
     await waitFor(() => {
-      expect(screen.getByText('2 running')).toBeInTheDocument()
+      expect(screen.getByText('1 running')).toBeInTheDocument()
     })
   })
-})
 
-describe('ActivityBar — avatar stack cap', () => {
-  it('caps the rendered avatar stack at MAX_STACK_AVATARS (4) while the count label shows the true total of 5', async () => {
+  it('does not mount for a background bash job alone — no agent children are running', () => {
     act(() => {
       useChatStore.setState({
         toolCalls: {
@@ -164,43 +177,31 @@ describe('ActivityBar — avatar stack cap', () => {
             id: 'call_1',
             call_id: 'call_1',
             tool: 'bash',
-            params: { command: 'npm run build', run_in_background: true },
+            params: { command: 'npm test', run_in_background: true },
             status: 'success',
             result: '{"sessionId":"call_1","status":"running"}',
           },
-          call_2: {
-            id: 'call_2',
-            call_id: 'call_2',
-            tool: 'bash',
-            params: { command: 'npm run lint', run_in_background: true },
-            status: 'success',
-            result: '{"sessionId":"call_2","status":"running"}',
-          },
-          call_3: {
-            id: 'call_3',
-            call_id: 'call_3',
-            tool: 'bash',
-            params: { command: 'npm run test', run_in_background: true },
-            status: 'success',
-            result: '{"sessionId":"call_3","status":"running"}',
-          },
-          call_4: {
-            id: 'call_4',
-            call_id: 'call_4',
-            tool: 'bash',
-            params: { command: 'npm run typecheck', run_in_background: true },
-            status: 'success',
-            result: '{"sessionId":"call_4","status":"running"}',
-          },
-          call_5: {
-            id: 'call_5',
-            call_id: 'call_5',
-            tool: 'bash',
-            params: { command: 'npm run e2e', run_in_background: true },
-            status: 'success',
-            result: '{"sessionId":"call_5","status":"running"}',
-          },
         },
+      })
+    })
+    renderBar()
+    expect(screen.queryByTestId('activity-bar')).not.toBeInTheDocument()
+  })
+})
+
+describe('ActivityBar — avatar stack cap', () => {
+  it('caps the rendered avatar stack at MAX_STACK_AVATARS (4) while the count label shows the true total of 5 agent children', async () => {
+    act(() => {
+      useChatStore.setState({
+        messages: [
+          makeAssistantMessage([
+            runningSpan({ spanId: 's1', parentCallId: 'c1', agentId: 'ray' }),
+            runningSpan({ spanId: 's2', parentCallId: 'c2', agentId: 'ray' }),
+            runningSpan({ spanId: 's3', parentCallId: 'c3', agentId: 'ray' }),
+            runningSpan({ spanId: 's4', parentCallId: 'c4', agentId: 'ray' }),
+            runningSpan({ spanId: 's5', parentCallId: 'c5', agentId: 'ray' }),
+          ]),
+        ],
       })
     })
     renderBar()

@@ -39,7 +39,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChatStore } from '@/store/chat'
-import type { SpanStep, SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
+import type { SubagentSpan, SubagentSpanTerminal } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { fetchAgents } from '@/lib/api'
 import type { Agent, ToolCall } from '@/lib/api'
@@ -57,7 +57,6 @@ export interface AgentActivityItem {
   taskLabel: string
   status: ActivityStatus
   durationMs?: number
-  steps: SpanStep[] // populated for native only — empty for 3p (issue #492: no live step detail yet)
   /**
    * The span's final result text (terminal spans only) — Fix 2 (2026-07-16):
    * SubagentBlock's thread card (now hidden from the thread by default) was
@@ -74,6 +73,35 @@ export interface AgentActivityItem {
    * via formatInterruptReason (@/lib/subagentStatus), not this raw value.
    */
   interruptReason?: SubagentSpanTerminal['reason']
+  /**
+   * ADR-091 D7/FR-E-004: the last `subagent_message.text` reduced onto this
+   * span, or 'steered' for a bare steer/respond — see
+   * `SubagentSpanBase.statusLine`'s doc comment. Undefined until the
+   * child's first `subagent_message` arrives.
+   */
+  statusLine?: string
+  /**
+   * ADR-091 D7/FR-E-004: the last `subagent_state.state` reduced onto this
+   * span — see `SubagentSpanBase.lifecycleState`'s doc comment. The side
+   * panel row reads `'queued'` here to show "queued" even while this
+   * item's own `status` is still `'running'` (a queued launch emits
+   * `subagent_start` before the child actually starts — I-4).
+   */
+  lifecycleState?: SubagentSpan['lifecycleState']
+  /**
+   * ADR-091 D7: the child's own routable session id
+   * (`SubagentStartFrame.child_session_id`) — the side panel's open control
+   * target. Absent on a transcript written before this delivery (history
+   * only), in which case the row renders without the open control.
+   */
+  childSessionId?: string
+  /**
+   * ADR-091 D7 table's "last update N s ago" — the ISO timestamp of the
+   * last `subagent_message`/`subagent_state` frame reduced onto this span
+   * (also seeded at `subagent_start`/`subagent_end`). See
+   * `SubagentSpanBase.lastUpdateAt`'s doc comment.
+   */
+  lastUpdateAt?: string
 }
 
 export interface BashActivityItem {
@@ -140,6 +168,19 @@ export type ActivityItem = AgentActivityItem | BashActivityItem | JudgeActivityI
 
 export interface RunningActivity {
   runningCount: number
+  /**
+   * ADR-091 D7/FR-E-005 (founder decision, round 8): the open session's
+   * direct AGENT children currently `running` — excludes background shell
+   * jobs, which `runningCount` still includes (bash-job visibility/count
+   * elsewhere is unchanged). This is what the Activity Bar's pill reads:
+   * "The SPA must not count shell jobs in the pill, because the pill
+   * answers 'how many sub-agents are running'" (WP-E spec, explicit
+   * prohibitions). A grandchild counts in its own parent's `running` set
+   * only when that parent's own session is the one open — this hook is
+   * already scoped to the active session (file header), so that scoping
+   * falls out for free.
+   */
+  runningChildren: number
   running: ActivityItem[]
   recentlyFinished: ActivityItem[]
 }
@@ -546,9 +587,12 @@ export function useRunningActivity(): RunningActivity {
       taskLabel: span.taskLabel,
       status: span.status,
       durationMs,
-      steps: resolved.agentType === '3p' ? [] : span.steps,
       finalResult: terminal?.finalResult,
       interruptReason: terminal?.reason,
+      statusLine: span.statusLine,
+      lifecycleState: span.lifecycleState,
+      childSessionId: span.childSessionId,
+      lastUpdateAt: span.lastUpdateAt,
     }
     if (isSpanRunning) {
       clearFinishedAt(span.spanId)
@@ -615,6 +659,7 @@ export function useRunningActivity(): RunningActivity {
 
   return {
     runningCount: running.length,
+    runningChildren: running.filter((item) => item.kind === 'agent').length,
     running,
     recentlyFinished: mergeAndCapFinished(finishedCandidates),
   }

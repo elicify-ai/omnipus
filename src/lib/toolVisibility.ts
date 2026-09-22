@@ -1,7 +1,12 @@
-// Client-side render filter, governing TWO chat surfaces via THREE exported
-// policies:
+// Client-side render filter, governing TWO chat surfaces:
 //   - The chat THREAD (transcript) — shouldRenderToolCall (tool-call chips)
-//     and shouldRenderSubagentSpan (SubagentBlock delegation cards).
+//     and shouldRenderJudgeVerdictInThread (judge-verdict cards). ADR-091
+//     D7/D10 deleted `shouldRenderSubagentSpan` (the SubagentBlock
+//     delegation-card gate) along with SubagentBlock itself — a child's own
+//     frames never arrive in the parent's bucket any more, so there is no
+//     span content left in the thread at any verbosity; the `delegate`
+//     tool-call line (shouldRenderToolCall's own case, below) is the
+//     thread's only remaining delegation surface.
 //   - The ActivityPanel slide-out — shouldRenderToolCallInPanel (expanded
 //     native-agent step rows), whose default INVERTS the thread's.
 //
@@ -27,8 +32,6 @@
 //     when absent, identically to delegate. `run_in_background` is read via
 //     getBoolArg(), whose zero value (missing/non-bool) is `false` — i.e.
 //     bash is foreground-by-default.
-
-import type { SpanLikeStatus } from './toolStatusConfig'
 
 /** Narrow an unknown params bag to a string field, honoring only real strings. */
 function paramString(params: Record<string, unknown> | undefined, key: string): string | undefined {
@@ -234,43 +237,6 @@ export function shouldRenderToolCall(
       // an unknown tool is always shown rather than silently swallowed.
       return true
   }
-}
-
-/**
- * Decide whether a delegation card (SubagentBlock) renders inline in the
- * chat THREAD (Fix 2, user-approved 2026-07-16; revised same day). Delegation
- * is hidden from the thread by default, UNCONDITIONALLY — including a failed/
- * errored/timed-out/interrupted span. There is deliberately no failed-state
- * exception here (an earlier revision of this policy had one — removed):
- * a subagent's error is returned to the DELEGATING agent's own turn as the
- * tool result, and that agent decides how to present or react to it in its
- * own response text, so the thread doesn't need its own separate failure
- * card for the same information. The raw span (including its failure) stays
- * fully transparent in the ActivityPanel slide-out — see
- * shouldRenderToolCallInPanel below, whose own rendering is NOT gated by
- * this function at all. The thread card reappears only via verbose chat.
- *
- * Kept as its own named policy function (rather than inlined at each call
- * site as a bare `verboseChatEnabled` check) so this rationale — and the
- * span-status domain it deliberately does NOT branch on — stays discoverable
- * in one place for the next person who wonders "why is a failed delegation
- * invisible in the thread?".
- *
- * @param span Any object carrying the span's status — deliberately typed
- *   structurally (not as the full `SubagentSpan` union from `@/store/chat`)
- *   so this lib module never has to import the store. Unused now that the
- *   failed-state exception is gone, but kept in the signature so call sites
- *   read naturally ("should this span render") and so a future revision of
- *   this policy (e.g. reinstating a narrower exception) doesn't need to
- *   touch every call site's argument list.
- * @param verboseChatEnabled When true, every span renders. This is now the
- *   ONLY condition under which a span renders in the thread.
- */
-export function shouldRenderSubagentSpan(
-  _span: { status: SpanLikeStatus },
-  verboseChatEnabled: boolean,
-): boolean {
-  return verboseChatEnabled
 }
 
 /**

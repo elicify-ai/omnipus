@@ -171,7 +171,7 @@ export function makeBucketMessages(msgs: ChatMessage[]): Pick<SessionChatState, 
  *
  * Removes the message from messagesById/messageOrder, evicts its tool calls
  * from toolCalls/toolCallOrder/textAtToolCallStart, and removes any
- * spanByParentCallId entries whose messageId matches the evicted message.
+ * spanBySpanId entries whose messageId matches the evicted message.
  */
 export function evictMessageFromBucket(
   bucket: SessionChatState,
@@ -194,16 +194,9 @@ export function evictMessageFromBucket(
     bucket.toolCallOrder = bucket.toolCallOrder.filter((id) => !evictedCallIds.has(id))
   }
 
-  // Evict BOTH span-index maps in lockstep via the shared helper — the
-  // two maps must always be filtered together (see evictSpanIndexEntries'
-  // doc comment for the invariant).
-  const filtered = evictSpanIndexEntries(
-    bucket.spanByParentCallId,
-    bucket.spanBySpanId,
-    new Set([messageId]),
-  )
-  bucket.spanByParentCallId = filtered.spanByParentCallId
-  bucket.spanBySpanId = filtered.spanBySpanId
+  // Evict the span index via the shared helper (see evictSpanIndexEntries'
+  // doc comment).
+  bucket.spanBySpanId = evictSpanIndexEntries(bucket.spanBySpanId, new Set([messageId]))
 }
 
 /** Captures an ISO-8601 timestamp's head, its fractional-seconds digits, and any trailing zone designator. */

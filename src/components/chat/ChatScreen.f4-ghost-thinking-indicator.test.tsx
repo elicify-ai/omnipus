@@ -162,7 +162,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 // `./tools/GenericToolCall` deliberately LEFT UNMOCKED — the whole point of
 // this test is that the real row (whose own visibility gate reads
 // `tc.status === 'error'`) renders "Failed" for the failed ToolSearch call
@@ -209,7 +208,6 @@ function seedBucket(messages: ChatMessage[]): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },

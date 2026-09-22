@@ -163,7 +163,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 // Mocked down to the STABLE contract the task brief guarantees:
 // data-testid="tool-call-badge" + data-tool — GenericToolCall's actual
 // markup/classes are being restyled concurrently by a sibling agent and are
@@ -251,7 +250,6 @@ function seedBucket(messages: ChatMessage[]): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },

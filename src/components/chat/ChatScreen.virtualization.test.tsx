@@ -174,7 +174,6 @@ vi.mock('./historical-markdown', () => ({
 
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
-vi.mock('./SubagentBlock', () => ({ SubagentBlock: () => null }))
 vi.mock('./tools/GenericToolCall', () => ({
   GenericToolCall: ({ toolName }: { toolName: string }) => {
     return React.createElement('div', { 'data-testid': 'tool-call-badge' }, toolName)
@@ -240,7 +239,6 @@ function seedStore(messages: ChatMessage[]): void {
         lastUserMessageAt: null,
         cancelStage: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
         trimmedCount: 0,
       },
     },
@@ -435,7 +433,6 @@ describe('VirtualizedMessageList', () => {
           lastUserMessageAt: null,
           cancelStage: null,
           lastReceivedEventTime: null,
-          spanByParentCallId: {},
           trimmedCount: 0,
         },
       },
@@ -536,7 +533,6 @@ describe('VirtualizedMessageList', () => {
           lastUserMessageAt: null,
           cancelStage: null,
           lastReceivedEventTime: null,
-          spanByParentCallId: {},
           trimmedCount: 0,
         },
       },

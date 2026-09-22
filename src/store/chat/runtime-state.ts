@@ -67,6 +67,11 @@ export const SESSION_SCOPED_FRAME_TYPES = new Set([
   // Goal outcome line (founder decision 2026-09-14): GoalOutcomeFrame carries
   // a required, min(1) `session_id` — session-scoped like goal_status.
   'goal_outcome',
+  // ADR-091 D7/I-4 (FR-E-002): subagent_message/subagent_state always carry
+  // a required `session_id` — the producing span's own session, reduced
+  // onto the span record (frames.ts's `case 'subagent_message'`/
+  // `'subagent_state'`). Session-scoped like subagent_start/_end above.
+  'subagent_message', 'subagent_state',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
