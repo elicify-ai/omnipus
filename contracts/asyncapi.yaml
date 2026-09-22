@@ -2732,11 +2732,23 @@ components:
         parent_call_id:
           type: string
           minLength: 1
+          description: >
+            The originating delegate or create_task tool-call id. For
+            delegate-origin children, this is the delegate tool-call id.
+            For create_task-origin children (task sessions), this is the
+            create_task tool-call id (the span key for I-4). This is the
+            span identifier used for both fronts.
         task_label:
           type: string
           maxLength: 100
         agent_id:
           type: string
+        child_session_id:
+          type: string
+          description: >
+            Optional session id of the opened child session. Present for
+            steered sessions; absent for legacy/optional. Enables the open
+            control on the side panel row (ADR-091 I-4).
         producing_session_id:
           type: string
           minLength: 1
@@ -2853,6 +2865,7 @@ components:
             - handback
             - steer
             - respond
+            - goal_status
         text:
           type: string
         pct:
