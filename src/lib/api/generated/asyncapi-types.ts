@@ -36,6 +36,7 @@ export type WsFrameType =
   | "tool_approval_required"
   | "tool_approval_resolved"
   | "session_state"
+  | "session_snapshot"
   | "system_overload"
   | "replay_warning"
   | "cancel_stage"
@@ -113,6 +114,7 @@ export interface PongFrame {
 export interface AttachSessionFrame {
   type: "attach_session";
   session_id: string;
+  since_seq?: number;
   since?: string;
 }
 
@@ -134,6 +136,7 @@ export interface MessageStatusFrame {
   session_id: string;
   client_message_id: string;
   state: "received" | "working" | "failed";
+  seq?: number;
 }
 
 export interface TokenFrame {
@@ -142,6 +145,8 @@ export interface TokenFrame {
   content: string;
   agent_id?: string;
   producing_session_id?: string;
+  replace?: boolean;
+  seq?: number;
 }
 
 export interface DoneStats {
@@ -165,6 +170,7 @@ export interface DoneFrame {
   session_id: string;
   stats?: DoneStats;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface LLMError {
@@ -187,6 +193,7 @@ export interface ErrorFrame {
   payload?: {
     llm_error: LLMError;
   };
+  seq?: number;
 }
 
 export interface ToolCallStartFrame {
@@ -200,6 +207,7 @@ export interface ToolCallStartFrame {
   parent_call_id?: string;
   agent_id?: string;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface TruncatedResult {
@@ -278,6 +286,7 @@ export interface ToolCallResultFrame {
   parent_call_id?: string;
   agent_id?: string;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface SubagentStartFrame {
@@ -288,6 +297,7 @@ export interface SubagentStartFrame {
   task_label: string;
   agent_id?: string;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface SubagentEndFrame {
@@ -302,6 +312,7 @@ export interface SubagentEndFrame {
   parent_call_id?: string;
   message?: string;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface SubagentMessageFrame {
@@ -373,6 +384,7 @@ export interface ReplayErrorFrame {
   payload?: {
     llm_error: LLMErrorReplay;
   };
+  seq?: number;
 }
 
 export interface ToolResultProjectionFrame {
@@ -383,6 +395,7 @@ export interface ToolResultProjectionFrame {
   content_state: "capped" | "emptied";
   mark?: string;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface RateLimitFrame {
@@ -416,6 +429,7 @@ export interface MediaFrame {
   session_id: string;
   parts: Array<MediaPart>;
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface AgentSwitchedFrame {
@@ -481,6 +495,7 @@ export interface AskUserQuestionCard {
 export interface AskUserQuestionFrame {
   type: "ask_user_question";
   card: AskUserQuestionCard;
+  seq?: number;
 }
 
 export interface AskUserAnswerFrame {
@@ -511,6 +526,13 @@ export interface SessionStateActiveTurn {
   started_at: string;
 }
 
+export interface SessionSnapshotFrame {
+  type: "session_snapshot";
+  session_id: string;
+  seq: number;
+  reason?: "cursor_ahead" | "retention_exceeded" | "unknown_position";
+}
+
 export interface SessionStateFrame {
   type: "session_state";
   user_id: string;
@@ -519,6 +541,7 @@ export interface SessionStateFrame {
   session_id?: string;
   active_turn?: SessionStateActiveTurn;
   emitted_at: string;
+  seq?: number;
 }
 
 export interface SystemOverloadFrame {
@@ -545,6 +568,7 @@ export interface CancelStageFrame {
   session_id: string;
   stage: "graceful" | "hard" | "detached";
   producing_session_id?: string;
+  seq?: number;
 }
 
 export interface SessionCloseAckFrame {
@@ -836,6 +860,7 @@ export interface GoalStatusFrame {
     status: "pending" | "met" | "unmet";
     clause_count?: number;
   }>;
+  seq?: number;
 }
 
 export interface LoopStatusFrame {
@@ -885,6 +910,7 @@ export interface JudgeVerdictFrame {
   judged_at: string;
   judge_agent_id: string;
   session_id?: string;
+  seq?: number;
 }
 
 export interface BrowserHandoverNoticeFrame {
@@ -910,6 +936,7 @@ export interface GoalOutcomeFrame {
   session_id: string;
   message_id: string;
   outcome: GoalOutcomeFrameOutcome;
+  seq?: number;
 }
 
 export interface KnowledgeIndexProgressFrame {
@@ -1007,6 +1034,7 @@ export type WsFrame =
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | AskUserAnswerFrame
+  | SessionSnapshotFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame
@@ -1096,6 +1124,7 @@ export type ServerFrame =
   | ToolApprovalRequiredFrame
   | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
+  | SessionSnapshotFrame
   | SessionStateFrame
   | SystemOverloadFrame
   | ReplayWarningFrame

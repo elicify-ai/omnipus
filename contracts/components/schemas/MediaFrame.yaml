@@ -30,3 +30,14 @@ properties:
       Non-empty array of media attachments. The server only emits a media frame
       when at least one part is present. Capped at 32 parts per frame to bound
       SPA render cost and payload size.
+
+  seq:
+    type: integer
+    format: int64
+    minimum: 0
+    description: >-
+      Per-session sequence number of this frame. Strictly increasing and gap-free within
+      the session, assigned by the gateway as the frame is emitted. The client stores the
+      highest seq it has applied per session and sends it back as since_seq on
+      attach_session; frames at or below that cursor are ignored, which makes re-delivery
+      idempotent. 0 means the session has no numbered event yet.
