@@ -21,17 +21,6 @@ const (
 	requestedSkillGranted
 )
 
-type delegatedTaskLimitStage string
-
-type delegatedTaskLimitNotice struct {
-	stage   delegatedTaskLimitStage
-	message string
-}
-
-func (n delegatedTaskLimitNotice) llmError() LLMError {
-	return LLMError{Code: CodeDelegatedTaskLimit, Message: n.message, Retryable: false}
-}
-
 type agentLoopKeyType struct{}
 
 var agentLoopKey = agentLoopKeyType{}

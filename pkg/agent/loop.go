@@ -2474,29 +2474,6 @@ func (al *AgentLoop) emitTurnErrorFrame(
 	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 
-// emitDelegatedTaskLimitNotice keeps publication ownership coherent by
-// deriving both destinations from sourceTS: live delivery uses the child's
-// own event identity, and persistence writes to that SAME child's own
-// transcript.
-//
-// ADR-091 boundary 11 (landing order §6): this used to walk
-// rootTurnState(sourceTS) and persist there — "always tell the top of the
-// tree" is exactly the hardcoded audience decision D3 replaces. A steered
-// child's own view is where R1 ("errors visible in the session's own view
-// and transcript") puts this; the upward half (the parent's side panel
-// status line) is subturn_result.go::emitSubTurnIterationLimitNotice's own
-// added Deliver call, not this shared helper — subTurnTimedOutResult's own
-// call site does not duplicate that upward delivery, since a timeout is
-// already one of I-5's terminal Outcomes, delivered once via turn
-// reconstruction (I-3, WP-A).
-func (al *AgentLoop) emitDelegatedTaskLimitNotice(
-	sourceTS *turnState, meta EventMeta, notice delegatedTaskLimitNotice,
-) {
-	llm := notice.llmError()
-	al.emitErrorEvent(sourceTS, meta, string(notice.stage), llm)
-	sourceTS.appendDelegatedTaskLimitNotice(notice)
-}
-
 func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {
 	sessionID := u9ToolExecSessionIDs(ts)
 	if al.audienceFor(context.Background(), steer.BoundaryTypedErrorFrame, sessionID) == steer.AudienceNone {

@@ -427,20 +427,6 @@ func (ts *turnState) appendDetachedTerminalError(kind, stage string, llm LLMErro
 	ts.writeErrorTranscriptWithAbandonment(kind, stage, llm.Message, llm.Code, true)
 }
 
-// appendDelegatedTaskLimitNotice is the sole persistence entry point for the
-// identifier-rich delegated-task notice. Its current producers restrict
-// variable content to bounded correlation fields, so this method can preserve
-// that copy without opening the generic classified-error path to arbitrary
-// child output.
-func (ts *turnState) appendDelegatedTaskLimitNotice(notice delegatedTaskLimitNotice) {
-	kind := EventKindError.String()
-	stage := string(notice.stage)
-	if !ts.canWriteErrorTranscript(kind, stage, notice.message, false) {
-		return
-	}
-	ts.persistErrorTranscript(kind, stage, notice.llmError(), notice.message)
-}
-
 func (ts *turnState) writeErrorTranscript(kind, stage, message string, code LLMErrorCode, pe ...*ProviderError) {
 	ts.writeErrorTranscriptWithAbandonment(kind, stage, message, code, false, pe...)
 }

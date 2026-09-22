@@ -203,7 +203,7 @@ type CancelReport struct {
 	SkippedTerminal []string
 }
 
-// Boundary names one of the twelve places a human could see something
+// Boundary names one of the places a human could see something
 // published (landing order §6). Each boundary calls the injected
 // AudienceResolver, then BoundaryObserver.Observe, and nothing else
 // decides.
@@ -220,12 +220,11 @@ const (
 	BoundaryAgentRequestedMessage    Boundary = "agent_requested_message"
 	BoundaryTaskResultNotification   Boundary = "task_result_notification"
 	BoundaryTypedErrorFrame          Boundary = "typed_error_frame"
-	BoundaryDelegateLifecycleNotice  Boundary = "delegate_lifecycle_notice"
 	BoundaryQuestionCard             Boundary = "question_card"
 )
 
-// Boundaries is the complete, ordered inventory (landing order §6, twelve
-// rows) — the set every containment test and control iterates over.
+// Boundaries is the complete, ordered inventory of reachable publication
+// boundaries — the set every containment test and control iterates over.
 var Boundaries = []Boundary{
 	BoundarySyncToolText,
 	BoundaryAsyncToolFeedback,
@@ -237,7 +236,6 @@ var Boundaries = []Boundary{
 	BoundaryAgentRequestedMessage,
 	BoundaryTaskResultNotification,
 	BoundaryTypedErrorFrame,
-	BoundaryDelegateLifecycleNotice,
 	BoundaryQuestionCard,
 }
 

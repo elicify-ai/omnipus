@@ -67,13 +67,16 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 	tests := []struct {
 		name       string
 		answer     string
+		turnFailed bool
 		withQueued bool
 		wantState  session.LifecycleState
 		wantKind   string
 		wantText   string
+		wantFatal  bool
 	}{
 		{name: "non-empty quiet", answer: "finished", wantState: session.LifecycleCompleted, wantKind: "handback"},
-		{name: "empty quiet", answer: "   ", wantState: session.LifecycleFailed, wantKind: "error", wantText: "empty_answer:"},
+		{name: "empty quiet", answer: "   ", wantState: session.LifecycleFailed, wantKind: "error", wantText: "empty_answer:", wantFatal: true},
+		{name: "iteration limit uses failed outcome", answer: toolLimitResponse, turnFailed: true, wantState: session.LifecycleFailed, wantKind: "error", wantText: "failed:", wantFatal: true},
 		{name: "non-empty queued descendant", answer: "parent answer", withQueued: true, wantState: session.LifecycleRunning},
 	}
 	for _, tc := range tests {
@@ -94,7 +97,7 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 				}
 			}
 
-			al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: tc.answer}, nil)
+			al.completeSteeredTurn(context.Background(), rec, turnResult{finalContent: tc.answer, turnFailed: tc.turnFailed}, nil)
 
 			got, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
 			if err != nil {
@@ -124,6 +127,9 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 				v, err := msgs[0].AsSessionMessageError()
 				if err != nil || !strings.Contains(v.Text, tc.wantText) {
 					t.Fatalf("error message = %q (%v), want contains %q", v.Text, err, tc.wantText)
+				}
+				if v.Fatal != tc.wantFatal {
+					t.Fatalf("error fatal = %v, want %v", v.Fatal, tc.wantFatal)
 				}
 			}
 		})
