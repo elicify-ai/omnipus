@@ -33,6 +33,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/state"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -405,6 +406,20 @@ type AgentLoop struct {
 	// way approvalGrants is, per the spec's Clarifications. Always non-nil
 	// after NewAgentLoop.
 	asyncNotifier *asyncNotifierImpl
+
+	// audienceResolver, boundaryObserver, upwardDeliverer are ADR-091 I-5's
+	// injected pkg/steer dependencies (landing order I-5, boundary
+	// inventory §6). Nil until SetSteerAudienceDeps is called (post-boot,
+	// once gateway_boot.go::wireSteerDeps has built the real
+	// implementations) — every boundary reads them through steer_boundary.go's
+	// audienceFor, which treats a nil resolver as AudienceUser (today's
+	// unrestricted behaviour) so a bare test AgentLoop that never wires
+	// steering is unaffected. Guarded by steerDepsMu (late-bound, mirroring
+	// askUserRegistry/askUserRegistryMu).
+	audienceResolver steer.AudienceResolver
+	boundaryObserver steer.BoundaryObserver
+	upwardDeliverer  steer.UpwardDeliverer
+	steerDepsMu      sync.RWMutex
 
 	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/
 	// used for all new sessions (joined session model). Legacy per-agent stores
