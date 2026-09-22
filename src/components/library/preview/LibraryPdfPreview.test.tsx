@@ -1220,6 +1220,108 @@ describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
   })
 })
 
+// ── Sharp zoom (2026-09-22): the canvas backing store follows the reader's
+// zoom, capped for memory ─────────────────────────────────────────────────
+// Before this, a page's canvas was drawn ONCE at fit-width x device pixel
+// ratio and the D-37 zoom above was pure CSS `zoom` on the already-drawn
+// bitmap — text softened progressively above 100%. `targetRasterScale` is
+// the pure function deciding how many device pixels per CSS pixel a page's
+// canvas should carry for a given zoom; these tests prove it (a) tracks
+// zoom 1:1 once zoom exceeds 100%, (b) is a no-op at/below 100% (zero
+// regression from the pre-existing baseline), (c) is capped, and (d) the
+// component actually applies it to a real canvas, not just computes it.
+describe('LibraryPdfPreview — sharp zoom: the canvas backing store follows zoom, capped', () => {
+  it('targetRasterScale is unchanged (deviceRatio) at and below 100% zoom, and grows 1:1 with zoom until the cap engages', async () => {
+    const { targetRasterScale } = await import('./LibraryPdfPreview')
+    // A representative fit-width viewport.
+    const fitW = 768
+    const fitH = 1024
+    expect(targetRasterScale(fitW, fitH, 1, 2)).toBe(2)
+    expect(targetRasterScale(fitW, fitH, 0.25, 2)).toBe(2)
+    // 200% is still comfortably under either cap: exact 1:1 tracking.
+    expect(targetRasterScale(fitW, fitH, 2, 2)).toBe(4)
+    // 400% on a 2x display is where the area cap engages even for this
+    // ordinary page size — less than the naive 8, but still sharper than
+    // the flat `deviceRatio` (2) every zoom level rendered at before this
+    // fix, and sharper again than the untouched 200% case above.
+    const at400 = targetRasterScale(fitW, fitH, 4, 2)
+    expect(at400).toBeLessThan(8)
+    expect(at400).toBeGreaterThan(4)
+  })
+
+  it('caps the backing store so a large page at 400% zoom on a 2x display never exceeds the dimension/area ceiling', async () => {
+    const { targetRasterScale, MAX_CANVAS_DIMENSION_PX, MAX_CANVAS_PIXELS } = await import('./LibraryPdfPreview')
+    // A wide pane on a large monitor. The NAIVE (uncapped) backing store
+    // here would be 1600*2*4 = 12800px wide and 2064*2*4 = 16512px tall —
+    // both already past MAX_CANVAS_DIMENSION_PX, at roughly 211 megapixels —
+    // far past MAX_CANVAS_PIXELS (4096 * 4096, Safari's canvas-area limit).
+    const fitW = 1600
+    const fitH = 2064
+    const deviceRatio = 2
+    const zoom = 4
+    const scale = targetRasterScale(fitW, fitH, zoom, deviceRatio)
+    const naive = deviceRatio * zoom
+    // The cap actually engaged — the result is well below the naive value —
+    // but never below the pre-existing, already-shipped baseline (deviceRatio
+    // alone): a capped page is still sharper than before the fix, never
+    // regressed by it.
+    expect(scale).toBeLessThan(naive)
+    expect(scale).toBeGreaterThanOrEqual(deviceRatio)
+    const backingWidth = fitW * scale
+    const backingHeight = fitH * scale
+    expect(backingWidth).toBeLessThanOrEqual(MAX_CANVAS_DIMENSION_PX + 1)
+    expect(backingHeight).toBeLessThanOrEqual(MAX_CANVAS_DIMENSION_PX + 1)
+    expect(backingWidth * backingHeight).toBeLessThanOrEqual(MAX_CANVAS_PIXELS * 1.001)
+  })
+
+  it('re-rasterises the visible page so its canvas backing-store width tracks the zoom level, not just the CSS box', async () => {
+    const { mod } = await renderPreview()
+    const pages = await screen.findByTestId('library-pdf-pages')
+    const pageEl = await screen.findByTestId('library-pdf-page')
+    const readCanvas = () => pageEl.querySelector('canvas') as HTMLCanvasElement
+    const widthAt100 = readCanvas().width
+    // The mock `page.getViewport` (top of this file) returns
+    // `600 * scale` / `800 * scale`; `measureRenderWidth`'s jsdom fallback
+    // (clientWidth is always 0 in jsdom) fits at `(800 - 32) / 600 = 1.28`,
+    // so the FIT viewport is 768 x 1024 CSS px — independently confirming
+    // the 100% baseline before asserting how it changes.
+    expect(widthAt100).toBe(Math.floor(768 * 1))
+
+    // Three 1.25x steps on the shared pill land above 100% without needing
+    // an exact 200% (the shared range steps multiplicatively, never lands on
+    // a round number) — the assertion below computes the RIGHT answer for
+    // whatever zoom is actually reached, from the same formula the module
+    // documents and exports, rather than assuming a specific value.
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    const zoomNow = Number(pages.getAttribute('data-zoom'))
+    expect(zoomNow).toBeGreaterThan(1)
+
+    // The redraw is debounced (RERASTER_DEBOUNCE_MS) and then async
+    // (page.render()'s mocked promise) — real time, no fake timers, matching
+    // every other timing test in this file.
+    await waitFor(
+      () => {
+        const expectedScale = mod.targetRasterScale(768, 1024, zoomNow, 1)
+        expect(readCanvas().width).toBe(Math.floor(768 * expectedScale))
+      },
+      { timeout: mod.RERASTER_DEBOUNCE_MS + 1000 },
+    )
+    // Directly against the acceptance criterion: the backing-store width
+    // grew in step with zoom, not by magnifying a fixed bitmap.
+    expect(readCanvas().width).toBeGreaterThan(widthAt100)
+    expect(readCanvas().width / widthAt100).toBeCloseTo(zoomNow, 1)
+
+    // The CSS box itself — what CSS `zoom` on the container multiplies — is
+    // UNCHANGED by the redraw: it is the thing that must stay put so the
+    // text layer, annotation layer and signature overlays keep lining up at
+    // every zoom level.
+    expect(readCanvas().style.width).toBe('768px')
+    expect(readCanvas().style.height).toBe('1024px')
+  })
+})
+
 describe('LibraryPdfPreview — D-63 the signature dialog defaults to the page on screen', () => {
   it('a 3-page document defaults to page 1 (the first visible), not the last page', async () => {
     h.numPages = 3

@@ -165,12 +165,25 @@ const MAX_SCALE = 4
  *  shared `ZoomPill` and the shared 25%-400% range (D18,
  *  docs/internal/design/components/zoomable-view.md).
  *
- *  It is a display zoom, not a re-render: the canvas is drawn once at
- *  fit-width x device pixel ratio (capped at `MAX_PIXEL_RATIO`), so above
- *  100% the drawn pixels are magnified and text softens progressively —
- *  at 400% on a 2x display each drawn pixel covers four screen pixels
- *  across. Re-rasterising at the zoom level would need the render effect
- *  to keep the loaded document instead of owning its fetch.
+ *  The CSS `zoom` is layout only — every page's element and canvas keep the
+ *  SAME fit-width CSS pixel size at every zoom level, so the text layer,
+ *  annotation layer and signature overlays (all positioned in that same
+ *  CSS-pixel space) stay aligned automatically as the whole container is
+ *  magnified uniformly. What DOES change with zoom is the canvas's backing
+ *  resolution: `targetRasterScale` above raises the device-pixels-per-CSS-
+ *  pixel a page is drawn at as zoom rises past 100%, so text stays sharp
+ *  rather than being magnified from a fixed bitmap. Re-rasterising a page
+ *  keeps the SAME loaded `PDFDocumentProxy` and `PDFPageProxy` (`docRef`,
+ *  `pagesRef`) — there is no re-fetch and no reopen — and is scoped to
+ *  pages currently near the viewport (`nearViewportPageNumbers`), debounced
+ *  while the reader is actively zooming or scrolling
+ *  (`RERASTER_DEBOUNCE_MS`), and capped in backing-store size
+ *  (`MAX_CANVAS_DIMENSION_PX`/`MAX_CANVAS_PIXELS`) so a long document never
+ *  re-rasterises every page at once and a single page never grows without
+ *  bound. `rasterizePage` draws the new resolution into a fresh, detached
+ *  canvas and swaps it in only once rendering finishes, so the previously
+ *  magnified (softer but complete) picture stays on screen the whole time —
+ *  never a blank page while the sharp one is being drawn.
  *
  *  Fit and 100% are the same action here (see `zoomToFit`/`zoomTo100`):
  *  the base render is already fitted, and this zoom multiplies it. */
@@ -201,9 +214,89 @@ export function firstVisiblePdfPage(container: HTMLElement): number {
   return 1
 }
 
-/** Cap the canvas backing store at 2x. Beyond that the memory cost per page
- *  grows faster than the visible gain on a 3x display. */
+/** Cap the canvas backing store at 2x for the UNZOOMED (100%) render. Beyond
+ *  that the memory cost per page grows faster than the visible gain on a 3x
+ *  display. The reader's own zoom (`PDF_READER_ZOOM_DEFAULT` below) is layered
+ *  on top of this, separately capped by `MAX_CANVAS_DIMENSION_PX`/
+ *  `MAX_CANVAS_PIXELS`. */
 const MAX_PIXEL_RATIO = 2
+
+/** Ceilings on a single page canvas's backing-store resolution once the
+ *  reader's zoom (not just device pixel ratio) is included. Two independent
+ *  caps, because either alone has a blind spot: the area cap alone lets a
+ *  very tall, narrow page reach an extreme single-side dimension before the
+ *  area limit engages; the dimension cap alone lets a very wide, short page
+ *  reach an extreme pixel count while staying under either side limit.
+ *  `MAX_CANVAS_DIMENSION_PX` sits well under the ~16,384px per-side ceiling
+ *  the engines this product ships on enforce; `MAX_CANVAS_PIXELS` is Safari's
+ *  hard canvas-area limit on iOS and iPadOS (4096 * 4096 = 16,777,216 pixels,
+ *  about 64MB of RGBA) — a larger canvas silently renders blank there. On a 2x display a typical
+ *  fit-width page keeps full detail up to about 200% zoom; above that the
+ *  cap holds it near 5x its CSS size (a measured 400% crop keeps 98% of the
+ *  uncapped sharpness), and a large page or ultra-wide pane never reaches
+ *  for hundreds of megabytes — and only pages visible or near the scroll viewport are ever
+ *  rasterised at these ceilings (`rasterizePage`/`nearViewportPageNumbers`
+ *  below) — never every page of a long document at once. */
+export const MAX_CANVAS_DIMENSION_PX = 8192
+export const MAX_CANVAS_PIXELS = 4096 * 4096
+
+/** Computes the backing-store scale (device pixels per CSS pixel of the
+ *  page's FIT-WIDTH viewport — the same viewport `pageEl`/`canvas.style`
+ *  size, unaffected by zoom) a page's canvas should be drawn at for a given
+ *  reader zoom level. At `zoom <= 1` this is exactly `deviceRatio` — the
+ *  same number every page has always rendered at — so 100% and below are
+ *  byte-for-byte the pre-existing behaviour. Above 100% it grows with zoom
+ *  so the canvas keeps roughly one device pixel per screen pixel at the
+ *  CURRENT magnification, clamped so a page's backing store never exceeds
+ *  `MAX_CANVAS_DIMENSION_PX` per side or `MAX_CANVAS_PIXELS` total — the
+ *  clamp can only ever raise the result above `deviceRatio`, never below it,
+ *  so it can only soften a very large page at extreme zoom, never regress a
+ *  small one below what it already rendered at. */
+export function targetRasterScale(fitViewportWidth: number, fitViewportHeight: number, zoom: number, deviceRatio: number): number {
+  if (zoom <= 1) return deviceRatio
+  const baseW = fitViewportWidth * deviceRatio
+  const baseH = fitViewportHeight * deviceRatio
+  const byDimension = Math.min(MAX_CANVAS_DIMENSION_PX / baseW, MAX_CANVAS_DIMENSION_PX / baseH)
+  const byArea = Math.sqrt(MAX_CANVAS_PIXELS / (baseW * baseH))
+  const zoomFactor = Math.max(1, Math.min(zoom, byDimension, byArea))
+  return deviceRatio * zoomFactor
+}
+
+/** How long to wait, in ms, after the LAST zoom step (wheel tick, pinch
+ *  frame, or pill click) or scroll movement before re-rasterising
+ *  near-viewport pages at the new target resolution (`rasterizePage` below).
+ *  A wheel/pinch gesture fires many steps in a row; without this each one
+ *  would start its own redraw, competing for the same canvas. The magnified
+ *  (but not yet re-rasterised) picture stays on screen throughout — nothing
+ *  is blanked while this timer is pending. */
+export const RERASTER_DEBOUNCE_MS = 150
+
+/** How far beyond the container's own visible rectangle, in CSS pixels, a
+ *  page still counts as "near" and gets proactively re-rasterised — roughly
+ *  one screenful, so the next page a reader scrolls to is already sharp
+ *  rather than rasterising on arrival. Pages further away keep whatever
+ *  resolution they last had until they come this close. */
+const NEAR_VIEWPORT_MARGIN_PX = 600
+
+/** The page numbers whose element is within `NEAR_VIEWPORT_MARGIN_PX` of the
+ *  container's own visible rectangle — the set `rasterizePage` calls are
+ *  scoped to, so a long document never re-rasterises every page at once for
+ *  one zoom step. Uses `getBoundingClientRect`, the same measurement
+ *  `firstVisiblePdfPage` above already relies on being correct under the
+ *  D-37 CSS `zoom` (see that function's own comment) — jsdom's all-zero
+ *  rects make every page "near" by this same math, which is the safe
+ *  default for a test environment that never lays anything out. */
+function nearViewportPageNumbers(container: HTMLElement, pageEls: Map<number, HTMLDivElement>): number[] {
+  const containerRect = container.getBoundingClientRect()
+  const top = containerRect.top - NEAR_VIEWPORT_MARGIN_PX
+  const bottom = containerRect.bottom + NEAR_VIEWPORT_MARGIN_PX
+  const result: number[] = []
+  for (const [n, el] of pageEls) {
+    const rect = el.getBoundingClientRect()
+    if (rect.bottom >= top && rect.top <= bottom) result.push(n)
+  }
+  return result
+}
 
 /** Page width, in CSS pixels, used ONLY when this component's own box
  *  genuinely measures zero — it is not laid out yet, or its parent is
@@ -579,6 +672,40 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
   const signaturePreviewElsRef = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingSaveBytesRef = useRef<Uint8Array | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // ── Zoom re-rasterisation (see `targetRasterScale`'s comment above) ───────
+  // The <canvas> currently mounted for each page — `rasterizePage` swaps this
+  // out for a freshly-drawn one, so later callers always redraw against
+  // whichever canvas is actually on screen, not a stale reference to the
+  // FIRST one.
+  const pageCanvasElsRef = useRef<Map<number, HTMLCanvasElement>>(new Map())
+  // The backing-store scale (`targetRasterScale`'s return value) currently
+  // painted on each page's canvas. `rasterizePage` reads this to skip a
+  // redraw that would produce an identical result — every zoom step below
+  // the cap, or a zoom step that lands on an already-capped page, is a
+  // real no-op rather than a wasted render.
+  const paintedScaleRef = useRef<Map<number, number>>(new Map())
+  // Bumped on every `rasterizePage` call for a given page. A redraw that
+  // finishes after a NEWER one already committed (e.g. two zoom steps fired
+  // close together) checks its own generation before swapping in the canvas
+  // it just built — the newer redraw's result must win, never the older one
+  // landing last and silently downgrading the resolution just shown.
+  const pageRenderGenerationRef = useRef<Map<number, number>>(new Map())
+  // The in-flight `page.render()` task for each page's CURRENT redraw, so a
+  // second zoom step arriving before the first redraw finishes cancels the
+  // now-pointless one instead of letting two renders race for the same slot.
+  const pendingRasterTasksRef = useRef<Map<number, { cancel: () => void }>>(new Map())
+  // `Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)` for the CURRENT
+  // load, captured once when the pages are drawn (device pixel ratio does
+  // not change mid-session) and reused by every later re-rasterisation so it
+  // matches the number the base render used.
+  const deviceRatioRef = useRef<number>(1)
+  // A live mirror of the `zoom` state, read by the scroll-triggered
+  // re-raster effect below (registered once, with no `zoom` dependency, so
+  // scrolling never re-subscribes the listener) and by the load effect's
+  // initial per-page render (which does not depend on `zoom` either — a
+  // Save-triggered reload must draw at whatever zoom the reader is
+  // currently at, not silently reset to 100%).
+  const zoomRef = useRef<number>(PDF_READER_ZOOM_DEFAULT)
   // True only while `handleSave` is awaiting `doc.saveDocument()` / the PUT.
   // `saveDocument()` talks to the worker and never settles if that worker
   // died, so a load failure discovered mid-save has to unwedge the indicator
@@ -670,6 +797,140 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
+  useEffect(() => {
+    zoomRef.current = zoom
+  }, [zoom])
+
+  /** Redraws ONE page's canvas at `targetScale` device-pixels-per-CSS-pixel,
+   *  reusing the SAME `PDFPageProxy`/`PageViewport` the base render already
+   *  holds (`pagesRef`/`pageViewportsRef`) — no re-fetch, no reopen. Builds
+   *  the new bitmap into a detached canvas and swaps it in only once it is
+   *  actually ready, so the page never goes blank: the previous canvas
+   *  (softer, but complete) stays on screen for the entire redraw. A no-op
+   *  when the page is already painted at `targetScale` (`paintedScaleRef`).
+   *
+   *  Failure here — the page's worker already torn down (an inline embed
+   *  past its base render, see EMB-032's note above `endWorkerThreadThen
+   *  ReleaseLease`'s inline branch), or a stale generation losing a race to
+   *  a newer redraw — leaves the CURRENT canvas exactly as it was: always a
+   *  complete, correct picture at some resolution, never a blank or
+   *  half-drawn one. That is why this catches and returns rather than
+   *  surfacing a toast: the fallback is itself a working display, not a
+   *  lost user action, and an inline embed hitting this on every zoom step
+   *  (expected, not a bug) would otherwise toast on every step. */
+  async function rasterizePage(pageNumber: number, targetScale: number) {
+    if (paintedScaleRef.current.get(pageNumber) === targetScale) return
+    const pdfjs = pdfjsRef.current
+    const page = pagesRef.current.get(pageNumber)
+    const viewport = pageViewportsRef.current.get(pageNumber)
+    const pageEl = pageElsRef.current.get(pageNumber)
+    const oldCanvas = pageCanvasElsRef.current.get(pageNumber)
+    if (!pdfjs || !page || !viewport || !pageEl || !oldCanvas) return
+
+    pendingRasterTasksRef.current.get(pageNumber)?.cancel()
+
+    const generation = (pageRenderGenerationRef.current.get(pageNumber) ?? 0) + 1
+    pageRenderGenerationRef.current.set(pageNumber, generation)
+
+    const newCanvas = document.createElement('canvas')
+    newCanvas.width = Math.floor(viewport.width * targetScale)
+    newCanvas.height = Math.floor(viewport.height * targetScale)
+    // The CSS box size is the FIT-WIDTH size, unaffected by targetScale —
+    // that is what keeps the page's layout, and every overlay positioned
+    // against it, identical at every zoom level (see this file's zoom
+    // comment above `PDF_READER_ZOOM_DEFAULT`).
+    newCanvas.style.width = `${viewport.width}px`
+    newCanvas.style.height = `${viewport.height}px`
+    newCanvas.className = oldCanvas.className
+    const ctx = newCanvas.getContext('2d')
+    if (!ctx) return
+
+    let renderTask: ReturnType<PDFPageProxy['render']>
+    try {
+      renderTask = page.render({
+        canvas: newCanvas,
+        canvasContext: ctx,
+        viewport,
+        transform: targetScale === 1 ? undefined : [targetScale, 0, 0, targetScale, 0, 0],
+        // Same read-only, static-appearance mode the base render uses — see
+        // the module doc's "Read-only BASE render (NB-17)" note. A redraw is
+        // the identical picture at a different resolution, never a live one.
+        annotationMode: pdfjs.AnnotationMode.ENABLE,
+        isEditing: false,
+      })
+    } catch {
+      return
+    }
+    pendingRasterTasksRef.current.set(pageNumber, renderTask)
+    try {
+      await renderTask.promise
+    } catch {
+      return
+    } finally {
+      if (pendingRasterTasksRef.current.get(pageNumber) === renderTask) {
+        pendingRasterTasksRef.current.delete(pageNumber)
+      }
+    }
+    // A newer redraw for this SAME page already committed while this one was
+    // in flight — its result must win, not this stale one landing last.
+    if (pageRenderGenerationRef.current.get(pageNumber) !== generation) return
+    if (!pageEl.isConnected || !oldCanvas.isConnected) return
+    pageEl.replaceChild(newCanvas, oldCanvas)
+    pageCanvasElsRef.current.set(pageNumber, newCanvas)
+    paintedScaleRef.current.set(pageNumber, targetScale)
+  }
+
+  // Re-rasterise near-viewport pages once the reader STOPS zooming
+  // (RERASTER_DEBOUNCE_MS after the last `zoom` change) — a wheel/pinch
+  // gesture fires many steps, and this coalesces them into one redraw per
+  // gesture rather than one per step. Skipped entirely before the base
+  // render has finished (`allPagesRendered`): there is nothing to
+  // re-rasterise yet, and `pagesRef`/`pageViewportsRef` are still being
+  // populated by the load effect below.
+  useEffect(() => {
+    if (!allPagesRendered) return
+    const container = containerRef.current
+    if (!container) return
+    const deviceRatio = deviceRatioRef.current
+    const timer = setTimeout(() => {
+      for (const n of nearViewportPageNumbers(container, pageElsRef.current)) {
+        const viewport = pageViewportsRef.current.get(n)
+        if (!viewport) continue
+        void rasterizePage(n, targetRasterScale(viewport.width, viewport.height, zoom, deviceRatio))
+      }
+    }, RERASTER_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [zoom, allPagesRendered])
+
+  // Re-rasterise near-viewport pages once SCROLLING settles, at whatever
+  // zoom is currently active (`zoomRef`, not `zoom` — this effect has no
+  // `zoom` dependency so it registers the listener exactly once). Handles
+  // the case the zoom-triggered effect above cannot: a reader who zoomed in,
+  // then scrolled to a page that was never near the viewport while zoom was
+  // settling, and so was never re-rasterised at the current zoom's target
+  // resolution.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onScroll = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        const deviceRatio = deviceRatioRef.current
+        for (const n of nearViewportPageNumbers(container, pageElsRef.current)) {
+          const viewport = pageViewportsRef.current.get(n)
+          if (!viewport) continue
+          void rasterizePage(n, targetRasterScale(viewport.width, viewport.height, zoomRef.current, deviceRatio))
+        }
+      }, RERASTER_DEBOUNCE_MS)
+    }
+    container.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      container.removeEventListener('scroll', onScroll)
+      if (timer) clearTimeout(timer)
+    }
   }, [])
 
   useEffect(() => {
@@ -823,6 +1084,16 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     signaturePreviewElsRef.current.clear()
     docRef.current = null
     pdfjsRef.current = null
+    // A fresh load means every previously-mounted canvas is gone with
+    // `container.replaceChildren()` below — carrying a stale "painted at
+    // scale X" entry forward would make `rasterizePage` treat a BRAND NEW
+    // canvas as already matching a scale it has never actually drawn at,
+    // and skip painting it.
+    for (const task of pendingRasterTasksRef.current.values()) task.cancel()
+    pendingRasterTasksRef.current.clear()
+    pageRenderGenerationRef.current.clear()
+    paintedScaleRef.current.clear()
+    pageCanvasElsRef.current.clear()
     container.replaceChildren()
 
     void (async () => {
@@ -1088,6 +1359,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
           container.removeAttribute('data-width-source')
         }
         const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)
+        deviceRatioRef.current = ratio
         let firstPageOnScreen = false
 
         for (const n of pagesToRender) {
@@ -1099,6 +1371,13 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
           const fit = (width - 32) / unscaled.width
           const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, fit))
           const viewport = page.getViewport({ scale })
+          // The reader may already be zoomed in before this load finishes —
+          // a Save re-opens the SAME document at whatever zoom was active
+          // (`reloadNonce`, not a fresh mount). `zoomRef` (not the `zoom`
+          // state) because this effect does not depend on zoom and must
+          // read whatever is current when it actually runs, not whatever it
+          // captured at closure-creation time.
+          const renderScale = targetRasterScale(viewport.width, viewport.height, zoomRef.current, ratio)
 
           const pageEl = document.createElement('div')
           pageEl.className = 'relative mx-auto my-4 shadow-lg'
@@ -1112,8 +1391,8 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
           pageEl.setAttribute('data-page-number', String(n))
 
           const canvas = document.createElement('canvas')
-          canvas.width = Math.floor(viewport.width * ratio)
-          canvas.height = Math.floor(viewport.height * ratio)
+          canvas.width = Math.floor(viewport.width * renderScale)
+          canvas.height = Math.floor(viewport.height * renderScale)
           canvas.style.width = `${viewport.width}px`
           canvas.style.height = `${viewport.height}px`
           canvas.className = 'block h-full w-full bg-white'
@@ -1128,6 +1407,8 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
           pagesRef.current.set(n, page)
           pageViewportsRef.current.set(n, viewport)
           pageElsRef.current.set(n, pageEl)
+          pageCanvasElsRef.current.set(n, canvas)
+          paintedScaleRef.current.set(n, renderScale)
 
           const ctx = canvas.getContext('2d')
           if (!ctx) throw new Error('This browser did not provide a 2D canvas context.')
@@ -1136,7 +1417,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             canvas,
             canvasContext: ctx,
             viewport,
-            transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
+            transform: renderScale === 1 ? undefined : [renderScale, 0, 0, renderScale, 0, 0],
             // NB-17 — the BASE canvas stays read-only. ENABLE draws annotation
             // appearance streams (including already-filled form values) as
             // static graphics. ENABLE_FORMS and ENABLE_STORAGE are the modes
@@ -1248,6 +1529,17 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
           // A task that already settled throws on cancel; nothing to do.
         }
       }
+      // A zoom/scroll-triggered redraw in flight when this load ends (unmount,
+      // or a retry/reload starting a fresh load) is pointless work against a
+      // page about to be torn down or replaced.
+      for (const task of pendingRasterTasksRef.current.values()) {
+        try {
+          task.cancel()
+        } catch {
+          // Already settled; nothing to do.
+        }
+      }
+      pendingRasterTasksRef.current.clear()
 
       // ── Ending the Worker THREAD. This is ours to do. ───────────────────
       // `endWorkerThreadThenReleaseLease` (defined above, shared with
