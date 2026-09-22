@@ -386,6 +386,28 @@ func TestDeliver_ProgressStoredNotWoken(t *testing.T) {
 	}
 }
 
+func TestDeliver_RejectsOutcomeMessageMismatch(t *testing.T) {
+	_, lifecycle, inbox, deliverer := newDeliverTestLoop(t)
+	const parentID, childID = "parent-1", "child-1"
+	seedParentAndChild(t, lifecycle, parentID, childID)
+
+	_, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+		ChildSessionID: childID,
+		Outcome:        steer.OutcomeProgress,
+		Message:        handbackEvent(childID, "wrong-kind").Message,
+	})
+	if err == nil {
+		t.Fatal("Deliver accepted an OutcomeProgress carrying a handback envelope")
+	}
+	msgs, _, _, drainErr := inbox.Drain(parentID, childID, "", 10)
+	if drainErr != nil {
+		t.Fatal(drainErr)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("mismatched event reached the inbox: %d entries", len(msgs))
+	}
+}
+
 // TestDeliver_StoppedRecipientNotWoken covers US-2/AS-13 (TDD plan test 18):
 // a recipient carrying a Stop marker for its current generation is not
 // woken; the entry is stored for acknowledgement at revival.

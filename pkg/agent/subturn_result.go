@@ -249,6 +249,9 @@ func emitSubTurnIterationLimitNotice(al *AgentLoop, childTS *turnState, cfg SubT
 	if deliverer == nil || childSessionID == "" {
 		return
 	}
+	if al.audienceFor(context.Background(), steer.BoundaryDelegateLifecycleNotice, childSessionID) == steer.AudienceNone {
+		return
+	}
 	var sm generated.SessionMessage
 	if err := sm.FromSessionMessageError(generated.SessionMessageError{
 		MessageId:      fmt.Sprintf("%s-limit-%s-%d", childSessionID, notice.stage, time.Now().UnixNano()),

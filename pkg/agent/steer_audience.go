@@ -110,21 +110,32 @@ func isTerminalOutcome(o steer.Outcome) bool {
 	}
 }
 
-// wakeEligibleOutcome reports whether o wakes the recipient (I-5's
-// wake-eligibility table: handback, question, blocker, a fatal error,
-// goal_status — today's wakeableSessionMessageKinds plus goal_status, minus
-// non-fatal errors). progress/checkpoint/a non-fatal lifecycle notice never
-// wake, not at first delivery and not at boot.
-func wakeEligibleOutcome(o steer.Outcome) bool {
-	switch o {
-	case steer.OutcomeFinalAnswer, steer.OutcomeEmptyAnswer, steer.OutcomeParkedQuestion,
-		steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed,
-		steer.OutcomeBlocker, steer.OutcomeGoalVerdict:
-		return true
+func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass) error {
+	wantKind, wantFatal := "", false
+	switch outcome {
+	case steer.OutcomeFinalAnswer:
+		wantKind = "handback"
+	case steer.OutcomeEmptyAnswer, steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed:
+		wantKind, wantFatal = "error", true
+	case steer.OutcomeParkedQuestion:
+		wantKind = "question"
+	case steer.OutcomeBlocker:
+		wantKind = "blocker"
+	case steer.OutcomeGoalVerdict:
+		wantKind = "goal_status"
+	case steer.OutcomeProgress:
+		wantKind = "progress"
+	case steer.OutcomeCheckpoint:
+		wantKind = "checkpoint"
+	case steer.OutcomeLifecycleNotice:
+		wantKind = "error"
 	default:
-		// progress, checkpoint, lifecycle_notice, waiting_for_children.
-		return false
+		return fmt.Errorf("outcome %q has no deliverable message variant", outcome)
 	}
+	if class.Kind != wantKind || (wantKind == "error" && class.Fatal != wantFatal) {
+		return fmt.Errorf("outcome %q does not match message kind %q (fatal=%v)", outcome, class.Kind, class.Fatal)
+	}
+	return nil
 }
 
 // subagentMessageKindForOutcome maps an I-5 turn Outcome onto the
@@ -285,6 +296,13 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	}
 
 	msg := event.Message
+	class, classErr := session.ClassifySessionMessage(msg)
+	if classErr != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify message: %w", classErr)
+	}
+	if matchErr := validateOutcomeMessage(event.Outcome, class); matchErr != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
+	}
 	if isTerminalOutcome(event.Outcome) {
 		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, childRec.Generation)
 		msg, err = withDeterministicMessageID(msg, id)
@@ -316,7 +334,7 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		al.deliverSubagentState(ownerKey, childRec, state)
 	}
 
-	if !wakeEligibleOutcome(event.Outcome) {
+	if !class.WakeEligible {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
 
