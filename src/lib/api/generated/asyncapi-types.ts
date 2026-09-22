@@ -541,7 +541,6 @@ export interface SessionStateFrame {
   session_id?: string;
   active_turn?: SessionStateActiveTurn;
   emitted_at: string;
-  seq?: number;
 }
 
 export interface SystemOverloadFrame {

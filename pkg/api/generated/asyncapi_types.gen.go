@@ -930,8 +930,6 @@ type SessionStateFrame struct {
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
 	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
-	// Per-session sequence number of this frame. Strictly increasing and gap-free within the session, assigned by the gateway as the frame is emitted. The client stores the highest seq it has applied per session and sends it back as since_seq on attach_session; frames at or below that cursor are ignored, which makes re-delivery idempotent. 0 means the session has no numbered event yet.
-	Seq *int64 `json:"seq,omitempty"`
 	// ADR-082 (review CR3) — the transcript session this snapshot describes; absent on the connection-open emit. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
 	SessionId *string `json:"session_id,omitempty"`
 	Type      string  `json:"type"`

@@ -582,7 +582,6 @@ export const SessionStateFrame = z
     session_id: z.string().optional(),
     active_turn: SessionStateActiveTurn.optional(),
     emitted_at: z.string(),
-    seq: z.number().int().min(0).optional(),
   })
   .strict();
 
