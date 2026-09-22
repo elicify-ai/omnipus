@@ -65,7 +65,7 @@ describe('ExecAllowlistSection — mirror-image D3 defect: first add/remove must
     renderSection()
 
     // Wait for hydration.
-    await screen.findByText('git *')
+    await screen.findByRole('button', { name: 'Remove pattern git *' })
 
     const input = screen.getByLabelText('New binary pattern')
     fireEvent.change(input, { target: { value: 'custom-tool *' } })
@@ -91,7 +91,7 @@ describe('ExecAllowlistSection — mirror-image D3 defect: first add/remove must
     // user action beyond the single add — proving the write is not
     // dependent on a SECOND edit to accidentally surface it.
     renderSection()
-    await screen.findByText('git *')
+    await screen.findByRole('button', { name: 'Remove pattern git *' })
 
     fireEvent.change(screen.getByLabelText('New binary pattern'), {
       target: { value: 'only-edit *' },
@@ -107,7 +107,7 @@ describe('ExecAllowlistSection — mirror-image D3 defect: first add/remove must
 
   it('removing the FIRST (and only) pattern in a session also actually saves', async () => {
     renderSection()
-    await screen.findByText('git *')
+    await screen.findByRole('button', { name: 'Remove pattern git *' })
 
     fireEvent.click(screen.getByRole('button', { name: /remove pattern git \*/i }))
 
@@ -118,7 +118,7 @@ describe('ExecAllowlistSection — mirror-image D3 defect: first add/remove must
 
   it('does not save on mount / hydration alone — no interaction means no PUT', async () => {
     renderSection()
-    await screen.findByText('git *')
+    await screen.findByRole('button', { name: 'Remove pattern git *' })
     await new Promise((resolve) => setTimeout(resolve, 900))
     expect(updateExecAllowlist).not.toHaveBeenCalled()
   })

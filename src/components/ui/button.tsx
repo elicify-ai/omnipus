@@ -47,25 +47,38 @@ export interface ButtonProps
   actionState?: 'idle' | 'pending' | 'success' | 'error'
 }
 
-// Portalled straight to document.body, never a DOM child of the button.
-// A role-restrictive parent (radiogroup/tablist/toolbar/menu/listbox) then
-// sees the button contribute exactly one child, and the accessible name
-// can never pick up announcement text, because the region isn't a
-// descendant of the button to begin with. Radix's `hideOthers` (used by
-// dialogs/popovers to hide background content) explicitly skips
-// `[aria-live]` nodes, so this stays announced even while a modal is open.
-function ActionAnnouncement({ description }: { description?: string }) {
+// Portalled beside the control in its nearest dialog/alert-dialog subtree,
+// or to document.body when no modal contains the control. The region is never
+// a DOM child of the button, so role-restrictive parents still see one child
+// and announcement text cannot leak into the control's accessible name.
+// role=status already supplies implicit aria-live="polite" (WAI-ARIA role
+// mapping), so an explicit aria-live attribute would be redundant, not
+// protective: Radix's hideOthers (the `aria-hidden` package) hides an
+// ancestor purely by DOM position — it has no `[aria-live]` carve-out — so a
+// background dialog (and this region inside it) is still correctly hidden
+// when a nested modal opens on top. See "lets a nested modal hide the dialog
+// containing an action announcement" in button.test.tsx.
+function ActionAnnouncement({ description, target }: { description?: string; target: HTMLElement | null }) {
   const [announcement, setAnnouncement] = React.useState('')
   React.useEffect(() => { setAnnouncement(description ?? '') }, [description])
+  if (!target) return null
   return createPortal(
-    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>,
-    document.body,
+    <span className="sr-only" role="status" aria-atomic="true">{announcement}</span>,
+    target,
   )
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, asChild = false, actionState = 'idle', type, disabled, onClickCapture, onAuxClickCapture, children, 'aria-busy': ariaBusy, 'aria-disabled': ariaDisabled, 'aria-description': ariaDescription, 'aria-label': ariaLabelProp, 'aria-labelledby': ariaLabelledByProp, ...props }, ref) => {
     const Comp = asChild ? Slot : 'button'
+    const [announcementTarget, setAnnouncementTarget] = React.useState<HTMLElement | null>(null)
+    const setRootRef = React.useCallback((node: HTMLButtonElement | null) => {
+      if (node) {
+        setAnnouncementTarget(node.closest<HTMLElement>('[role="dialog"], [role="alertdialog"]') ?? document.body)
+      }
+      if (typeof ref === 'function') return ref(node)
+      if (ref) ref.current = node
+    }, [ref])
     const pending = actionState === 'pending'
     const loadingVisible = useLoadingVisibility(pending)
     const presentedState = loadingVisible ? 'pending' : actionState === 'pending' ? 'idle' : actionState
@@ -124,7 +137,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             childCapture?.(event)
             onAuxClickCapture?.(event)
           },
-        }, <>{feedback}{(children.props as { children?: React.ReactNode }).children}<ActionAnnouncement description={feedbackDescription} /></>)
+        }, <>{feedback}{(children.props as { children?: React.ReactNode }).children}<ActionAnnouncement description={feedbackDescription} target={announcementTarget} /></>)
       : children
     return (
       <Comp
@@ -133,7 +146,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         // Placed before {...props} so a caller-supplied tabIndex wins.
         tabIndex={0}
         className={cn(buttonVariants({ variant, size }), className)}
-        ref={ref}
+        ref={setRootRef}
         {...props}
         {...(!asChild ? { type: type ?? 'button', disabled: disabled || pending } : { type })}
         aria-disabled={asChild && (disabled || pending) ? true : ariaDisabled}
@@ -149,7 +162,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         <>
           {feedback}
           {children}
-          <ActionAnnouncement description={feedbackDescription} />
+          <ActionAnnouncement description={feedbackDescription} target={announcementTarget} />
         </>
       )}</Comp>
     )
