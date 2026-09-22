@@ -840,18 +840,9 @@ jobs:
       # Playwright's own webServer managing start/stop for this one step --
       # no separate long-running process to coordinate across steps.
       #
-      # NON-BLOCKING UNTIL LINUX BASELINES EXIST. The committed baselines were
-      # captured on macOS and Playwright bakes the platform into every snapshot
-      # filename (`*-chromium-darwin.png`); this runner is ubuntu-latest and
-      # looks for `-linux`. So on the first run this step reports every image
-      # as missing, which is a real gap and not something to paper over -- but
-      # failing every PR before anyone can capture the Linux set would only
-      # teach people to ignore it. It therefore runs, uploads its evidence, and
-      # does not block, until the `-linux` baselines are generated and
-      # committed (issue #774). Flip continue-on-error back to false in the
-      # same commit that adds them -- a gate that never blocks is not a gate.
+      # Blocking: pixel diff of every catalogued component story against the
+      # committed darwin and linux baselines (maxDiffPixels: 50).
       - run: npm run test:design-system:screenshot
-        continue-on-error: true
         env:
           STORYBOOK_STATIC_DIR: dist/storybook
       - name: Upload appearance-gate diff evidence

@@ -86,12 +86,15 @@ function pascalCase(value: string): string {
 // `defaultMonth` to a fixed PAST month at the story-meta level, so it can
 // never again coincide with a real "today" highlight. JobStatus's stall
 // indicator needs a full `--motion-loading-escalation` (10s) of real
-// wall-clock time after mount to change what it renders, and no captured
-// story here waits anywhere near that long -- documented as a timing margin,
-// not a guarantee; freeze it with Playwright's `page.clock` in a follow-up if
-// it is ever seen to flake. CSS animation (Skeleton's pulse, Progress's
-// indeterminate bar) is handled by `toHaveScreenshot`'s own default, which
-// disables animations before every capture -- nothing here does that work.
+// wall-clock time after mount to change what it renders. Under a fully
+// parallel suite, scheduling delay can push the capture past that threshold,
+// so `openStoryForScreenshot` freezes time for JobStatus (see that function).
+// It is the only `src/components/ui` component whose render changes on a
+// delayed timer; AutoSaveIndicator and date-time-picker read the clock only
+// synchronously at render and stay unfrozen. CSS
+// animation (Skeleton's pulse, Progress's indeterminate bar) is handled by
+// `toHaveScreenshot`'s own default, which disables animations before every
+// capture -- nothing here does that work.
 const storyOverrides: Record<string, string> = {
   DatePicker: 'ReadOnly',
   DateTimePicker: 'ReadOnly',
@@ -125,9 +128,26 @@ async function findStoryEntry(page: Page, manifest: Manifest, storyName: string)
   return entry!
 }
 
-async function openStoryForScreenshot(page: Page, manifest: Manifest, storyName: string) {
+async function openStoryForScreenshot(page: Page, manifest: Manifest, storyName: string, freezeClockAt?: Date) {
   const entry = await findStoryEntry(page, manifest, storyName)
-  await page.addInitScript(() => {
+  if (freezeClockAt) {
+    // JobStatus only. `setFixedTime` freezes Date.now() so the component's
+    // elapsed-time arithmetic reads zero; it does not stop real timers, so the
+    // init script below also neutralises setTimeout calls of 5s or more — the
+    // escalation timer — while every shorter timer (React, Storybook, the
+    // attach() retry below) keeps the native implementation. A fully paused
+    // clock is not used: installed before navigation, it stalls page load.
+    await page.clock.setFixedTime(freezeClockAt)
+  }
+  await page.addInitScript((neutralizeLongTimers: boolean) => {
+    if (neutralizeLongTimers) {
+      const nativeSetTimeout = window.setTimeout.bind(window)
+      const ESCALATION_GUARD_MS = 5_000 // well under --motion-loading-escalation's 10s, well above any legitimate short-delay bootstrap timer
+      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+        if (typeof timeout === 'number' && timeout >= ESCALATION_GUARD_MS) return 0 as unknown as ReturnType<typeof window.setTimeout>
+        return nativeSetTimeout(handler, timeout, ...args)
+      }) as typeof window.setTimeout
+    }
     const state = window as Window & {
       __designSystemStoryFinished?: StoryFinished
       __STORYBOOK_ADDONS_CHANNEL__?: { on: (event: string, listener: (payload: unknown) => void) => void }
@@ -143,7 +163,7 @@ async function openStoryForScreenshot(page: Page, manifest: Manifest, storyName:
       })
     }
     attach()
-  })
+  }, Boolean(freezeClockAt))
   await page.goto(`/iframe.html?id=${entry.id}&viewMode=story`)
   await expect(page.locator('[data-design-system-config]')).toBeAttached()
   await page.waitForFunction((storyId) => {
@@ -164,7 +184,10 @@ test('manifest coverage exists before the appearance gate can pass', () => {
 for (const target of targets) {
   test(`${target.manifest.component} [appearance:${target.stateLabel}]`, async ({ page }, testInfo) => {
     testInfo.setTimeout(45_000)
-    await openStoryForScreenshot(page, target.manifest, target.story)
+    // See the decision comment above `storyOverrides`: JobStatus's stall
+    // indicator is wall-clock-driven, so its capture freezes `page.clock`.
+    const freezeClockAt = target.manifest.component === 'JobStatus' ? new Date('2026-06-22T12:00:00Z') : undefined
+    await openStoryForScreenshot(page, target.manifest, target.story, freezeClockAt)
     // maxDiffPixels/maxDiffPixelRatio and animation handling are set
     // globally in playwright.design-system.config.ts's
     // `expect.toHaveScreenshot` block -- see the decision comment there for
