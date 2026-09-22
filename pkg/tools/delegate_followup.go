@@ -132,7 +132,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// at all. Mirrors message_parent's identical Is3P posture (D5).
 	if rec.Is3P {
 		return ErrorResult(fmt.Sprintf(
-			"delegate: steer: not available to external-CLI (3P) sessions — session %s runs on an external CLI "+
+			"delegate: steer: not_steerable: external command-line session %s runs on an external CLI "+
 				"(claude-code/codex/opencode) with no steering-queue drain in its dispatch path; use "+
 				"action=\"respond\" (which redispatches a corrective session) or action=\"follow_up\" instead",
 			sessionID,

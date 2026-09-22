@@ -1303,6 +1303,23 @@ func callerOwnerKey(ctx context.Context) string {
 	return strings.TrimSpace(ToolTranscriptSessionID(ctx))
 }
 
+type delegatePrincipalContextKey struct{}
+
+// WithDelegatePrincipal carries an already-authenticated human principal from
+// the gateway into a delegate steering action. Tools never manufacture human
+// identity: callers that do not supply this value are evaluated as agents.
+func WithDelegatePrincipal(ctx context.Context, principal steer.Principal) context.Context {
+	return context.WithValue(ctx, delegatePrincipalContextKey{}, principal)
+}
+
+func delegateHumanPrincipal(ctx context.Context) (steer.Principal, bool) {
+	principal, ok := ctx.Value(delegatePrincipalContextKey{}).(steer.Principal)
+	if !ok || principal.Kind != steer.PrincipalKindHuman || strings.TrimSpace(principal.ID) == "" {
+		return steer.Principal{}, false
+	}
+	return principal, true
+}
+
 // verifyCallerOwnsSession (ADR-057 W12/FR-039/FR-040) rejects a gated
 // delegate action whose caller is not an ANCESTOR of rec — a direct parent,
 // grandparent, and so on up to the configured max delegation depth
@@ -1333,18 +1350,37 @@ func callerOwnerKey(ctx context.Context) string {
 // which is exactly the terminal, no-match case; a Load failure is never
 // treated as an ownership match).
 func (t *DelegateTool) verifyCallerOwnsSession(ctx context.Context, rec *session.LifecycleRecord) error {
+	_, err := t.verifyCallerPrincipal(ctx, rec)
+	return err
+}
+
+// verifyCallerPrincipal proves steering authority and returns the identity
+// that must accompany the resulting action. An authenticated human is global
+// steering authority. An agent must be the target's direct or transitive
+// steering ancestor, walked exclusively through the durable SteeredBy edge.
+func (t *DelegateTool) verifyCallerPrincipal(ctx context.Context, rec *session.LifecycleRecord) (steer.Principal, error) {
+	if principal, ok := delegateHumanPrincipal(ctx); ok {
+		return principal, nil
+	}
 	caller := callerOwnerKey(ctx)
 	if caller == "" {
-		return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
+		return steer.Principal{}, fmt.Errorf("session %s is not steered by the calling principal", rec.SessionID)
 	}
-	ancestor := strings.TrimSpace(rec.ParentDurableKey)
+	ancestor := ""
+	if rec.SteeredBy != nil {
+		ancestor = strings.TrimSpace(rec.SteeredBy.SteeringSessionID)
+	}
 	maxDepth := t.ownershipMaxDepth()
 	for depth := 0; depth < maxDepth; depth++ {
 		if ancestor == "" {
 			break
 		}
 		if ancestor == caller {
-			return nil
+			principalID := strings.TrimSpace(ToolAgentID(ctx))
+			if principalID == "" {
+				principalID = caller
+			}
+			return steer.Principal{Kind: steer.PrincipalKindAgent, ID: principalID}, nil
 		}
 		if t.lifecycle == nil {
 			break
@@ -1374,7 +1410,10 @@ func (t *DelegateTool) verifyCallerOwnsSession(ctx context.Context, rec *session
 			// failure of ANY kind is never treated as an ownership match.
 			break
 		}
-		ancestor = strings.TrimSpace(parentRec.ParentDurableKey)
+		if parentRec.SteeredBy == nil {
+			break
+		}
+		ancestor = strings.TrimSpace(parentRec.SteeredBy.SteeringSessionID)
 	}
-	return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
+	return steer.Principal{}, fmt.Errorf("session %s is not steered by the calling principal", rec.SessionID)
 }
