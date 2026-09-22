@@ -816,7 +816,7 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 			// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
 			buildDelegationDenyCheckerForDelegate(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeBackground,
 				agentExistsChecker(rw.rs.registry),
 			),
@@ -829,7 +829,7 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// independently re-derive (and silently override) an explicit
 		// per-edge Depth.
 		delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
-			currentAgentID, rw.cfg.Agents.Defaults, rw.cfg.Performance,
+			currentAgentID, rw.cfg.Performance,
 		))
 
 		// ADR-057: derive the ownership-walk bound from the SAME operator
@@ -839,7 +839,11 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// child fail with an ownership error indistinguishable from a real
 		// cross-tenant attempt. Zero/unset is ignored by the setter, which
 		// keeps its own default.
-		delegateTool.SetOwnershipWalkMaxDepth(rw.cfg.Agents.Defaults.SubTurn.MaxDepth)
+		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
+		if depthErr != nil {
+			configuredDepthCap = 0
+		}
+		delegateTool.SetOwnershipWalkMaxDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
 
 		agent.Tools.RegisterReplacing(delegateTool)
 	}
@@ -892,7 +896,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// oneself is not delegation (no new instance spawned), not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),
@@ -963,7 +967,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// existing owner is a no-op reassignment, not delegation — not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),

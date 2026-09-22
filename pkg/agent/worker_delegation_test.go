@@ -98,7 +98,7 @@ func TestSeededGraph_JimToAvaTaskAllowed(t *testing.T) {
 
 	check := buildDelegationDenyCheckerForTaskReassignment(
 		string(coreagent.IDJim),
-		cfg.Agents.Defaults,
+		cfg.Performance,
 		config.DelegationModeTask,
 	)
 	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial != nil {
@@ -114,7 +114,7 @@ func TestSeededGraph_JimToWorkerAllowed(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, seedEdgesFromConfig(cfg))
 
 	check := buildDelegationDenyCheckerForTaskReassignment(
-		string(coreagent.IDJim), cfg.Agents.Defaults, config.DelegationModeTask,
+		string(coreagent.IDJim), cfg.Performance, config.DelegationModeTask,
 	)
 	if denial := check(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
 		t.Fatalf("Jim → worker (task) must be allowed, got deny: %+v", denial)
@@ -130,7 +130,7 @@ func TestSeededGraph_DisallowedTargetDenied(t *testing.T) {
 
 	check := buildDelegationDenyCheckerForTaskReassignment(
 		string(coreagent.IDMia),
-		cfg.Agents.Defaults,
+		cfg.Performance,
 		config.DelegationModeTask,
 	)
 	if denial := check(ctxWS(testWS, 0), string(coreagent.IDAva)); denial == nil {
@@ -148,7 +148,7 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 
 	jimCheck := buildDelegationDenyCheckerForDelegate(
 		string(coreagent.IDJim),
-		cfg.Agents.Defaults,
+		cfg.Performance,
 		config.DelegationMode("await"),
 	)
 	if denial := jimCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
@@ -158,7 +158,7 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	// Mia hands substantial work to Jim rather than assigning staff directly.
 	miaCheck := buildDelegationDenyCheckerForDelegate(
 		string(coreagent.IDMia),
-		cfg.Agents.Defaults,
+		cfg.Performance,
 		config.DelegationMode("await"),
 	)
 	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial == nil || denial.Policy != "trust_set" {

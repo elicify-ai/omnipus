@@ -148,7 +148,11 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 			// one exists for a specific target) is enforced separately at
 			// spawn-time via SubTurnConfig.ResolvedMaxDepth and does not change
 			// this general-roster footer.
-			globalDepthCap := resolveEffectiveDelegationDepth(nil, liveCfg.Agents.Defaults.SubTurn.MaxDepth)
+			configuredDepthCap, depthErr := liveCfg.Performance.EffectiveMaxDelegationDepth()
+			if depthErr != nil {
+				configuredDepthCap = 0
+			}
+			globalDepthCap := resolveEffectiveDelegationDepth(nil, configuredDepthCap)
 
 			var targets []delegationTarget
 			for _, e := range edges {

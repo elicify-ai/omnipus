@@ -87,7 +87,6 @@ func resolveEffectiveDelegationDepth(edgeDepth *int, globalMaxDepth int) int {
 //     explicitly-targeted call.
 func buildDelegationDepthResolver(
 	currentAgentID string,
-	defaults config.AgentDefaults,
 	performance config.PerformanceConfig,
 ) func(ctx context.Context, targetAgentID string) *int {
 	// ADR-091 D9: performance.max_delegation_depth is now the single

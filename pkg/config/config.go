@@ -886,12 +886,6 @@ type RoutingConfig struct {
 	Threshold  float64 `json:"threshold"`   // complexity score in [0,1]; score >= threshold → primary model
 }
 
-// SubTurnConfig configures the SubTurn execution system.
-type SubTurnConfig struct {
-	MaxDepth              int `json:"max_depth"      env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
-	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
-}
-
 type ToolFeedbackConfig struct {
 	Enabled       bool `json:"enabled"         env:"OMNIPUS_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`
 	MaxArgsLength int  `json:"max_args_length" env:"OMNIPUS_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH"`
@@ -988,7 +982,6 @@ type AgentDefaults struct {
 	MaxMediaSize   int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	Routing        *RoutingConfig     `json:"routing,omitempty"`
 	SteeringMode   string             `json:"steering_mode,omitempty"         env:"OMNIPUS_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	SubTurn        SubTurnConfig      `json:"subturn"`
 	ToolFeedback   ToolFeedbackConfig `json:"tool_feedback,omitempty"`
 	SplitOnMarker  bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled

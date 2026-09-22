@@ -64,7 +64,7 @@ func TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate(t *testing.
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil),
 	})
-	check := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground)
+	check := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground)
 
 	denial := check(ctxWS(testWS, 0), "mia") // self-target
 	if denial == nil {
@@ -84,8 +84,8 @@ func newSelfTargetDelegateTool() (*tools.DelegateTool, *spySessionLauncher) {
 	spy := &spySessionLauncher{}
 	dt.SetSessionLauncher(spy)
 	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
-	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{}))
+		buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground))
+	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.PerformanceConfig{}))
 	return dt, spy
 }
 
@@ -133,10 +133,10 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 	spy := &spySessionLauncher{}
 	dt.SetSessionLauncher(spy)
 	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
+		buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground))
 
 	depthResolverCalled := false
-	realResolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
+	realResolver := buildDelegationDepthResolver("mia", config.PerformanceConfig{})
 	dt.SetDelegationDepthResolver(func(ctx context.Context, target string) *int {
 		depthResolverCalled = true
 		return realResolver(ctx, target)
