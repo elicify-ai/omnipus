@@ -71,22 +71,76 @@ func TestChatTransportsCorrelatedToolImagesInOrder(t *testing.T) {
 	if _, err := p.Chat(context.Background(), messages, nil, "model", nil); err != nil {
 		t.Fatal(err)
 	}
-	apiMessages := body["messages"].([]any)
+	rawMessages, present := body["messages"]
+	if !present {
+		t.Fatalf("request body is missing messages: %#v", body)
+	}
+	apiMessages, ok := rawMessages.([]any)
+	if !ok {
+		t.Fatalf("request messages type = %T, want []any", rawMessages)
+	}
 	var ids []string
 	var images [][]byte
-	for _, rawMessage := range apiMessages {
-		for _, rawContent := range rawMessage.(map[string]any)["content"].([]any) {
-			result, ok := rawContent.(map[string]any)["toolResult"].(map[string]any)
+	for messageIndex, rawMessage := range apiMessages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			t.Fatalf("message[%d] type = %T, want map[string]any", messageIndex, rawMessage)
+		}
+		rawContents, present := message["content"]
+		if !present {
+			t.Fatalf("message[%d] is missing content: %#v", messageIndex, message)
+		}
+		contents, ok := rawContents.([]any)
+		if !ok {
+			t.Fatalf("message[%d] content type = %T, want []any", messageIndex, rawContents)
+		}
+		for contentIndex, rawContent := range contents {
+			content, ok := rawContent.(map[string]any)
 			if !ok {
+				t.Fatalf("message[%d] content[%d] type = %T, want map[string]any", messageIndex, contentIndex, rawContent)
+			}
+			rawResult, present := content["toolResult"]
+			if !present {
 				continue
 			}
-			ids = append(ids, result["toolUseId"].(string))
-			for _, rawResultContent := range result["content"].([]any) {
-				image, ok := rawResultContent.(map[string]any)["image"].(map[string]any)
+			result, ok := rawResult.(map[string]any)
+			if !ok {
+				t.Fatalf("message[%d] content[%d] toolResult type = %T, want map[string]any", messageIndex, contentIndex, rawResult)
+			}
+			toolUseID, ok := result["toolUseId"].(string)
+			if !ok {
+				t.Fatalf("message[%d] content[%d] toolUseId type = %T, want string", messageIndex, contentIndex, result["toolUseId"])
+			}
+			ids = append(ids, toolUseID)
+			rawResultContents, present := result["content"]
+			if !present {
+				t.Fatalf("message[%d] content[%d] toolResult is missing content: %#v", messageIndex, contentIndex, result)
+			}
+			resultContents, ok := rawResultContents.([]any)
+			if !ok {
+				t.Fatalf("message[%d] content[%d] toolResult content type = %T, want []any", messageIndex, contentIndex, rawResultContents)
+			}
+			for resultIndex, rawResultContent := range resultContents {
+				resultContent, ok := rawResultContent.(map[string]any)
 				if !ok {
+					t.Fatalf("message[%d] content[%d] toolResult content[%d] type = %T, want map[string]any", messageIndex, contentIndex, resultIndex, rawResultContent)
+				}
+				rawImage, present := resultContent["image"]
+				if !present {
 					continue
 				}
-				encoded := image["source"].(map[string]any)["bytes"].(string)
+				image, ok := rawImage.(map[string]any)
+				if !ok {
+					t.Fatalf("message[%d] content[%d] toolResult content[%d] image type = %T, want map[string]any", messageIndex, contentIndex, resultIndex, rawImage)
+				}
+				source, ok := image["source"].(map[string]any)
+				if !ok {
+					t.Fatalf("message[%d] content[%d] toolResult content[%d] image source type = %T, want map[string]any", messageIndex, contentIndex, resultIndex, image["source"])
+				}
+				encoded, ok := source["bytes"].(string)
+				if !ok {
+					t.Fatalf("message[%d] content[%d] toolResult content[%d] image bytes type = %T, want string", messageIndex, contentIndex, resultIndex, source["bytes"])
+				}
 				decoded, decodeErr := base64.StdEncoding.DecodeString(encoded)
 				if decodeErr != nil {
 					t.Fatal(decodeErr)

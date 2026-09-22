@@ -205,8 +205,8 @@ func TestServed_EmbeddedSnapshot_BedrockRegionsAndInferenceProfiles(t *testing.T
 
 	var bedrock map[string]any
 	for _, p := range provs {
-		row, ok := p.(map[string]any)
-		require.True(t, ok, "provider entry is not a map: %T", p)
+		row, rowOK := p.(map[string]any)
+		require.True(t, rowOK, "provider entry is not a map: %T", p)
 		if row["id"] == "amazon-bedrock" {
 			bedrock = row
 			break
