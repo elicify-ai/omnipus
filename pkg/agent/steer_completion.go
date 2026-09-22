@@ -11,6 +11,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/google/uuid"
 )
 
 // completeSteeredTurn applies the goal-less completion disposition after a
@@ -163,6 +164,16 @@ func completionDisposition(result turnResult, runErr error, answer string) (stee
 		return steer.OutcomeInterrupted, session.LifecycleCancelled, "interrupted: the session was cancelled"
 	case runErr != nil:
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: " + runErr.Error()
+	case result.finalContent == toolLimitResponse:
+		// The turn hit the tool-iteration ceiling with no final response
+		// (loop_run_turn.go::finalizeTurn sets finalContent to the
+		// toolLimitResponse sentinel and marks the turn failed). This is a
+		// non-fatal lifecycle notice — the child stopped early, it did not
+		// crash — so the parent gets an `error` (fatal: false) inbox entry
+		// that never wakes it (I-5), and the record stays running so the
+		// parent can nudge the child rather than treat it terminal-failed.
+		return steer.OutcomeLifecycleNotice, session.LifecycleRunning,
+			"max_tool_iterations: the session reached its tool-iteration limit without a final answer"
 	case result.turnFailed || result.status == TurnEndStatusError:
 		return steer.OutcomeFailed, session.LifecycleFailed, "failed: the turn ended with an error"
 	case result.status == TurnEndStatusParked:
@@ -196,13 +207,26 @@ func (al *AgentLoop) completionMessage(rec *session.LifecycleRecord, outcome ste
 	if failureReason == "" {
 		failureReason = string(outcome) + ": the session did not complete"
 	}
+	// A lifecycle notice (the tool-iteration limit) is the one non-terminal
+	// outcome to reach this branch — steer_audience.go::validateOutcomeMessage
+	// pairs OutcomeLifecycleNotice with an `error` carrying `fatal: false`.
+	// Every other non-final-answer outcome is a genuine failure and is fatal.
+	// The notice also takes a fresh, inbox-assigned id: Deliver only stamps
+	// the deterministic `<child>:<gen>:final` id for terminal outcomes, so a
+	// re-nudged child that hits the limit again must not collide on
+	// rec.SessionID and get silently deduplicated.
+	messageID := rec.SessionID
+	fatal := outcome != steer.OutcomeLifecycleNotice
+	if outcome == steer.OutcomeLifecycleNotice {
+		messageID = uuid.NewString()
+	}
 	err := message.FromSessionMessageError(generated.SessionMessageError{
-		MessageId:      rec.SessionID,
+		MessageId:      messageID,
 		SessionId:      rec.SessionID,
 		CreatedAt:      now,
 		Depth:          1,
 		SenderIdentity: rec.AgentID,
-		Fatal:          true,
+		Fatal:          fatal,
 		Text:           failureReason,
 	})
 	return message, err

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -76,7 +77,7 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 	}{
 		{name: "non-empty quiet", answer: "finished", wantState: session.LifecycleCompleted, wantKind: "handback"},
 		{name: "empty quiet", answer: "   ", wantState: session.LifecycleFailed, wantKind: "error", wantText: "empty_answer:", wantFatal: true},
-		{name: "iteration limit uses failed outcome", answer: toolLimitResponse, turnFailed: true, wantState: session.LifecycleFailed, wantKind: "error", wantText: "failed:", wantFatal: true},
+		{name: "iteration limit is a non-fatal lifecycle notice", answer: toolLimitResponse, turnFailed: true, wantState: session.LifecycleRunning, wantKind: "error", wantText: "max_tool_iterations:", wantFatal: false},
 		{name: "non-empty queued descendant", answer: "parent answer", withQueued: true, wantState: session.LifecycleRunning},
 	}
 	for _, tc := range tests {
@@ -131,6 +132,108 @@ func TestCompletion_Disposition_PersistedAndValidated(t *testing.T) {
 				if v.Fatal != tc.wantFatal {
 					t.Fatalf("error fatal = %v, want %v", v.Fatal, tc.wantFatal)
 				}
+			}
+		})
+	}
+}
+
+// TestCompletion_IterationLimit_NonFatal_DoesNotWakeParent covers landing
+// order §2 I-5's "max-iterations lifecycle notice" row: a steered child whose
+// turn ends at the tool-iteration ceiling (loop_run_turn.go::finalizeTurn
+// sets finalContent to the toolLimitResponse sentinel and marks the turn
+// failed) is delivered to its parent as an `error` entry with `fatal: false` —
+// a notice that the child stopped early, not a crash — and a non-fatal error
+// never wakes the parent. A genuine failure is the contrast: `fatal: true`
+// and the parent is woken.
+func TestCompletion_IterationLimit_NonFatal_DoesNotWakeParent(t *testing.T) {
+	tests := []struct {
+		name      string
+		result    turnResult
+		runErr    error
+		wantFatal bool
+		wantWake  bool
+		wantText  string
+		wantState session.LifecycleState
+	}{
+		{
+			name:      "iteration limit produces a non-fatal notice and does not wake",
+			result:    turnResult{finalContent: toolLimitResponse, turnFailed: true},
+			wantFatal: false,
+			wantWake:  false,
+			wantText:  "max_tool_iterations:",
+			wantState: session.LifecycleRunning,
+		},
+		{
+			name:      "genuine failure is fatal and wakes the parent",
+			runErr:    errors.New("downstream provider failure"),
+			wantFatal: true,
+			wantWake:  true,
+			wantText:  "failed:",
+			wantState: session.LifecycleFailed,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			al, cleanup := newSteerAL(t)
+			defer cleanup()
+			wireSteerCompletionDeps(t, al)
+			parentID := newTestSteeringSession(t, al, "ws-1")
+			rec := launchRunningChild(t, al, parentID, "call-"+tc.name)
+
+			// The plain webchat parent carries an empty PeerID, so the wake
+			// destination would be empty and WakeParentAlways would refuse.
+			// Give the child's reporting target a routable address so the
+			// wake-eligibility contrast is genuinely observable.
+			if err := al.GetSessionLifecycleStore().Mutate(rec.SessionID, func(r *session.LifecycleRecord) error {
+				r.SteeredBy.ReportingTarget = session.ReportingTarget{Channel: "webchat", ChatID: parentID}
+				return nil
+			}); err != nil {
+				t.Fatalf("Mutate(reporting target): %v", err)
+			}
+
+			var wakes []string
+			al.asyncNotifier.registerObserver(func(e AsyncNotifyEvent) {
+				if strings.HasPrefix(e.SourceKind, "message_parent:") {
+					wakes = append(wakes, e.SourceKind)
+				}
+			})
+
+			if err := al.completeSteeredTurn(context.Background(), rec, tc.result, tc.runErr); err != nil {
+				t.Fatalf("completeSteeredTurn: %v", err)
+			}
+
+			msgs, _, _, err := al.GetMessageInboxStore().Drain(parentID, rec.SessionID, "", 10)
+			if err != nil {
+				t.Fatalf("Drain(parent): %v", err)
+			}
+			if len(msgs) != 1 {
+				t.Fatalf("parent messages = %d, want 1", len(msgs))
+			}
+			kind, err := msgs[0].Discriminator()
+			if err != nil || kind != "error" {
+				t.Fatalf("message kind = %q (%v), want error", kind, err)
+			}
+			e, err := msgs[0].AsSessionMessageError()
+			if err != nil {
+				t.Fatalf("AsSessionMessageError: %v", err)
+			}
+			if e.Fatal != tc.wantFatal {
+				t.Fatalf("error fatal = %v, want %v", e.Fatal, tc.wantFatal)
+			}
+			if !strings.Contains(e.Text, tc.wantText) {
+				t.Fatalf("error text = %q, want contains %q", e.Text, tc.wantText)
+			}
+
+			if gotWake := len(wakes) > 0; gotWake != tc.wantWake {
+				t.Fatalf("parent woke = %v (sources %v), want %v", gotWake, wakes, tc.wantWake)
+			}
+
+			got, err := al.GetSessionLifecycleStore().Load(rec.SessionID)
+			if err != nil {
+				t.Fatalf("Load(child after completion): %v", err)
+			}
+			if got.State != tc.wantState {
+				t.Fatalf("child state = %q, want %q", got.State, tc.wantState)
 			}
 		})
 	}
