@@ -820,6 +820,20 @@ func (al *AgentLoop) turnImminentForIdentity(sessionID string, scope CancelScope
 	lowerChannel := strings.ToLower(scope.Channel)
 	settleKey := preArmKeyForScope(sessionID, scope)
 	now := time.Now()
+	sessionIDs := map[string]struct{}{}
+	if sessionID != "" {
+		sessionIDs[sessionID] = struct{}{}
+		if al.sessionLifecycleStoreForTools != nil {
+			descendants, err := CollectDescendantSessionIDs(al.sessionLifecycleStoreForTools, sessionID)
+			for _, descendantID := range descendants {
+				sessionIDs[descendantID] = struct{}{}
+			}
+			if err != nil {
+				slog.Warn("agent: cancel pre-arm descendant walk incomplete; using reachable subset",
+					"session_id", sessionID, "error", err)
+			}
+		}
+	}
 
 	// Delegate-spawn signal, checked first: a pending-spawn marker is real,
 	// unambiguous evidence on its own — pkg/tools/delegate.go's executeAsync
@@ -845,7 +859,12 @@ func (al *AgentLoop) turnImminentForIdentity(sessionID string, scope CancelScope
 		matched := false
 		switch {
 		case sessionID != "":
-			matched = strings.HasSuffix(wscope, ":"+sessionID)
+			for candidateID := range sessionIDs {
+				if strings.HasSuffix(wscope, ":"+candidateID) {
+					matched = true
+					break
+				}
+			}
 		case scope.Channel != "" && scope.ChatID != "":
 			lw := strings.ToLower(wscope)
 			matched = strings.Contains(lw, lowerChatID) && strings.Contains(lw, lowerChannel)

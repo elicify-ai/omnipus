@@ -17,7 +17,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"runtime/debug"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -958,10 +961,10 @@ func stringSliceSetDiff(a, b []string) (onlyInA, onlyInB []string) {
 // ADR-057 U15 — descendant-set helpers (W8, FR-024…FR-027)
 // ============================================================================
 
-// CollectDescendantSessionIDs performs a breadth-first walk of the durable
-// ParentDurableKey edge (pkg/session/lifecycle.go, U13's FR-019/FR-020
-// index) starting at rootSessionID and returns every reachable descendant's
-// OWN session id (rootSessionID itself is never included).
+// CollectDescendantSessionIDs performs a breadth-first walk of ADR-091's
+// durable SteeredBy.SteeringSessionID edge starting at rootSessionID and
+// returns every reachable descendant's own session id (rootSessionID itself
+// is never included).
 //
 // [FIX-5, Defect 4, 2026-08-03] Exported and HOISTED: this used to be
 // duplicated byte-for-byte as pkg/gateway/websocket.go's unexported
@@ -1016,36 +1019,68 @@ func CollectDescendantSessionIDs(lifecycleStore *session.LifecycleStore, rootSes
 	if lifecycleStore == nil || rootSessionID == "" {
 		return nil, nil
 	}
+	records, walkErr := loadLifecycleRecordsForDescendantWalk(lifecycleStore)
+	childrenByParent := make(map[string][]string)
+	for i := range records {
+		rec := &records[i]
+		if rec.SteeredBy == nil || rec.SteeredBy.SteeringSessionID == "" {
+			continue
+		}
+		parentID := rec.SteeredBy.SteeringSessionID
+		childrenByParent[parentID] = append(childrenByParent[parentID], rec.SessionID)
+	}
+	for parentID := range childrenByParent {
+		sort.Strings(childrenByParent[parentID])
+	}
 	visited := map[string]struct{}{rootSessionID: {}}
 	queue := []string{rootSessionID}
 	var descendants []string
-	var walkErrs []error
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
-		children, err := lifecycleStore.List(session.LifecycleFilter{ParentDurableKey: id})
-		if err != nil {
-			// This branch of the tree is now UNREACHABLE for this walk — every
-			// descendant beneath `id`, however many levels deep, is silently
-			// dropped from the returned slice. Recorded (not just logged) so
-			// the caller can distinguish this from "id has no children".
-			walkErrs = append(walkErrs, fmt.Errorf("list children of %q: %w", id, err))
-			continue
-		}
-		for _, rec := range children {
-			if _, seen := visited[rec.SessionID]; seen {
+		for _, childID := range childrenByParent[id] {
+			if _, seen := visited[childID]; seen {
 				continue
 			}
-			visited[rec.SessionID] = struct{}{}
-			descendants = append(descendants, rec.SessionID)
-			queue = append(queue, rec.SessionID)
+			visited[childID] = struct{}{}
+			descendants = append(descendants, childID)
+			queue = append(queue, childID)
 		}
 	}
-	if len(walkErrs) > 0 {
-		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %d branch(es) failed to list children: %w",
-			rootSessionID, len(walkErrs), errors.Join(walkErrs...))
+	if walkErr != nil {
+		return descendants, fmt.Errorf("descendant walk incomplete for root %q: %w", rootSessionID, walkErr)
 	}
 	return descendants, nil
+}
+
+func loadLifecycleRecordsForDescendantWalk(store *session.LifecycleStore) ([]session.LifecycleRecord, error) {
+	entries, err := os.ReadDir(store.Dir())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	records := make([]session.LifecycleRecord, 0, len(entries))
+	var loadErrs []error
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") || strings.HasPrefix(entry.Name(), ".tmp-") {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".jsonl")
+		rec, loadErr := store.Load(id)
+		if loadErr != nil {
+			if !errors.Is(loadErr, session.ErrLifecycleNotFound) {
+				loadErrs = append(loadErrs, fmt.Errorf("load %q: %w", id, loadErr))
+			}
+			continue
+		}
+		records = append(records, *rec)
+	}
+	if len(loadErrs) > 0 {
+		return records, fmt.Errorf("%d lifecycle record(s) unreadable: %w", len(loadErrs), errors.Join(loadErrs...))
+	}
+	return records, nil
 }
 
 // collectDescendantSessionIDs is al's own lifecycle-store-bound wrapper
@@ -1081,8 +1116,8 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 	return append([]string{sessionID}, descendants...), err
 }
 
-// cancelDurableDescendantLifecycleRecords walks the durable ParentDurableKey
-// edge transitively from rootSessionID (via collectDescendantSessionIDs) and
+// cancelDurableDescendantLifecycleRecords walks the durable steered-by edge
+// transitively from rootSessionID (via collectDescendantSessionIDs) and
 // transitions EVERY reachable descendant's persisted LifecycleRecord to
 // cancelled (FR-026), independent of whether that descendant still has a
 // live turnState in al.activeTurnStates. This is the DURABLE counterpart to
@@ -1091,7 +1126,7 @@ func (al *AgentLoop) resolveBackgroundKillSessionIDs(sessionID string) ([]string
 // finished and been cleared from activeTurnStates is UNREACHABLE via the
 // in-memory parentTurnID chain (steering.go's collectLiveDescendantTurnStates
 // documents this limitation on itself) but remains reachable here, because
-// this walk is keyed on the durable ParentDurableKey edge persisted to disk,
+// this walk is keyed on the durable SteeredBy edge persisted to disk,
 // never on any in-memory turn registration.
 //
 // FR-025: RequestCancel launches this via `go
@@ -1253,7 +1288,7 @@ func (al *AgentLoop) hasPendingDescendantSpawn(sessionID string, scope CancelSco
 // SAME two functions being invoked again by the recursive call.
 //
 // No infinite-recursion or unbounded-depth hazard: unlike
-// CollectDescendantSessionIDs's durable ParentDurableKey BFS (which needs its
+// CollectDescendantSessionIDs's durable steered-by BFS (which needs its
 // own `visited` set because a corrupt/cyclic persisted graph is a real
 // possibility), this recursion is driven entirely by REAL, freshly-created
 // turnState registrations — registerActiveTurn is called at most once per

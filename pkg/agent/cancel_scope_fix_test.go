@@ -151,25 +151,25 @@ func TestCollectDescendantSessionIDs_PartialFailureReturnsErrorAndPartialSet(t *
 	)
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
 		SessionID: healthyChild, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root, ParentDurableKey: root,
+		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
+			SteeringSessionID: root, RootSessionID: root,
+		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 	}))
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
 		SessionID: badChild, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root, ParentDurableKey: root,
+		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
+			SteeringSessionID: root, RootSessionID: root,
+		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: root,
 	}))
 	require.NoError(t, ls.Persist(&session.LifecycleRecord{
 		SessionID: badGrandkid, State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: badChild, ParentDurableKey: badChild,
+		Origin: &session.Origin{Kind: session.OriginKindDelegate}, SteeredBy: &session.SteeredBy{
+			SteeringSessionID: badChild, RootSessionID: root,
+		}, OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: badChild,
 	}))
 
-	// Force ls.List(LifecycleFilter{ParentDurableKey: badChild}) to error:
-	// listByParentDurableKey resolves badChild's children from the in-memory
-	// parent index (here: [badGrandkid]) and then calls s.Load(badGrandkid)
-	// for each — if THAT Load fails with anything other than
-	// ErrLifecycleNotFound (a torn/missing-file self-heals silently; see
-	// lifecycle.go's own doc comment), the WHOLE List call returns that
-	// error immediately, exactly the "one corrupt record fails the whole
-	// query" defect. Reproduced against genuine on-disk state (binding Rule
+	// Force the steered-by walk's per-record Load(badGrandkid) to error.
+	// Reproduced against genuine on-disk state (binding Rule
 	// 1, no spies): overwrite badGrandkid's own .jsonl with a single line
 	// longer than LifecycleStore's 10MB bufio.Scanner buffer, which makes
 	// scanner.Err() return bufio.ErrTooLong — a real I/O-layer failure, not

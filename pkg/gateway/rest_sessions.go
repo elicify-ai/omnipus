@@ -16,6 +16,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
@@ -610,7 +611,7 @@ func (a *restAPI) renameSession(w http.ResponseWriter, r *http.Request, id strin
 
 // deleteSession handles DELETE /api/v1/sessions/{id}.
 // Removes all session data and returns {"success": true}.
-func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id string) {
+func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id string) {
 	store := a.resolveSessionStore(id)
 	if store == nil {
 		jsonErr(w, http.StatusNotFound, "session not found")
@@ -654,6 +655,25 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, _ *http.Request, id strin
 					"disable the heartbeat in the workspace settings first")
 			return
 		}
+	}
+
+	// Deleting a session is also a REST-originated Stop boundary: stamp and
+	// cancel its durable steering subtree before any session data disappears.
+	// A partial cascade aborts deletion instead of reporting success while an
+	// unreadable descendant may still be running. The current OpenAPI delete
+	// response has no cancel-report fields; until WP-E publishes that response
+	// schema, the error body carries the same one-line partial summary used by
+	// the WebSocket channel and no undocumented wire fields are emitted.
+	report, cascaded := cancelSteeredSubtree(r.Context(), a.agentLoop, id, steer.Principal{
+		Kind: steer.PrincipalKindHuman,
+		ID:   actorUsername(r),
+	})
+	if cascaded && len(report.Unreachable) > 0 {
+		summary := cancelPartialSummary(report)
+		slog.Warn("rest: delete session: Stop cascade incomplete; deletion refused",
+			"session_id", id, "summary", summary, "unreachable", report.Unreachable)
+		jsonErr(w, http.StatusInternalServerError, summary)
+		return
 	}
 
 	// ADR-057 W18b (FR-071/BDD-78): resolve id's full descendant set BEFORE

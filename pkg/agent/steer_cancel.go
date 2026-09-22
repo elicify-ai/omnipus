@@ -12,50 +12,163 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"sync"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// SteerCanceller is the CP-0 compiled stub for steer.Canceller, owned by
-// WP-D from CP-0 onward. CancelSubtree reaches nothing; Revive returns the
-// current generation unchanged — placeholders until WP-D's I-6 cascade
-// lands at CP-3.
+// SteerCanceller implements ADR-091's durable Stop cascade and revival.
 type SteerCanceller struct {
-	Lifecycle *session.LifecycleStore
+	Lifecycle          *session.LifecycleStore
+	cancelTurn         GenerationCancelFunc
+	revivalStateWriter RevivalStateWriter
+	locks              sync.Map
 }
 
 var _ steer.Canceller = (*SteerCanceller)(nil)
 
-// NewSteerCanceller returns the CP-0 stub Canceller.
-func NewSteerCanceller(lifecycle *session.LifecycleStore) *SteerCanceller {
-	return &SteerCanceller{Lifecycle: lifecycle}
+// GenerationCancelResult is the live-turn registry's answer to a cancel
+// carrying the generation stamped on the durable record.
+type GenerationCancelResult struct {
+	Found                  bool
+	Cancelled              bool
+	SkippedNewerGeneration bool
 }
 
-// CancelSubtree implements steer.Canceller. CP-0 stub: reaches nothing —
-// every candidate is reported unreachable rather than silently dropped, so
-// a caller driving this stub before CP-3 sees an honest empty cascade, not
-// a false "reached" report.
-func (*SteerCanceller) CancelSubtree(_ context.Context, sessionID string, _ steer.Principal) (steer.CancelReport, error) {
-	return steer.CancelReport{
-		Unreachable: []steer.UnreachableSession{{
-			ID:     sessionID,
-			Reason: "steer: Canceller not wired (ADR-091 CP-0 stub — WP-D lands the real cascade at CP-3)",
-		}},
-	}, nil
-}
+// GenerationCancelFunc cancels a live turn only when its registered
+// generation equals generation. WP-A wires the turn registry implementation;
+// the indirection keeps the durable cascade independently testable.
+type GenerationCancelFunc func(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error)
 
-// Revive implements steer.Canceller. CP-0 stub: returns the record's
-// current generation unchanged (no revival takes place).
-func (c *SteerCanceller) Revive(_ context.Context, sessionID string, _ steer.Principal) (int, error) {
-	if c.Lifecycle == nil {
-		return 0, nil
+// RevivalStateWriter persists the parent's subagent_state(running) lifecycle
+// event after Revive has durably published the new generation. WP-B supplies
+// the transcript/frame implementation at the composition root.
+type RevivalStateWriter func(ctx context.Context, sessionID string, generation int) error
+
+// NewSteerCanceller builds the I-6 Canceller. cancelTurn is optional only so
+// CP-0 wiring continues to compile until WP-A's generation-aware turn registry
+// lands; production wiring must supply it before ADR-091 is reachable.
+func NewSteerCanceller(lifecycle *session.LifecycleStore, cancelTurn ...GenerationCancelFunc) *SteerCanceller {
+	c := &SteerCanceller{Lifecycle: lifecycle}
+	if len(cancelTurn) > 0 {
+		c.cancelTurn = cancelTurn[0]
 	}
-	rec, err := c.Lifecycle.Load(sessionID)
+	return c
+}
+
+// SetRevivalStateWriter installs the I-4 lifecycle-event writer. It is a
+// construction-time option and must not be changed after the canceller is
+// published to concurrent callers.
+func (c *SteerCanceller) SetRevivalStateWriter(writer RevivalStateWriter) *SteerCanceller {
+	if c != nil {
+		c.revivalStateWriter = writer
+	}
+	return c
+}
+
+// CancelSubtree implements I-6 as one operation under the stopped node's
+// cascade lock: enumerate, stamp, generation-aware cancel, then enumerate once
+// more for children published during the first pass.
+func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by steer.Principal) (steer.CancelReport, error) {
+	var report steer.CancelReport
+	if c == nil || c.Lifecycle == nil {
+		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{
+			ID: sessionID, Reason: "lifecycle store is not configured",
+		})
+		return report, nil
+	}
+	if sessionID == "" {
+		return report, fmt.Errorf("steer: cancel subtree: session id is required")
+	}
+
+	lock := c.cascadeLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+
+	stamped := make(map[string]int)
+	seen := make(map[string]struct{})
+	at := time.Now().UTC()
+	process := func(ids []string) {
+		for _, id := range ids {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			generation, outcome, err := c.stampStop(id, at, by)
+			switch {
+			case errors.Is(err, errCascadeTerminal):
+				report.SkippedTerminal = append(report.SkippedTerminal, id)
+			case err != nil:
+				report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
+			case outcome == stopStamped || outcome == stopAlreadyStamped:
+				stamped[id] = generation
+				report.Reached = append(report.Reached, id)
+			}
+		}
+	}
+
+	first, walkErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
+	if walkErr != nil {
+		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: walkErr.Error()})
+	}
+	process(append([]string{sessionID}, first...))
+	c.cancelStamped(ctx, stamped, &report)
+
+	second, secondErr := CollectDescendantSessionIDs(c.Lifecycle, sessionID)
+	if secondErr != nil {
+		report.Unreachable = appendUniqueUnreachable(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: secondErr.Error()})
+	}
+	lateStart := len(stamped)
+	process(second)
+	if len(stamped) > lateStart {
+		c.cancelStamped(ctx, stamped, &report)
+	}
+	return report, nil
+}
+
+// Revive mints a generation for a stopped session or terminal follow-up.
+// LifecycleStore.Mutate holds the record's write lock across the read,
+// decision, and append, so a concurrent Stop is applied in arrival order.
+// The old Stop marker is retained as inert history: reserveDispatch compares
+// its generation with the newly incremented record generation.
+func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.Principal) (int, error) {
+	if c == nil || c.Lifecycle == nil {
+		return 0, session.ErrLifecycleNotFound
+	}
+	var generation int
+	var revived bool
+	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		generation = rec.Generation
+		stopped := rec.Stop != nil && rec.Stop.Generation == rec.Generation
+		if !stopped && !rec.Terminal() {
+			return nil
+		}
+
+		rec.Generation++
+		rec.ResumedFrom = rec.SessionID
+		rec.State = session.LifecycleRunning
+		rec.FailedReason = ""
+		rec.NeedsInput = nil
+		generation = rec.Generation
+		revived = true
+		return nil
+	})
 	if err != nil {
 		return 0, err
 	}
-	return rec.Generation, nil
+	if revived && c.revivalStateWriter != nil {
+		if err := c.revivalStateWriter(ctx, sessionID, generation); err != nil {
+			return generation, fmt.Errorf("steer: write revival state for %q generation %d: %w", sessionID, generation, err)
+		}
+	}
+	return generation, nil
 }
 
 // reserveDispatch is I-6's package-internal reservation primitive
@@ -66,5 +179,88 @@ func (c *SteerCanceller) Revive(_ context.Context, sessionID string, _ steer.Pri
 // (ErrTerminal). Nothing calls this yet: SteerLauncher.Dispatch is itself a
 // CP-0 stub (steer_launcher.go).
 func reserveDispatch(rec *session.LifecycleRecord, gen int) (ok bool, reason string) {
+	if rec == nil {
+		return false, steer.ErrInvalidEdge.Error()
+	}
+	if gen < rec.Generation {
+		return false, steer.ErrStaleGeneration.Error()
+	}
+	if rec.Terminal() {
+		return false, steer.ErrTerminal.Error()
+	}
+	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+		return false, steer.ErrDispatchCancelled.Error()
+	}
 	return true, ""
+}
+
+type stopStampOutcome uint8
+
+const (
+	stopStamped stopStampOutcome = iota + 1
+	stopAlreadyStamped
+)
+
+var errCascadeTerminal = errors.New("steer: cancel subtree: terminal record")
+
+func (c *SteerCanceller) cascadeLock(sessionID string) *sync.Mutex {
+	lock, _ := c.locks.LoadOrStore(sessionID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
+}
+
+func (c *SteerCanceller) stampStop(sessionID string, at time.Time, by steer.Principal) (int, stopStampOutcome, error) {
+	var generation int
+	var outcome stopStampOutcome
+	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		if rec.Terminal() {
+			return errCascadeTerminal
+		}
+		generation = rec.Generation
+		if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+			outcome = stopAlreadyStamped
+			return errStopAlreadyStamped
+		}
+		rec.Stop = &session.Stop{At: at, Generation: rec.Generation, By: by}
+		outcome = stopStamped
+		return nil
+	})
+	if errors.Is(err, errStopAlreadyStamped) {
+		return generation, outcome, nil
+	}
+	return generation, outcome, err
+}
+
+var errStopAlreadyStamped = errors.New("steer: cancel subtree: current generation already stamped")
+
+func (c *SteerCanceller) cancelStamped(ctx context.Context, stamped map[string]int, report *steer.CancelReport) {
+	if c.cancelTurn == nil {
+		return
+	}
+	for _, id := range report.Reached {
+		generation, ok := stamped[id]
+		if !ok {
+			continue
+		}
+		delete(stamped, id)
+		result, err := c.cancelTurn(ctx, id, generation)
+		if err != nil {
+			report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: id, Reason: err.Error()})
+			continue
+		}
+		if result.SkippedNewerGeneration {
+			report.SkippedNewerGeneration = append(report.SkippedNewerGeneration, id)
+		}
+	}
+}
+
+func appendUniqueUnreachable(items []steer.UnreachableSession, item steer.UnreachableSession) []steer.UnreachableSession {
+	for _, existing := range items {
+		if existing.ID == item.ID && existing.Reason == item.Reason {
+			return items
+		}
+	}
+	return append(items, item)
 }
