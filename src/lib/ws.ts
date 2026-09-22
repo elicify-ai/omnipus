@@ -787,11 +787,11 @@ export class WsConnection {
   }
 
   // _handleClose is the entire close path, extracted from the onclose handler
-  // so the heartbeat's force-close catch below can drive it with a synthetic
-  // event when close() itself throws — otherwise a throwing close() means
-  // onclose never fires, nothing is logged, and the connection sits frozen
-  // with no reconnect (see _startHeartbeat). Takes only the two fields it
-  // reads, so a synthetic {code, reason} literal is a legal argument.
+  // so force-close paths can drive it with a synthetic event immediately.
+  // WebSocket.close() only starts the closing handshake; waiting for onclose
+  // can leave the UI falsely connected while an unreachable peer never
+  // answers. Takes only the two fields it reads, so a synthetic
+  // {code, reason} literal is a legal argument.
   private _handleClose(event: Pick<CloseEvent, 'code' | 'reason'>): void {
     // Drop this socket from the test-visible registry before nulling.
     if (typeof window !== 'undefined' && (import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator !== 'undefined' && navigator.webdriver))) {
@@ -838,6 +838,38 @@ export class WsConnection {
       }
       this._scheduleReconnect()
     }
+  }
+
+  /**
+   * Attempt a polite WebSocket close, but drive the disconnect path now rather
+   * than waiting for the peer to complete the closing handshake.
+   *
+   * All handlers are detached first. That makes the synthetic close exactly
+   * once: a late close/error/message from the dying socket cannot tear down a
+   * replacement socket, schedule another reconnect, or deliver stale frames.
+   */
+  private _forceClose(code: number, reason: string): void {
+    const socket = this.ws
+    if (!socket || socket.readyState === WebSocket.CLOSED) return
+
+    socket.onopen = null
+    socket.onmessage = null
+    socket.onerror = null
+    socket.onclose = null
+
+    let closeReason = reason
+    try {
+      socket.close(code, reason)
+    } catch (err) {
+      closeReason = `${reason} (close() threw)`
+      console.warn(`[ws] close() threw during ${reason} force-close — synthesizing close`, err)
+    }
+
+    // Keep this guard even though the handlers above are detached: a custom
+    // WebSocket implementation may still synchronously replace the socket from
+    // inside close(). Never let an obsolete socket close a newer connection.
+    if (this.ws !== socket) return
+    this._handleClose({ code, reason: closeReason })
   }
 
   private _scheduleReconnect(): void {
@@ -922,23 +954,11 @@ export class WsConnection {
     }
 
     // The browser's WebSocket close handler does not always fire promptly when
-    // the underlying network drops. Listen for the offline event and force-close
-    // so onclose fires synchronously and the UI flips to disconnected.
+    // the underlying network drops. Listen for the offline event, attempt a
+    // polite close, and immediately drive the disconnect path ourselves.
     this._onOffline = () => {
       if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
-        try {
-          this.ws.close(1000, 'offline')
-        } catch (err) {
-          // close() can throw, and when it does onclose does NOT run — the
-          // old comment here claimed otherwise and left the connection frozen
-          // with no log and no reconnect, exactly the ping-timeout bug (see
-          // _startHeartbeat's catch). Drive the close path by hand with a
-          // synthetic event; detach onclose first so a late real close event
-          // on the dying socket can't run the handler twice.
-          console.warn('[ws] close() threw during offline force-close — synthesizing close', err)
-          if (this.ws) this.ws.onclose = null
-          this._handleClose({ code: 1000, reason: 'offline (close() threw)' })
-        }
+        this._forceClose(1000, 'offline')
       }
     }
 
@@ -979,28 +999,12 @@ export class WsConnection {
             console.warn(
               `[ws] ${this.missedPingCount} consecutive pings with no server response — forcing reconnect`
             )
-            try {
-              // 4000 is an application-defined close code in the RFC 6455
-              // 3000-4999 range. 1006 (abnormal closure) is RESERVED — it may
-              // only ever be *reported* by the browser (e.g. as event.code
-              // when the connection drops without a close frame), never
-              // passed to WebSocket.close(), which throws InvalidAccessError
-              // for any code outside 1000 or 3000-4999. 4000 is valid, so
-              // close() succeeds and onclose fires normally, driving the
-              // reconnect via _scheduleReconnect below.
-              this.ws.close(4000, 'ping timeout')
-            } catch (err) {
-              // close() with a valid code should not throw — but if it does,
-              // onclose never fires, so without this branch nothing is logged,
-              // no reconnect is scheduled, and the connection sits frozen
-              // until the user notices (the next 30s tick would just throw
-              // again). Drive the close path by hand with a synthetic event:
-              // detach onclose first so a late real close event on the dying
-              // socket can't run the handler a second time.
-              console.warn('[ws] close() threw during ping-timeout force-close — synthesizing close', err)
-              if (this.ws) this.ws.onclose = null
-              this._handleClose({ code: 4000, reason: 'ping timeout (close() threw)' })
-            }
+            // 4000 is an application-defined close code in the RFC 6455
+            // 3000-4999 range. 1006 (abnormal closure) is RESERVED — it may
+            // only ever be *reported* by the browser, never passed to
+            // WebSocket.close(). Do not wait for the closing handshake here:
+            // this timeout exists precisely because the peer is unresponsive.
+            this._forceClose(4000, 'ping timeout')
             return
           }
         } else {
