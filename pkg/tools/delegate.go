@@ -629,7 +629,7 @@ func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
 // pkg/agent/steering.go); defined as an interface here to avoid a
 // tools<->agent import cycle.
 type DelegateSteeringSink interface {
-	EnqueueSteeringMessage(scope, agentID string, principal steer.Principal, msg providers.Message) error
+	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
 }
 
 // defaultCancelGrace is the cooperative-stop grace window before the hard

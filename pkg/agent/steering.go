@@ -16,7 +16,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -54,9 +53,8 @@ type steeringQueue struct {
 }
 
 type steeringQueueItem struct {
-	message   providers.Message
-	wake      *steeringWake
-	principal steer.Principal
+	message providers.Message
+	wake    *steeringWake
 }
 
 type steeringWake struct {
@@ -277,13 +275,11 @@ func (al *AgentLoop) enqueueSteeringFromMessage(msg bus.InboundMessage) error {
 	return al.enqueueSteeringMessage(route.SessionKey, ag.ID, pmsg)
 }
 
-// EnqueueSteeringMessage is the exported wrapper around enqueueSteeringMessage
-// for callers outside this package (pkg/tools/delegate.go's `steer` action —
-// tools cannot reach the unexported method directly, mirroring the existing
-// SubTurnSpawner-interface pattern used to avoid a tools<->agent import
-// cycle). Behavior is byte-for-byte identical to the internal method.
-func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, principal steer.Principal, msg providers.Message) error {
-	return al.enqueueSteeringItem(scope, agentID, steeringQueueItem{message: msg, principal: principal})
+// EnqueueSteeringMessage is the exported wrapper used by the delegate tool
+// after it has synchronously verified the caller's authority for the target
+// session. The queue only transports the resulting user message.
+func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
+	return al.enqueueSteeringMessage(scope, agentID, msg)
 }
 
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {

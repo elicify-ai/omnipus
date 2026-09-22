@@ -86,21 +86,26 @@ func TestSteer_DeliversInArrivalOrder(t *testing.T) {
 	}
 }
 
-func TestSteer_PublishesVerifiedPrincipal(t *testing.T) {
+func TestSteer_VerifiesAuthorityBeforeEnqueue(t *testing.T) {
 	tool, store, _, sink := newADR053TestTool(t)
 	if err := store.Persist(adr091SteeredRecord("child", "parent-session")); err != nil {
 		t.Fatal(err)
 	}
+	outsider := WithTranscriptSessionID(context.Background(), "outsider-session")
+	result := tool.Execute(outsider, map[string]any{"action": "steer", "session_id": "child", "text": "intrude"})
+	if !result.IsError {
+		t.Fatal("unauthorized steering unexpectedly succeeded")
+	}
+	if len(sink.delivered) != 0 {
+		t.Fatalf("unauthorized steering enqueued %d messages", len(sink.delivered))
+	}
+
 	ctx := WithAgentID(WithTranscriptSessionID(context.Background(), "parent-session"), "shared-agent-profile")
-	result := tool.Execute(ctx, map[string]any{"action": "steer", "session_id": "child", "text": "continue"})
+	result = tool.Execute(ctx, map[string]any{"action": "steer", "session_id": "child", "text": "continue"})
 	if result.IsError {
 		t.Fatalf("steer: %s", result.ForLLM)
 	}
-	if len(sink.principals) != 1 {
-		t.Fatalf("published principals = %#v, want one", sink.principals)
-	}
-	want := steer.Principal{Kind: steer.PrincipalKindAgent, ID: "parent-session"}
-	if sink.principals[0] != want {
-		t.Fatalf("published principal = %+v, want verified caller-session authority %+v", sink.principals[0], want)
+	if len(sink.delivered) != 1 || sink.delivered[0].Content != "continue" {
+		t.Fatalf("authorized steering deliveries = %#v, want one verified message", sink.delivered)
 	}
 }

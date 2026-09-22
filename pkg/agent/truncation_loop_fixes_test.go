@@ -29,7 +29,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -319,7 +318,7 @@ func TestTruncationD6_ChainRebuildKeepsSteeringMessage(t *testing.T) {
 			content:      "",
 			finishReason: "stop",
 			onCall: func() {
-				require.NoError(t, al.EnqueueSteeringMessage(sessionKey, "truncation-test-agent", steer.Principal{},
+				require.NoError(t, al.EnqueueSteeringMessage(sessionKey, "truncation-test-agent",
 					providers.Message{Role: "user", Content: steerText}))
 			},
 		},
