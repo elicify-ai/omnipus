@@ -426,6 +426,18 @@ export interface AgentSwitchedFrame {
   producing_session_id?: string;
 }
 
+export interface CommandSegmentInfo {
+  segment_index: number;
+  command_text: string;
+  resolved_binary?: string;
+  args?: Array<string>;
+  classification?: "read" | "write" | "read_write" | "none";
+  path?: string;
+  network_required?: boolean;
+  suggested_prefix?: string;
+  prefix_available?: boolean;
+}
+
 export interface ToolApprovalRequiredFrame {
   type: "tool_approval_required";
   approval_id: string;
@@ -440,6 +452,7 @@ export interface ToolApprovalRequiredFrame {
   expires_in_ms: number;
   producing_session_id?: string;
   workspace_id?: string;
+  segments?: Array<CommandSegmentInfo>;
 }
 
 export interface ToolApprovalResolvedFrame {
@@ -552,6 +565,19 @@ export interface SessionCloseAckFrame {
   session_id: string;
   id?: string;
   producing_session_id?: string;
+}
+
+export interface SessionModeUpdateFrame {
+  type: "session_mode_update";
+  session_id: string;
+  mode: "ask" | "auto" | "inherit";
+}
+
+export interface SessionModeUpdatedFrame {
+  type: "session_mode_updated";
+  session_id: string;
+  effective_mode: "ask" | "auto" | "god";
+  custom_override?: boolean;
 }
 
 export interface DevicePairingRequestFrame {
@@ -1012,6 +1038,8 @@ export type WsFrame =
   | ReplayWarningFrame
   | CancelStageFrame
   | SessionCloseAckFrame
+  | SessionModeUpdateFrame
+  | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | SessionCloseFrame
@@ -1101,6 +1129,8 @@ export type ServerFrame =
   | ReplayWarningFrame
   | CancelStageFrame
   | SessionCloseAckFrame
+  | SessionModeUpdateFrame
+  | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | NotificationFrame

@@ -149,8 +149,6 @@ properties:
     example: 50
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
-  shell_policy:
-    $ref: './AgentShellPolicy.yaml'
   fallback_models:
     type: array
     maxItems: 2

@@ -6878,6 +6878,27 @@ func (e SandboxConfigMode) Valid() bool {
 	}
 }
 
+// Defines values for SandboxConfigShellPermissionMode.
+const (
+	SandboxConfigShellPermissionModeAsk  SandboxConfigShellPermissionMode = "ask"
+	SandboxConfigShellPermissionModeAuto SandboxConfigShellPermissionMode = "auto"
+	SandboxConfigShellPermissionModeGod  SandboxConfigShellPermissionMode = "god"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigShellPermissionMode enum.
+func (e SandboxConfigShellPermissionMode) Valid() bool {
+	switch e {
+	case SandboxConfigShellPermissionModeAsk:
+		return true
+	case SandboxConfigShellPermissionModeAuto:
+		return true
+	case SandboxConfigShellPermissionModeGod:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SandboxConfigUpdateFilesystemModel.
 const (
 	SandboxConfigUpdateFilesystemModelConfined SandboxConfigUpdateFilesystemModel = "confined"
@@ -6911,6 +6932,48 @@ func (e SandboxConfigUpdateMode) Valid() bool {
 	case SandboxConfigUpdateModeOff:
 		return true
 	case SandboxConfigUpdateModePermissive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SandboxConfigUpdateShellPermissionMode.
+const (
+	SandboxConfigUpdateShellPermissionModeAsk  SandboxConfigUpdateShellPermissionMode = "ask"
+	SandboxConfigUpdateShellPermissionModeAuto SandboxConfigUpdateShellPermissionMode = "auto"
+	SandboxConfigUpdateShellPermissionModeGod  SandboxConfigUpdateShellPermissionMode = "god"
+)
+
+// Valid indicates whether the value is a known member of the SandboxConfigUpdateShellPermissionMode enum.
+func (e SandboxConfigUpdateShellPermissionMode) Valid() bool {
+	switch e {
+	case SandboxConfigUpdateShellPermissionModeAsk:
+		return true
+	case SandboxConfigUpdateShellPermissionModeAuto:
+		return true
+	case SandboxConfigUpdateShellPermissionModeGod:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SandboxStatusEffectiveMode.
+const (
+	SandboxStatusEffectiveModeAsk  SandboxStatusEffectiveMode = "ask"
+	SandboxStatusEffectiveModeAuto SandboxStatusEffectiveMode = "auto"
+	SandboxStatusEffectiveModeGod  SandboxStatusEffectiveMode = "god"
+)
+
+// Valid indicates whether the value is a known member of the SandboxStatusEffectiveMode enum.
+func (e SandboxStatusEffectiveMode) Valid() bool {
+	switch e {
+	case SandboxStatusEffectiveModeAsk:
+		return true
+	case SandboxStatusEffectiveModeAuto:
+		return true
+	case SandboxStatusEffectiveModeGod:
 		return true
 	default:
 		return false
@@ -9631,18 +9694,18 @@ func (e TodoStatus) Valid() bool {
 
 // Defines values for ToolApprovalActionRequestAction.
 const (
-	ToolApprovalActionRequestActionAlways  ToolApprovalActionRequestAction = "always"
-	ToolApprovalActionRequestActionApprove ToolApprovalActionRequestAction = "approve"
-	ToolApprovalActionRequestActionCancel  ToolApprovalActionRequestAction = "cancel"
-	ToolApprovalActionRequestActionDeny    ToolApprovalActionRequestAction = "deny"
+	ToolApprovalActionRequestActionAllow     ToolApprovalActionRequestAction = "allow"
+	ToolApprovalActionRequestActionAllowOnce ToolApprovalActionRequestAction = "allow_once"
+	ToolApprovalActionRequestActionCancel    ToolApprovalActionRequestAction = "cancel"
+	ToolApprovalActionRequestActionDeny      ToolApprovalActionRequestAction = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalActionRequestAction enum.
 func (e ToolApprovalActionRequestAction) Valid() bool {
 	switch e {
-	case ToolApprovalActionRequestActionAlways:
+	case ToolApprovalActionRequestActionAllow:
 		return true
-	case ToolApprovalActionRequestActionApprove:
+	case ToolApprovalActionRequestActionAllowOnce:
 		return true
 	case ToolApprovalActionRequestActionCancel:
 		return true
@@ -9653,24 +9716,60 @@ func (e ToolApprovalActionRequestAction) Valid() bool {
 	}
 }
 
+// Defines values for ToolApprovalActionRequestScope.
+const (
+	ToolApprovalActionRequestScopeExact  ToolApprovalActionRequestScope = "exact"
+	ToolApprovalActionRequestScopePrefix ToolApprovalActionRequestScope = "prefix"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalActionRequestScope enum.
+func (e ToolApprovalActionRequestScope) Valid() bool {
+	switch e {
+	case ToolApprovalActionRequestScopeExact:
+		return true
+	case ToolApprovalActionRequestScopePrefix:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolApprovalResponseAction.
 const (
-	ToolApprovalResponseActionAlways  ToolApprovalResponseAction = "always"
-	ToolApprovalResponseActionApprove ToolApprovalResponseAction = "approve"
-	ToolApprovalResponseActionCancel  ToolApprovalResponseAction = "cancel"
-	ToolApprovalResponseActionDeny    ToolApprovalResponseAction = "deny"
+	ToolApprovalResponseActionAllow     ToolApprovalResponseAction = "allow"
+	ToolApprovalResponseActionAllowOnce ToolApprovalResponseAction = "allow_once"
+	ToolApprovalResponseActionCancel    ToolApprovalResponseAction = "cancel"
+	ToolApprovalResponseActionDeny      ToolApprovalResponseAction = "deny"
 )
 
 // Valid indicates whether the value is a known member of the ToolApprovalResponseAction enum.
 func (e ToolApprovalResponseAction) Valid() bool {
 	switch e {
-	case ToolApprovalResponseActionAlways:
+	case ToolApprovalResponseActionAllow:
 		return true
-	case ToolApprovalResponseActionApprove:
+	case ToolApprovalResponseActionAllowOnce:
 		return true
 	case ToolApprovalResponseActionCancel:
 		return true
 	case ToolApprovalResponseActionDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ToolApprovalResponseScope.
+const (
+	ToolApprovalResponseScopeExact  ToolApprovalResponseScope = "exact"
+	ToolApprovalResponseScopePrefix ToolApprovalResponseScope = "prefix"
+)
+
+// Valid indicates whether the value is a known member of the ToolApprovalResponseScope enum.
+func (e ToolApprovalResponseScope) Valid() bool {
+	switch e {
+	case ToolApprovalResponseScopeExact:
+		return true
+	case ToolApprovalResponseScopePrefix:
 		return true
 	default:
 		return false
@@ -11196,15 +11295,6 @@ type Agent struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
 
-	// ShellPolicy Per-agent shell command deny-pattern configuration.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-		// EnableDenyPatterns Enable pattern-based shell command blocking.
-		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
-
 	// Skills List of skill IDs granted to this agent. Only skills in this list are available during this agent's runs. When no skills are granted the field is omitted entirely from the response (the backend does not emit an empty array). Absence of the field and an empty array are semantically identical (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
@@ -11333,15 +11423,6 @@ type AgentCreateRequestMain struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// ShellPolicy Per-agent shell command deny-pattern configuration.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-		// EnableDenyPatterns Enable pattern-based shell command blocking.
-		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
-
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
 
@@ -11428,15 +11509,6 @@ type AgentCreateRequestSubagent struct {
 
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
-
-	// ShellPolicy Per-agent shell command deny-pattern configuration.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-		// EnableDenyPatterns Enable pattern-based shell command blocking.
-		EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
 
 	// Skills Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
 	Skills *[]string `json:"skills,omitempty"`
@@ -11607,15 +11679,6 @@ type AgentSession struct {
 
 	// UpdatedAt RFC3339 last-update timestamp.
 	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// AgentShellPolicy Per-agent shell command deny-pattern configuration.
-type AgentShellPolicy struct {
-	// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
-	CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-
-	// EnableDenyPatterns Enable pattern-based shell command blocking.
-	EnableDenyPatterns *bool `json:"enable_deny_patterns,omitempty"`
 }
 
 // AgentStats Aggregate runtime statistics for an agent. Absent on the Agent object when no sessions have been run.
@@ -11914,13 +11977,6 @@ type AgentUpdateRequest struct {
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
-
-	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
-	ShellPolicy *struct {
-		// CustomDenyPatterns Must each be valid Go regexp patterns (400 on invalid regexp).
-		CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-		EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
-	} `json:"shell_policy,omitempty"`
 
 	// Skills Replace the agent's skill list. Only the skill IDs in this list will be granted; omitting this field leaves the existing list unchanged. Send an empty array to remove all skills. Rejected 400 on subagent_3p agents (CLI doesn't see Omnipus skills).
 	Skills *[]string `json:"skills,omitempty"`
@@ -13560,18 +13616,6 @@ type EvidenceRecord struct {
 
 	// Truncated True when `output` was cut to the size cap; a `"...[truncated N bytes]"` marker is appended in that case.
 	Truncated bool `json:"truncated"`
-}
-
-// ExecAllowlist Exec binary allowlist configuration for GET/PUT /api/v1/security/exec-allowlist (SEC-05).
-type ExecAllowlist struct {
-	// AllowedBinaries Ordered list of allowed binary name patterns evaluated on every exec call. Patterns are trimmed, deduplicated, and validated server-side. Empty array = block all exec calls.
-	AllowedBinaries []string `json:"allowed_binaries"`
-
-	// Approval Approval mode for exec calls. Reflects config.tools.exec.approval. Only present in GET responses.
-	Approval *string `json:"approval,omitempty"`
-
-	// RestartRequired True in PUT responses — the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-	RestartRequired *bool `json:"restart_required,omitempty"`
 }
 
 // ExecProxyStatus Runtime state of the exec SSRF proxy returned by GET /api/v1/security/exec-proxy-status (SEC-28).
@@ -18414,7 +18458,7 @@ type SandboxConfig struct {
 	// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
 	FilesystemModel *SandboxConfigFilesystemModel `json:"filesystem_model,omitempty"`
 
-	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+	// GodMode O14 global god-mode ("bypass-permissions") runtime state — ADR-091 D1's "God Mode" of the three shell-permission modes (Ask/Auto/God Mode). When true, every agent's bash tool-policy ceiling is floored at "allow", the kernel sandbox is off, and network egress is open (D6). Operator `deny` command rules (ADR-091 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
 	GodMode *bool `json:"god_mode,omitempty"`
 
 	// GodModeAvailable Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. The runtime god_mode switch is a no-op when this is false.
@@ -18429,8 +18473,9 @@ type SandboxConfig struct {
 	// Saved Present in PUT responses. Always true on success.
 	Saved *bool `json:"saved,omitempty"`
 
-	// ShellDenyPatterns Global fallback shell command deny-list (regex entries). Per-agent custom patterns extend this list.
-	ShellDenyPatterns *[]string `json:"shell_deny_patterns,omitempty"`
+	// ShellPermissionMode ADR-091 D1's configured global shell-permission mode. "ask" — every bash call shows the approval dialog. "auto" (fresh-install default) — commands run while a kernel sandbox confines them; anything needing more asks (Auto behaves like Ask where no kernel sandbox is active, FR-008). "god" — no approvals, no kernel sandbox, no network egress filter (mirrors `god_mode`/`god_mode_available` below).
+	// This is a convenience presentation, not independent storage (ADR-091 D1/FR-001): "ask" reads/writes the same underlying value as the global `bash` entry in GET/PUT /api/v1/security/tool-policies ("ask"), "auto" the same underlying value ("allow"), distinguished from "god" by the `god_mode` flag above. Deliberately named `shell_permission_mode`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide.
+	ShellPermissionMode *SandboxConfigShellPermissionMode `json:"shell_permission_mode,omitempty"`
 
 	// Ssrf Nested SSRF config block for backward-compatible clients.
 	Ssrf *struct {
@@ -18458,7 +18503,11 @@ type SandboxConfigFilesystemModel string
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
-// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_deny_patterns are hot-reloaded.
+// SandboxConfigShellPermissionMode ADR-091 D1's configured global shell-permission mode. "ask" — every bash call shows the approval dialog. "auto" (fresh-install default) — commands run while a kernel sandbox confines them; anything needing more asks (Auto behaves like Ask where no kernel sandbox is active, FR-008). "god" — no approvals, no kernel sandbox, no network egress filter (mirrors `god_mode`/`god_mode_available` below).
+// This is a convenience presentation, not independent storage (ADR-091 D1/FR-001): "ask" reads/writes the same underlying value as the global `bash` entry in GET/PUT /api/v1/security/tool-policies ("ask"), "auto" the same underlying value ("allow"), distinguished from "god" by the `god_mode` flag above. Deliberately named `shell_permission_mode`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide.
+type SandboxConfigShellPermissionMode string
+
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_permission_mode are hot-reloaded. This endpoint is the routing target for ADR-091's global shell-permission mode write (shell_permission_mode below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use (ADR-091 FR-045). No new auth mechanism; the requirement is routing the mode write through this handler rather than a bespoke endpoint that bypasses it.
 type SandboxConfigUpdate struct {
 	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
 	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
@@ -18473,8 +18522,9 @@ type SandboxConfigUpdate struct {
 	// Mode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 	Mode *SandboxConfigUpdateMode `json:"mode,omitempty"`
 
-	// ShellDenyPatterns Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
-	ShellDenyPatterns *[]string `json:"shell_deny_patterns,omitempty"`
+	// ShellPermissionMode Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies already exposes ("ask"/"allow" respectively — no new storage, FR-001); "god" additionally sets the same GodMode state the existing POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+	// Per-agent and per-chat modes tighten only, and are NOT set here: an agent's mode is `tool_policy_changes.set.bash` on PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped modifier is the session_mode_update WS frame (asyncapi.yaml). A per-agent or per-chat write looser than this value is rejected 4xx by its own writer (FR-003).
+	ShellPermissionMode *SandboxConfigUpdateShellPermissionMode `json:"shell_permission_mode,omitempty"`
 
 	// Ssrf Nested SSRF configuration sub-object. Flat fields take precedence.
 	Ssrf *struct {
@@ -18499,6 +18549,10 @@ type SandboxConfigUpdateFilesystemModel string
 // SandboxConfigUpdateMode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 type SandboxConfigUpdateMode string
 
+// SandboxConfigUpdateShellPermissionMode Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies already exposes ("ask"/"allow" respectively — no new storage, FR-001); "god" additionally sets the same GodMode state the existing POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+// Per-agent and per-chat modes tighten only, and are NOT set here: an agent's mode is `tool_policy_changes.set.bash` on PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped modifier is the session_mode_update WS frame (asyncapi.yaml). A per-agent or per-chat write looser than this value is rejected 4xx by its own writer (FR-003).
+type SandboxConfigUpdateShellPermissionMode string
+
 // SandboxStatus Runtime sandbox backend status returned by GET /api/v1/security/sandbox-status.
 type SandboxStatus struct {
 	// AbiVersion Landlock ABI version. Present on Linux with Landlock support.
@@ -18521,6 +18575,9 @@ type SandboxStatus struct {
 
 	// DisabledBy Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel".
 	DisabledBy *string `json:"disabled_by,omitempty"`
+
+	// EffectiveMode ADR-091 D1's resolved shell-permission mode for this gateway's global default — the chat-header badge's read target. "ask" and "auto"/"god" are a presentation over the existing bash tool-policy ceiling value ("ask" vs "allow") and the existing GodMode flag respectively; no second kernel_sandbox_active derivation is added here — this field already folds in the FR-007 platform predicate (Linux: Landlock enforce, not degraded; macOS: Seatbelt's own active/enabled state, read directly rather than via policy_applied, which is documented false on macOS by design; Windows: never) and FR-008's Auto-to-Ask fallback, so a configured "auto" with no active kernel sandbox is reported here as "ask". The SPA renders the "Auto → Ask" badge tooltip by comparing this value against the separately-fetched configured value (SandboxConfig.shell_permission_mode).
+	EffectiveMode *SandboxStatusEffectiveMode `json:"effective_mode,omitempty"`
 
 	// FilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 	FilesystemModel *SandboxStatusFilesystemModel `json:"filesystem_model,omitempty"`
@@ -18552,6 +18609,9 @@ type SandboxStatus struct {
 	// SeccompEnforced Whether seccomp syscall filtering is enforced.
 	SeccompEnforced *bool `json:"seccomp_enforced,omitempty"`
 }
+
+// SandboxStatusEffectiveMode ADR-091 D1's resolved shell-permission mode for this gateway's global default — the chat-header badge's read target. "ask" and "auto"/"god" are a presentation over the existing bash tool-policy ceiling value ("ask" vs "allow") and the existing GodMode flag respectively; no second kernel_sandbox_active derivation is added here — this field already folds in the FR-007 platform predicate (Linux: Landlock enforce, not degraded; macOS: Seatbelt's own active/enabled state, read directly rather than via policy_applied, which is documented false on macOS by design; Windows: never) and FR-008's Auto-to-Ask fallback, so a configured "auto" with no active kernel sandbox is reported here as "ask". The SPA renders the "Auto → Ask" badge tooltip by comparing this value against the separately-fetched configured value (SandboxConfig.shell_permission_mode).
+type SandboxStatusEffectiveMode string
 
 // SandboxStatusFilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 type SandboxStatusFilesystemModel string
@@ -21417,32 +21477,48 @@ type TokenUsageSummary struct {
 	TokensCacheWrite *int `json:"tokens_cache_write,omitempty"`
 }
 
-// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, cancelling, or approving-and-remembering ("always") it.
+// ToolApprovalActionRequest Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-091 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
 type ToolApprovalActionRequest struct {
-	// Action Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
+	// Action Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
 	Action ToolApprovalActionRequestAction `json:"action"`
+
+	// Scope Grant scope (ADR-091 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-091 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+	// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
+	// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-091 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+	Scope *ToolApprovalActionRequestScope `json:"scope,omitempty"`
 }
 
-// ToolApprovalActionRequestAction Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
+// ToolApprovalActionRequestAction Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
 type ToolApprovalActionRequestAction string
+
+// ToolApprovalActionRequestScope Grant scope (ADR-091 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-091 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+// Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
+// When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-091 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+type ToolApprovalActionRequestScope string
 
 // ToolApprovalResponse Response from POST /api/v1/tool-approvals/{approval_id}. Confirms that the approval action was processed.
 type ToolApprovalResponse struct {
-	// Action The action that was applied. Echoes the request action, including "always" (approve-and-remember).
+	// Action The action that was applied. Echoes the request action (ADR-091 D4), including "allow" (approve-and-remember, renamed from "always").
 	Action ToolApprovalResponseAction `json:"action"`
 
 	// ApprovalId The approval ID that was resolved.
 	ApprovalId string `json:"approval_id"`
 
-	// GrantRecorded Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
+	// GrantRecorded Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval).
 	GrantRecorded *bool `json:"grant_recorded,omitempty"`
+
+	// Scope Echoes the request's `scope` (ADR-091 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+	Scope *ToolApprovalResponseScope `json:"scope,omitempty"`
 
 	// Status Result status. Always "ok" when the action was accepted.
 	Status ToolApprovalResponseStatus `json:"status"`
 }
 
-// ToolApprovalResponseAction The action that was applied. Echoes the request action, including "always" (approve-and-remember).
+// ToolApprovalResponseAction The action that was applied. Echoes the request action (ADR-091 D4), including "allow" (approve-and-remember, renamed from "always").
 type ToolApprovalResponseAction string
+
+// ToolApprovalResponseScope Echoes the request's `scope` (ADR-091 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+type ToolApprovalResponseScope string
 
 // ToolApprovalResponseStatus Result status. Always "ok" when the action was accepted.
 type ToolApprovalResponseStatus string
@@ -23202,12 +23278,6 @@ type GetProvidersCatalogParams struct {
 // RestoreBackup200JSONResponseBodyStatus defines parameters for RestoreBackup.
 type RestoreBackup200JSONResponseBodyStatus string
 
-// UpdateExecAllowlistJSONBody defines parameters for UpdateExecAllowlist.
-type UpdateExecAllowlistJSONBody struct {
-	// AllowedBinaries List of allowed binary name patterns.
-	AllowedBinaries []string `json:"allowed_binaries"`
-}
-
 // ListSessionsParams defines parameters for ListSessions.
 type ListSessionsParams struct {
 	// AgentId Filter by agent ID.
@@ -23491,9 +23561,6 @@ type UpdateScheduleJSONRequestBody = ScheduleUpdate
 
 // UpdateAuditLogToggleJSONRequestBody defines body for UpdateAuditLogToggle for application/json ContentType.
 type UpdateAuditLogToggleJSONRequestBody = AuditLogToggleRequest
-
-// UpdateExecAllowlistJSONRequestBody defines body for UpdateExecAllowlist for application/json ContentType.
-type UpdateExecAllowlistJSONRequestBody UpdateExecAllowlistJSONBody
 
 // UpdatePromptGuardJSONRequestBody defines body for UpdatePromptGuard for application/json ContentType.
 type UpdatePromptGuardJSONRequestBody = PromptGuardUpdateRequest

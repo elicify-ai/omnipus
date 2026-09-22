@@ -76,12 +76,14 @@ properties:
   god_mode:
     type: boolean
     description: >
-      O14 global god-mode ("bypass-permissions") runtime state. When true, every
-      agent's tool policy is floored at "allow", the kernel sandbox is off,
-      network egress is open, and the shell guard is off — regardless of
-      per-agent profiles. Audit logging, the prompt-injection guard, and rate
-      limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password
-      step-up). Always false when god mode is unavailable.
+      O14 global god-mode ("bypass-permissions") runtime state — ADR-091 D1's
+      "God Mode" of the three shell-permission modes (Ask/Auto/God Mode).
+      When true, every agent's bash tool-policy ceiling is floored at
+      "allow", the kernel sandbox is off, and network egress is open
+      (D6). Operator `deny` command rules (ADR-091 D3) still apply — the
+      floor cannot erase them. Audit logging, the prompt-injection guard, and
+      rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode
+      (password step-up). Always false when god mode is unavailable.
     example: false
   god_mode_available:
     type: boolean
@@ -111,16 +113,30 @@ properties:
       nothing at runtime, so the UI must present the control as locked rather
       than offering a write that silently does nothing.
     example: false
-  shell_deny_patterns:
-    type: array
-    items:
-      type: string
+  shell_permission_mode:
+    type: string
+    enum:
+      - ask
+      - auto
+      - god
     description: >
-      Global fallback shell command deny-list (regex entries).
-      Per-agent custom patterns extend this list.
-    example:
-      - "^curl\\s"
-      - "^wget\\s"
+      ADR-091 D1's configured global shell-permission mode. "ask" — every
+      bash call shows the approval dialog. "auto" (fresh-install default) —
+      commands run while a kernel sandbox confines them; anything needing
+      more asks (Auto behaves like Ask where no kernel sandbox is active,
+      FR-008). "god" — no approvals, no kernel sandbox, no network egress
+      filter (mirrors `god_mode`/`god_mode_available` below).
+
+      This is a convenience presentation, not independent storage (ADR-091
+      D1/FR-001): "ask" reads/writes the same underlying value as the
+      global `bash` entry in GET/PUT /api/v1/security/tool-policies
+      ("ask"), "auto" the same underlying value ("allow"), distinguished
+      from "god" by the `god_mode` flag above. Deliberately named
+      `shell_permission_mode`, not `mode` — this schema's existing `mode`
+      field is the unrelated kernel sandbox enforcement mode
+      (off/permissive/enforce); reusing that key for a different value
+      domain would collide.
+    example: auto
   requires_restart:
     type: boolean
     description: >

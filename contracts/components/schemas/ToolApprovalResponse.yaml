@@ -15,14 +15,25 @@ properties:
   action:
     type: string
     description: >
-      The action that was applied. Echoes the request action, including
-      "always" (approve-and-remember).
+      The action that was applied. Echoes the request action (ADR-091 D4),
+      including "allow" (approve-and-remember, renamed from "always").
     enum:
-      - approve
       - deny
+      - allow_once
+      - allow
       - cancel
-      - always
-    example: approve
+    example: allow_once
+  scope:
+    type: string
+    enum:
+      - exact
+      - prefix
+    description: >
+      Echoes the request's `scope` (ADR-091 D4/FR-024). Present only when
+      action is "allow" AND the resolved approval was a D3/D4 command grant
+      — omitted for a D7/D8 path-widening or network-widening grant, and
+      omitted when action is not "allow".
+    example: exact
   status:
     type: string
     description: Result status. Always "ok" when the action was accepted.
@@ -32,7 +43,11 @@ properties:
   grant_recorded:
     type: boolean
     description: >
-      Present only when action is "always". True when the standing Always
-      Allow grant was stored. False means this call was approved once, but
-      the next identical call will ask again — the grant did not stick
-      (missing session, agent, or tool identity on the approval).
+      Present only when action is "allow". True when the grant was
+      stored — a session command grant (scope: exact/prefix), or the
+      pre-flight escalation's own path-widening/network-widening grant when
+      this approval resolved a D7/D8 escalation instead of an ordinary
+      tool-approval-required frame. False means this call was approved
+      once, but the next identical call (or the next command needing the
+      same widening) will ask again — the grant did not stick (missing
+      session, agent, or tool identity on the approval).

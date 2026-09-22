@@ -740,30 +740,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/security/exec-allowlist": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get exec binary allowlist (SEC-05)
-         * @description Returns the current exec allowlist and approval mode.
-         */
-        get: operations["getExecAllowlist"];
-        /**
-         * Update exec binary allowlist (SEC-05)
-         * @description Atomically updates the exec binary allowlist. Patterns are trimmed, validated, and deduplicated. Changes are audit-logged (SEC-15). Note: requires_restart=true in the response because the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-         */
-        put: operations["updateExecAllowlist"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/security/exec-proxy-status": {
         parameters: {
             query?: never;
@@ -870,7 +846,7 @@ export interface paths {
         get: operations["getSandboxConfig"];
         /**
          * Update sandbox configuration
-         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_deny_patterns. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_deny_patterns are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_permission_mode. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_permission_mode are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
          */
         put: operations["updateSandboxConfig"];
         post?: never;
@@ -8005,7 +7981,6 @@ export interface components {
              */
             max_tool_iterations: number;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -8149,25 +8124,6 @@ export interface components {
              * @example 2026-05-17T14:23:00Z
              */
             last_active?: string;
-        };
-        /**
-         * AgentShellPolicy
-         * @description Per-agent shell command deny-pattern configuration.
-         */
-        AgentShellPolicy: {
-            /**
-             * @description Enable pattern-based shell command blocking.
-             * @example true
-             */
-            enable_deny_patterns?: boolean;
-            /**
-             * @description Additional Go regexp patterns to block in shell commands.
-             * @example [
-             *       "rm -rf /",
-             *       "curl.*169\\.254"
-             *     ]
-             */
-            custom_deny_patterns?: string[];
         };
         /** @description Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts). */
         AgentToolsCfg: {
@@ -8327,7 +8283,6 @@ export interface components {
              * @example alloy
              */
             voice?: string | null;
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8416,7 +8371,6 @@ export interface components {
              * @example You are a focused research assistant...
              */
             soul: string;
-            shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8541,18 +8495,6 @@ export interface components {
              * @example 100
              */
             max_tool_iterations?: number;
-            /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
-            shell_policy?: {
-                /** @example true */
-                enable_deny_patterns?: boolean;
-                /**
-                 * @description Must each be valid Go regexp patterns (400 on invalid regexp).
-                 * @example [
-                 *       "rm -rf /"
-                 *     ]
-                 */
-                custom_deny_patterns?: string[];
-            };
             /**
              * @description Hex color code for agent avatar display (e.g. "#D4AF37").
              * @example #D4AF37
@@ -9092,7 +9034,7 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off — regardless of per-agent profiles. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+             * @description O14 global god-mode ("bypass-permissions") runtime state — ADR-091 D1's "God Mode" of the three shell-permission modes (Ask/Auto/God Mode). When true, every agent's bash tool-policy ceiling is floored at "allow", the kernel sandbox is off, and network egress is open (D6). Operator `deny` command rules (ADR-091 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
              * @example false
              */
             god_mode?: boolean;
@@ -9112,13 +9054,12 @@ export interface components {
              */
             workspace_path_guard_env_override?: boolean;
             /**
-             * @description Global fallback shell command deny-list (regex entries). Per-agent custom patterns extend this list.
-             * @example [
-             *       "^curl\\s",
-             *       "^wget\\s"
-             *     ]
+             * @description ADR-091 D1's configured global shell-permission mode. "ask" — every bash call shows the approval dialog. "auto" (fresh-install default) — commands run while a kernel sandbox confines them; anything needing more asks (Auto behaves like Ask where no kernel sandbox is active, FR-008). "god" — no approvals, no kernel sandbox, no network egress filter (mirrors `god_mode`/`god_mode_available` below).
+             *     This is a convenience presentation, not independent storage (ADR-091 D1/FR-001): "ask" reads/writes the same underlying value as the global `bash` entry in GET/PUT /api/v1/security/tool-policies ("ask"), "auto" the same underlying value ("allow"), distinguished from "god" by the `god_mode` flag above. Deliberately named `shell_permission_mode`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide.
+             * @example auto
+             * @enum {string}
              */
-            shell_deny_patterns?: string[];
+            shell_permission_mode?: "ask" | "auto" | "god";
             /** @description Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths). */
             requires_restart?: boolean;
             /** @description Present in PUT responses. Always true on success. */
@@ -9194,6 +9135,12 @@ export interface components {
              * @example 2
              */
             bind_ports_count: number;
+            /**
+             * @description ADR-091 D1's resolved shell-permission mode for this gateway's global default — the chat-header badge's read target. "ask" and "auto"/"god" are a presentation over the existing bash tool-policy ceiling value ("ask" vs "allow") and the existing GodMode flag respectively; no second kernel_sandbox_active derivation is added here — this field already folds in the FR-007 platform predicate (Linux: Landlock enforce, not degraded; macOS: Seatbelt's own active/enabled state, read directly rather than via policy_applied, which is documented false on macOS by design; Windows: never) and FR-008's Auto-to-Ask fallback, so a configured "auto" with no active kernel sandbox is reported here as "ask". The SPA renders the "Auto → Ask" badge tooltip by comparing this value against the separately-fetched configured value (SandboxConfig.shell_permission_mode).
+             * @example auto
+             * @enum {string}
+             */
+            effective_mode?: "ask" | "auto" | "god";
         };
         /**
          * AuditEntry
@@ -9327,31 +9274,6 @@ export interface components {
              * @example 60
              */
             max_agent_tool_calls_per_minute?: number;
-        };
-        /**
-         * ExecAllowlist
-         * @description Exec binary allowlist configuration for GET/PUT /api/v1/security/exec-allowlist (SEC-05).
-         */
-        ExecAllowlist: {
-            /**
-             * @description Ordered list of allowed binary name patterns evaluated on every exec call. Patterns are trimmed, deduplicated, and validated server-side. Empty array = block all exec calls.
-             * @example [
-             *       "git",
-             *       "python3",
-             *       "node"
-             *     ]
-             */
-            allowed_binaries: string[];
-            /**
-             * @description Approval mode for exec calls. Reflects config.tools.exec.approval. Only present in GET responses.
-             * @example ask
-             */
-            approval?: string;
-            /**
-             * @description True in PUT responses — the in-memory agent loop uses the previous allowlist until the gateway restarts (SEC-12).
-             * @example true
-             */
-            restart_required?: boolean;
         };
         /**
          * ExecProxyStatus
@@ -10581,7 +10503,7 @@ export interface components {
              */
             ref?: string;
         };
-        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_deny_patterns are hot-reloaded. */
+        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_permission_mode are hot-reloaded. This endpoint is the routing target for ADR-091's global shell-permission mode write (shell_permission_mode below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use (ADR-091 FR-045). No new auth mechanism; the requirement is routing the mode write through this handler rather than a bespoke endpoint that bypasses it. */
         SandboxConfigUpdate: {
             /**
              * @description Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
@@ -10631,13 +10553,12 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description Global fallback list of Go regexp patterns to block in shell commands. Per-agent custom_deny_patterns extend this list. Hot-reloaded.
-             * @example [
-             *       "rm -rf /",
-             *       "curl.*169\\.254"
-             *     ]
+             * @description Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies already exposes ("ask"/"allow" respectively — no new storage, FR-001); "god" additionally sets the same GodMode state the existing POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+             *     Per-agent and per-chat modes tighten only, and are NOT set here: an agent's mode is `tool_policy_changes.set.bash` on PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped modifier is the session_mode_update WS frame (asyncapi.yaml). A per-agent or per-chat write looser than this value is rejected 4xx by its own writer (FR-003).
+             * @example auto
+             * @enum {string}
              */
-            shell_deny_patterns?: string[];
+            shell_permission_mode?: "ask" | "auto" | "god";
             /**
              * @description ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.
              * @example false
@@ -11942,18 +11863,24 @@ export interface components {
              */
             approval_id: string;
             /**
-             * @description The action that was applied. Echoes the request action, including "always" (approve-and-remember).
-             * @example approve
+             * @description The action that was applied. Echoes the request action (ADR-091 D4), including "allow" (approve-and-remember, renamed from "always").
+             * @example allow_once
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel" | "always";
+            action: "deny" | "allow_once" | "allow" | "cancel";
+            /**
+             * @description Echoes the request's `scope` (ADR-091 D4/FR-024). Present only when action is "allow" AND the resolved approval was a D3/D4 command grant — omitted for a D7/D8 path-widening or network-widening grant, and omitted when action is not "allow".
+             * @example exact
+             * @enum {string}
+             */
+            scope?: "exact" | "prefix";
             /**
              * @description Result status. Always "ok" when the action was accepted.
              * @example ok
              * @enum {string}
              */
             status: "ok";
-            /** @description Present only when action is "always". True when the standing Always Allow grant was stored. False means this call was approved once, but the next identical call will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
+            /** @description Present only when action is "allow". True when the grant was stored — a session command grant (scope: exact/prefix), or the pre-flight escalation's own path-widening/network-widening grant when this approval resolved a D7/D8 escalation instead of an ordinary tool-approval-required frame. False means this call was approved once, but the next identical call (or the next command needing the same widening) will ask again — the grant did not stick (missing session, agent, or tool identity on the approval). */
             grant_recorded?: boolean;
         };
         /**
@@ -12750,15 +12677,23 @@ export interface components {
         };
         /**
          * ToolApprovalActionRequest
-         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval by approving, denying, cancelling, or approving-and-remembering ("always") it.
+         * @description Request body for POST /api/v1/tool-approvals/{approval_id}. Resolves a pending tool call approval (ADR-091 D4). Renamed from the 4-value approve|deny|cancel|always set: "approve" -> "allow_once", "always" -> "allow" (greenfield, no upgrade path). `cancel` is retained in the enum with no corresponding UI button — see its own description.
          */
         ToolApprovalActionRequest: {
             /**
-             * @description Action to take on this approval. approve — allow this single invocation. deny    — reject this single invocation. cancel  — cancel this invocation (e.g. modal dismissed / turn aborted). always  — allow this invocation AND record a session-scoped "Always Allow" grant for (session, agent, tool) so future matching calls in the same session auto-approve without re-prompting.
-             * @example approve
+             * @description Action to take on this approval. deny       — reject this single invocation (also the resolution for Escape/overlay-click/X in the UI, none of which render a Cancel button any more). allow_once — allow this single invocation only, no grant recorded. allow      — allow this invocation AND record a session-scoped grant per `scope` below so future matching calls in the same session auto-approve without re-prompting. cancel     — client-issued resolution for the stuck-approval recovery path only (a lost-server 404), distinct from `deny` (a network failure, which leaves the approval unresolved so a later snapshot can restore it) — ToolApprovalModal.resolution.test.tsx and the headless CLI approval path (pkg/app/internal/run/run.go) both depend on `deny` and `cancel` remaining distinct wire values. Never shown as a button.
+             * @example allow_once
              * @enum {string}
              */
-            action: "approve" | "deny" | "cancel" | "always";
+            action: "deny" | "allow_once" | "allow" | "cancel";
+            /**
+             * @description Grant scope (ADR-091 D4/FR-024). Present only when action is "allow"; ignored otherwise. "exact" (default when omitted) — command text + cwd, unchanged from the pre-ADR-091 "always" grant. "prefix" — a new {binary, arg_prefix} grant, ignores cwd, token-boundary matched (e.g. "npm run test" does not match "npm run testfoo"). run_in_background is a separate match dimension for both scopes and is not carried here — it is read from the pending approval's own recorded tool-call args.
+             *     Not meaningful for a D7 (filesystem) or D8 (network) pre-flight escalation shown via the same dialog — approving one of those records the path-widening or network-widening grant the frame described, not an exact/prefix command grant; `scope` is ignored for those approvals.
+             *     When the pending approval covers a chained command (multiple unmatched segments in ToolApprovalRequiredFrame.segments), this one scope choice applies uniformly to every currently-unmatched segment resolved by this action (ADR-091 D4: "one rule per segment" is a server-side recording detail, not a per-segment client choice).
+             * @example exact
+             * @enum {string}
+             */
+            scope?: "exact" | "prefix";
         };
         /**
          * CredentialSetRequest
@@ -17492,71 +17427,6 @@ export interface operations {
                 };
             };
             503: components["responses"]["503BypassActive"];
-        };
-    };
-    getExecAllowlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Current exec allowlist. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecAllowlist"];
-                };
-            };
-            /** @description Missing or invalid bearer token. */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    updateExecAllowlist: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    /** @description List of allowed binary name patterns. */
-                    allowed_binaries: string[];
-                };
-            };
-        };
-        responses: {
-            /** @description Updated allowlist (restart required). */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecAllowlist"];
-                };
-            };
-            /** @description Invalid pattern (empty, too long, or too many entries). */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
         };
     };
     getExecProxyStatus: {
@@ -23484,7 +23354,6 @@ export type Agent = components["schemas"]["Agent"];
 export type AgentModelParams = components["schemas"]["AgentModelParams"];
 export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
-export type AgentShellPolicy = components["schemas"]["AgentShellPolicy"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
 export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
@@ -23520,7 +23389,6 @@ export type AuditEntry = components["schemas"]["AuditEntry"];
 export type AuditLogResponse = components["schemas"]["AuditLogResponse"];
 export type AuditLogToggle = components["schemas"]["AuditLogToggle"];
 export type RateLimitConfig = components["schemas"]["RateLimitConfig"];
-export type ExecAllowlist = components["schemas"]["ExecAllowlist"];
 export type ExecProxyStatus = components["schemas"]["ExecProxyStatus"];
 export type SkillTrustResponse = components["schemas"]["SkillTrustResponse"];
 export type PromptGuardResponse = components["schemas"]["PromptGuardResponse"];

@@ -1,0 +1,41 @@
+title: SessionModeUpdateFrame
+description: >
+  Client → server. Set or clear this session's ADR-091 D1/FR-004 per-chat
+  shell-permission-mode modifier — new, session-keyed state
+  (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never
+  written into config.json and never a chat_id key on either policy map
+  (Hard Constraint #6). Applied after the global x per-agent merge resolves
+  the effective bash policy; tighten-only — the server rejects (via error,
+  session-scoped, session_id set) a value looser than the resolved global x
+  per-agent mode. "god" is not a valid per-chat value: God Mode is
+  global-only (D1) and always requires the existing password step-up
+  endpoint (POST /api/v1/gateway/god-mode), never this frame. Inherits to a
+  delegated subagent session exactly as approval grants do
+  (ApprovalGrantStore.InheritFrom); clears with the session on restart
+  (FR-006). Documentation copy — the canonical, code-generating definition
+  is the inline schema of the same name in asyncapi.yaml.
+type: object
+required:
+  - type
+  - session_id
+  - mode
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_mode_update
+  session_id:
+    type: string
+    minLength: 1
+  mode:
+    type: string
+    enum:
+      - ask
+      - auto
+      - inherit
+    description: >
+      "ask"/"auto" set the per-chat modifier (tighten-only against the
+      resolved global x per-agent value). "inherit" clears any existing
+      per-chat modifier for this session — the chat reverts to the global
+      x per-agent resolved mode rather than being set to a stricter one.
+    example: ask

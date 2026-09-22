@@ -422,6 +422,28 @@ type CancelStageFrame struct {
 	Type               string  `json:"type"`
 }
 
+// CommandSegmentInfo — ADR-091 D3/D4/D7/D8. One chained-command segment (split via splitShellSegments/shellCommandHead) awaiting an approval decision, listed inside ToolApprovalRequiredFrame.segments. Only unmatched segments appear here — a segment already covered by an existing D3 rule or session grant is resolved server-side without a prompt (D4: "a later partial match prompts only the unmatched segment(s)").
+type CommandSegmentInfo struct {
+	// Argument tokens following the resolved binary, as split.
+	Args []string `json:"args,omitempty"`
+	// FR-038 filesystem-operation classification for the path this segment's D7 pre-flight escalation concerns. "none" when this segment carries no filesystem escalation (an ordinary D3/D4 command-rule prompt, or a D8-only network escalation).
+	Classification *string `json:"classification,omitempty"`
+	// This segment's raw command text (post-split, pre-resolution).
+	CommandText string `json:"command_text"`
+	// FR-043's network-need classifier verdict for this segment — true when approving widens the session's ConnectPortRules to DefaultConnectPorts (D8/FR-044). Independent of `classification`: a segment can need both a filesystem and a network grant at once (e.g. `curl -o /etc/foo https://x`).
+	NetworkRequired *bool `json:"network_required,omitempty"`
+	// The filesystem path FR-038's classifier extracted for this segment. Present iff classification is read/write/read_write.
+	Path *string `json:"path,omitempty"`
+	// False on Windows (FR-041: exact-command match only, no prefix option, no chained-segment splitting) or when FR-026's algorithm found no stop token narrower than the full command. The dialog omits the "prefix" scope radio for this segment when false.
+	PrefixAvailable *bool `json:"prefix_available,omitempty"`
+	// Absolute path the segment's leading token resolved to against the child's effective PATH/env (D3 resolve-and-verify, FR-040). Absent when the head could not be resolved to a literal executable — a normalised head (shellCommandHeadDetailed's third return), a quote-blind over-split, a redirection-only segment, or brace expansion (FR-020/FR-040 blind spots). Such a segment always routes to ask and offers no D3 rule match, only this dialog.
+	ResolvedBinary *string `json:"resolved_binary,omitempty"`
+	// Zero-based position of this segment among the full chained command's segments (splitShellSegments order).
+	SegmentIndex int `json:"segment_index"`
+	// FR-026's suggested-prefix algorithm output for this segment, shown next to the "prefix" scope radio when the user picks Allow. Absent when prefix_available is false.
+	SuggestedPrefix *string `json:"suggested_prefix,omitempty"`
+}
+
 // DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the calling agent's own narration of the denial, not a dedicated SPA-rendered block. The frame's top-level `error` field carries the same `reason`.
 type DelegationFailure struct {
 	// Fixed discriminator the SPA matches on.
@@ -872,6 +894,24 @@ type SessionCloseFrame struct {
 	Type      string `json:"type"`
 }
 
+// SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-091 D1/FR-004 per-chat shell-permission-mode modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on either policy map (Hard Constraint #6). Applied after the global x per-agent merge resolves the effective bash policy; tighten-only — the server rejects (via error, session-scoped, session_id set) a value looser than the resolved global x per-agent mode. "god" is not a valid per-chat value: God Mode is global-only (D1) and always requires the existing password step-up endpoint (POST /api/v1/gateway/god-mode), never this frame. Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart (FR-006).
+type SessionModeUpdateFrame struct {
+	// "ask"/"auto" set the per-chat modifier (tighten-only against the resolved global x per-agent value). "inherit" clears any existing per-chat modifier for this session — the chat reverts to the global x per-agent resolved mode rather than being set to a stricter one.
+	Mode      string `json:"mode"`
+	SessionId string `json:"session_id"`
+	Type      string `json:"type"`
+}
+
+// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved mode. A rejected (loosening) request is NOT acknowledged here — it receives the existing, session-scoped ErrorFrame instead, matching every other WS write rejection in this spec. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013), matching SessionCloseAckFrame's own precedent.
+type SessionModeUpdatedFrame struct {
+	// True when the underlying per-agent bash policy is a stricter explicit override outside the three named modes (e.g. ADR-090's Jim, bash: deny) — FR-001's "custom override" indicator. The SPA shows this session as its nearest named mode (Ask) with the indicator rather than silently bucketing it.
+	CustomOverride *bool `json:"custom_override,omitempty"`
+	// The resolved effective mode for this session after applying (or clearing) the modifier — same three-value vocabulary as SandboxStatus.effective_mode. "god" appears here only when the global default itself is God Mode (a per-chat modifier can never produce it, tighten-only).
+	EffectiveMode string `json:"effective_mode"`
+	SessionId     string `json:"session_id"`
+	Type          string `json:"type"`
+}
+
 // SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output — so producing_session_id is absent (FR-013).
 type SessionStartedFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
@@ -1019,11 +1059,13 @@ type ToolApprovalRequiredFrame struct {
 	ExpiresInMs int            `json:"expires_in_ms"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	ToolCallId         string  `json:"tool_call_id"`
-	ToolName           string  `json:"tool_name"`
-	TurnId             string  `json:"turn_id"`
-	Type               string  `json:"type"`
+	// ADR-091 D3/D4/D7/D8 per-segment breakdown — present only when tool_name is "bash" and the approval was raised by the D3 rule matcher or a D7/D8 pre-flight escalation, not for an ordinary non-shell tool approval. A single, unchained bash command still populates this with exactly one entry so the SPA has one rendering path. Absent for non-bash tool approvals.
+	Segments   []CommandSegmentInfo `json:"segments,omitempty"`
+	SessionId  string               `json:"session_id"`
+	ToolCallId string               `json:"tool_call_id"`
+	ToolName   string               `json:"tool_name"`
+	TurnId     string               `json:"turn_id"`
+	Type       string               `json:"type"`
 	// Workspace the requesting session belongs to (resolved server-side from session meta, walking up to the delegating parent). The SPA shows the approval only while that workspace is active. Omitted when the session belongs to no workspace (shown everywhere).
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }

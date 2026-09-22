@@ -101,3 +101,21 @@ properties:
       Number of bind-port allow-list rules installed by the kernel.
       Zero on FallbackBackend, Mode=Off, or Landlock ABI < 4.
     example: 2
+  effective_mode:
+    type: string
+    enum: [ask, auto, god]
+    description: >
+      ADR-091 D1's resolved shell-permission mode for this gateway's global
+      default — the chat-header badge's read target. "ask" and "auto"/"god"
+      are a presentation over the existing bash tool-policy ceiling value
+      ("ask" vs "allow") and the existing GodMode flag respectively; no
+      second kernel_sandbox_active derivation is added here — this field
+      already folds in the FR-007 platform predicate (Linux: Landlock
+      enforce, not degraded; macOS: Seatbelt's own active/enabled state,
+      read directly rather than via policy_applied, which is documented
+      false on macOS by design; Windows: never) and FR-008's Auto-to-Ask
+      fallback, so a configured "auto" with no active kernel sandbox is
+      reported here as "ask". The SPA renders the "Auto → Ask" badge
+      tooltip by comparing this value against the separately-fetched
+      configured value (SandboxConfig.shell_permission_mode).
+    example: auto

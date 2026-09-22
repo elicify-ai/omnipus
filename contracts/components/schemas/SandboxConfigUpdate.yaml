@@ -7,7 +7,14 @@ description: >
   in the same request body.
   mode and allowed_paths are restart-gated
   (the response includes requires_restart=true when either changes).
-  ssrf.allow_internal and shell_deny_patterns are hot-reloaded.
+  ssrf.allow_internal and shell_permission_mode are hot-reloaded.
+  This endpoint is the routing target for ADR-091's global shell-permission
+  mode write (shell_permission_mode below) specifically because it already
+  gates every write behind requireReAuth (see putSandboxConfig ->
+  authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same
+  password step-up God Mode and credential writes use (ADR-091 FR-045). No
+  new auth mechanism; the requirement is routing the mode write through this
+  handler rather than a bespoke endpoint that bypasses it.
 properties:
   mode:
     type: string
@@ -71,16 +78,29 @@ properties:
         description: CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
         example:
           - "10.0.0.1/32"
-  shell_deny_patterns:
-    type: array
-    items:
-      type: string
+  shell_permission_mode:
+    type: string
+    enum:
+      - ask
+      - auto
+      - god
     description: >
-      Global fallback list of Go regexp patterns to block in shell commands.
-      Per-agent custom_deny_patterns extend this list. Hot-reloaded.
-    example:
-      - "rm -rf /"
-      - "curl.*169\\.254"
+      Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write
+      the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies
+      already exposes ("ask"/"allow" respectively — no new storage,
+      FR-001); "god" additionally sets the same GodMode state the existing
+      POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes
+      effect immediately, no restart required. Deliberately not named
+      `mode` — that key above is the unrelated kernel sandbox enforcement
+      mode (off/permissive/enforce).
+
+      Per-agent and per-chat modes tighten only, and are NOT set here: an
+      agent's mode is `tool_policy_changes.set.bash` on
+      PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped
+      modifier is the session_mode_update WS frame (asyncapi.yaml). A
+      per-agent or per-chat write looser than this value is rejected 4xx by
+      its own writer (FR-003).
+    example: auto
   workspace_path_guard:
     type: boolean
     description: >

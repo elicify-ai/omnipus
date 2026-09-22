@@ -2022,7 +2022,7 @@ func FixtureOperationResult_Edge() OperationResult {
 func FixtureToolApprovalResponse_Populated() ToolApprovalResponse {
 	return ToolApprovalResponse{
 		ApprovalId: "ap-550e8400-e29b-41d4-a716-446655440001",
-		Action:     ToolApprovalResponseAction("approve"),
+		Action:     ToolApprovalResponseActionAllowOnce,
 		Status:     ToolApprovalResponseStatus("ok"),
 	}
 }
@@ -2034,7 +2034,7 @@ func FixtureToolApprovalResponse_ZeroValue() ToolApprovalResponse {
 func FixtureToolApprovalResponse_Edge() ToolApprovalResponse {
 	return ToolApprovalResponse{
 		ApprovalId: "ap-" + repeatStr("e", 36),
-		Action:     ToolApprovalResponseAction("deny"),
+		Action:     ToolApprovalResponseActionDeny,
 		Status:     ToolApprovalResponseStatus("ok"),
 	}
 }
@@ -2452,7 +2452,6 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
-	enabled := true
 	color := "#D4AF37"
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
@@ -2483,13 +2482,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 		}{
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,
-		},
-		ShellPolicy: &struct {
-			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
-			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
-		}{
-			EnableDenyPatterns: &enabled,
-			CustomDenyPatterns: &[]string{"rm -rf /"},
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {

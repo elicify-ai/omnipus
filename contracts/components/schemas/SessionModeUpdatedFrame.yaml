@@ -1,0 +1,47 @@
+title: SessionModeUpdatedFrame
+description: >
+  Server → client. Acknowledges a session_mode_update request with the
+  session's resulting resolved mode. A rejected (loosening) request is NOT
+  acknowledged here — it receives the existing, session-scoped ErrorFrame
+  instead, matching every other WS write rejection in this spec.
+  Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per
+  the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn
+  output, so producing_session_id is absent (FR-013), matching
+  SessionCloseAckFrame's own precedent. Documentation copy — the canonical,
+  code-generating definition is the inline schema of the same name in
+  asyncapi.yaml.
+type: object
+required:
+  - type
+  - session_id
+  - effective_mode
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: session_mode_updated
+  session_id:
+    type: string
+    minLength: 1
+  effective_mode:
+    type: string
+    enum:
+      - ask
+      - auto
+      - god
+    description: >
+      The resolved effective mode for this session after applying (or
+      clearing) the modifier — same three-value vocabulary as
+      SandboxStatus.effective_mode. "god" appears here only when the global
+      default itself is God Mode (a per-chat modifier can never produce it,
+      tighten-only).
+    example: auto
+  custom_override:
+    type: boolean
+    description: >
+      True when the underlying per-agent bash policy is a stricter explicit
+      override outside the three named modes (e.g. ADR-090's Jim, bash:
+      deny) — FR-001's "custom override" indicator. The SPA shows this
+      session as its nearest named mode (Ask) with the indicator rather
+      than silently bucketing it.
+    example: false

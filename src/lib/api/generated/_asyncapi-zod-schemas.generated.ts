@@ -445,6 +445,20 @@ export const AgentSwitchedFrame = z
   })
   .strict();
 
+export const CommandSegmentInfo = z
+  .object({
+    segment_index: z.number().int().min(0),
+    command_text: z.string().min(1),
+    resolved_binary: z.string().optional(),
+    args: z.array(z.string()).optional(),
+    classification: z.enum(["read", "write", "read_write", "none"]).optional(),
+    path: z.string().optional(),
+    network_required: z.boolean().optional(),
+    suggested_prefix: z.string().optional(),
+    prefix_available: z.boolean().optional(),
+  })
+  .strict();
+
 export const ToolApprovalRequiredFrame = z
   .object({
     type: z.literal("tool_approval_required"),
@@ -458,6 +472,7 @@ export const ToolApprovalRequiredFrame = z
     expires_in_ms: z.number().int().min(0).max(86400000),
     producing_session_id: z.string().min(1).optional(),
     workspace_id: z.string().min(1).max(128).optional(),
+    segments: z.array(CommandSegmentInfo).optional(),
   })
   .strict();
 
@@ -601,6 +616,23 @@ export const SessionCloseAckFrame = z
     session_id: z.string().min(1),
     id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
+  })
+  .strict();
+
+export const SessionModeUpdateFrame = z
+  .object({
+    type: z.literal("session_mode_update"),
+    session_id: z.string().min(1),
+    mode: z.enum(["ask", "auto", "inherit"]),
+  })
+  .strict();
+
+export const SessionModeUpdatedFrame = z
+  .object({
+    type: z.literal("session_mode_updated"),
+    session_id: z.string().min(1),
+    effective_mode: z.enum(["ask", "auto", "god"]),
+    custom_override: z.boolean().optional(),
   })
   .strict();
 
@@ -1158,6 +1190,8 @@ export const WsFrame = z.discriminatedUnion("type", [
   ReplayWarningFrame,
   CancelStageFrame,
   SessionCloseAckFrame,
+  SessionModeUpdateFrame,
+  SessionModeUpdatedFrame,
   DevicePairingRequestFrame,
   WhatsAppPairingFrame,
   SessionCloseFrame,

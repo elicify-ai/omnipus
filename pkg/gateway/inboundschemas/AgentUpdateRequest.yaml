@@ -70,21 +70,6 @@ properties:
     type: integer
     description: New maximum tool calls per turn. Allowed on all agents.
     example: 100
-  shell_policy:
-    type: object
-    description: >
-      Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
-    properties:
-      enable_deny_patterns:
-        type: boolean
-        example: true
-      custom_deny_patterns:
-        type: array
-        items:
-          type: string
-        description: Must each be valid Go regexp patterns (400 on invalid regexp).
-        example:
-          - "rm -rf /"
   color:
     type: string
     pattern: '^#[0-9A-Fa-f]{6}$'
