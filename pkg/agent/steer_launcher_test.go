@@ -599,6 +599,82 @@ func TestLaunch_NestedSameShardDoesNotDeadlock(t *testing.T) {
 	}
 }
 
+// TestLaunch_DefaultTimeoutIsThirtyMinutes proves D9's founder-set default: a
+// steered launch with no per-call timeout_seconds and no configured
+// performance.delegation_timeout_minutes records a 30-minute lifetime on the
+// edge (SteeredBy.Limits.TimeoutSeconds == 1800).
+func TestLaunch_DefaultTimeoutIsThirtyMinutes(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	l := NewSteerLauncher(al)
+	steerer := newTestSteeringSession(t, al, "ws-1")
+
+	res, err := l.Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "long work",
+		Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-default-timeout"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	rec, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if rec.SteeredBy == nil {
+		t.Fatal("SteeredBy = nil, want the edge carrying the resolved timeout")
+	}
+	if got := rec.SteeredBy.Limits.TimeoutSeconds; got != 30*60 {
+		t.Fatalf("Limits.TimeoutSeconds = %d, want %d (30 minutes)", got, 30*60)
+	}
+}
+
+// TestLaunch_TimeoutPrecedence proves that an explicit call-level timeout and
+// a configured performance.delegation_timeout_minutes each override the
+// 30-minute default, with the explicit per-call value winning.
+func TestLaunch_TimeoutPrecedence(t *testing.T) {
+	t.Run("explicit call-level timeout wins", func(t *testing.T) {
+		al, cleanup := newSteerAL(t)
+		defer cleanup()
+		steerer := newTestSteeringSession(t, al, "ws-1")
+		res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+			SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "quick work",
+			Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-explicit-timeout"},
+			Limits: steer.Limits{TimeoutSeconds: 90},
+		})
+		if err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		rec, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := rec.SteeredBy.Limits.TimeoutSeconds; got != 90 {
+			t.Fatalf("Limits.TimeoutSeconds = %d, want 90 (explicit call-level)", got)
+		}
+	})
+
+	t.Run("configured value wins over the default", func(t *testing.T) {
+		al, cleanup := newSteerAL(t)
+		defer cleanup()
+		al.GetConfig().Performance.DelegationTimeoutMinutes = 10
+		steerer := newTestSteeringSession(t, al, "ws-1")
+		res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+			SteeringSessionID: steerer, TargetAgentID: testDefaultAgentID, Task: "configured work",
+			Origin: steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-configured-timeout"},
+		})
+		if err != nil {
+			t.Fatalf("Launch: %v", err)
+		}
+		rec, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got := rec.SteeredBy.Limits.TimeoutSeconds; got != 10*60 {
+			t.Fatalf("Limits.TimeoutSeconds = %d, want %d (configured 10 minutes)", got, 10*60)
+		}
+	})
+}
+
 // ============================== Dispatch ==============================
 
 func TestDispatch_TerminalSessionRefused(t *testing.T) {

@@ -38,7 +38,12 @@ import (
 // this only as a defensive backstop.
 const maxLaunchAncestorWalk = 4096
 
-const defaultSteeredSessionTimeout = 5 * time.Minute
+// defaultSteeredSessionTimeout is the built-in lifetime for a steered session
+// when neither a per-call timeout_seconds nor performance.delegation_timeout_minutes
+// was configured (D9: 0 = default; the founder raised the default from 5 to
+// 30 minutes, 2026-09-23). An explicit call-level timeout and a configured
+// value still win over this backstop (see Launch's limits resolution above).
+const defaultSteeredSessionTimeout = 30 * time.Minute
 
 // SteerLauncher implements steer.SessionLauncher (I-2), owned by WP-A.
 type SteerLauncher struct {
