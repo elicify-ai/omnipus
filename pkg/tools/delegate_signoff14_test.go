@@ -36,6 +36,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // signoff14CapturingSpawner implements SubTurnSpawner, recording BOTH how
@@ -127,7 +128,7 @@ func TestDelegateTool_Respond_NativeRedispatchesWithIsResume(t *testing.T) {
 // correlation_id) so the caller can retry.
 type signoff14FailingSteeringSink struct{}
 
-func (signoff14FailingSteeringSink) EnqueueSteeringMessage(_, _ string, _ providers.Message) error {
+func (signoff14FailingSteeringSink) EnqueueSteeringMessage(_, _ string, _ steer.Principal, _ providers.Message) error {
 	return errors.New("signoff14: simulated steering sink failure")
 }
 

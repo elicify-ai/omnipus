@@ -24,20 +24,23 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // fakeSteeringSink implements DelegateSteeringSink for tests.
 type fakeSteeringSink struct {
-	mu        sync.Mutex
-	delivered []providers.Message
-	scopes    []string
+	mu         sync.Mutex
+	delivered  []providers.Message
+	scopes     []string
+	principals []steer.Principal
 }
 
-func (f *fakeSteeringSink) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
+func (f *fakeSteeringSink) EnqueueSteeringMessage(scope, agentID string, principal steer.Principal, msg providers.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.delivered = append(f.delivered, msg)
 	f.scopes = append(f.scopes, scope)
+	f.principals = append(f.principals, principal)
 	return nil
 }
 

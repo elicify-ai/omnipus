@@ -746,7 +746,7 @@ func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
 // pkg/agent/steering.go); defined as an interface here (mirroring
 // SubTurnSpawner above) to avoid a tools<->agent import cycle.
 type DelegateSteeringSink interface {
-	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
+	EnqueueSteeringMessage(scope, agentID string, principal steer.Principal, msg providers.Message) error
 }
 
 // DelegateSpawnMarker lets DelegateTool record — synchronously, on the
@@ -1376,11 +1376,7 @@ func (t *DelegateTool) verifyCallerPrincipal(ctx context.Context, rec *session.L
 			break
 		}
 		if ancestor == caller {
-			principalID := strings.TrimSpace(ToolAgentID(ctx))
-			if principalID == "" {
-				principalID = caller
-			}
-			return steer.Principal{Kind: steer.PrincipalKindAgent, ID: principalID}, nil
+			return steer.Principal{Kind: steer.PrincipalKindAgent, ID: caller}, nil
 		}
 		if t.lifecycle == nil {
 			break
