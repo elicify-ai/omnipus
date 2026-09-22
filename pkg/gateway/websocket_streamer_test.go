@@ -9,9 +9,93 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// fakeGatewaySteerAudience is a minimal steer.AudienceResolver double, keyed
+// by session id, for ADR-091 boundary 6 tests.
+type fakeGatewaySteerAudience struct {
+	audience map[string]steer.Audience
+}
+
+var _ steer.AudienceResolver = (*fakeGatewaySteerAudience)(nil)
+
+func (f *fakeGatewaySteerAudience) Audience(_ context.Context, sessionID string) (steer.Audience, steer.Class, error) {
+	a, ok := f.audience[sessionID]
+	if !ok {
+		return steer.AudienceUser, steer.ClassOrdinaryRoot, nil
+	}
+	return a, steer.ClassSteered, nil
+}
+
+// recordingGatewayObserver is a minimal steer.BoundaryObserver double.
+type recordingGatewayObserver struct {
+	calls []steer.Boundary
+}
+
+var _ steer.BoundaryObserver = (*recordingGatewayObserver)(nil)
+
+func (r *recordingGatewayObserver) Observe(b steer.Boundary, _ string, _ steer.Audience) {
+	r.calls = append(r.calls, b)
+}
+
+// TestWsStreamer_SteeredSession_ShadowedByAudience proves ADR-091 boundary 6
+// (landing order §6, FR-B-001/FR-B-014): a steered session's live token
+// stream is contained by the injected steer.AudienceResolver alone (no
+// parentSpawnCallID stamp) — resolved once, lazily, on the streamer's first
+// Update() call, and the boundary is proven exercised via Observe.
+func TestWsStreamer_SteeredSession_ShadowedByAudience(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	t.Cleanup(func() { SetGatewaySteerAudienceDeps(nil, nil) })
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+
+	obs := &recordingGatewayObserver{}
+	SetGatewaySteerAudienceDeps(&fakeGatewaySteerAudience{
+		audience: map[string]steer.Audience{meta.ID: steer.AudienceSteeringSession},
+	}, obs)
+
+	streamerIface, ok := handler.GetStreamer(context.Background(), "webchat", "chat-steered", meta.ID)
+	require.True(t, ok)
+	streamer, ok := streamerIface.(*wsStreamer)
+	require.True(t, ok, "GetStreamer for webchat must return a *wsStreamer")
+
+	require.NoError(t, streamer.Update(context.Background(), "child narration"))
+
+	assert.True(t, streamer.isShadowStream, "a steered session's stream must be shadowed by audience alone")
+	if len(obs.calls) != 1 || obs.calls[0] != steer.BoundaryWebchatStreaming {
+		t.Fatalf("expected exactly one Observe(webchat_streaming, ...) call, got %+v", obs.calls)
+	}
+}
+
+// TestWsStreamer_OrdinaryRootSession_UnaffectedByAudience proves a wired
+// resolver does not interfere with an ordinary root's own live stream.
+func TestWsStreamer_OrdinaryRootSession_UnaffectedByAudience(t *testing.T) {
+	handler, _, al := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+	t.Cleanup(func() { SetGatewaySteerAudienceDeps(nil, nil) })
+
+	store := al.GetSessionStore()
+	require.NotNil(t, store)
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
+	require.NoError(t, err)
+
+	SetGatewaySteerAudienceDeps(&fakeGatewaySteerAudience{audience: map[string]steer.Audience{}}, nil)
+
+	streamerIface, ok := handler.GetStreamer(context.Background(), "webchat", "chat-root", meta.ID)
+	require.True(t, ok)
+	streamer, ok := streamerIface.(*wsStreamer)
+	require.True(t, ok)
+
+	require.NoError(t, streamer.Update(context.Background(), "root text"))
+	assert.False(t, streamer.isShadowStream, "an ordinary root session's stream must not be shadowed")
+}
 
 // --- moved from websocket_pump.go tests 2026-09-15 ---
 
