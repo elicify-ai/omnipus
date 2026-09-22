@@ -166,10 +166,38 @@ func (n *NeedsInput) Expired(now time.Time) bool {
 // not-wire-format: internal disk record; a caller (pkg/tools/delegate.go)
 // maps it onto generated.SessionLifecycleRecord at the tool-result boundary.
 type LifecycleRecord struct {
-	SessionID   string         `json:"session_id"`
+	SessionID string `json:"session_id"`
+	// Generation starts at 1. Pre-ADR-091 it was purely persistLocked's
+	// same-generation-write guard (L-3): a new generation is minted only by
+	// a follow_up/Play. ADR-091 landing order I-1 ADDS a second reason it
+	// moves — a stopped session revived by a newer instruction (I-6
+	// Canceller.Revive) — alongside the existing one (a terminal session
+	// given a follow-up; delegate_followup.go::spawnCorrectiveFollowUp
+	// already increments it today, carried over unchanged). It never moves
+	// on an ordinary re-entry. persistLocked's terminal-immutability guard
+	// below is exactly why both cases must bump Generation before writing
+	// again.
 	Generation  int            `json:"generation"`
 	ResumedFrom string         `json:"resumed_from,omitempty"`
 	State       LifecycleState `json:"state"`
+
+	// Origin names what created this record and, for a delegate/task
+	// origin, the originating tool-call id (ADR-091 landing order I-1).
+	// Present on every record written by ADR-091 code; nil on a record
+	// written before ADR-091 — I-8's classifier reads that absence as one
+	// of the signals distinguishing a legacy_delegate record from a fresh
+	// one. See lifecycle_edge.go for the type and for why it (and
+	// SteeredBy, Stop below) live in this package rather than pkg/steer.
+	Origin *Origin `json:"origin,omitempty"`
+	// SteeredBy is the durable edge naming who steers this session (I-1);
+	// nil for a session nobody steers (an ordinary_root). See Origin's own
+	// doc comment for how the two combine under I-8's classifier.
+	SteeredBy *SteeredBy `json:"steered_by,omitempty"`
+	// Stop is the durable Stop marker on THIS session's own record (D8);
+	// nil means no Stop has been stamped for the record's current
+	// generation. Written by the cascade (I-6 Canceller.CancelSubtree) on
+	// the stopped node and every reachable non-terminal descendant.
+	Stop *Stop `json:"stop,omitempty"`
 
 	OwnerScopeKind OwnerScopeKind `json:"owner_scope_kind"`
 	OwnerScopeID   string         `json:"owner_scope_id,omitempty"`
@@ -303,8 +331,11 @@ type LifecycleStore struct {
 	// session_ids, maintained inside Persist (persistLocked) and consulted
 	// by List when LifecycleFilter.ParentDurableKey is set — see
 	// lifecycle_index.go. It is a property of THIS store instance (like
-	// lock), not shared across LifecycleStore values.
-	parentIndex *lifecycleParentIndex
+	// lock), not shared across LifecycleStore values. ADR-091 I-9 adds an
+	// exported LifecycleIndex.Report(), which is why the type itself
+	// (formerly the unexported lifecycleParentIndex) is now exported; the
+	// unexported field name and every existing accessor are unchanged.
+	parentIndex *LifecycleIndex
 }
 
 // NewLifecycleStore creates a LifecycleStore rooted at dir. By convention
@@ -316,12 +347,20 @@ func NewLifecycleStore(dir string) *LifecycleStore {
 	return &LifecycleStore{
 		dir:         dir,
 		lock:        &lifecycleStripedLock{},
-		parentIndex: newLifecycleParentIndex(),
+		parentIndex: newLifecycleIndex(),
 	}
 }
 
 // Dir returns the store's root directory.
 func (s *LifecycleStore) Dir() string { return s.dir }
+
+// IndexReport returns the parent index's most recent unreadable-record
+// report (ADR-091 landing order I-9) — the accessor WP-D's boot sweep
+// reads "through the store it already holds" rather than reaching into the
+// unexported parentIndex field itself. Equivalent to
+// s.parentIndex.Report(); `pkg/steer` refers to the return type via
+// `type IndexReport = session.IndexReport`.
+func (s *LifecycleStore) IndexReport() IndexReport { return s.parentIndex.Report() }
 
 func (s *LifecycleStore) path(sessionID string) string {
 	return filepath.Join(s.dir, sessionID+".jsonl")
