@@ -1,20 +1,44 @@
 // ActivityPanel — slide-out detail view tests.
 //
 // Fixture types come from src/hooks/useRunningActivity.ts (ActivityItem,
-// AgentActivityItem, BashActivityItem) — this component is purely prop-driven,
-// no store/query mocking required.
+// AgentActivityItem, BashActivityItem) — this component is purely prop-driven
+// except for the ADR-091 additions below (the approval queue store, and
+// navigation for the open control).
+//
+// ADR-091 D7/D10: the nested per-step detail (SubagentBlock's steps,
+// ToolCallBadge surface="panel") is gone from this file along with it — a
+// child's own tool calls carry the child's own session_id (I-4) and never
+// arrive in this bucket any more, so `AgentActivityItem` no longer carries a
+// `steps` field. This file's step-list-specific describe blocks ("expandable
+// native row", "panel-only step visibility policy", "delegated browser call,
+// the partial fallback") are removed with it; final result / interrupt
+// reason (subagent_end's own fields, untouched by that deletion) stay
+// covered. New coverage: the row's status line, the "queued" state, the
+// "awaiting approval: <tool>" override, and the open control.
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import { ActivityPanel } from './ActivityPanel'
 import type { AgentActivityItem, BashActivityItem } from '@/hooks/useRunningActivity'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
+import { useToolApprovalStore } from '@/store/toolApproval'
+
+const mockNavigate = vi.fn()
+
+vi.mock('@tanstack/react-router', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-router')>()
+  return {
+    ...actual,
+    useNavigate: () => mockNavigate,
+  }
+})
 
 beforeEach(() => {
+  mockNavigate.mockClear()
   act(() => {
     useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
   })
 })
 
@@ -30,9 +54,12 @@ function makeAgentItem(overrides: Partial<AgentActivityItem> = {}): AgentActivit
     taskLabel: overrides.taskLabel ?? 'audit files',
     status: overrides.status ?? 'running',
     durationMs: overrides.durationMs,
-    steps: overrides.steps ?? [],
     finalResult: overrides.finalResult,
     interruptReason: overrides.interruptReason,
+    statusLine: overrides.statusLine,
+    lifecycleState: overrides.lifecycleState,
+    childSessionId: overrides.childSessionId,
+    lastUpdateAt: overrides.lastUpdateAt,
   }
 }
 
@@ -104,45 +131,11 @@ describe('ActivityPanel — recently finished section', () => {
   })
 })
 
-describe('ActivityPanel — expandable native row', () => {
-  it('toggles open on click, revealing its ToolCallBadge steps', () => {
-    const toolStep = {
-      kind: 'tool' as const,
-      tool: {
-        id: 's1',
-        call_id: 's1',
-        tool: 'fs.list',
-        params: {},
-        status: 'success' as const,
-        result: 'a.txt',
-      },
-    }
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', steps: [toolStep] })]}
-        recentlyFinished={[]}
-      />,
-    )
-    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
-    const toggle = screen.getByRole('button', { expanded: false })
-    // A row that CAN expand must stay enabled (unlike the disabled gate on
-    // non-expandable bash/3p rows below).
-    expect(toggle).not.toBeDisabled()
-    fireEvent.click(toggle)
-    expect(screen.getByTestId('tool-call-badge')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { expanded: true }))
-    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
-  })
-})
-
 // ── Fix 2 (2026-07-16): panel carries the final result / interrupt reason ──
-// SubagentBlock's thread card (now hidden from the thread by default) was
-// the only surface showing span.finalResult and a human-readable interrupt
-// reason. useRunningActivity.ts now carries both onto AgentActivityItem so
-// the panel — the durable default-visible surface for this detail — can
-// render them too.
+// SubagentBlock's thread card (now deleted, ADR-091 D7/D10) was the only
+// surface showing span.finalResult and a human-readable interrupt reason;
+// useRunningActivity.ts carries both onto AgentActivityItem so the panel —
+// the durable surface for this detail now — can render them.
 
 describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
   it('an expanded finished item shows its final result in a labeled block', () => {
@@ -167,23 +160,6 @@ describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
     expect(screen.getByText('Found 3 errors in the last hour.')).toBeInTheDocument()
   })
 
-  it('a finished item with zero steps but a final result is still expandable', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[]}
-        recentlyFinished={[
-          makeAgentItem({ status: 'success', steps: [], finalResult: 'done quickly' }),
-        ]}
-      />,
-    )
-    const toggle = screen.getByRole('button', { expanded: false })
-    expect(toggle).not.toBeDisabled()
-    fireEvent.click(toggle)
-    expect(screen.getByText('done quickly')).toBeInTheDocument()
-  })
-
   it('an expanded interrupted item appends the human-readable reason to the status text', () => {
     render(
       <ActivityPanel
@@ -194,7 +170,6 @@ describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
           makeAgentItem({
             status: 'interrupted',
             taskLabel: 'long task',
-            steps: [],
             finalResult: 'partial output',
             interruptReason: 'parent_timeout',
           }),
@@ -205,166 +180,18 @@ describe('ActivityPanel — final result / interrupt reason (Fix 2)', () => {
     expect(screen.getByText('(parent timed out)')).toBeInTheDocument()
   })
 
-  // (item 8g, 2026-07-16 fix wave): expansion-with-steps was only ever
-  // exercised for RUNNING items (see "ActivityPanel — expandable native
-  // row" above) — this pins the same behavior for a FINISHED
-  // (recentlyFinished) item, whose steps are just as reachable.
-  it('an expanded finished item shows its (non-ToolSearch) steps', () => {
-    const visibleStep = {
-      kind: 'tool' as const,
-      tool: { id: 'fin1', call_id: 'fin1', tool: 'fs.list', params: { path: '/tmp' }, status: 'success' as const, result: 'a.txt' },
-    }
+  it('does not render a "Final result" block when the finished item has none, and the row is not expandable', () => {
     render(
       <ActivityPanel
         open
         onOpenChange={() => {}}
         running={[]}
-        recentlyFinished={[makeAgentItem({ status: 'success', taskLabel: 'listed files', steps: [visibleStep] })]}
+        recentlyFinished={[makeAgentItem({ status: 'success', taskLabel: 'no result' })]}
       />,
     )
-    const toggle = screen.getByRole('button', { expanded: false })
-    expect(toggle).not.toBeDisabled()
-    fireEvent.click(toggle)
-    const badge = screen.getByTestId('tool-call-badge')
-    expect(badge).toHaveAttribute('data-tool', 'fs.list')
-  })
-
-  it('an expanded finished item HIDES a ToolSearch step by default (non-verbose) but shows other steps', () => {
-    const loadToolStep = {
-      kind: 'tool' as const,
-      tool: { id: 'fin2', call_id: 'fin2', tool: 'ToolSearch', params: { name: 'web_search' }, status: 'success' as const, result: 'ok' },
-    }
-    const visibleStep = {
-      kind: 'tool' as const,
-      tool: { id: 'fin3', call_id: 'fin3', tool: 'fs.list', params: {}, status: 'success' as const, result: 'a.txt' },
-    }
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[]}
-        recentlyFinished={[makeAgentItem({ status: 'success', steps: [loadToolStep, visibleStep] })]}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    const badges = screen.getAllByTestId('tool-call-badge')
-    expect(badges).toHaveLength(1)
-    expect(badges[0]).toHaveAttribute('data-tool', 'fs.list')
-  })
-
-  it('does not render a "Final result" block when the finished item has none', () => {
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[]}
-        recentlyFinished={[
-          makeAgentItem({
-            status: 'success',
-            steps: [{ kind: 'tool', tool: { id: 's1', call_id: 's1', tool: 'fs.list', params: {}, status: 'success', result: 'a.txt' } }],
-          }),
-        ]}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
+    const toggle = screen.getByText('no result').closest('button')
+    expect(toggle).toBeDisabled()
     expect(screen.queryByText('Final result')).not.toBeInTheDocument()
-  })
-})
-
-// ── Fix 2 (2026-07-16, revised same day): panel-only step visibility ───────
-// The panel is the designated transparency surface for exactly the detail
-// the thread hides by default — its default INVERTS to show everything
-// except `ToolSearch` (shouldRenderToolCallInPanel, toolVisibility.ts),
-// rather than applying the thread's shouldRenderToolCall hidden-set (which
-// would hide a bash poll/read step, a background delegate dispatch, etc.).
-// ToolCallBadge is told to use this policy via surface="panel" — see
-// ActivityPanel.tsx's step-mapping.
-
-describe('ActivityPanel — panel-only step visibility policy (shows all but ToolSearch)', () => {
-  function makeToolStep(overrides: Partial<import('@/lib/api').ToolCall & { call_id: string }> = {}) {
-    return {
-      kind: 'tool' as const,
-      tool: {
-        id: overrides.id ?? 'step_1',
-        call_id: overrides.call_id ?? overrides.id ?? 'step_1',
-        tool: overrides.tool ?? 'bash',
-        params: overrides.params ?? {},
-        status: overrides.status ?? 'success' as const,
-        result: overrides.result,
-      },
-    }
-  }
-
-  it('SHOWS a bash {action:"poll"} step — hidden in the thread, but visible here', () => {
-    const pollStep = makeToolStep({ id: 'poll1', call_id: 'poll1', tool: 'bash', params: { action: 'poll' } })
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', steps: [pollStep] })]}
-        recentlyFinished={[]}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    const badge = screen.getByTestId('tool-call-badge')
-    expect(badge).toBeInTheDocument()
-    expect(badge).toHaveAttribute('data-tool', 'bash')
-  })
-
-  it('HIDES a ToolSearch step by default (non-verbose)', () => {
-    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'ToolSearch' })
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', steps: [loadToolStep] })]}
-        recentlyFinished={[]}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
-  })
-
-  it('SHOWS a ToolSearch step once verbose chat is enabled', () => {
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: true })
-    })
-    const loadToolStep = makeToolStep({ id: 'lt1', call_id: 'lt1', tool: 'ToolSearch' })
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', steps: [loadToolStep] })]}
-        recentlyFinished={[]}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    const badge = screen.getByTestId('tool-call-badge')
-    expect(badge).toBeInTheDocument()
-    expect(badge).toHaveAttribute('data-tool', 'ToolSearch')
-  })
-
-  it('SHOWS a failed (error-status) delegate step — the panel is the transparency surface for exactly what the thread hides on failure', () => {
-    const failedDelegateStep = makeToolStep({
-      id: 'd1',
-      call_id: 'd1',
-      tool: 'delegate',
-      params: {},
-      status: 'error',
-      result: { error: 'delegation_denied', reason: 'nope', policy: 'mode', tool: 'delegate' },
-    })
-    render(
-      <ActivityPanel
-        open
-        onOpenChange={() => {}}
-        running={[makeAgentItem({ status: 'running', steps: [failedDelegateStep] })]}
-        recentlyFinished={[]}
-      />,
-    )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    const badge = screen.getByTestId('tool-call-badge')
-    expect(badge).toBeInTheDocument()
-    expect(badge).toHaveAttribute('data-tool', 'delegate')
   })
 })
 
@@ -375,7 +202,7 @@ describe('ActivityPanel — 3rd-party agent row', () => {
         open
         onOpenChange={() => {}}
         running={[
-          makeAgentItem({ status: 'running', agentType: '3p', agentName: 'ClaudeCode', steps: [] }),
+          makeAgentItem({ status: 'running', agentType: '3p', agentName: 'ClaudeCode' }),
         ]}
         recentlyFinished={[]}
       />,
@@ -525,158 +352,216 @@ describe('ActivityPanel — bash-kind error state', () => {
   })
 })
 
-// ── ADR-057: the ADR-053 FE-5 Agent-View session list (lifecycle badge +
-// peek/reply/steer/stop affordances) has been removed as dead code — its
-// sole data source, mid-span `subagent_message`/`subagent_state` frames, has
-// zero Go emitters and can never be populated. See ActivityPanel.tsx's own
-// header comment. This describe block covered that removed surface and is
-// gone with it; makeAgentItem above no longer accepts the now-deleted
-// sessionMessages/lifecycleState/lifecycleSessionId/steeringReceipt fields.
+// ── ADR-091 D7/FR-E-004: the row's status line ──────────────────────────────
 
-// ── browser-agent-capability-spec FR-039 / S-63, panel half ──────────────
-//
-// The chat thread does NOT show a delegated browser call at the default
-// (asserted in src/lib/toolVisibility.test.ts). The ActivityPanel is the only
-// partial fallback, and "partial" is the load-bearing word — the panel is
-// narrower than "fully transparent" and these tests assert what it actually
-// does, not what it is assumed to do:
-//
-//   - it aggregates ONLY subagent delegation spans, background bash sessions
-//     and judge verdicts (useRunningActivity.ts's own header). A PARENT-turn
-//     tool call is none of those, so it never appears here at all — which is
-//     why ADR-075 D2.11's "a browser_snapshot never appears there" is right
-//     for the parent case and wrong for the delegated one.
-//   - a span must still be running, or inside RECENTLY_FINISHED_CAP = 8
-//     (useRunningActivity.ts:148), to be listed.
-//   - the operator must open the panel AND expand that span.
-//   - an external-CLI (3p) sub-agent's steps are dropped upstream at
-//     useRunningActivity.ts:549 (`steps: resolved.agentType === '3p' ? [] :
-//     span.steps`), so nothing of its browsing reaches any surface.
-//
-// TESTS ONLY — no SPA source changes.
+describe('ActivityPanel — status line (ADR-091 FR-E-004)', () => {
+  it('shows the last subagent_message.text as the status line', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', statusLine: 'checking the checkout page' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByTestId('activity-row-status-line')).toHaveTextContent('checking the checkout page')
+  })
 
-describe('ActivityPanel — delegated browser call, the partial fallback (FR-039, S-63)', () => {
-  function makeBrowserSnapshotStep() {
+  it('falls back to "last update N s ago" before any subagent_message has arrived', () => {
+    const tenSecondsAgo = new Date(Date.now() - 10_000).toISOString()
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', statusLine: undefined, lastUpdateAt: tenSecondsAgo })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByTestId('activity-row-status-line')).toHaveTextContent(/last update \d+ s ago/)
+  })
+
+  it('renders no status line when neither statusLine nor lastUpdateAt is present (a pre-delivery transcript, edge case)', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', statusLine: undefined, lastUpdateAt: undefined })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.queryByTestId('activity-row-status-line')).not.toBeInTheDocument()
+  })
+
+  it('a bash item never shows a status line — the field only exists on agent items', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeBashItem({ status: 'running' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.queryByTestId('activity-row-status-line')).not.toBeInTheDocument()
+  })
+})
+
+// ── ADR-091 D7/FR-E-004: "queued" state ─────────────────────────────────────
+
+describe('ActivityPanel — queued state (ADR-091 FR-E-004)', () => {
+  it('reads "queued" when lifecycleState is queued, even though the span itself is status: running', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'queued', statusLine: 'ignored while queued' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('queued')).toBeInTheDocument()
+    expect(screen.queryByText('running')).not.toBeInTheDocument()
+    // No fabricated status line while queued — nothing has happened yet.
+    expect(screen.queryByTestId('activity-row-status-line')).not.toBeInTheDocument()
+  })
+
+  it('reads "running" once the child starts (lifecycleState transitions away from queued)', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'running' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('running')).toBeInTheDocument()
+    expect(screen.queryByText('queued')).not.toBeInTheDocument()
+  })
+})
+
+// ── ADR-091 D7/FR-E-009: awaiting approval ──────────────────────────────────
+
+describe('ActivityPanel — awaiting approval (ADR-091 FR-E-009)', () => {
+  function pendingApproval(sessionId: string, toolName: string) {
     return {
-      kind: 'tool' as const,
-      tool: {
-        id: 'snap1',
-        call_id: 'snap1',
-        tool: 'browser_snapshot',
-        params: {},
-        status: 'success' as const,
-        result: 'textbox "Card number" value="4111 1111 1111 1111"',
-      },
+      approvalId: 'appr_1',
+      toolCallId: 'call_1',
+      toolName,
+      args: {},
+      agentId: 'agent-child',
+      sessionId,
+      turnId: 'turn_1',
+      expiresAt: Date.now() + 60_000,
     }
   }
 
-  it('direction 3: a NATIVE sub-agent span carries the browser_snapshot call in its expanded steps', () => {
+  it('reads "awaiting approval: bash" while the approval queue holds a pending approval for the child session', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [pendingApproval('child-sess-1', 'bash')] })
+    })
     render(
       <ActivityPanel
         open
         onOpenChange={() => {}}
         running={[
-          makeAgentItem({
-            status: 'running',
-            agentType: 'native',
-            taskLabel: 'check the checkout form',
-            steps: [makeBrowserSnapshotStep()],
-          }),
+          makeAgentItem({ status: 'running', childSessionId: 'child-sess-1', statusLine: 'was doing something' }),
         ]}
         recentlyFinished={[]}
       />,
     )
-    // The expand is a real precondition, not a formality — this is limit (3).
-    // Before the click the badge must not be present.
-    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    const badge = screen.getByTestId('tool-call-badge')
-    expect(badge).toBeInTheDocument()
-    expect(badge).toHaveAttribute('data-tool', 'browser_snapshot')
+    expect(screen.getByTestId('activity-row-status-line')).toHaveTextContent('awaiting approval: bash')
   })
 
-  it('the same is true for a finished native span, which is the case an operator actually reads after the fact', () => {
-    render(
+  it('returns to its own status line once the approval is resolved (removed from the queue)', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [pendingApproval('child-sess-2', 'bash')] })
+    })
+    const { rerender } = render(
       <ActivityPanel
         open
         onOpenChange={() => {}}
-        running={[]}
-        recentlyFinished={[
-          makeAgentItem({
-            status: 'success',
-            agentType: 'native',
-            durationMs: 1200,
-            steps: [makeBrowserSnapshotStep()],
-          }),
+        running={[
+          makeAgentItem({ status: 'running', childSessionId: 'child-sess-2', statusLine: 'checking logs' }),
         ]}
+        recentlyFinished={[]}
       />,
     )
-    fireEvent.click(screen.getByRole('button', { expanded: false }))
-    expect(screen.getByTestId('tool-call-badge')).toHaveAttribute('data-tool', 'browser_snapshot')
+    expect(screen.getByTestId('activity-row-status-line')).toHaveTextContent('awaiting approval: bash')
+
+    act(() => {
+      useToolApprovalStore.setState({ queue: [] })
+    })
+    rerender(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[
+          makeAgentItem({ status: 'running', childSessionId: 'child-sess-2', statusLine: 'checking logs' }),
+        ]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByTestId('activity-row-status-line')).toHaveTextContent('checking logs')
   })
 
-  // Direction 4 — and this is the assertion that stops direction 3's green
-  // from being read as "the panel covers delegated browsing". It does not
-  // cover the external-CLI population at all.
-  //
-  // Asserted at the PANEL rather than at the hook on purpose: the upstream
-  // mapping (useRunningActivity.ts:549) already empties `steps` for a 3p
-  // agent, so handing the panel a 3p item WITH steps is the stronger test —
-  // it proves the panel itself refuses to render them, so the guarantee does
-  // not rest on that one upstream ternary staying correct.
-  it('direction 4: an external-CLI (3p) span renders NO browser step, even when handed one', () => {
+  it('an approval pending for a DIFFERENT session does not affect this row', () => {
+    act(() => {
+      useToolApprovalStore.setState({ queue: [pendingApproval('some-other-session', 'bash')] })
+    })
     render(
       <ActivityPanel
         open
         onOpenChange={() => {}}
         running={[
-          makeAgentItem({
-            status: 'running',
-            agentType: '3p',
-            agentName: 'ClaudeCode',
-            taskLabel: 'check the checkout form',
-            steps: [makeBrowserSnapshotStep()],
-          }),
+          makeAgentItem({ status: 'running', childSessionId: 'child-sess-3', statusLine: 'my own status' }),
         ]}
         recentlyFinished={[]}
       />,
     )
-    // The 3p row is not expandable at all — it shows a static notice instead.
-    expect(screen.getByText('No live step detail yet')).toBeInTheDocument()
-    const header = screen.getByText('check the checkout form').closest('button')
-    expect(header).toBeDisabled()
-    fireEvent.click(header as HTMLButtonElement)
-    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
-    // And the captured value never reaches the DOM on any path.
-    expect(screen.queryByText(/4111 1111 1111 1111/)).not.toBeInTheDocument()
+    expect(screen.getByTestId('activity-row-status-line')).toHaveTextContent('my own status')
+  })
+})
+
+// ── ADR-091 D7/FR-E-004: the open control ───────────────────────────────────
+
+describe('ActivityPanel — open control (ADR-091 FR-E-004)', () => {
+  it('renders an open control when childSessionId is present, and navigates to the child session on click', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', childSessionId: 'child-sess-open-1' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    const openControl = screen.getByTestId('activity-row-open')
+    expect(openControl).toBeInTheDocument()
+    fireEvent.click(openControl)
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/sessions/$sessionId',
+      params: { sessionId: 'child-sess-open-1' },
+    })
   })
 
-  // The panel's OTHER real limit, asserted rather than assumed: it renders
-  // only what it is handed. A parent-turn browser call is not a span, not a
-  // background bash session and not a judge verdict, so useRunningActivity
-  // never produces an item for it — and with no items the panel shows its
-  // empty state. This is why the panel is not a fallback for the parent case
-  // and the chat thread is the only surface there.
-  it('a parent-turn browser call is not something the panel can show — with no spans it is empty', () => {
-    render(<ActivityPanel open onOpenChange={() => {}} running={[]} recentlyFinished={[]} />)
-    expect(screen.getByText('No background activity yet.')).toBeInTheDocument()
-    expect(screen.queryByTestId('tool-call-badge')).not.toBeInTheDocument()
+  it('renders no open control when childSessionId is absent (a transcript written before this delivery, edge case)', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', childSessionId: undefined })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.queryByTestId('activity-row-open')).not.toBeInTheDocument()
   })
 
-  // The panel's step policy is the INVERSE of the thread's, and a browser tool
-  // must be on the visible side of it. Pinned separately from the render
-  // assertions above so a regression in the predicate is distinguishable from
-  // a regression in the component.
-  it('shouldRenderToolCallInPanel admits every one of the six new browser tools', () => {
-    for (const tool of [
-      'browser_select_option',
-      'browser_press_key',
-      'browser_hover',
-      'browser_upload_file',
-      'browser_handle_dialog',
-      'browser_snapshot',
-    ]) {
-      expect(shouldRenderToolCallInPanel(tool, false)).toBe(true)
-    }
+  it('a bash item never shows an open control', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeBashItem({ status: 'running' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.queryByTestId('activity-row-open')).not.toBeInTheDocument()
   })
 })
