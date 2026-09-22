@@ -6126,10 +6126,6 @@
       "lane": 5
     },
     {
-      "source": "src/components/agents/ShellDenyPatternsEditor.tsx",
-      "lane": 5
-    },
-    {
       "source": "src/components/agents/ToolApprovalModal.tsx",
       "lane": 8
     },
@@ -6963,10 +6959,6 @@
     },
     {
       "source": "src/components/settings/DiagnosticsSection.tsx",
-      "lane": 6
-    },
-    {
-      "source": "src/components/settings/ExecAllowlistSection.tsx",
       "lane": 6
     },
     {

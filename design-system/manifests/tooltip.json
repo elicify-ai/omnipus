@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "component": "Tooltip",
+  "exports": [
+    "Tooltip"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/tooltip.tsx",
+  "documentation": "docs/internal/design/components/tooltip.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "focus"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/tooltip.stories.tsx",
+      "exports": [
+        "Default",
+        "Keyboard"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "tooltip-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/tooltip.test.tsx",
+      "test": "Tooltip — accessibility contract > Escape dismisses the bubble WITHOUT moving focus off the trigger (not a focus trap)"
+    },
+    {
+      "id": "tooltip-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/tooltip.stories.tsx",
+      "test": "Default",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-axe] axe",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-keyboard] keyboard",
+      "story": "Keyboard"
+    },
+    {
+      "id": "tooltip-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-browser] browser",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-pointer] pointer",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-reduced-motion] reduced-motion",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-forced-colors] forced-colors",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-root-size] root-size",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-zoom] zoom",
+      "story": "Default"
+    },
+    {
+      "id": "tooltip-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Tooltip [check:tooltip-reflow] reflow",
+      "story": "Default"
+    }
+  ]
+}
