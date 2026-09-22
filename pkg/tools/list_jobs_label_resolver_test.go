@@ -7,9 +7,8 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// UAT M3 fix: label_contains must match a subagent's caller-supplied
-// `delegate(label=...)` value when one is resolvable, not unconditionally the
-// delegated agent's display name.
+// ADR-091 FR-C-010: label_contains and the displayed label read the launch
+// title from the lifecycle record. They never reopen the live delegate index.
 //
 // Repro (live UAT, 2026-08-03): delegate(run, async=true,
 // label="UAT_LABEL_TEST_PROBE", ...) dispatched successfully, then
@@ -49,7 +48,7 @@ func TestListJobs_LabelContainsMatchesCustomDelegateLabel(t *testing.T) {
 		// The labeled dispatch — the exact UAT repro shape: a running
 		// subagent delegated to "worker", tagged with a caller-chosen label
 		// at dispatch time.
-		{SessionID: "ses-labeled", WorkspaceID: "ws1", AgentID: "worker",
+		{SessionID: "ses-labeled", WorkspaceID: "ws1", AgentID: "worker", Title: "UAT_LABEL_TEST_PROBE",
 			ParentAgentID: "mia", State: session.LifecycleRunning},
 		// A second, UNLABELED dispatch to the SAME agent — present so a test
 		// that accidentally matched on agent id/name alone would return BOTH
@@ -59,10 +58,11 @@ func TestListJobs_LabelContainsMatchesCustomDelegateLabel(t *testing.T) {
 	}}
 	tool := NewListJobsTool(nil, nil, lifecycles)
 	tool.SetAgentNamer(func() JobAgentNamer { return fakeAgentNamer{"worker": "Worker"} })
+	liveLabels := &fakeLabelResolver{labels: map[string]string{
+		"ses-labeled": "UAT_LABEL_TEST_PROBE",
+	}}
 	tool.SetLabelResolver(func() JobLabelResolver {
-		return &fakeLabelResolver{labels: map[string]string{
-			"ses-labeled": "UAT_LABEL_TEST_PROBE",
-		}}
+		return liveLabels
 	})
 
 	// Positive lower bound: the label the caller actually set MUST find its
@@ -74,11 +74,11 @@ func TestListJobs_LabelContainsMatchesCustomDelegateLabel(t *testing.T) {
 	if len(matched.Rows) != 1 || matched.Rows[0].ID != "ses-labeled" {
 		t.Fatalf("custom label must match its own row exactly, got %v", rowIDs(matched.Rows))
 	}
-	// The DISPLAYED label is unchanged by this fix (FR-005): a subagent row's
-	// visible `label` is still the agent's display name, never the caller's
-	// custom label. Only the FILTER target changed.
-	if matched.Rows[0].Label != "Worker" {
-		t.Errorf("displayed label must still be the agent's display name, got %q", matched.Rows[0].Label)
+	if matched.Rows[0].Label != "UAT_LABEL_TEST_PROBE" {
+		t.Errorf("displayed label = %q, want durable lifecycle title", matched.Rows[0].Label)
+	}
+	if liveLabels.calls != 0 {
+		t.Errorf("live delegate label resolver called %d times, want 0", liveLabels.calls)
 	}
 
 	// Negative assertion, paired per Binding Rule 4: a term that matches
@@ -89,6 +89,46 @@ func TestListJobs_LabelContainsMatchesCustomDelegateLabel(t *testing.T) {
 	}))
 	if len(unmatched.Rows) != 0 {
 		t.Fatalf("a non-matching label must return zero rows, got %v", rowIDs(unmatched.Rows))
+	}
+}
+
+func TestListJobs_OneRowPerSession_AfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	store := session.NewLifecycleStore(dir)
+	records := []*session.LifecycleRecord{
+		{
+			SessionID: "task-session", Generation: 1, State: session.LifecycleRunning,
+			WorkspaceID: "ws1", AgentID: "worker", ParentAgentID: "mia", Title: "Task-backed worker",
+			OwnerScopeKind: session.OwnerScopeParentSession,
+			Origin:         &session.Origin{Kind: session.OriginKindTask, TaskID: "task-1"},
+		},
+		{
+			SessionID: "delegate-session", Generation: 1, State: session.LifecycleRunning,
+			WorkspaceID: "ws1", AgentID: "worker", ParentAgentID: "mia", Title: "Durable delegate title",
+			OwnerScopeKind: session.OwnerScopeParentSession,
+			Origin:         &session.Origin{Kind: session.OriginKindDelegate, CallID: "call-1"},
+		},
+	}
+	for _, rec := range records {
+		if err := store.Persist(rec); err != nil {
+			t.Fatalf("Persist(%s): %v", rec.SessionID, err)
+		}
+	}
+
+	// Reopen the store to prove the row comes from the record, not any live
+	// delegate state. Ceiling 1 also proves task-origin exclusion happens
+	// before the result limit.
+	reopened := session.NewLifecycleStore(dir)
+	result := collectSubagentRows(reopened, "mia", "ws1", newRedactor(nil), 1, nil, nil, nil)
+	if result.err != nil {
+		t.Fatalf("collectSubagentRows: %v", result.err)
+	}
+	if len(result.rows) != 1 {
+		t.Fatalf("rows = %d, want one delegate-only row", len(result.rows))
+	}
+	row := result.rows[0]
+	if row.ID != "delegate-session" || row.Label != "Durable delegate title" || !row.Actionable {
+		t.Fatalf("row = %+v, want actionable delegate row labelled from lifecycle title", row)
 	}
 }
 
