@@ -437,6 +437,156 @@ describe('ActivityPanel — queued state (ADR-091 FR-E-004)', () => {
   })
 })
 
+// ── Cross-family review finding 21: lifecycleState drives the row's DOT,
+// not just the 'queued' label text. Every case below sets `status: 'running'`
+// — the parent's own "span still open" flag, true for a real child from
+// subagent_start until subagent_end — while `lifecycleState` carries a
+// DIFFERENT value, exactly the race the finding describes (a subagent_state
+// announcing e.g. 'completed' can arrive before the matching subagent_end).
+// Before the fix, every one of these rendered the spinning 'running'
+// indicator regardless of lifecycleState; after the fix, the dot and label
+// come from lifecycleState whenever it is present, span status only as a
+// legacy fallback (last test in this block).
+describe('ActivityPanel — lifecycle state drives the row dot, not span status (ADR-091 cross-family review finding 21)', () => {
+  it('needs_input renders a distinct warning dot and label, not "running"', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'needs_input' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('needs input')).toBeInTheDocument()
+    expect(screen.queryByText('running')).not.toBeInTheDocument()
+    const dot = screen.getByText('needs input').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-warning)]')
+  })
+
+  it('paused renders a distinct warning dot and label, not "running"', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'paused' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('paused')).toBeInTheDocument()
+    expect(screen.queryByText('running')).not.toBeInTheDocument()
+    const dot = screen.getByText('paused').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-warning)]')
+  })
+
+  it('completed renders a success dot and "done" label even while the span itself is still status: running (subagent_end has not arrived yet)', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'completed' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('done')).toBeInTheDocument()
+    expect(screen.queryByText('running')).not.toBeInTheDocument()
+    const dot = screen.getByText('done').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-success)]')
+  })
+
+  it('failed renders an error dot and "failed" label even while the span itself is still status: running', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'failed' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('failed')).toBeInTheDocument()
+    expect(screen.queryByText('running')).not.toBeInTheDocument()
+    const dot = screen.getByText('failed').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+
+  it('cancelled renders a cancelled dot and label even while the span itself is still status: running', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'cancelled' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('cancelled')).toBeInTheDocument()
+    expect(screen.queryByText('running')).not.toBeInTheDocument()
+    const dot = screen.getByText('cancelled').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-cancelled)]')
+  })
+
+  it('timed_out renders a muted dot and "timed out" label even while the span itself is still status: running', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'timed_out' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('timed out')).toBeInTheDocument()
+    expect(screen.queryByText('running')).not.toBeInTheDocument()
+    const dot = screen.getByText('timed out').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+  })
+
+  it('queued renders a distinct (non-spinning) dot, not the running spinner — the label override alone was the old, incomplete fix', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'queued' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('queued')).toBeInTheDocument()
+    // The old bug: the dot stayed the spinning 'running' indicator (an
+    // ArrowsClockwise icon, not a `span` dot) even though the label read
+    // "queued". A real dot element must be present instead.
+    const dot = screen.getByText('queued').previousElementSibling
+    expect(dot?.tagName).toBe('SPAN')
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-muted)]')
+  })
+
+  it('running (lifecycleState) renders the spinning indicator and "running" label', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[makeAgentItem({ status: 'running', lifecycleState: 'running' })]}
+        recentlyFinished={[]}
+      />,
+    )
+    expect(screen.getByText('running')).toBeInTheDocument()
+    // The spinning indicator is an SVG icon (ArrowsClockwise), not a `span` dot.
+    const indicator = screen.getByText('running').previousElementSibling
+    expect(indicator?.tagName).toBe('svg')
+    expect(indicator?.getAttribute('class')).toContain('animate-spin')
+  })
+
+  it('falls back to span status when lifecycleState is absent (legacy transcript, or before the first subagent_state arrives)', () => {
+    render(
+      <ActivityPanel
+        open
+        onOpenChange={() => {}}
+        running={[]}
+        recentlyFinished={[makeAgentItem({ status: 'error', lifecycleState: undefined })]}
+      />,
+    )
+    expect(screen.getByText('failed')).toBeInTheDocument()
+    const dot = screen.getByText('failed').previousElementSibling
+    expect(dot?.getAttribute('class')).toContain('bg-[var(--color-error)]')
+  })
+})
+
 // ── ADR-091 D7/FR-E-009: awaiting approval ──────────────────────────────────
 
 describe('ActivityPanel — awaiting approval (ADR-091 FR-E-009)', () => {

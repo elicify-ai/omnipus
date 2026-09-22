@@ -47,7 +47,7 @@ import { useToolApprovalStore } from '@/store/toolApproval'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
 import { getSpanStatusDot, statusDot } from '@/lib/toolStatusConfig'
-import { formatInterruptReason, formatLastUpdateAge } from '@/lib/subagentStatus'
+import { formatInterruptReason, formatLastUpdateAge, getLifecycleStatusDot } from '@/lib/subagentStatus'
 
 export interface ActivityPanelProps {
   open: boolean
@@ -63,7 +63,6 @@ function ActivityRow({
 }) {
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
-  const config = getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
   // JudgeActivityItem carries no durationMs (no wire-level "judge started"
   // moment to measure elapsed time from — see its doc comment).
   const duration = item.kind === 'judge' ? '' : formatDuration(item.durationMs)
@@ -76,10 +75,17 @@ function ActivityRow({
   const interruptReason = item.kind === 'agent' ? item.interruptReason : undefined
   const childSessionId = item.kind === 'agent' ? item.childSessionId : undefined
   const lifecycleState = item.kind === 'agent' ? item.lifecycleState : undefined
-  // FR-E-004: "queued" overrides the dot's own label — a queued launch
-  // stamps subagent_start (so the span already shows here, status:
-  // 'running') before the child actually starts executing (I-4).
-  const dotLabel = lifecycleState === 'queued' ? 'queued' : config.label
+  // ADR-091 D7/FR-E-004 (cross-family review finding 21): lifecycleState
+  // (the ADR-053 eight-state domain reduced from subagent_state) drives the
+  // row's dot AND label whenever it is present — a span's own `status` (the
+  // parent's "still open" flag, set at subagent_start/cleared at
+  // subagent_end) is a different axis and is only a legacy fallback for a
+  // span with no lifecycleState yet. Previously only the LABEL was
+  // overridden, and only for 'queued' — needs_input/paused/completed/
+  // failed/cancelled/timed_out all kept showing the running spinner.
+  const config = lifecycleState
+    ? getLifecycleStatusDot(lifecycleState, { size: 12, runningLabel: 'running' })
+    : getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
 
   // FR-E-009: a pending approval for the child's session overrides the
   // status LINE (not the dot label above) with "awaiting approval: <tool>"
@@ -138,7 +144,7 @@ function ActivityRow({
         </span>
         {config.indicator}
         <span className={cn('text-[var(--color-muted)] shrink-0', config.textClass)}>
-          {dotLabel}
+          {config.label}
           {/* W1-9, carried via Fix 2: interrupt reason appended to the
               status text, matching the deleted thread card's own inline
               treatment. */}
