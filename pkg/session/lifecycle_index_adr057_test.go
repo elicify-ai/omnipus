@@ -114,7 +114,7 @@ func TestLifecycleParentIndex_UnattributedRecordNotIndexed(t *testing.T) {
 // the last child clearing the parent's bucket entirely (so long-running
 // processes do not accumulate empty buckets).
 func TestLifecycleParentIndex_RemoveIsIdempotentAndPrunesEmptyBucket(t *testing.T) {
-	idx := newLifecycleParentIndex()
+	idx := newLifecycleIndex()
 	// Removing something never added is a documented no-op, not a panic.
 	idx.remove("nope", "nope")
 
