@@ -90,13 +90,61 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 // finishSteeredGoalTurn sends a goal-bearing child through the same
 // session-owned claim/Judge pipeline used by an interactive goal turn. The
 // Judge dispatch remains asynchronous, matching runAgentLoop's ordering.
+//
+// A steered child runs through steer_launcher.go's own dispatch goroutine,
+// never through runAgentLoop's inline post-turn block (loop.go) — so
+// checkGoalLoopAfterTurn's re-injected follow-ups (result.followUps) have no
+// turnResult of an in-flight request to ride back out on, exactly the
+// "there is no turnResult to attach a followUp to" situation
+// dispatchGoalAsyncFollowUp's own doc comment (goal_triggers.go) names for
+// the idle-tick and deferred-claim paths. Reuses that SAME re-inject
+// primitive (al.asyncNotifier.Notify, the one PublishInbound call site
+// scripts/check-operator-prompt-sites.sh's FR-029a census already counts)
+// instead of a second, direct bus.MessageBus.PublishInbound call — a bare
+// direct publish here would also have resolved the wrong agent for a worker
+// whose Channel/ChatID are not a routable live instance (the exact "Worker
+// vs Jim" misattribution FIX 5d's AsyncOriginAgentID exists to prevent;
+// processSystemMessage). SenderCanonicalID carries the follow-up's own
+// goalLoopFollowUpSenderID stamp through unchanged so
+// checkGoalLoopAfterTurn's origin gate still accepts the re-injected turn.
 func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, result *turnResult, runErr error) {
 	if al == nil || ts == nil || result == nil || runErr != nil {
 		return
 	}
 	al.checkGoalLoopAfterTurn(context.Background(), ts.agent, ts.opts, result)
 	for _, followUp := range result.followUps {
-		if err := al.bus.PublishInbound(context.Background(), followUp); err != nil {
+		if al.asyncNotifier == nil {
+			logger.WarnCF("agent", "steer: publish goal follow-up failed: async notifier is not wired",
+				map[string]any{"session_id": ts.opts.TranscriptSessionID})
+			continue
+		}
+		// A delegate/task-origin steered child carries no external channel
+		// binding at all (meta.Channel/PeerID are seeded "" at launch,
+		// steer_launcher.go::Launch) — AsyncNotifyEvent.Notify's FR-N7 guard
+		// refuses an empty destination outright. Falls back to the SAME
+		// "system"/synthetic-chat-id destination
+		// TaskExecutor.wakeOwnerAttemptsExhausted (task_executor_judge.go)
+		// already uses for a channel-less task origin: it is discarded for
+		// routing purposes (processSystemMessage resolves the agent from
+		// AsyncOriginAgentID, never from this pair) and only shapes where a
+		// SendResponse reply is published, which a channel-less steered
+		// child has nowhere real to receive anyway.
+		channel, chatID := followUp.Channel, followUp.ChatID
+		if channel == "" || chatID == "" {
+			channel, chatID = "system", "steer:"+followUp.SessionID
+		}
+		notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
+			Channel:             channel,
+			ChatID:              chatID,
+			AgentID:             ts.agentID,
+			TranscriptSessionID: followUp.SessionID,
+			SourceKind:          "steer_goal_loop",
+			SenderCanonicalID:   followUp.Sender.CanonicalID,
+			Content:             followUp.Content,
+		})
+		cancel()
+		if err != nil {
 			logger.WarnCF("agent", "steer: publish goal follow-up failed",
 				map[string]any{"session_id": ts.opts.TranscriptSessionID, "error": err.Error()})
 		}
