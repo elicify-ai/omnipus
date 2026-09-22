@@ -584,7 +584,7 @@ func (al *AgentLoop) dispatchSteeredSessionReserved(ctx context.Context, session
 }
 
 // dispatchSteeredSession is I-2/I-3's authoritative admission decision.
-// Reserves via I-6's reserveDispatch (WP-D's, admits everything until CP-3),
+// Reserves via I-6's live reserveDispatch guard,
 // then decides running/queued atomically against the turn-counting
 // admission gate (steerAdmission), then registers the turn via
 // registerTurnIfAbsent — in that order — so two concurrent dispatches for
@@ -625,17 +625,15 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		rollbackReservation()
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, err)
 	}
-	if rec.Terminal() {
-		rollbackReservation()
-		return steer.DispatchResult{}, steer.ErrTerminal
-	}
 	if ok, reason := reserveDispatch(rec, gen); !ok {
 		rollbackReservation()
-		if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
+		switch reason {
+		case steer.ErrDispatchCancelled.Error():
 			return steer.DispatchResult{}, steer.ErrDispatchCancelled
-		}
-		if gen < rec.Generation {
+		case steer.ErrStaleGeneration.Error():
 			return steer.DispatchResult{}, steer.ErrStaleGeneration
+		case steer.ErrTerminal.Error():
+			return steer.DispatchResult{}, steer.ErrTerminal
 		}
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: refused: %s", reason)
 	}
