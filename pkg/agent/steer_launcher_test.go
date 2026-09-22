@@ -93,6 +93,25 @@ func TestLaunch_UnknownAgentRefused(t *testing.T) {
 	}
 }
 
+// TestLaunch_TaskOriginWithoutTaskID_Refused proves the launch-side fix for
+// the task front: a task-origin launch with an empty Origin.TaskID is refused
+// here — before any write — rather than failing later at Dispatch, which
+// routes a task-origin session into task orchestration that needs the id
+// (task_executor.go::dispatchLaunchedTask).
+func TestLaunch_TaskOriginWithoutTaskID_Refused(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	l := NewSteerLauncher(al)
+
+	_, err := l.Launch(context.Background(), steer.LaunchRequest{
+		TargetAgentID: testDefaultAgentID, Task: "do a task",
+		Origin: steer.Origin{Kind: steer.OriginKindTask}, WorkspaceID: "ws-1", Owner: "dan",
+	})
+	if !errors.Is(err, steer.ErrTaskIDRequired) {
+		t.Fatalf("Launch(task origin, empty TaskID) = %v, want ErrTaskIDRequired", err)
+	}
+}
+
 func TestLaunch_SteeredEmptyParentAgentHonorsFailClosedSwitch(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -637,7 +656,7 @@ func TestDispatch_AtCap_Queued(t *testing.T) {
 
 	res, err := l.Launch(context.Background(), steer.LaunchRequest{
 		TargetAgentID: testDefaultAgentID, Task: "queued task",
-		Origin: steer.Origin{Kind: steer.OriginKindTask}, WorkspaceID: "ws-1", Owner: "dan",
+		Origin: steer.Origin{Kind: steer.OriginKindChat}, WorkspaceID: "ws-1", Owner: "dan",
 	})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)
@@ -673,7 +692,7 @@ func TestDispatch_AdmitsAndRegistersATurn(t *testing.T) {
 
 	res, err := l.Launch(context.Background(), steer.LaunchRequest{
 		TargetAgentID: testDefaultAgentID, Task: "run me",
-		Origin: steer.Origin{Kind: steer.OriginKindTask}, WorkspaceID: "ws-1", Owner: "dan",
+		Origin: steer.Origin{Kind: steer.OriginKindChat}, WorkspaceID: "ws-1", Owner: "dan",
 	})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)

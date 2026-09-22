@@ -93,6 +93,17 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if req.Label == "" && req.Task == "" {
 		return steer.LaunchResult{}, steer.ErrTitleRequired
 	}
+	// A task-origin session needs its task id to survive Dispatch, which
+	// routes it into task orchestration (dispatchLaunchedTask). Refuse an
+	// empty TaskID here — at launch, before any write — rather than letting
+	// it fail later at dispatch (the "dispatched task session has no task
+	// origin" error). No other Origin.Kind has this requirement: delegate's
+	// CallID is only the I-4 span key, and the span-emission path
+	// (publishSteeredLaunch, steer_frames.go) skips a missing CallID, so an
+	// empty CallID is not a later failure.
+	if req.Origin.Kind == steer.OriginKindTask && req.Origin.TaskID == "" {
+		return steer.LaunchResult{}, steer.ErrTaskIDRequired
+	}
 	if req.Goal != nil && len(req.Goal.Criteria) == 0 {
 		// Mirrors create_task's own refusal text exactly (US-1/AS-5:
 		// "a LaunchRequest.Goal that create_task would reject is rejected

@@ -16,6 +16,13 @@ var (
 	// Task text (Q15, founder decision round 5) — refused before any write.
 	ErrTitleRequired = errors.New("steer: launch: title required (label and task text both empty)")
 
+	// ErrTaskIDRequired is returned when a launch's Origin.Kind is task but
+	// Origin.TaskID is empty — refused at launch, before any write, rather
+	// than failing later at dispatch (task_executor.go::dispatchLaunchedTask
+	// cannot load a task without its id). The missing field is named in the
+	// message so the caller can report it precisely.
+	ErrTaskIDRequired = errors.New("steer: launch: origin kind \"task\" requires Origin.TaskID")
+
 	// ErrDepthExceeded is returned when a launch would exceed the
 	// effective delegation depth (global ceiling or a tighter per-edge
 	// value).
