@@ -19,11 +19,14 @@
 // apply one to, so a stray size segment on a video embed is inert by
 // construction rather than merely "ignored by convention".
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { ArrowsOutSimple } from '@phosphor-icons/react'
 import { libraryDownloadUrl } from '@/lib/api'
+import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
-import { MediaUnplayableNotice, mediaPreviewContainerClass } from './mediaPreviewStates'
+import { IconButton } from '@/components/ui/icon-button'
+import { MediaUnplayableNotice } from './mediaPreviewStates'
 
 interface LibraryVideoPreviewProps {
   workspaceId: string
@@ -38,27 +41,63 @@ export function LibraryVideoPreview({ workspaceId, entry, variant = 'pane' }: Li
   // is the ordinary case, not the exotic one. Without this, the reader gets a
   // black rectangle inside their note that does nothing when pressed.
   const [failed, setFailed] = useState(false)
+  const videoRef = useRef<HTMLVideoElement>(null)
+
+  const handleFullscreen = () => {
+    if (videoRef.current?.requestFullscreen) {
+      void videoRef.current.requestFullscreen()
+    }
+  }
+
+  // No <track>: a workspace video file carries no caption track to attach.
+  // Shared by both variants; only the inline variant adds its own frame.
+  const player = (
+    <>
+      <video
+        ref={videoRef}
+        controls
+        // UAT D-102: same native-control colour rule as LibraryAudioPreview.
+        style={{ colorScheme: 'dark' }}
+        src={src}
+        onError={() => setFailed(true)}
+        className="block max-h-full max-w-full rounded-md"
+        data-testid="library-video-element"
+      >
+        Your browser does not support playing this video. Use Download instead.
+      </video>
+      <IconButton
+        onClick={handleFullscreen}
+        aria-label="Open full screen"
+        className="absolute top-2 right-2 h-7 w-7 flex items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+        data-testid="library-video-fullscreen"
+      >
+        <ArrowsOutSimple size={14} />
+      </IconButton>
+    </>
+  )
+
   return (
     <div
-      className={mediaPreviewContainerClass(variant)}
+      // Same container as LibraryAudioPreview — keep both literal strings in sync by hand.
+      className={cn(
+        variant === 'inline'
+          ? 'flex items-center justify-center'
+          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]',
+        'relative',
+      )}
       data-testid="library-video-preview"
       data-variant={variant}
     >
       {failed ? (
         <MediaUnplayableNotice kind="video" name={entry.path} href={src} />
+      ) : variant === 'inline' ? (
+        // The frame shrink-wraps the rendered video, so the full-screen
+        // button sits in the video's own corner rather than the note column's.
+        <div className="relative inline-block" data-testid="library-video-frame">
+          {player}
+        </div>
       ) : (
-        /* No <track>: a workspace video file carries no caption track to attach. */
-        <video
-          controls
-          // UAT D-102: same native-control colour rule as LibraryAudioPreview.
-          style={{ colorScheme: 'dark' }}
-          src={src}
-          onError={() => setFailed(true)}
-          className="max-h-full max-w-full rounded-md"
-          data-testid="library-video-element"
-        >
-          Your browser does not support playing this video. Use Download instead.
-        </video>
+        player
       )}
     </div>
   )

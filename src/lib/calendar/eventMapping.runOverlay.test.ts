@@ -19,6 +19,15 @@
 
 import { describe, it, expect } from 'vitest'
 import { mapToCalendarEvents, buildRunCountsTooltip, resolveRunForOccurrence } from './eventMapping'
+// STATUS_STYLE is the canonical status→chip style map (FR-005), itself
+// resolved through the governed status contract (src/design-system/status.ts)
+// — and the exact map `eventMapping.ts`'s `resolveOccurrenceChipState` /
+// `resolveBucketWorstWins` read from for done/in_progress/failed. Asserting
+// against it (rather than a hardcoded hex) tests that the run overlay wires
+// a matched run's status to the canonical chip colour, not a literal the
+// design system owns and can change deliberately (e.g. the in_progress
+// blue→gold unification that made these tests fail in the first place).
+import { STATUS_STYLE } from '@/components/calendar/types'
 import type { Task } from '@/lib/api'
 import type { TaskOccurrenceSet, TaskRun } from '@/lib/api/generated/openapi-types'
 
@@ -74,7 +83,7 @@ describe('four-state chip rule — state 1: instant with a matching run', () => 
     expect(ext?.kind).toBe('task-occurrence')
     expect(ext?.status).toBe('done')
     expect(ext?.icon).toBe('CheckCircle')
-    expect(events[0].backgroundColor).toBe('#34D399')
+    expect(events[0].backgroundColor).toBe(STATUS_STYLE.done.bg)
     if (ext?.kind === 'task-occurrence') {
       expect(ext.occurrenceMs).toBe(occurrenceMs)
       expect(ext.runId).toBe('run-abc')
@@ -96,7 +105,7 @@ describe('four-state chip rule — state 1: instant with a matching run', () => 
     const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('failed')
     expect(events[0].extendedProps?.icon).toBe('XCircle')
-    expect(events[0].backgroundColor).toBe('#F87171')
+    expect(events[0].backgroundColor).toBe(STATUS_STYLE.failed.bg)
   })
 
   it('in_progress run → CircleNotch glyph, blue background, hasResult false/no result yet', () => {
@@ -112,7 +121,7 @@ describe('four-state chip rule — state 1: instant with a matching run', () => 
     const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('in_progress')
     expect(events[0].extendedProps?.icon).toBe('CircleNotch')
-    expect(events[0].backgroundColor).toBe('#60A5FA')
+    expect(events[0].backgroundColor).toBe(STATUS_STYLE.in_progress.bg)
     if (events[0].extendedProps?.kind === 'task-occurrence') {
       expect(events[0].extendedProps.hasResult).toBe(false)
     }
@@ -145,7 +154,7 @@ describe('four-state chip rule — state 2: no run, future instant', () => {
     const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('scheduled')
     expect(events[0].extendedProps?.icon).toBe('Clock')
-    expect(events[0].backgroundColor).not.toBe('#F87171') // not task.status=failed's red
+    expect(events[0].backgroundColor).not.toBe(STATUS_STYLE.failed.bg) // not task.status=failed's red
     if (events[0].extendedProps?.kind === 'task-occurrence') {
       expect(events[0].extendedProps.tooltip).toBeUndefined()
       expect(events[0].extendedProps.runId).toBeUndefined()
@@ -173,7 +182,7 @@ describe('four-state chip rule — state 3: no run, past instant ("no record")',
     expect(ext?.status).toBe('no_record')
     expect(ext?.icon).not.toBe('Clock')
     expect(ext?.icon).toBe('Circle')
-    expect(events[0].backgroundColor).not.toBe('#34D399') // not task.status=done's green
+    expect(events[0].backgroundColor).not.toBe(STATUS_STYLE.done.bg) // not task.status=done's green
     if (ext?.kind === 'task-occurrence') {
       expect(ext.tooltip).toBe(
         'Run history unavailable — retention expired or the schedule changed since this ran.',
@@ -359,11 +368,36 @@ describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)'
     const ext = events[0].extendedProps
     expect(ext?.status).toBe('skipped')
     expect(ext?.icon).toBe('SkipForward')
-    expect(events[0].backgroundColor).toBe('#F97316') // SKIPPED_STYLE.bg — the orange, not the grey fallback
+    // SKIPPED_STYLE.bg — the amber (statusContract.cancelled), not the grey
+    // fallback; see SKIPPED_STYLE's own doc comment in types.ts. The next
+    // test proves it stays distinct from STATUS_STYLE.blocked's orange.
+    expect(events[0].backgroundColor).toBe('#EAB308')
     if (ext?.kind === 'task-occurrence') {
       expect(ext.runId).toBe('run-skip')
       expect(ext.sessionId).toBe('s-skip')
     }
+  })
+
+  // Independent oracle: renders a REAL 'blocked' task chip AND a real
+  // skipped-run chip through the same `mapToCalendarEvents` path (not a copy
+  // read out of STATUS_STYLE/SKIPPED_STYLE) and compares their actual
+  // rendered colours directly, so a future change that collapses the two
+  // statuses onto the same hex fails here even if neither constant is ever
+  // read by name.
+  it('a blocked task chip renders a different colour than a skipped run chip', () => {
+    const blockedTask = makeTask({ status: 'blocked', due: '2026-06-20' })
+    const [blockedEvent] = mapToCalendarEvents([blockedTask])
+
+    const occurrenceMs = NOW - 60_000
+    const skippedSet = makeOccurrenceSet({
+      occurrences_ms: [occurrenceMs],
+      occurrence_runs: [
+        { occurrence_ms: occurrenceMs, status: 'skipped', run_id: 'run-skip-3', session_id: 's-3', has_result: false },
+      ],
+    })
+    const [skippedEvent] = mapToCalendarEvents([makeTask({ status: 'next' })], [skippedSet], NOW, NOW)
+
+    expect(blockedEvent.backgroundColor).not.toBe(skippedEvent.backgroundColor)
   })
 
   it('a skipped run is NOT overridden by task.status, and never falls back to STATUS_STYLE_FALLBACK grey', () => {
@@ -379,7 +413,7 @@ describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)'
     const events = mapToCalendarEvents([task], [set], NOW, NOW)
     expect(events[0].extendedProps?.status).toBe('skipped') // NOT 'done'
     expect(events[0].backgroundColor).not.toBe('#94A3B8') // not the grey STATUS_STYLE_FALLBACK/NO_RECORD_STYLE
-    expect(events[0].backgroundColor).not.toBe('#34D399') // not task.status=done's green
+    expect(events[0].backgroundColor).not.toBe(STATUS_STYLE.done.bg) // not task.status=done's green
   })
 
   it('worst-wins priority: skipped beats in_progress/done/scheduled when there is no failure', () => {
@@ -452,7 +486,7 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
     expect(ext?.status).toBe('scheduled') // NOT 'failed' (task.status)
     expect(ext?.icon).toBe('Clock')
     expect(events[0].backgroundColor).toBe('#94A3B8') // SCHEDULED_STYLE.bg, NOT task.status=failed's red
-    expect(events[0].backgroundColor).not.toBe('#F87171')
+    expect(events[0].backgroundColor).not.toBe(STATUS_STYLE.failed.bg)
     if (ext?.kind === 'task-occurrence-agg') {
       expect(ext.tooltip).toBe('first at 09:00')
     }
@@ -482,7 +516,7 @@ describe('four-state chip rule — bucket fallback when run_counts is absent', (
     expect(ext?.status).toBe('no_record') // NOT 'done' (task.status), NOT 'scheduled'
     expect(ext?.icon).toBe('Circle')
     expect(ext?.icon).not.toBe('Clock')
-    expect(events[0].backgroundColor).not.toBe('#34D399') // not task.status=done's green
+    expect(events[0].backgroundColor).not.toBe(STATUS_STYLE.done.bg) // not task.status=done's green
     if (ext?.kind === 'task-occurrence-agg') {
       expect(ext.tooltip).toBe(
         'Run history unavailable — retention expired or the schedule changed since this ran.',

@@ -1,20 +1,36 @@
-// ImageLightbox — full-screen overlay for clicking images in markdown.
-// Close on backdrop click or Escape key.
+// ImageLightbox — full-screen overlay for enlarging an image or an SVG
+// diagram, used by chat (MediaLightbox.tsx) and, through the same shared
+// component, the Library image/diagram previews. Built entirely on the
+// ZoomableView media-viewer face (D18,
+// docs/internal/design/components/zoomable-view.md): the ZoomPill lives in
+// the toolbar, and drag-to-pan / wheel-zoom-on-pointer / pinch /
+// double-click-to-toggle-fit / the shared 25-400% range all come from
+// `useZoomableMedia`. This component owns no zoom math of its own.
 //
-// Extended props (all optional, back-compat preserved):
 //   svg?     — render sanitized SVG markup instead of an <img> (Mermaid).
-//              When both `svg` and `src` are provided, `svg` wins.
-//   toolbar? — render a MediaActionToolbar (or any ReactNode) in a top bar.
-//   title?   — caption shown above the image (below the close button row).
+//              When both `svg` and `src` are provided, `svg` wins. Its
+//              intrinsic size is resolved from its viewBox
+//              (resolveSvgIntrinsicSize) rather than trusted to survive
+//              sanitization — defect 1 (zoomable-view.md): an <svg> that
+//              loses its width/height/style attributes to DOMPurify falls
+//              back to the browser's default replaced-element size
+//              (300x150), so a wide diagram "opens" collapsed to ~300px at
+//              every viewport regardless of its real content size.
+//   toolbar? — render a MediaActionToolbar (or any ReactNode) in the top
+//              bar, alongside the zoom pill.
+//   title?   — caption shown above the media (below the close-button row).
 //
-// Zoom/pan: mouse-wheel / ctrl+wheel to zoom (centered on cursor), drag to pan
-// when zoomed, double-click to reset. Scale is clamped 0.5–8×. Esc and
-// backdrop-click close (but a drag does NOT close).
+// Close on backdrop click, the close button, or Escape; every close path
+// returns focus to whatever was focused when the viewer opened (D18: "Escape
+// closes the media viewer and restores focus to the enlarge action that
+// opened it").
 
-import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode, type SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from '@phosphor-icons/react'
 import DOMPurify from 'dompurify'
+import { IconButton } from '@/components/ui/icon-button'
+import { ZoomPill, useZoomableMedia, resolveSvgIntrinsicSize, computeFittedScale, type ZoomableSize } from '@/components/ui/zoomable-view'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -31,190 +47,142 @@ interface ImageLightboxProps {
   title?: string
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const MIN_SCALE = 0.5
-const MAX_SCALE = 8
-const RESET_SCALE = 1
-const RESET_TRANSLATE = { x: 0, y: 0 }
-
 // ── ImageLightbox ──────────────────────────────────────────────────────────────
 
 export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageLightboxProps) {
-  // Transform state
-  const [scale, setScale] = useState(RESET_SCALE)
-  const [translate, setTranslate] = useState(RESET_TRANSLATE)
+  // `svg` is fixed for the lifetime of this component instance — the caller
+  // (MediaLightbox) keys the lightbox by content, so a different diagram is
+  // a fresh mount, never a prop swap on the same instance.
+  const sanitizedSvg = useMemo(
+    () => (svg ? DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true }, ADD_TAGS: ['foreignObject'] }) : null),
+    [svg],
+  )
 
-  // Drag state (stored in a ref to avoid re-renders on every mousemove)
-  const dragRef = useRef<{
-    active: boolean
-    startX: number
-    startY: number
-    startTx: number
-    startTy: number
-    moved: boolean
-  } | null>(null)
+  // Defect 1 fix: resolve the SVG's TRUE intrinsic size from its viewBox,
+  // from the markup string directly — no need to wait for it to mount.
+  const svgSize = useMemo(() => (sanitizedSvg ? resolveSvgIntrinsicSize(sanitizedSvg) : null), [sanitizedSvg])
 
-  // Reference to the media wrapper for centering zoom on cursor
-  const mediaWrapRef = useRef<HTMLDivElement>(null)
-
-  const resetTransform = useCallback(() => {
-    setScale(RESET_SCALE)
-    setTranslate(RESET_TRANSLATE)
+  // An <img>'s natural size is known only once it has loaded.
+  const [imgSize, setImgSize] = useState<ZoomableSize | null>(null)
+  const handleImgLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    setImgSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })
   }, [])
 
-  // ── Keyboard handler ────────────────────────────────────────────────────────
+  const contentSize = sanitizedSvg ? svgSize : imgSize
+
+  // The raw hook, not <ZoomableMediaSurface>: this component already owns the
+  // frame element (the media area below the top bar) and needs `scale` as
+  // live React state so the toolbar's ZoomPill — a SIBLING of the frame, not
+  // a child — re-renders with it. `useZoomableMedia` is published exactly
+  // for this ("a caller that already owns its own wrapper element ... can
+  // bind these handlers directly without an extra DOM layer").
+  // A photo opens fitted but never above its real pixel size: enlarging a
+  // 200x120 image 4x to fill the screen only shows blocky pixels. A diagram
+  // is vector and stays sharp at any scale, so it keeps the plain fit.
+  const getFitScale = useCallback(
+    (frame: ZoomableSize) => {
+      if (sanitizedSvg || !imgSize) return svgSize ? computeFittedScale(svgSize, frame) : 1
+      return Math.min(computeFittedScale(imgSize, frame), 1)
+    },
+    [sanitizedSvg, imgSize, svgSize],
+  )
+  const { scale, translate, controller, frameProps, frameRef } = useZoomableMedia({ contentSize, getFitScale })
+
+  // Focus restore (D18): capture whatever was focused when the viewer opened
+  // and give it back on unmount, for every close path — Escape, the close
+  // button, or the backdrop.
+  const openerRef = useRef<HTMLElement | null>(null)
   useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') onClose()
+    openerRef.current = document.activeElement as HTMLElement | null
+    return () => {
+      openerRef.current?.focus?.()
+    }
+  }, [])
+
+  useEffect(() => {
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose()
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
   }, [onClose])
 
-  // ── Wheel zoom ──────────────────────────────────────────────────────────────
-  const handleWheel = useCallback(
-    (e: React.WheelEvent<HTMLDivElement>) => {
-      e.preventDefault()
-      const wrap = mediaWrapRef.current
-      if (!wrap) return
-
-      const rect = wrap.getBoundingClientRect()
-      // Cursor position relative to the media wrapper center
-      const cursorX = e.clientX - rect.left - rect.width / 2
-      const cursorY = e.clientY - rect.top - rect.height / 2
-
-      const zoomFactor = e.deltaY < 0 ? 1.15 : 1 / 1.15
-      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * zoomFactor))
-      const scaleDelta = newScale / scale
-
-      // Shift translate so the point under the cursor stays fixed
-      setTranslate((prev) => ({
-        x: cursorX - (cursorX - prev.x) * scaleDelta,
-        y: cursorY - (cursorY - prev.y) * scaleDelta,
-      }))
-      setScale(newScale)
-    },
-    [scale],
-  )
-
-  // ── Drag to pan ─────────────────────────────────────────────────────────────
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return
-      dragRef.current = {
-        active: true,
-        startX: e.clientX,
-        startY: e.clientY,
-        startTx: translate.x,
-        startTy: translate.y,
-        moved: false,
-      }
-    },
-    [translate],
-  )
-
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const drag = dragRef.current
-    if (!drag?.active) return
-    const dx = e.clientX - drag.startX
-    const dy = e.clientY - drag.startY
-    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
-      drag.moved = true
-    }
-    setTranslate({ x: drag.startTx + dx, y: drag.startTy + dy })
+  const handleBackdropClick = useCallback(() => onClose(), [onClose])
+  // Pointer capture (set by useZoomableMedia's pointer-down handler) keeps a
+  // drag's eventual `click` targeted on the frame even if the pointer ends up
+  // over the backdrop, so this alone is enough to stop a drag-release from
+  // also closing the viewer — no separate "did we just drag" tracking needed.
+  const handleMediaClick = useCallback((event: React.MouseEvent) => {
+    event.stopPropagation()
   }, [])
-
-  const handleMouseUp = useCallback(() => {
-    if (dragRef.current) {
-      dragRef.current.active = false
-    }
-  }, [])
-
-  // ── Double-click to reset ───────────────────────────────────────────────────
-  const handleDoubleClick = useCallback(() => {
-    resetTransform()
-  }, [resetTransform])
-
-  // ── Backdrop click (don't close if a drag just ended) ──────────────────────
-  const handleBackdropClick = useCallback(() => {
-    if (dragRef.current?.moved) {
-      dragRef.current.moved = false
-      return
-    }
-    onClose()
-  }, [onClose])
-
-  // Media stop propagation (prevents backdrop close when clicking the media)
-  const handleMediaClick = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation()
-  }, [])
-
-  // ── Sanitize SVG if provided ────────────────────────────────────────────────
-  const sanitizedSvg = svg
-    ? DOMPurify.sanitize(svg, { USE_PROFILES: { svg: true }, ADD_TAGS: ['foreignObject'] })
-    : null
-
-  // Cursor style reflects drag state
-  const cursorClass = scale > 1 ? 'cursor-grab active:cursor-grabbing' : 'cursor-zoom-in'
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[200] flex flex-col bg-black/85 backdrop-blur-sm"
+      className="fixed inset-0 z-[200] flex flex-col bg-[var(--color-primary)]/85 backdrop-blur-sm"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal
       aria-label={title ?? alt ?? 'Image preview'}
     >
-      {/* ── Top bar: close + optional toolbar ──────────────────────────── */}
+      {/* ── Top bar: close + zoom pill + optional toolbar ──────────────── */}
       <div
-        className="flex items-center justify-between px-4 py-3 shrink-0"
+        className="flex items-center justify-between px-[var(--space-3)] py-[var(--space-2-5)] shrink-0"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Title / toolbar slot */}
-        <div className="flex items-center gap-3 min-w-0 flex-1">
+        <div className="flex items-center gap-[var(--space-2-5)] min-w-0 flex-1">
           {title && (
-            <span className="text-sm font-medium text-[var(--color-secondary)] truncate">
+            <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] truncate">
               {title}
             </span>
           )}
+          <ZoomPill
+            zoom={scale}
+            min={controller.minScale}
+            onZoomIn={controller.zoomIn}
+            onZoomOut={controller.zoomOut}
+            onFit={controller.zoomToFit}
+            onZoomTo100={controller.zoomTo100}
+          />
           {toolbar && <div className="flex items-center">{toolbar}</div>}
         </div>
 
         {/* Close button */}
-        <button tabIndex={0}
-          type="button"
-          className="ml-3 w-9 h-9 shrink-0 flex items-center justify-center rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-3,var(--color-surface-2))] transition-colors z-10"
+        <IconButton
+          variant="secondary"
+          className="ml-[var(--space-2-5)] shrink-0 rounded-full border border-[var(--color-border)] z-10"
           onClick={onClose}
           aria-label="Close image preview"
         >
           <X size={16} weight="bold" />
-        </button>
+        </IconButton>
       </div>
 
-      {/* ── Media area ─────────────────────────────────────────────────── */}
+      {/* ── Media area — the ZoomableView media-viewer frame ───────────── */}
       <div
-        ref={mediaWrapRef}
-        className={`flex-1 flex items-center justify-center overflow-hidden select-none ${cursorClass}`}
-        onWheel={handleWheel}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseUp}
-        onDoubleClick={handleDoubleClick}
+        {...frameProps}
+        ref={frameRef}
+        tabIndex={0}
+        role="group"
+        aria-label={title ?? alt ?? 'Zoomable media'}
+        data-testid="image-lightbox-frame"
+        data-scale={scale}
+        data-fit={controller.isFit}
         onClick={handleMediaClick}
+        className={`relative flex-1 flex items-center justify-center overflow-hidden select-none ${
+          controller.isFit ? 'cursor-zoom-in' : 'cursor-grab active:cursor-grabbing'
+        }`}
       >
         <div
           style={{
             transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
             transformOrigin: 'center center',
-            willChange: 'transform',
-            transition: dragRef.current?.active ? 'none' : 'transform 0.05s ease-out',
           }}
         >
           {sanitizedSvg ? (
             <div
-              className="max-w-[90vw] max-h-[80vh] rounded-lg overflow-hidden shadow-2xl ring-1 ring-[var(--color-border)] bg-[var(--color-surface-2)] p-4"
+              style={svgSize ? { width: svgSize.width, height: svgSize.height } : undefined}
+              className="[&>svg]:block [&>svg]:h-full [&>svg]:w-full rounded-lg overflow-hidden shadow-2xl ring-1 ring-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-3)]"
+              data-testid="image-lightbox-svg"
               dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
             />
           ) : src ? (
@@ -222,26 +190,24 @@ export function ImageLightbox({ src, alt, onClose, svg, toolbar, title }: ImageL
               src={src}
               alt={alt || ''}
               draggable={false}
-              className="max-w-[90vw] max-h-[80vh] rounded-lg object-contain shadow-2xl ring-1 ring-[var(--color-border)]"
+              onLoad={handleImgLoad}
+              // Laid out at its natural size, like the SVG branch: the zoom
+              // transform must be the only thing that scales it. Without this
+              // the preflight `img { max-width: 100% }` pre-shrinks a large
+              // image to the frame width and the fitted transform then shrinks
+              // it again (a 4000x3000 image opened at 337x253 instead of
+              // 1123x842).
+              style={imgSize ? { width: imgSize.width, height: imgSize.height } : undefined}
+              className="max-w-none shrink-0 rounded-lg object-contain shadow-2xl ring-1 ring-[var(--color-border)]"
             />
           ) : null}
         </div>
       </div>
 
-      {/* ── Zoom indicator (shown when not at 1×) ──────────────────────── */}
-      {scale !== 1 && (
-        <div
-          className="absolute bottom-10 right-4 text-[10px] text-[var(--color-muted)] bg-[var(--color-surface-2)]/80 px-2 py-0.5 rounded-full pointer-events-none"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {Math.round(scale * 100)}%
-        </div>
-      )}
-
       {/* ── Alt caption ────────────────────────────────────────────────── */}
       {alt && (
         <p
-          className="absolute bottom-4 left-1/2 -translate-x-1/2 text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)]/80 px-3 py-1.5 rounded-full pointer-events-none"
+          className="absolute bottom-4 left-1/2 -translate-x-1/2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)]/80 px-[var(--space-2-5)] py-[var(--space-1)] rounded-full pointer-events-none"
           onClick={(e) => e.stopPropagation()}
         >
           {alt}

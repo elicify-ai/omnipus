@@ -9,7 +9,7 @@
  * Placement: board toolbar, right side — next to the New Task button.
  */
 
-import { useRef } from 'react'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn } from '@/lib/utils'
 import type { BoardAltitude } from '@/store/workspacesStore'
 
@@ -23,68 +23,39 @@ const OPTIONS: { value: BoardAltitude; label: string }[] = [
   { value: 'show-all',  label: 'Show all' },
 ]
 
-// WAI-ARIA radio group pattern: exactly one radio is in the tab sequence
-// (the checked one — roving tabindex); arrow keys move AND immediately
-// select the adjacent option, matching how a native <input type="radio">
-// group behaves.
+// WAI-ARIA radio group pattern, via the shared `RadioGroup`/`RadioGroupItem`
+// primitive (src/components/ui/radio-group.tsx) — built specifically to
+// replace this component's own former hand-rolled roving-tabindex
+// implementation (see that file's doc comment). Behavior is unchanged: one
+// radio is in the tab sequence (the checked one), arrow keys move AND
+// immediately select the adjacent option; RadioGroup additionally supports
+// Home/End (jump to first/last), a WAI-ARIA APG addition this component
+// never had, not a removed capability.
 export function AltitudeToggle({ value, onChange }: AltitudeToggleProps) {
-  const optionRefs = useRef<Partial<Record<BoardAltitude, HTMLButtonElement | null>>>({})
-
-  function moveSelection(delta: 1 | -1) {
-    const currentIndex = OPTIONS.findIndex((opt) => opt.value === value)
-    const next = OPTIONS[(currentIndex + delta + OPTIONS.length) % OPTIONS.length]
-    onChange(next.value)
-    optionRefs.current[next.value]?.focus()
-  }
-
-  function handleKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
-    switch (e.key) {
-      case 'ArrowRight':
-      case 'ArrowDown':
-        e.preventDefault()
-        moveSelection(1)
-        break
-      case 'ArrowLeft':
-      case 'ArrowUp':
-        e.preventDefault()
-        moveSelection(-1)
-        break
-      default:
-        break
-    }
-  }
-
   return (
-    <div
-      className="flex items-center rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-0.5 gap-0.5"
-      role="radiogroup"
+    <RadioGroup
+      value={value}
+      onValueChange={(next) => onChange(next as BoardAltitude)}
       aria-label="Board depth"
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-[var(--space-0-5)] gap-[var(--space-0-5)]"
     >
       {OPTIONS.map((opt) => {
         const checked = value === opt.value
         return (
-          <button
+          <RadioGroupItem
             key={opt.value}
-            ref={(el) => {
-              optionRefs.current[opt.value] = el
-            }}
-            type="button"
-            role="radio"
-            aria-checked={checked}
-            tabIndex={checked ? 0 : -1}
-            onClick={() => onChange(opt.value)}
-            onKeyDown={handleKeyDown}
+            value={opt.value}
             className={cn(
-              'px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors',
+              'h-auto w-auto justify-center border-0 bg-transparent px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium rounded-md transition-colors',
               checked
-                ? 'bg-[var(--color-surface-1)] text-[var(--color-secondary)] shadow-sm'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+                ? 'bg-[var(--color-surface-1)] text-[var(--color-secondary)] shadow-sm hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)]'
+                : 'text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]',
             )}
           >
             {opt.label}
-          </button>
+          </RadioGroupItem>
         )
       })}
-    </div>
+    </RadioGroup>
   )
 }

@@ -41,19 +41,11 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Checkbox } from '@/components/ui/checkbox'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
 import { canDropTransition } from '@/components/workspaces/BoardView'
@@ -64,7 +56,8 @@ import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
 import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
 import { TaskActivityChip } from '@/components/workspaces/TaskActivityChip'
-import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
+import { StatusBadge } from '@/components/workspaces/StatusBadge'
+import { STATUS_OPTIONS } from '@/components/workspaces/taskStatusConfig'
 import { formatDateTime } from '@/lib/dateFormat'
 import {
   Play,
@@ -89,9 +82,25 @@ import {
 } from '@/components/workspaces/taskFormFields'
 
 // ── Status config ──────────────────────────────────────────────────────────────
-// STATUS_OPTIONS / STATUS_BADGE live in taskStatusConfig.ts — single source
-// of truth shared with TaskRunStatusField (the calendar's read-only status
-// badge). See that file for details.
+// STATUS_OPTIONS lives in taskStatusConfig.ts — single source of truth shared
+// with TaskRunStatusField (the calendar's read-only status badge). See that
+// file for details. `statusOptionTextClass` below stays local to THIS file
+// (rather than living in taskStatusConfig.ts alongside STATUS_OPTIONS): the
+// design-system static scanners (`scripts/design-system-locks/{typography,
+// spacing,ts-colors}.mjs`) cannot resolve a class-returning function across a
+// module boundary, only a literal `switch` in the same file as its JSX call
+// site (`items={STATUS_OPTIONS.filter(...).map(...)}` below) — same
+// literal-per-branch shape as `PriorityBadge.tsx` and `StatusBadge.tsx`.
+function statusOptionTextClass(status: Task['status']): string {
+  const fallback = 'text-[color:var(--status-inbox-foreground)]'
+  if (status === 'inbox') return fallback
+  if (status === 'next') return 'text-[color:var(--status-next-foreground)]'
+  if (status === 'in_progress') return 'text-[color:var(--status-in-progress-foreground)]'
+  if (status === 'blocked') return 'text-[color:var(--status-blocked-foreground)]'
+  if (status === 'done') return 'text-[color:var(--status-done-foreground)]'
+  if (status === 'failed') return 'text-[color:var(--status-failed-foreground)]'
+  return fallback
+}
 
 const PRIORITY_CONFIG: Record<number, { label: string; color: string }> = {
   1: { label: 'P1 — Critical',  color: 'text-[color:var(--color-error)]' },
@@ -645,7 +654,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const blockedBy = task.blocked_by ?? []
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
       {/* Autosave indicator — every field change saves immediately. */}
       <div className="flex justify-end min-h-[14px]" data-testid="task-detail-autosave">
         <AutoSaveIndicator status={saveStatus} error={saveError} />
@@ -655,11 +664,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           pattern as the Goal field below). */}
       <Field label="Title">
         {editingTitle ? (
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             <Input
               value={titleDraft}
               onChange={(e) => { setTitleDraft(e.target.value); setTitleError('') }}
-              className="text-sm font-medium h-8"
+              className="text-[length:var(--type-body-compact-size)] font-medium h-8"
               autoFocus
               maxLength={200}
               aria-label="Title"
@@ -671,16 +680,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               }}
             />
             {titleError && (
-              <p id="task-title-error" className="text-xs text-[var(--color-error)]">{titleError}</p>
+              <p id="task-title-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{titleError}</p>
             )}
-            <div className="flex gap-1.5">
-              <Button size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleSaveTitle}>
+            <div className="flex gap-[var(--space-1)]">
+              <Button size="sm" className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]" onClick={handleSaveTitle}>
                 <Check size={10} weight="bold" /> Save
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 px-2 text-[10px] gap-1"
+                className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]"
                 onClick={() => { setTitleDraft(task.title); setTitleError(''); setEditingTitle(false) }}
               >
                 <X size={10} /> Cancel
@@ -689,15 +698,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </div>
         ) : (
           <div className="relative group">
-            <p className="text-sm font-medium text-[var(--color-secondary)] pr-6">{task.title}</p>
-            <button tabIndex={0}
-              type="button"
+            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] pr-[var(--space-4)]">{task.title}</p>
+            <IconButton
               onClick={() => { setTitleDraft(task.title); setEditingTitle(true) }}
-              className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              variant="ghost"
+              size="sm"
+              className="absolute top-0 right-0 h-auto w-auto p-[var(--space-1)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-[var(--color-muted)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)]"
               aria-label="Edit title"
             >
               <PencilSimple size={12} />
-            </button>
+            </IconButton>
           </div>
         )}
       </Field>
@@ -706,22 +716,22 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           goal record once the task starts its own session). */}
       <Field label="Goal">
         {editingPrompt ? (
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             <Textarea
               value={promptDraft}
               onChange={(e) => setPromptDraft(e.target.value)}
-              className="text-xs min-h-[80px] font-mono"
+              className="text-[length:var(--type-utility-xs-size)] min-h-[80px] font-mono"
               autoFocus
               maxLength={10000}
             />
-            <div className="flex gap-1.5">
-              <Button size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleSavePrompt}>
+            <div className="flex gap-[var(--space-1)]">
+              <Button size="sm" className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]" onClick={handleSavePrompt}>
                 <Check size={10} weight="bold" /> Save
               </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-6 px-2 text-[10px] gap-1"
+                className="h-6 px-[var(--space-2)] text-[length:var(--type-caption-size)] gap-[var(--space-1)]"
                 onClick={() => { setPromptDraft(task.prompt ?? ''); setEditingPrompt(false) }}
               >
                 <X size={10} /> Cancel
@@ -730,17 +740,18 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           </div>
         ) : (
           <div className="relative group">
-            <pre className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 whitespace-pre-wrap break-words leading-relaxed">
+            <pre className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-[var(--space-2-5)] whitespace-pre-wrap break-words leading-relaxed">
               {task.prompt || <span className="text-[var(--color-muted)]">No prompt set.</span>}
             </pre>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               onClick={() => setEditingPrompt(true)}
-              className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              variant="ghost"
+              size="sm"
+              className="absolute top-2 right-2 h-auto w-auto p-[var(--space-1)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-[var(--color-muted)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)]"
               aria-label="Edit prompt"
             >
               <PencilSimple size={12} />
-            </button>
+            </IconButton>
           </div>
         )}
       </Field>
@@ -755,7 +766,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           items={[1, 2, 3, 4, 5].map((p) => ({
             value: String(p),
             label: PRIORITY_CONFIG[p]?.label ?? `P${p}`,
-            className: cn('text-xs', PRIORITY_CONFIG[p]?.color),
+            className: cn('text-[length:var(--type-utility-xs-size)]', PRIORITY_CONFIG[p]?.color),
           }))}
         />
       </Field>
@@ -763,25 +774,25 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Status */}
       <Field label="Status">
         {isRunning ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
+          <div className="flex flex-wrap items-center gap-[var(--space-2)]">
+            <StatusBadge status="in_progress" className="h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
               In Progress
-            </Badge>
+            </StatusBadge>
             {/* "Last activity 5 s ago" (founder decision 2026-09-14). */}
             <TaskActivityChip task={task} variant="panel" />
           </div>
         ) : task.status === 'blocked' ? (
           // blocked is backend-derived (unmet dependency) — show read-only, not selectable
-          <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
+          <StatusBadge status="blocked" className="h-8 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center">
             Blocked (dependency unmet)
-          </Badge>
+          </StatusBadge>
         ) : task.status === 'done' ? (
           // Done is terminal — mirror canDropTransition (board DnD forbids
           // leaving done). Show a read-only badge instead of a dropdown that
           // offers transitions the backend rejects.
           <Badge
             data-testid="status-done-terminal"
-            className="h-8 text-xs bg-[var(--color-success)]/10 text-[color:var(--color-success)] border-transparent rounded-md px-2 inline-flex items-center"
+            className="h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-success)]/10 text-[color:var(--color-success)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center"
           >
             Done (final)
           </Badge>
@@ -799,18 +810,18 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             ).map((o) => ({
               value: o.value,
               label: o.label,
-              className: cn('text-xs', o.color),
+              className: cn('text-[length:var(--type-utility-xs-size)]', statusOptionTextClass(o.value)),
             }))}
           />
         )}
         {statusError && (
-          <p className="text-xs text-[var(--color-error)] mt-1.5">{statusError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]">{statusError}</p>
         )}
       </Field>
 
       {/* Workspace */}
       <Field label="Workspace">
-        <p className="text-xs text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           {task.workspace_id
             ? (workspaces.find((p) => p.id === task.workspace_id)?.name ?? task.workspace_id)
             : '—'}
@@ -834,7 +845,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           ]}
         />
         {noWorkspaceForAssignment && (
-          <p className="text-xs text-[var(--color-muted)] mt-1.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
             Task has no workspace — plan assignment unavailable
           </p>
         )}
@@ -895,9 +906,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
         />
         {criteriaError && (
-          <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{criteriaError}</p>
         )}
-        <div className="mt-2">
+        <div className="mt-[var(--space-2)]">
           {/* GOAL-FR-054/FR-055 (C-81/C-42): `dod` is now passed to the
               EXISTING CriteriaVerdictList, which already accepts the prop
               and already renders a distinctly-labelled "Definition of
@@ -926,7 +937,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
         />
         {dodError && (
-          <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{dodError}</p>
         )}
       </Field>
 
@@ -934,7 +945,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {isRunning && typeof task.attempt_count === 'number' && task.attempt_count > 0 && (
         <Button
           variant="outline"
-          className="w-full gap-2 text-xs h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
           onClick={() => setConfirmStopLoop(true)}
           disabled={isStoppingLoop}
         >
@@ -943,26 +954,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </Button>
       )}
 
-      <AlertDialog open={confirmStopLoop} onOpenChange={setConfirmStopLoop}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Stop this task's goal loop?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This winds down the attempt loop for “{task.title}”. In-flight work finishes gracefully; it will not restart automatically.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => doStopLoop()}
-              disabled={isStoppingLoop}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
-            >
-              {isStoppingLoop ? 'Stopping…' : 'Stop/Clear'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmStopLoop}
+        onOpenChange={setConfirmStopLoop}
+        title="Stop this task's goal loop?"
+        description={
+          <>
+            This winds down the attempt loop for &ldquo;{task.title}&rdquo;. In-flight work finishes gracefully; it will not restart automatically.
+          </>
+        }
+        confirmLabel={isStoppingLoop ? 'Stopping…' : 'Stop/Clear'}
+        destructive
+        pending={isStoppingLoop}
+        onConfirm={() => doStopLoop()}
+      />
 
       {/* Agent */}
       <Field label="Agent">
@@ -984,14 +989,14 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         {/* F3: a workspace-less task would otherwise offer choices the
             backend guarantees will 400 — disable + explain instead. */}
         {noWorkspaceForAssignment ? (
-          <p className="text-xs text-[var(--color-muted)] mt-1.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
             Task has no workspace — assignment unavailable
           </p>
         ) : teamError ? (
           // F1: a failed team-set fetch degrades to the unscoped roster —
           // surface that degrade instead of leaving it indistinguishable
           // from a healthy, unrestricted workspace.
-          <p className="text-xs text-[var(--color-muted)] mt-1.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">
             Team list unavailable — showing all agents
           </p>
         ) : null}
@@ -1002,7 +1007,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           <p
             data-testid="task-assignee-warning"
             role="status"
-            className="text-xs text-[color:var(--color-warning)] mt-1.5"
+            className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-warning)] mt-[var(--space-1)]"
           >
             {task.assignee_warning.message}
           </p>
@@ -1026,8 +1031,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           editing here. */}
       {isScheduledTrigger(task.trigger) && (
         <Field label="Trigger">
-          <div className="space-y-1.5">
-            <p className="text-xs text-[var(--color-secondary)]">
+          <div className="space-y-[var(--space-1)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
               {scheduledTriggerSummary(task.trigger)}
             </p>
             {task.workspace_id && (
@@ -1035,7 +1040,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                 to="/workspaces/$workspaceId/calendar"
                 params={{ workspaceId: task.workspace_id }}
                 tabIndex={0}
-                className="inline-flex items-center gap-1 text-xs text-[color:var(--color-accent)] hover:underline"
+                className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-accent)] hover:underline"
               >
                 <CalendarBlank size={12} />
                 Edit in workspace calendar
@@ -1052,7 +1057,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             <Button
               type="button"
               variant="outline"
-              className="justify-between h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-normal w-full"
+              className="justify-between h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-[var(--font-weight-regular)] w-full"
               disabled={depCandidates.length === 0}
             >
               <span className="truncate">
@@ -1065,16 +1070,16 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               <CaretDown size={12} className="shrink-0 opacity-70" />
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-1" align="start">
+          <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-[var(--space-1)]" align="start">
             {depCandidates.map((t) => {
               const checked = blockedBy.includes(t.id)
               return (
-                <button tabIndex={0}
+                <Button
                   key={t.id}
-                  type="button"
+                  variant="ghost"
                   onClick={() => handleToggleDep(t.id)}
                   aria-pressed={checked}
-                  className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-[var(--color-surface-1)] transition-colors"
+                  className="h-auto w-full justify-start gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] text-left hover:bg-[var(--color-surface-1)]"
                 >
                   {/* The row button carries the checked state via aria-pressed
                       — this Checkbox is a decorative visual echo, not a
@@ -1087,36 +1092,37 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
                     className="pointer-events-none"
                   />
                   <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
-                </button>
+                </Button>
               )
             })}
           </PopoverContent>
         </Popover>
         {blockedBy.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
+          <div className="flex flex-wrap gap-[var(--space-1)] mt-[var(--space-1)]">
             {blockedBy.map((id) => {
               const dep = depCandidates.find((x) => x.id === id) ?? wsTasks.find((x) => x.id === id)
               return (
                 <span
                   key={id}
-                  className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                  className="inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                 >
                   <span className="max-w-[120px] truncate">{dep?.title ?? id}</span>
-                  <button tabIndex={0}
-                    type="button"
+                  <IconButton
                     onClick={() => handleToggleDep(id)}
                     aria-label={`Remove dependency ${dep?.title ?? id}`}
-                    className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                   >
                     <X size={9} />
-                  </button>
+                  </IconButton>
                 </span>
               )
             })}
           </div>
         )}
         {depError && (
-          <p role="alert" className="text-xs text-[var(--color-error)] mt-1.5">{depError}</p>
+          <p role="alert" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]">{depError}</p>
         )}
       </Field>
 
@@ -1131,7 +1137,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
           }}
         />
         {dueError && (
-          <p className="text-xs text-[var(--color-error)] mt-1.5">{dueError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mt-[var(--space-1)]">{dueError}</p>
         )}
       </Field>
 
@@ -1142,7 +1148,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Start button — inbox / next tasks */}
       {isStartable && (
         <Button
-          className="w-full gap-2 text-xs h-8"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8"
           onClick={() => doStart()}
           disabled={isStarting}
         >
@@ -1155,7 +1161,7 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {isFailed && (
         <Button
           variant="outline"
-          className="w-full gap-2 text-xs h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8 border-[var(--color-error)]/30 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10"
           onClick={() => doRetry()}
           disabled={isRetrying}
         >
@@ -1183,24 +1189,25 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       <TaskRunsList
         taskId={task.id}
         onNavigate={onClose}
-        className="pt-2 border-t border-[var(--color-border)]"
+        className="pt-[var(--space-2)] border-t border-[var(--color-border)]"
       />
 
       {/* Artifacts */}
       {(task.artifacts?.length ?? 0) > 0 && (
         <Field label="Artifacts">
-          <div className="space-y-1">
+          <div className="space-y-[var(--space-1)]">
             {task.artifacts!.map((path) => (
-              <div key={path} className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs">
+              <div key={path} className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]">
                 <span className="flex-1 font-mono text-[var(--color-secondary)] truncate">{path}</span>
-                <button tabIndex={0}
-                  type="button"
+                <IconButton
                   onClick={() => handleCopyPath(path)}
-                  className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                   aria-label={`Copy path: ${path}`}
                 >
                   <Copy size={11} />
-                </button>
+                </IconButton>
               </div>
             ))}
           </div>
@@ -1210,34 +1217,34 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Sub-tasks (children via parent_task_id) */}
       {subtasks.length > 0 && (
         <Field label={`Sub-tasks (${subtasks.length})`}>
-          <div className="space-y-1">
+          <div className="space-y-[var(--space-1)]">
             {subtasks.map((sub) => (
-              <button tabIndex={0}
+              <Button
                 key={sub.id}
-                type="button"
+                variant="ghost"
                 onClick={() => onTaskSelect?.(sub)}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs hover:bg-[var(--color-surface-1)] transition-colors text-left"
+                className="h-auto w-full justify-start gap-[var(--space-2)] rounded-md bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] text-left hover:bg-[var(--color-surface-1)]"
               >
-                <Badge
-                  variant="outline"
-                  className={cn('text-[9px] px-1 py-0 shrink-0 border-0', STATUS_BADGE[sub.status] ?? '')}
+                <StatusBadge
+                  status={sub.status}
+                  className="text-[length:var(--type-caption-size)] px-[var(--space-1)] py-0 shrink-0 border-0"
                 >
                   {sub.status}
-                </Badge>
+                </StatusBadge>
                 <span className="flex-1 text-[var(--color-secondary)] truncate">{sub.title}</span>
                 {sub.agent_name && (
-                  <span className="shrink-0 text-[var(--color-muted)] flex items-center gap-0.5">
+                  <span className="shrink-0 text-[var(--color-muted)] flex items-center gap-[var(--space-0-5)]">
                     <Robot size={10} /> {sub.agent_name}
                   </span>
                 )}
-              </button>
+              </Button>
             ))}
           </div>
         </Field>
       )}
 
       {/* Metadata */}
-      <div className="pt-2 border-t border-[var(--color-border)] space-y-1.5">
+      <div className="pt-[var(--space-2)] border-t border-[var(--color-border)] space-y-[var(--space-1)]">
         {task.created_by && <MetaRow label="Created by" value={task.created_by} />}
         <MetaRow label="Created" value={formatDateTime(task.created_at)} />
         <MetaRow label="Updated" value={formatDateTime(task.updated_at)} />
@@ -1247,11 +1254,11 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
       {/* Delete button (danger zone) — confirmed via AlertDialog (was firing
           with zero confirmation, a one-click irreversible data-loss trap). */}
-      <div className="pt-2 border-t border-[var(--color-border)]">
+      <div className="pt-[var(--space-2)] border-t border-[var(--color-border)]">
         <Button
           variant="ghost"
           size="sm"
-          className="w-full gap-2 text-xs h-8 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]"
+          className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8 text-[color:var(--color-error)] hover:bg-[var(--color-error)]/10 hover:text-[color:var(--color-error)]"
           onClick={() => setConfirmDelete(true)}
           disabled={isDeleting}
         >
@@ -1260,26 +1267,20 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         </Button>
       </div>
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this task?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes “{task.title}”. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => doDelete()}
-              disabled={isDeleting}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
-            >
-              {isDeleting ? 'Deleting…' : 'Delete'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this task?"
+        description={
+          <>
+            This permanently deletes &ldquo;{task.title}&rdquo;. This cannot be undone.
+          </>
+        }
+        confirmLabel={isDeleting ? 'Deleting…' : 'Delete'}
+        destructive
+        pending={isDeleting}
+        onConfirm={() => doDelete()}
+      />
     </div>
   )
 }
@@ -1301,12 +1302,12 @@ export function WorkflowTaskDetailPanel({
   return (
     <Sheet open={task != null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent side="right" className="w-full sm:w-[380px] md:w-[460px] overflow-y-auto p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>{task?.title ?? ''}</SheetTitle>
         </SheetHeader>
 
         {task && (
-          <div className="px-6 py-4">
+          <div className="px-[var(--space-4)] py-[var(--space-3)]">
             <TaskDetailPanel task={task} onClose={onClose} onTaskSelect={onTaskSelect} />
           </div>
         )}
@@ -1319,8 +1320,8 @@ export function WorkflowTaskDetailPanel({
 
 function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">{label}</p>
+    <div className="space-y-[var(--space-1)]">
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">{label}</p>
       {children}
     </div>
   )
@@ -1330,7 +1331,7 @@ function Field({ label, children }: { label: React.ReactNode; children: React.Re
 
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center gap-2 text-xs">
+    <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)]">
       <span className="text-[var(--color-muted)] w-[80px] shrink-0">{label}</span>
       <span className="text-[var(--color-secondary)]">{value}</span>
     </div>

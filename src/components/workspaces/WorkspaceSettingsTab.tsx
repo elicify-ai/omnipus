@@ -6,17 +6,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { Card } from '@/components/ui/card'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { useUiStore } from '@/store/ui'
 import {
@@ -419,7 +411,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
 
   return (
     <div className="absolute inset-0 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-6 py-6 flex flex-col gap-6">
+      <div className="max-w-2xl mx-auto px-[var(--space-4)] py-[var(--space-4)] flex flex-col gap-[var(--space-4)]">
         {/* Header with autosave indicator */}
         <div className="flex items-center justify-between">
           <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
@@ -429,7 +421,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Name */}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="ws-name">Name</Label>
           <Input
             id="ws-name"
@@ -440,12 +432,12 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             className="bg-[var(--color-surface-2)]"
           />
           {name.trim().length === 0 && (
-            <span className="text-xs text-[var(--color-error)]">Name is required.</span>
+            <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">Name is required.</span>
           )}
         </div>
 
         {/* Description */}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="ws-description">Description</Label>
           <Textarea
             id="ws-description"
@@ -459,7 +451,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Workspace / Project Instructions */}
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <div className="flex items-center justify-between">
             <Label htmlFor="ws-instructions">
               Workspace / Project Instructions
@@ -468,17 +460,17 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               <AutoSaveIndicator status={instructionsSaveStatus} error={instructionsSaveError} />
             )}
           </div>
-          <p className="text-xs text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Applied to every agent working in this workspace, on top of their persona. Like a project CLAUDE.md.
           </p>
           {instructionsError ? (
-            <div className="flex flex-col items-center gap-3 py-4 text-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
-              <p className="text-sm text-[var(--color-error)]">Could not load project instructions.</p>
+            <div className="flex flex-col items-center gap-[var(--space-2-5)] py-[var(--space-3)] text-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]">
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load project instructions.</p>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => void refetchInstructions()}
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 <ArrowsClockwise size={13} />
                 Retry
@@ -491,7 +483,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
               onChange={(e) => { markInstructionsDirty(); setInstructionsContent(e.target.value) }}
               placeholder={"# Project Instructions\n\nDescribe conventions, tech stack, coding standards, and team preferences that every agent should follow in this workspace."}
               rows={10}
-              className="bg-[var(--color-surface-2)] text-xs font-mono resize-none"
+              className="bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] font-mono resize-none"
               // D3 fix: inert until hydrated — closes the race where a very
               // fast edit lands before `fetchWorkspaceInstructions` resolves
               // and gets silently adopted as useAutoSave's "already saved"
@@ -503,18 +495,18 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         </div>
 
         {/* Danger zone */}
-        <div className="mt-2 flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
-          <span className="text-xs font-semibold uppercase tracking-widest text-[var(--color-muted)]">
+        <Card variant="default" className="mt-[var(--space-2)] flex flex-col gap-[var(--space-2-5)] p-[var(--space-3)]">
+          <span className="text-[length:var(--type-utility-xs-size)] font-semibold uppercase tracking-widest text-[var(--color-muted)]">
             Manage
           </span>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-[var(--space-2)]">
             {(!isDefault || isArchived) && (
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => archiveMutation.mutate()}
                 disabled={archiveMutation.isPending}
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 {isArchived ? <ArrowCounterClockwise size={14} /> : <Archive size={14} />}
                 {isArchived ? 'Restore workspace' : 'Archive workspace'}
@@ -526,7 +518,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
                 variant="outline"
                 size="sm"
                 onClick={() => setConfirmDelete(true)}
-                className="gap-1.5 border-[var(--color-error)]/40 text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
+                className="gap-[var(--space-1)] border-[var(--color-error)]/40 text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
               >
                 <Trash size={14} />
                 Delete workspace
@@ -534,34 +526,28 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
             )}
           </div>
           {isDefault && (
-            <span className="text-xs text-[var(--color-muted)]">
+            <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               The default workspace cannot be archived or deleted.
             </span>
           )}
-        </div>
+        </Card>
       </div>
 
-      <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete this workspace?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes “{workspace.name}” and cascade-deletes its tasks and
-              session links. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
-            >
-              {deleteMutation.isPending ? 'Deleting…' : 'Delete'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this workspace?"
+        description={
+          <>
+            This permanently deletes &ldquo;{workspace.name}&rdquo; and cascade-deletes its tasks and
+            session links. This cannot be undone.
+          </>
+        }
+        confirmLabel={deleteMutation.isPending ? 'Deleting…' : 'Delete'}
+        destructive
+        pending={deleteMutation.isPending}
+        onConfirm={() => deleteMutation.mutate()}
+      />
     </div>
   )
 }

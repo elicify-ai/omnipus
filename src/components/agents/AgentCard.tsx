@@ -1,5 +1,6 @@
 import { Circle, Star } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -36,24 +37,32 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
   const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
   const handleOpen = onClick ?? (() => openEditAgentSlideOver(agent.id))
   const bindingCopy = providerBindingCopy(agent)
+  // Agent.status is the agent's own lifecycle (draft/active/error), not a task status.
+  const isDraftAgent = agent.status === 'draft'
+  const isErrorAgent = agent.status === 'error'
 
   return (
-    <div className="relative group/card">
-      <button tabIndex={0}
+    <div className="relative group/card h-full">
+      <Button
         type="button"
+        variant="ghost"
         data-testid={`agent-card-${agent.id}`}
         onClick={handleOpen}
         className={cn(
-          'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4',
+          'block h-full w-full whitespace-normal rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left',
+          // pb reserves the strip the absolute "Set as default" occupies: without it
+          // a two-line description pushes the chips row under that button and the two
+          // overlap. h-full (not h-auto) makes every card in a grid row the same height.
+          'pb-[var(--space-8)]',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
           'focus-visible:border-[var(--color-accent)]'
         )}
         aria-label={`View agent ${agent.name}`}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-[var(--space-2-5)]">
           {/* Avatar — decorative next to the visible name below */}
           <div
-            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold"
+            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
             style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
             aria-hidden="true"
           >
@@ -68,8 +77,8 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
 
           {/* Info */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-              <span className="font-headline font-bold text-sm text-[var(--color-secondary)] truncate">
+            <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-0-5)] flex-wrap">
+              <span className="font-headline font-bold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {agent.name}
               </span>
               {agent.status === 'active' && (
@@ -83,28 +92,28 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                     className="text-[var(--color-accent)] shrink-0"
                     aria-label="Default agent"
                   />
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-accent)] shrink-0">
+                  <span className="text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-accent)] shrink-0">
                     Default
                   </span>
                 </>
               )}
             </div>
-            <p className="text-sm text-[var(--color-muted)] line-clamp-2 mb-2">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-[var(--space-2)]">
               {agent.description || 'No description'}
             </p>
-            <div className="flex items-center gap-2 flex-wrap">
-              {agent.status === 'draft' ? (
+            <div className="flex items-center gap-[var(--space-2)] flex-wrap">
+              {isDraftAgent ? (
                 <Badge variant="warning" className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10">draft</Badge>
-              ) : agent.status === 'error' ? (
+              ) : isErrorAgent ? (
                 <Badge variant="destructive" className="text-[var(--color-error)] border-[var(--color-error)]/30 bg-[var(--color-error)]/10">error</Badge>
               ) : (
-                <Badge variant={badgeVariantFor(agent.type)} className="font-normal">
+                <Badge variant={badgeVariantFor(agent.type)} className="font-[var(--font-weight-regular)]">
                   {agent.type}
                 </Badge>
               )}
               {agent.model && (
                 <span
-                  className="text-xs font-mono text-[var(--color-muted)] truncate max-w-[140px]"
+                  className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] truncate max-w-[140px]"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
@@ -114,39 +123,40 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 // T068-28 / FR-014: text badge, never colour-only — the copy is the state.
                 <Badge
                   variant="warning"
-                  className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 font-normal"
+                  className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 font-[var(--font-weight-regular)]"
                 >
                   {bindingCopy}
                 </Badge>
               )}
             </div>
-            {agent.status === 'draft' && agent.type === 'Main' && (
-              <p className="text-xs text-[var(--color-warning)]/70 mt-1">
+            {isDraftAgent && agent.type === 'Main' && (
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/70 mt-[var(--space-1)]">
                 Set up SOUL.md to activate this agent
               </p>
             )}
-            {agent.status === 'error' && (
-              <p className="text-xs text-[var(--color-error)]/70 mt-1">
+            {isErrorAgent && (
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/70 mt-[var(--space-1)]">
                 Agent encountered an error — check the activity log
               </p>
             )}
           </div>
         </div>
-      </button>
+      </Button>
 
       {/* "Set as default" sits outside the card button to avoid nested-button HTML violation.
           Persistent (no group-hover gating — touch users would never see it) and sized for a
           44×44 tap target per WCAG 2.5.8 (token: --spacing-tap-target-min). */}
       {!agent.default && onSetDefault && (
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={onSetDefault}
-          className="absolute bottom-3 right-4 flex items-center justify-center gap-1 min-h-tap-target-min min-w-tap-target-min px-2 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors"
+          className="absolute bottom-3 right-4 h-auto min-h-tap-target-min min-w-tap-target-min gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)]"
           aria-label={`Set ${agent.name} as default agent`}
         >
           <Star size={12} weight="fill" />
           Set as default
-        </button>
+        </Button>
       )}
     </div>
   )

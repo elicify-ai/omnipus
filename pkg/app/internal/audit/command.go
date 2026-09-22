@@ -112,6 +112,9 @@ func runVerify(ctx context.Context, dir string, jsonOutput bool) error {
 			credentials.EnvMasterKey, credentials.EnvKeyFile,
 		))
 	}
+	// Overwrite the store's master key on the way out; this command holds it
+	// only to derive the audit chain key.
+	defer store.Close()
 
 	chainKey, err := store.DeriveSubkey(auditpkg.AuditChainKeyInfo)
 	if err != nil {

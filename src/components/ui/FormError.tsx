@@ -23,7 +23,7 @@
 // renders the string.
 //
 // Usage:
-//   <label htmlFor="x">Name</label>
+//   <Label htmlFor="x">Name</Label>
 //   <Input id="x" aria-describedby={error ? nameErrorId : undefined} aria-invalid={!!error} required />
 //   <FormError id={nameErrorId} error={error} />
 
@@ -54,7 +54,7 @@ export function FormError({ error, id, className }: FormErrorProps) {
     <p
       id={id}
       role="alert"
-      className={cn('mt-1 text-xs text-[var(--color-error)]', className)}
+      className={cn('mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]', className)}
     >
       {error}
     </p>

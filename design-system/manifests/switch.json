@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "component": "Switch",
+  "exports": [
+    "Switch"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/switch.tsx",
+  "documentation": "docs/internal/design/components/switch.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default",
+    "checked",
+    "disabled"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/switch.stories.tsx",
+      "exports": [
+        "Default",
+        "Checked",
+        "Disabled"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "switch-unit",
+      "kind": "unit",
+      "file": "src/components/ui/switch.test.tsx",
+      "test": "Switch — form contract preserves identity and controlled checked state",
+      "applicable": true
+    },
+    {
+      "id": "switch-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/switch.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-disabled-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/switch.stories.tsx",
+      "test": "Disabled",
+      "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "switch-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "switch-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Switch [check:switch-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

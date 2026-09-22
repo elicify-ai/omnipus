@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Terminal, Plus, Trash } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { fetchExecAllowlist, updateExecAllowlist } from '@/lib/api'
@@ -97,7 +99,7 @@ export function ExecAllowlistSection(): React.ReactElement {
 
   if (isLoading) {
     return (
-      <div className="text-sm text-[var(--color-muted)] py-2">
+      <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-[var(--space-2)]">
         Loading allowlist...
       </div>
     )
@@ -105,26 +107,26 @@ export function ExecAllowlistSection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-sm text-red-400">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">
         Failed to load exec allowlist. Please try again.
       </p>
     )
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+          <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
             <Terminal size={14} className="text-[var(--color-muted)]" />
             Command Binary Allowlist
             {restartRequired && (
-              <span className="ml-2 text-[10px] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-1.5 py-0.5">
+              <span className="ml-[var(--space-2)] text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-[var(--space-1)] py-[var(--space-0-5)]">
                 Restart required
               </span>
             )}
           </h3>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Glob patterns for binaries that bash may run.
             E.g. <span className="font-mono">git *</span>,{' '}
             <span className="font-mono">npm run *</span>. When non-empty, bash
@@ -134,39 +136,41 @@ export function ExecAllowlistSection(): React.ReactElement {
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {patterns.length === 0 ? (
-          <p className="text-xs text-[var(--color-muted)] italic">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">
             No patterns configured. Bash runs without the binary allowlist restriction
             (existing deny-pattern safety checks still apply).
           </p>
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-[var(--space-2)]">
             {patterns.map((pattern) => (
               <div
                 key={pattern}
-                className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1"
+                className="flex items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)]"
               >
                 <Badge
                   variant="secondary"
-                  className="font-mono text-xs px-0 py-0 bg-transparent border-0 text-[var(--color-secondary)]"
+                  className="font-mono text-[length:var(--type-utility-xs-size)] px-0 py-0 bg-transparent border-0 text-[var(--color-secondary)]"
                 >
                   {pattern}
                 </Badge>
-                <button tabIndex={0}
+                <IconButton
+                  variant="ghost"
+                  size="sm"
                   type="button"
                   aria-label={`Remove pattern ${pattern}`}
                   onClick={() => handleRemove(pattern)}
-                  className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                 >
                   <Trash size={12} />
-                </button>
+                </IconButton>
               </div>
             ))}
           </div>
         )}
 
-        <div className="flex items-center gap-2 pt-1">
+        <div className="flex items-center gap-[var(--space-2)] pt-[var(--space-1)]">
           <Input
             value={newPattern}
             onChange={(e) => {
@@ -175,23 +179,23 @@ export function ExecAllowlistSection(): React.ReactElement {
             }}
             onKeyDown={handleKeyDown}
             placeholder="e.g. git or npm run *"
-            className="h-7 text-xs font-mono flex-1"
+            className="h-7 text-[length:var(--type-utility-xs-size)] font-mono flex-1"
             aria-label="New binary pattern"
           />
           <Button
             size="sm"
             variant="outline"
             onClick={handleAdd}
-            className="h-7 px-2 gap-1 text-xs shrink-0"
+            className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shrink-0"
           >
             <Plus size={11} weight="bold" />
             Add
           </Button>
         </div>
         {addError && (
-          <p className="text-xs text-[var(--color-error)]">{addError}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{addError}</p>
         )}
-      </div>
+      </Card>
     </section>
   )
 }

@@ -2,9 +2,12 @@
 // real link (KB-8b), reusing the SAME parser and the SAME three-state honesty
 // model the note-reading surface uses (`../knowledgeMarkdown.tsx`):
 // `parseWikilink` interprets the token, `KbLinkState`/`KbLinkResolution` is
-// the only vocabulary a resolution answers in, and `LINK_CLASS` /
-// `UNVERIFIED_LINK_CLASS` / `UnresolvedLink` are the SAME objects the note
-// reader draws with — not a second color choice that can drift from them.
+// the only vocabulary a resolution answers in, and `UnresolvedLink` is the
+// SAME component the note reader draws with. The verified/unverified link
+// classes below are the same two literal strings knowledgeMarkdown.tsx's own
+// `LINK_CLASS`/`UNVERIFIED_LINK_CLASS` hold — not a second color choice that
+// can drift from them; keep every copy byte-identical by hand if either
+// ever changes.
 //
 // A view only knows the rows it loaded, never the whole collection, so its
 // own `resolveWikilink` (BasePreview.tsx) can honestly answer `resolved`
@@ -25,11 +28,10 @@ import type { MouseEvent, ReactNode } from 'react'
 import {
   parseWikilink,
   WIKILINK_RE,
-  LINK_CLASS,
-  UNVERIFIED_LINK_CLASS,
   UnresolvedLink,
 } from '../knowledgeMarkdown'
 import type { KbLinkResolution } from '../knowledgeMarkdown'
+import { Button } from '@/components/ui/button'
 
 /**
  * What a view can offer a cell's wikilink tokens. Mirrors
@@ -88,7 +90,6 @@ function CellWikilink({
   const path = resolution.path ?? target
   const verified = resolution.state === 'resolved'
   const href = resolver.linkHref?.(path)
-  const className = verified ? LINK_CLASS : UNVERIFIED_LINK_CLASS
   const srUnverified = !verified ? (
     <span className="sr-only"> (link target not verified against the rows shown here)</span>
   ) : null
@@ -110,7 +111,11 @@ function CellWikilink({
         href={href}
         data-testid="viewpart-cell-link"
         data-kb-state={verified ? 'resolved' : 'unknown'}
-        className={className}
+        className={
+          verified
+            ? 'text-[var(--color-accent)] underline underline-offset-2 hover:opacity-80 transition-opacity'
+            : 'text-[var(--color-secondary)] border-b border-dashed border-[var(--color-muted)] hover:opacity-80 transition-opacity'
+        }
         onClick={handleClick}
       >
         {text}
@@ -120,17 +125,20 @@ function CellWikilink({
   }
 
   return (
-    <button
-      type="button"
-      tabIndex={0}
+    <Button
+      variant="link"
       data-testid="viewpart-cell-link"
       data-kb-state={verified ? 'resolved' : 'unknown'}
-      className={`inline text-left align-baseline ${className}`}
+      className={
+        verified
+          ? 'inline h-auto rounded-none p-0 align-baseline text-[length:inherit] font-[var(--font-weight-regular)] text-left text-[var(--color-accent)] underline underline-offset-2 hover:opacity-80 transition-opacity'
+          : 'inline h-auto rounded-none p-0 align-baseline text-[length:inherit] font-[var(--font-weight-regular)] text-left hover:no-underline text-[var(--color-secondary)] border-b border-dashed border-[var(--color-muted)] hover:opacity-80 transition-opacity'
+      }
       onClick={handleClick}
     >
       {text}
       {srUnverified}
-    </button>
+    </Button>
   )
 }
 

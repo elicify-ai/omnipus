@@ -20,15 +20,27 @@ import {
 
 describe('planStateColors — badge matrix', () => {
   it.each([
+    // 'approved' hex value (design-system/tokens/colors.json):
+    // `color.status.next` refs the lighter `primitive.color.blue-label`
+    // (#60A5FA), clearing >=7:1 against near-black chip text — the app's
+    // documented floor (`primitive.color.blue`, #3B82F6, only clears
+    // ~5.38:1).
+    //
+    // 'failed' hex value: `color.status.failed` refs the lighter
+    // `primitive.color.red-label` (#F87171), which clears 7.15:1 against the
+    // same near-black chip text.
     ['draft', 'Draft', '#9ca3af'],
-    ['approved', 'Approved', '#3B82F6'],
+    ['approved', 'Approved', '#60A5FA'],
     ['running', 'Running', '#D4AF37'],
     ['done', 'Done', '#10b981'],
-    ['failed', 'Failed', '#ef4444'],
+    ['failed', 'Failed', '#F87171'],
   ] as const)('state=%s -> label=%s hex=%s', (state, label, hex) => {
-    expect(planStateColor(state)).toBe(hex)
+    // Hex is compared case-insensitively: these values now come from the
+    // governed status contract, which returns them upper-case, and CSS hex
+    // is case-insensitive — the same colour either way.
+    expect(planStateColor(state).toLowerCase()).toBe(hex.toLowerCase())
     expect(planStateLabel(state)).toBe(label)
-    expect(PLAN_STATE_COLORS[state]).toBe(hex)
+    expect(PLAN_STATE_COLORS[state].toLowerCase()).toBe(hex.toLowerCase())
     expect(PLAN_STATE_LABELS[state]).toBe(label)
   })
 

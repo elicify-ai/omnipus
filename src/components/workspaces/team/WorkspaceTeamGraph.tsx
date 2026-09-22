@@ -2,7 +2,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import {
   ReactFlow,
   ReactFlowProvider,
-  Controls,
+  MiniMap,
+  Panel,
   Handle,
   Position,
   MarkerType,
@@ -11,6 +12,7 @@ import {
   getBezierPath,
   applyNodeChanges,
   useConnection,
+  useReactFlow,
   type Node,
   type Edge,
   type Connection,
@@ -25,10 +27,18 @@ import '../reactflow-theme.css'
 import { Star, Lightning, Trash, Warning, PencilSimple, X, Scales } from '@phosphor-icons/react'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { Badge } from '@/components/ui/badge'
+import { IconButton } from '@/components/ui/icon-button'
 import { cn, initialOf } from '@/lib/utils'
 import { EdgeModeEditor, EdgeLabelChip } from './EdgeModeEditor'
 import { AgentDelegatePicker } from './AgentDelegatePicker'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
+import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
+import {
+  contentExceedsFrame,
+  useZoomableCanvasOpeningFit,
+  useZoomableCanvasPill,
+  zoomableCanvasFlowProps,
+} from '@/lib/zoomable-view-canvas'
 import {
   validateConnection,
   rejectionMessageForFailedConnection,
@@ -118,7 +128,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
   const { allNodes, editState, workerIds, onDelegate } = useTeamGraphCanvasContext()
 
   const connection = useConnection()
-  const isTarget = connection.inProgress && connection.fromNode?.id !== id
+  const isTarget = !!connection.inProgress && connection.fromNode?.id !== id
   const targetHandleStyle = {
     pointerEvents: connection.inProgress ? ('all' as const) : ('none' as const),
   }
@@ -137,7 +147,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         data-testid={`team-node-${model.id}`}
         data-ghost="true"
         className={cn(
-          'group relative w-[220px] rounded-xl border border-dashed border-[var(--color-warning)]/60 bg-[var(--color-warning)]/5 px-3 py-2.5 shadow-sm transition-colors',
+          'group relative w-[220px] rounded-xl border border-dashed border-[var(--color-warning)]/60 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-2)] shadow-sm transition-colors',
           isTarget && 'border-solid ring-2 ring-[var(--color-warning)]/70',
         )}
         title={`${model.id} no longer exists — its delegation edge is dangling. Click the edge to delete it, or remove this node.`}
@@ -152,7 +162,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             '!border-[var(--color-warning)] !bg-[var(--color-warning)]',
           )}
         />
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-[var(--space-2)]">
           <div
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--color-warning)]/15 text-[var(--color-warning)]"
             aria-hidden="true"
@@ -160,25 +170,24 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             <Warning size={16} weight="fill" />
           </div>
           <div className="min-w-0 flex-1">
-            <span className="block truncate font-headline text-sm font-bold text-[var(--color-warning)]">
+            <span className="block truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-warning)]">
               {model.id}
             </span>
-            <span className="mt-0.5 block text-[9px] font-medium uppercase tracking-wide text-[var(--color-warning)]/80">
+            <span className="mt-[var(--space-0-5)] block text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-warning)]/80">
               deleted — dangling edge
             </span>
           </div>
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             aria-label={`Remove ${model.id} from team`}
             title="Remove from team"
-            className="nodrag shrink-0 rounded p-1 text-[var(--color-warning)]/70 hover:bg-[var(--color-warning)]/15 hover:text-[var(--color-warning)]"
+            className="nodrag h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-warning)]/70 hover:bg-[var(--color-warning)]/15 hover:text-[var(--color-warning)]"
             onClick={(e) => {
               e.stopPropagation()
               data.onRemoveMember(model.id)
             }}
           >
             <X size={13} weight="bold" />
-          </button>
+          </IconButton>
         </div>
       </div>
     )
@@ -197,12 +206,12 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
       <div
         data-testid={`team-node-${model.id}`}
         data-implicit="true"
-        className="group relative w-[220px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm"
+        className="group relative w-[220px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] shadow-sm"
         title={`${model.name} — Verifier, implicit member of every workspace. System agents cannot be added to or removed from the team roster.`}
       >
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-[var(--space-2)]">
           <div
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-[var(--color-secondary)]"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]"
             style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
             aria-hidden="true"
           >
@@ -213,10 +222,10 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
             )}
           </div>
           <div className="min-w-0 flex-1">
-            <span className="block truncate font-headline text-sm font-bold text-[var(--color-secondary)]">
+            <span className="block truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               {model.name}
             </span>
-            <span className="mt-0.5 block text-[10px] font-medium text-[var(--color-muted)]">
+            <span className="mt-[var(--space-0-5)] block text-[length:var(--type-caption-size)] font-medium text-[var(--color-muted)]">
               {model.role}
             </span>
           </div>
@@ -224,7 +233,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
         <Badge
           variant="muted"
           data-testid={`team-node-implicit-badge-${model.id}`}
-          className="mt-2 inline-flex w-fit items-center gap-1 whitespace-normal rounded px-1.5 py-0.5 text-[9px] font-medium uppercase leading-tight tracking-wide"
+          className="mt-[var(--space-2)] inline-flex w-fit items-center gap-[var(--space-1)] whitespace-normal rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium uppercase leading-tight tracking-wide"
         >
           <Scales size={9} weight="bold" aria-hidden="true" />
           Verifier — implicit member of every workspace
@@ -269,7 +278,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
           : undefined
       }
       className={cn(
-        'group relative w-[220px] cursor-grab rounded-xl border bg-[var(--color-surface-1)] px-3 py-2.5 shadow-sm transition-colors active:cursor-grabbing',
+        'group relative w-[220px] cursor-grab rounded-xl border bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] shadow-sm transition-colors active:cursor-grabbing',
         'border-[var(--color-border)] hover:border-[var(--color-accent)]/50',
         isTarget && 'border-[var(--color-accent)] ring-2 ring-[var(--color-accent)]/70',
       )}
@@ -297,7 +306,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
       )}
 
       {/* Hover actions (delegate / edit / remove). pointer-events isolated via data-node-action. */}
-      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
+      <div className="absolute right-1.5 top-1.5 z-10 flex items-center gap-[var(--space-0-5)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
         {/* Keyboard equivalent of the drag-to-delegate gesture (WCAG 2.1.1 /
             2.5.7 — creating an edge is otherwise drag-only). */}
         {canBeSource && (
@@ -310,40 +319,38 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
           />
         )}
         {data.onOpenAgent && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             data-node-action="edit"
             aria-label={`Edit ${model.name}`}
             title="Edit the global agent"
-            className="nodrag rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+            className="nodrag h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
             onClick={(e) => {
               e.stopPropagation()
               data.onOpenAgent?.(id)
             }}
           >
             <PencilSimple size={12} weight="bold" />
-          </button>
+          </IconButton>
         )}
         {!model.isDefault && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             data-node-action="remove"
             aria-label={`Remove ${model.name} from team`}
             title="Remove from this workspace's team"
-            className="nodrag rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
+            className="nodrag h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
             onClick={(e) => {
               e.stopPropagation()
               data.onRemoveMember(id)
             }}
           >
             <Trash size={12} weight="bold" />
-          </button>
+          </IconButton>
         )}
       </div>
 
-      <div className="pointer-events-none flex items-center gap-2.5">
+      <div className="pointer-events-none flex items-center gap-[var(--space-2)]">
         <div
-          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold text-[var(--color-secondary)]"
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]"
           style={{ backgroundColor: model.color ?? 'var(--color-surface-3)' }}
           aria-hidden="true"
         >
@@ -354,8 +361,8 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate font-headline text-sm font-bold text-[var(--color-secondary)]">
+          <div className="flex items-center gap-[var(--space-1)]">
+            <span className="truncate font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               {model.name}
             </span>
             {model.isDefault && (
@@ -367,13 +374,13 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
               />
             )}
           </div>
-          <div className="mt-0.5 flex items-center gap-1">
-            <span className="truncate text-[10px] font-medium text-[var(--color-muted)]">
+          <div className="mt-[var(--space-0-5)] flex items-center gap-[var(--space-1)]">
+            <span className="truncate text-[length:var(--type-caption-size)] font-medium text-[var(--color-muted)]">
               {model.role}
             </span>
             {model.isWorker && (
               <span
-                className="inline-flex items-center gap-0.5 rounded border border-[var(--color-info)]/40 bg-[var(--color-info)]/10 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[var(--color-info)]"
+                className="inline-flex items-center gap-[var(--space-0-5)] rounded border border-[var(--color-info)]/40 bg-[var(--color-info)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-info)]"
                 title="Worker — a delegation-only agent. It may both receive work and delegate onward (depth is bounded per edge)."
               >
                 <Lightning size={9} weight="fill" /> worker
@@ -622,11 +629,68 @@ function WorkspaceTeamGraphInner({
   const [flowNodes, setFlowNodes] = useState<AgentFlowNode[]>(modelNodes)
   const draggedPositions = useRef<Record<string, { x: number; y: number }>>({})
 
-  // React Flow renders the <Controls> zoom/fit buttons itself — no JSX site
-  // here can carry the repo's explicit-tabIndex convention, so stamp them
-  // post-render (WebKit Tab reachability; see useLibraryTabIndex).
+  // The zoom pill's own buttons (ZoomPill, catalogued Button/IconButton) stamp
+  // an explicit tabIndex in their own JSX — useLibraryTabIndex is no longer
+  // needed for them. It stays wired for React Flow's own attribution
+  // `<a href>` link, the one remaining library-rendered interactive element
+  // (WebKit Tab reachability; see useLibraryTabIndex).
   const canvasDomRef = useRef<HTMLDivElement>(null)
   useLibraryTabIndex(canvasDomRef)
+
+  // ZoomableView canvas preset (D18, docs/internal/design/components/zoomable-view.md)
+  // — same wiring as GraphView (graph/GraphView.tsx): the shared ZoomPill
+  // driven by this live React Flow instance, `+ − 0 1` keyboard shortcuts
+  // guarded against the delegation-depth number input (EdgeModeEditor.tsx)
+  // so typing "0"/"1" there never gets hijacked into a zoom action, and the
+  // mini-map shown only when content exceeds the frame. `pill.min` is the
+  // DYNAMIC interactive floor (2026-09-21 fix): `min(25%, the true fit)`,
+  // recomputed for the current node set and frame — passed straight to
+  // `<ReactFlow minZoom>` below so manual zoom-out/wheel/pinch can always
+  // reach Fit on an oversized team, not just the pill's own "Fit" action.
+  const { getNodesBounds } = useReactFlow<AgentFlowNode>()
+  const teamFitViewOptions = useMemo(() => ({ padding: 0.25, maxZoom: 1.1 }), [])
+  const pill = useZoomableCanvasPill({ fitViewOptions: teamFitViewOptions })
+
+  // Drives the OPENING fit imperatively instead of the declarative `fitView`
+  // boolean prop (removed below), which read React Flow's STATIC minZoom
+  // before any per-graph measurement was possible. Unlike GraphView, the
+  // team graph sets no legibility floor of its own (`teamFitViewOptions` has
+  // no `minZoom`) — so per D18's "Opening size" rule an oversized team opens
+  // at its true fitted scale directly (`min(25%, fit)`), same as the media
+  // viewer face, rather than at some intermediate floor.
+  useZoomableCanvasOpeningFit(teamFitViewOptions)
+  const zoomKeyboard = useZoomableViewKeyboard({
+    onZoomIn: pill.onZoomIn,
+    onZoomOut: pill.onZoomOut,
+    onFit: pill.onFit,
+    onZoomTo100: pill.onZoomTo100,
+  })
+  const handleCanvasKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      if (target.closest('input, textarea, select, [contenteditable="true"]')) return
+      zoomKeyboard(event)
+    },
+    [zoomKeyboard],
+  )
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const el = canvasDomRef.current
+    if (!el) return undefined
+    const measure = () => setFrameSize({ width: el.clientWidth, height: el.clientHeight })
+    measure()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  const contentBounds = getNodesBounds(flowNodes)
+  const showMinimap =
+    frameSize != null &&
+    contentExceedsFrame(
+      { width: contentBounds.width * pill.zoom, height: contentBounds.height * pill.zoom },
+      frameSize,
+    )
 
   useEffect(() => {
     setFlowNodes(
@@ -679,6 +743,7 @@ function WorkspaceTeamGraphInner({
       ref={canvasDomRef}
       data-testid="team-graph-canvas"
       className="h-full w-full bg-[var(--color-surface-0)]"
+      onKeyDown={handleCanvasKeyDown}
     >
       <TeamGraphCanvasContext.Provider value={canvasContextValue}>
         <ReactFlow
@@ -702,16 +767,16 @@ function WorkspaceTeamGraphInner({
           // the duplicate outer stop, without touching drag/connect/select.
           nodesFocusable={false}
           elementsSelectable
-          fitView
-          fitViewOptions={{ padding: 0.25, maxZoom: 1.1 }}
+          {...zoomableCanvasFlowProps}
+          minZoom={pill.min}
           proOptions={{ hideAttribution: true }}
           defaultEdgeOptions={{ type: 'delegation' }}
           colorMode="dark"
         >
-          <Controls
-            showInteractive={false}
-            className="!border-[var(--color-border)] !bg-[var(--color-surface-1)]"
-          />
+          <Panel position="bottom-left">
+            <ZoomPill {...pill} aria-label="Zoom team graph" />
+          </Panel>
+          {showMinimap && <MiniMap pannable zoomable className="!bottom-4 !right-4" />}
         </ReactFlow>
       </TeamGraphCanvasContext.Provider>
     </div>

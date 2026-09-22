@@ -153,16 +153,32 @@ func (a *restAPI) resolveCredentialRef(ref string) (string, error) {
 // above — the bug this helper fixes is that callers never called errors.As and instead
 // treated every non-nil error identically.
 //
-// Two semantically distinct causes exist:
+// Three semantically distinct causes exist:
 //   - *credentials.NotFoundError: the ref itself is not in the store (stale/deleted
 //     credential, a hand-edited config with a typo'd ref, …). Unlocking the vault
 //     changes nothing here — the correct advice is to re-enter the API key.
-//   - anything else (locked store, decrypt/auth failure, …): the vault genuinely
-//     could not be read. This is transient — unlock and retry IS correct advice.
+//   - *credentials.EntryAuthError: the ref is present but its stored value does not
+//     authenticate under that name — edited on disk, moved here from another entry,
+//     or written by an older release that did not bind the name. Unlock-and-retry
+//     would be the wrong advice (the store is open; the bytes are the problem), so
+//     this names the entry and asks for it to be entered again.
+//   - anything else (locked store, …): the vault genuinely could not be read.
+//     This is transient — unlock and retry IS correct advice.
+//
+// Order matters: *EntryAuthError unwraps to credentials.ErrWrongKey, so it must be
+// matched by type before the fallthrough.
 func describeCredentialResolutionError(err error) string {
 	var notFound *credentials.NotFoundError
 	if errors.As(err, &notFound) {
 		return "the configured credential reference no longer exists — re-enter the API key."
+	}
+	var entryAuth *credentials.EntryAuthError
+	if errors.As(err, &entryAuth) {
+		return fmt.Sprintf(
+			"the stored value for credential %q did not authenticate — it was edited or moved "+
+				"from another entry, or written by an older release — re-enter this credential.",
+			entryAuth.Name,
+		)
 	}
 	return "API key is configured but the credential vault could not be read " +
 		"(store locked or undecryptable) — unlock and retry."

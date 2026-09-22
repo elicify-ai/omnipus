@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Omnipus design-system lock ledger",
+  "description": "Temporary owned debt entries plus permanent exact path/rule/syntax exceptions. No directory-wide exemptions. This schema does not approve a repository ledger.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "entries", "exceptions"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "fingerprint",
+          "ruleId",
+          "path",
+          "syntax",
+          "owner",
+          "replacement",
+          "expiryCheckpoint"
+        ],
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "ruleId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?!\\.\\.)(?!.*\\/\\.\\.)[A-Za-z0-9._$ -]+(?:\\/[A-Za-z0-9._$ -]+)*$"
+          },
+          "syntax": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          },
+          "replacement": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expiryCheckpoint": {
+            "enum": ["A", "B", "C1", "C2", "C3", "C4", "C5", "C6"]
+          }
+        }
+      }
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ruleId", "path", "syntax", "reason"],
+        "properties": {
+          "ruleId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?!\\.\\.)(?!.*\\/\\.\\.)[A-Za-z0-9._$ -]+(?:\\/[A-Za-z0-9._$ -]+)*$"
+          },
+          "syntax": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "owner": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "reviewedBoundaries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "kind", "reason"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?!\\.\\.)(?!.*\\/\\.\\.)[A-Za-z0-9._$ -]+(?:\\/[A-Za-z0-9._$ -]+)*$"
+          },
+          "kind": {
+            "enum": ["test", "story", "generated-tokens"]
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

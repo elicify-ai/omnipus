@@ -120,7 +120,15 @@ const RECT_PADDING_PDF_UNITS = 1
  * "Place signature" action) is expected to disable itself before that can
  * happen; this is a programmer-error guard, not a user-facing validation.
  */
-export function buildInkAnnotationEntry(params: {
+export function buildInkAnnotationEntry({
+  strokesPdfSpace,
+  pageIndex,
+  rotation,
+  annotationEditorTypeInk,
+  color = [0, 0, 0],
+  opacity = 1,
+  thicknessPdfUnits = 1.5,
+}: {
   strokesPdfSpace: SignatureStroke[]
   pageIndex: number
   rotation: number
@@ -131,16 +139,6 @@ export function buildInkAnnotationEntry(params: {
   opacity?: number
   thicknessPdfUnits?: number
 }): { key: string; value: InkAnnotationStorageValue } {
-  const {
-    strokesPdfSpace,
-    pageIndex,
-    rotation,
-    annotationEditorTypeInk,
-    color = [0, 0, 0],
-    opacity = 1,
-    thicknessPdfUnits = 1.5,
-  } = params
-
   const nonEmptyStrokes = strokesPdfSpace.filter((stroke) => stroke.length > 0)
   if (nonEmptyStrokes.length === 0) {
     throw new Error('buildInkAnnotationEntry requires at least one non-empty stroke')

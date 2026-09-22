@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "notes": "Height budgets for D17-declared 'key rows'. Each budget is an explicit ceiling in CSS pixels, measured with getBoundingClientRect().height on the row's root element. A row exceeding its budget for the current environment is reported as a key-row-budget violation. These are STARTING placeholder ceilings (current measured baseline plus headroom for wrapped text) pending founder review — see tests/touch-in-context/README.md. Add a new entry here to cover another key row; nothing in the harness needs to change.",
+  "rows": [
+    {
+      "id": "chat-composer",
+      "description": "The chat composer input row: attach buttons, textarea and send/stop control on one baseline. Root element carries data-testid=\"composer-card\" (src/components/chat/ChatScreen.tsx).",
+      "selector": "[data-testid=\"composer-card\"]",
+      "appliesToRouteIds": ["_app/workspaces.$workspaceId.chat"],
+      "budgetPx": {
+        "desktopPointer": 96,
+        "touchPhone": 132,
+        "touchTablet": 132
+      }
+    }
+  ]
+}

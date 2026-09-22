@@ -88,8 +88,16 @@ describe('provider save & connect integration (test #27)', () => {
     // it does NOT call configureProvider yet (Spec-6 FR-12.2 consent gate).
     fireEvent.click(screen.getByRole('button', { name: /save.*connect/i }))
 
-    // The ReAuthDialog mounts in a portal — query it asynchronously.
+    // The ReAuthDialog mounts in a portal — query it asynchronously. Exactly
+    // ONE dialog must be exposed to assistive tech at a time: the
+    // provider-config Sheet stays mounted underneath (FR-033 — Escape/overlay
+    // on the sheet must not unmount it while a discard prompt could be
+    // pending), but it must be aria-hidden while the ReAuthDialog holds the
+    // consent gate. findByRole('dialog') resolving to a single element is
+    // itself the regression check for "Found multiple elements with role
+    // dialog"; the explicit aria-hidden assertion below pins the mechanism.
     const reauthDialog = await screen.findByRole('dialog')
+    expect(screen.getByTestId('provider-config-sheet')).toHaveAttribute('aria-hidden', 'true')
     const passwordInput = within(reauthDialog).getByTestId('reauth-password-input')
     fireEvent.change(passwordInput, { target: { value: 'my-password' } })
 
@@ -154,8 +162,10 @@ describe('provider save & connect integration (test #27)', () => {
     fireEvent.change(keyInput, { target: { value: 'sk-ant-valid-key' } })
     fireEvent.click(screen.getByRole('button', { name: /save.*connect/i }))
 
-    // Pass the re-auth gate so the PUT actually fires.
+    // Pass the re-auth gate so the PUT actually fires. Same single-dialog
+    // regression check as the first test above.
     const reauthDialog = await screen.findByRole('dialog')
+    expect(screen.getByTestId('provider-config-sheet')).toHaveAttribute('aria-hidden', 'true')
     const passwordInput = within(reauthDialog).getByTestId('reauth-password-input')
     fireEvent.change(passwordInput, { target: { value: 'my-password' } })
     fireEvent.click(within(reauthDialog).getByTestId('reauth-confirm'))

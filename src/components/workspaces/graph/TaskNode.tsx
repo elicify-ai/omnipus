@@ -7,13 +7,23 @@ import { cn } from '@/lib/utils'
 import { PRIORITY_LABELS, taskNodeVisual, type TaskGraphNode } from './taskGraph'
 import { TaskActionButton } from '../TaskActionButton'
 
-// Priority pill colours — mirrors TaskCard's P1..P5 ladder (red→muted).
-const PRIORITY_CLASS: Record<number, string> = {
-  1: 'text-red-400 border-red-500/40',
-  2: 'text-orange-400 border-orange-500/40',
-  3: 'text-yellow-400 border-yellow-500/40',
-  4: 'text-blue-400 border-blue-500/40',
-  5: 'text-[var(--color-muted)] border-[var(--color-border)]',
+/**
+ * Priority pill colours — mirrors `PriorityBadge.tsx`'s P1..P5 ladder
+ * (red→muted), same `--color-priority-N` tokens (converted, byte-for-byte,
+ * from this Tailwind v4 install's own `red-400`/`red-500`,
+ * `orange-400`/`orange-500`, `yellow-400`/`yellow-500`, `blue-400`/`blue-500`
+ * — see that file's doc comment). A literal `if`-chain over the closed
+ * priority set, not a `Record` looked up by a runtime key — the
+ * design-system static scanners cannot resolve a class list read out of a
+ * record via a dynamic key.
+ */
+function priorityNodeClass(priority: number): string {
+  const fallback = 'text-[var(--color-priority-3)] border-[var(--color-priority-3)]/40'
+  if (priority === 1) return 'text-[var(--color-priority-1)] border-[var(--color-priority-1)]/40'
+  if (priority === 2) return 'text-[var(--color-priority-2)] border-[var(--color-priority-2)]/40'
+  if (priority === 4) return 'text-[var(--color-priority-4)] border-[var(--color-priority-4)]/40'
+  if (priority === 5) return 'text-[var(--color-muted)] border-[var(--color-border)]'
+  return fallback
 }
 
 /**
@@ -87,10 +97,10 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
       }}
       className={cn(
         'group relative w-[248px] overflow-hidden rounded-xl border bg-[var(--color-surface-1)]',
-        'shadow-[0_2px_8px_rgba(0,0,0,0.35)] transition-colors',
+        'shadow-[0_2px_8px_color-mix(in_srgb,var(--color-primary)_35%,transparent)] transition-colors',
         'focus-visible:border-[var(--color-accent)]',
         selected
-          ? 'border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent),0_4px_20px_rgba(212,175,55,0.25)]'
+          ? 'border-[var(--color-accent)] shadow-[0_0_0_1px_var(--color-accent),0_4px_20px_color-mix(in_srgb,var(--color-accent)_25%,transparent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/80',
       )}
       data-testid={`task-node-${task.id}`}
@@ -123,17 +133,17 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
       <div
         className={cn(
           'absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
-          selected && 'opacity-100',
+          selected ? 'opacity-100' : undefined,
         )}
       >
         <TaskActionButton task={task} className="bg-[var(--color-surface-1)]" />
       </div>
 
-      <div className="flex flex-col gap-2 py-2.5 pl-3.5 pr-3">
+      <div className="flex flex-col gap-[var(--space-2)] py-[var(--space-2)] pl-[var(--space-2-5)] pr-[var(--space-2-5)]">
         {/* Top row: status chip + priority. */}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-[var(--space-2)]">
           <span
-            className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold leading-none"
+            className="inline-flex items-center gap-[var(--space-1)] rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none"
             style={{
               color: visual.color,
               backgroundColor: `${visual.color}1f`, // ~12% alpha tint
@@ -143,7 +153,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
               aria-hidden
               className={cn(
                 'h-1.5 w-1.5 rounded-full',
-                visual.animated && 'animate-pulse',
+                visual.animated ? 'animate-pulse' : undefined,
               )}
               style={{ backgroundColor: visual.color }}
             />
@@ -152,8 +162,8 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
 
           <span
             className={cn(
-              'flex-shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold leading-none',
-              PRIORITY_CLASS[priority] ?? PRIORITY_CLASS[3],
+              'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-none',
+              priorityNodeClass(priority),
             )}
           >
             {PRIORITY_LABELS[priority] ?? 'P3'}
@@ -161,7 +171,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
         </div>
 
         {/* Title — Outfit, two-line clamp. */}
-        <p className="font-headline text-[13px] font-semibold leading-snug text-[var(--color-secondary)] line-clamp-2">
+        <p className="font-headline text-[length:var(--type-caption-size)] font-semibold leading-snug text-[var(--color-secondary)] line-clamp-2">
           {task.title}
         </p>
 
@@ -171,10 +181,10 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
             lint-disjoint paths this member creates/edits. Standalone-task
             nodes (no plan_id) carry neither and skip this row entirely. */}
         {hasPlanMeta && (
-          <div className="flex flex-col gap-1" data-testid={`task-node-planmeta-${task.id}`}>
+          <div className="flex flex-col gap-[var(--space-1)]" data-testid={`task-node-planmeta-${task.id}`}>
             {isJoin && (
               <span
-                className="inline-flex w-fit items-center gap-1 rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--color-accent)]"
+                className="inline-flex w-fit items-center gap-[var(--space-1)] rounded-full border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-accent)]"
                 title="Join member — converges one or more parallel streams into a single artifact"
               >
                 <GitMerge size={10} weight="bold" />
@@ -183,7 +193,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
             )}
             {writeSetLabel && (
               <span
-                className="inline-flex w-fit max-w-full items-center gap-1 text-[10px] leading-none text-[var(--color-muted)]"
+                className="inline-flex w-fit max-w-full items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] leading-none text-[var(--color-muted)]"
                 title={`Writes: ${writeSetLabel}`}
               >
                 <FolderSimple size={10} weight="fill" className="flex-shrink-0" />
@@ -195,14 +205,14 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
 
         {/* Bottom row: assigned agent avatar + name. */}
         {hasAgent && (
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-[var(--space-1)]">
             <span
               className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full"
               style={{ backgroundColor: `${toTint(avatarColor)}` }}
             >
               <AgentIcon size={10} weight="bold" style={{ color: avatarColor }} />
             </span>
-            <span className="truncate text-[11px] text-[var(--color-muted)]">
+            <span className="truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               {agentName}
             </span>
           </div>

@@ -17,9 +17,11 @@ A symptom-first fix list for startup failures, unreachable gateways, login and A
 
 If it exits with no output at all, read `gateway_panic.log`, as above.
 
-### Exit code 78: the kernel sandbox failed to apply
+### Exit code 78: the sandbox failed on a capable kernel
 
-The sandbox (Omnipus's process-level confinement for agent work) refused to start on a kernel that claims to support it, and the gateway fails closed rather than listen half-protected. Look for `sandbox apply failed` in `gateway.log`, then start with `omnipus start --sandbox=permissive` (violations logged, not blocked) or, for development only, `--sandbox=off`. Valid values are `enforce`, `permissive`, and `off`; a typo exits with code 2. `OMNIPUS_ENV=production` with the sandbox weakened prints a repeating warning banner — deliberate, not a fault. Full detail: [operations/sandbox-config.md](operations/sandbox-config.md).
+Exit 78 now happens only when a kernel that claims to support Landlock fails for a reason other than a right the kernel does not know — a malformed rule, a port rule the kernel rejects, or the step that activates the policy. Omnipus refuses to start rather than listen half-protected. Look for `sandbox.apply_failed` in `gateway.log`, then start with `omnipus start --sandbox=permissive` (violations logged, not blocked) or, for development only, `--sandbox=off`. Valid values are `enforce`, `permissive`, and `off`; a typo exits with code 2.
+
+A kernel that is too old for a right Omnipus asks for is different: Omnipus starts anyway, at application-level enforcement, and logs `sandbox.degraded` instead of exiting — see [operations/sandbox-limitations.md](operations/sandbox-limitations.md). `OMNIPUS_ENV=production` with the sandbox weakened prints a repeating warning banner — deliberate, not a fault. Full detail: [operations/sandbox-config.md](operations/sandbox-config.md).
 
 ### It exits with "bind: address already in use"
 
@@ -100,6 +102,15 @@ The encrypted credential store needs a master key. The gateway looks for one in 
 | 5 | Interactive prompt | Terminal only |
 
 A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. See [Security for users](security.md).
+
+## Credentials stop working after an upgrade
+
+Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Entries written before that binding existed no longer open, and the gateway reports each one it cannot read. Re-enter them:
+
+1. Open **Settings**, **Security**, **Credential Vault** and enter each value again — or run `omnipus credentials set <name> <value>`.
+2. Restart the gateway.
+
+There is deliberately no fallback that reads an old entry: it would let a value be moved between names again. Note the difference when only one entry fails while the others still work — that entry was edited on disk or copied from another entry, not written by an older release. The gateway names the entry at fault in its log.
 
 ## The web app looks outdated after a source build
 

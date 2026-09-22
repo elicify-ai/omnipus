@@ -1,0 +1,356 @@
+{
+  "version": 1,
+  "description": "Lead read-and-approve decisions for the Stage B exception registry (scripts/design-system/registry-merge.mjs --decisions). registry-verify.mjs auto-classifies only boundaries shaped \"Component#prop\"; every other shape needs a lead to read the call site and record a verdict here with the evidence they read. Tracked in the repo rather than under dist/ because a fresh checkout cannot rebuild the ledger without it.",
+  "decisions": [
+    {
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AvatarColorPicker#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 271: className ?? 'flex gap-2' — caller value unmodified, literal fallback scanned separately"
+    },
+    {
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "syntax": "AvatarHeader#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 355: className ?? '<literal>' — caller value unmodified, literal fallback scanned separately"
+    },
+    {
+      "path": "src/components/ui/sheet.tsx",
+      "syntax": "SheetContent#widthClass",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 116: widthClass ?? (size ? sheetSizeWidth[size] : sideDefaultWidth[side]) — fallback from scanned const records"
+    },
+    {
+      "path": "src/components/ui/smart-select.tsx",
+      "syntax": "SearchableSelect#item.className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 187: className={item.className} — item from the caller's items prop, unmodified"
+    },
+    {
+      "path": "src/components/ui/calendar.tsx",
+      "syntax": "Chevron#chevronClassName",
+      "decision": "approve",
+      "category": "third-party widget values",
+      "evidence": "line 67: react-day-picker supplies className to the Chevron render slot; repair tried and rejected (fanout L3 calendar-chevron codemod dropped the classNames.chevron override)"
+    },
+    {
+      "path": "src/components/browser/BrowserLiveView.tsx",
+      "syntax": "BrowserLiveView#dom-style.backgroundColor<-resolvedAgent?.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "lines 934/2780: agent colour from the agents query cache as background, token fallback"
+    },
+    {
+      "path": "src/components/chat/ActivityAvatar.tsx",
+      "syntax": "ActivityAvatar#dom-style.backgroundColor<-item.agentColor",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 81: agent colour as avatar background, token fallback; text colour is a token"
+    },
+    {
+      "path": "src/components/workspaces/team/WorkspaceTeamGraph.tsx",
+      "syntax": "AgentNode#dom-style.backgroundColor<-model.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "lines 206/347: agent node colour as avatar background, token fallback"
+    },
+    {
+      "path": "src/hooks/useRunningActivity.ts",
+      "syntax": "resolveAgent#dom-style.agentColor<-agent.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 244: carrier field agentColor: agent.color into the activity item painted by ActivityAvatar (approved separately); not itself a paint site"
+    },
+    {
+      "path": "src/components/calendar/FullCalendarView.tsx",
+      "syntax": "EventChip#dom-style.backgroundColor<-arg.event.backgroundColor",
+      "decision": "approve",
+      "category": "third-party widget values",
+      "evidence": "line 135: colour read back from FullCalendar's event arg; set by makeEvent from scanned palette consts; repair would replace FullCalendar's own event colouring (not invisible)"
+    },
+    {
+      "path": "src/lib/calendar/eventMapping.ts",
+      "syntax": "makeEvent#dom-style.backgroundColor<-bg",
+      "decision": "approve",
+      "category": "third-party widget values",
+      "evidence": "lines 109-124: bg is FullCalendar EventInput colour; all callers pass chip-style palette consts scanned at definition"
+    },
+    {
+      "path": "src/lib/calendar/eventMapping.ts",
+      "syntax": "makeEvent#dom-style.borderColor<-bg",
+      "decision": "approve",
+      "category": "third-party widget values",
+      "evidence": "as makeEvent backgroundColor"
+    },
+    {
+      "path": "src/components/skills/WhatsAppPairingBody.tsx",
+      "syntax": "RetryableState#iconProps.className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 27: iconProps?.className ?? '' — the component's own prop member, unmodified"
+    },
+    {
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "AgentProfile#dom-style.color<-selectedColor",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "lines 331/1468: selectedColor is the agent colour being edited; swatch preview background and icon colour, token fallback"
+    },
+    {
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "OmnipusComposer#dom-style.backgroundColor<-item.agentColor",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 2796: agent avatar background, token fallback"
+    },
+    {
+      "path": "src/components/chat/composer/AgentPicker.tsx",
+      "syntax": "AgentPicker#dom-style.backgroundColor<-agent.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 355: agent avatar background, token fallback"
+    },
+    {
+      "path": "src/components/chat/MessageItem.tsx",
+      "syntax": "avatarStyle#dom-style.backgroundColor<-agent?.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "lines 111/193: avatarStyle paints the agent avatar background"
+    },
+    {
+      "path": "src/components/workspaces/graph/taskGraph.ts",
+      "syntax": "buildTaskGraph#dom-style.agentColor<-agent?.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 330: carrier field into TaskNode data, painted as the avatar tint (approved separately)"
+    },
+    {
+      "path": "src/components/workspaces/graph/TaskNode.tsx",
+      "syntax": "TaskNodeComponent#dom-style.backgroundColor<-agentColor",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "lines 39/201: agent avatar tint background, muted-token fallback"
+    },
+    {
+      "path": "src/components/workspaces/graph/TaskNode.tsx",
+      "syntax": "TaskNodeComponent#dom-style.color<-agentColor",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 203: agent icon colour, muted-token fallback"
+    },
+    {
+      "path": "src/components/workspaces/team/AddAgentPicker.tsx",
+      "syntax": "AddAgentPicker#dom-style.backgroundColor<-a.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 147: agent avatar background, token fallback"
+    },
+    {
+      "path": "src/components/workspaces/team/teamGraphModel.ts",
+      "syntax": "implicitSystemNodes#dom-style.color<-a.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 296: carrier into the team graph model, painted as AgentNode avatar background (approved separately)"
+    },
+    {
+      "path": "src/components/workspaces/team/teamGraphModel.ts",
+      "syntax": "buildTeamGraphModel#dom-style.color<-a.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 350: carrier into the team graph model, painted as AgentNode avatar background (approved separately)"
+    },
+    {
+      "path": "src/hooks/useSlashMenu.ts",
+      "syntax": "useSlashMenu#dom-style.agentColor<-agent.color",
+      "decision": "approve",
+      "category": "user-authored colours",
+      "evidence": "line 659: carrier field agentColor into the slash-menu item"
+    },
+    {
+      "path": "src/components/ui/table.tsx",
+      "syntax": "Table#containerProps.className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "lines 11-32: containerProps.className merged unmodified with one literal via cn"
+    },
+    {
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "pb-[max(0.5rem,env(safe-area-inset-bottom,var(--space-0)))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 3599: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-top: env(safe-area-inset-top,var(--space-0))",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 821, line 851: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-bottom: env(safe-area-inset-bottom,var(--space-0))",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 822, line 852: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-left: env(safe-area-inset-left,var(--space-0))",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 823, line 853: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/screens/AgentListScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 639, line 658, line 675: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/screens/ConnectorsScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 1063: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/screens/ProfileScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 12: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/screens/SettingsScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 55: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/screens/SkillsScreen.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 165: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/shared/RouteFallback.tsx",
+      "syntax": "pb-[env(safe-area-inset-bottom,var(--space-0))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 9: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/styles/globals.css",
+      "syntax": "padding-right: env(safe-area-inset-right,var(--space-0))",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 268: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/styles/globals.css",
+      "syntax": "padding-top: max(0.75rem, env(safe-area-inset-top,var(--space-0)))",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 274: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so var(--space-0) is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "pb-[max(var(--space-2),env(safe-area-inset-bottom,var(--space-0)))]",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 3599: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so the fallback is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/styles/globals.css",
+      "syntax": "font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum))",
+      "decision": "approve",
+      "category": "root font-size clamp() bounded by registered tokens",
+      "evidence": "line 150: every bound in the clamp() is a registered token; the only non-token leaf is --user-font-size, the runtime user font-size preference written by ProfileSection.tsx -- a founder-approved permanent non-token category. typography.mjs reclassifies this to extension-boundary (not a silent pass) only when every OTHER leaf is a registered token, mirroring the safe-area env() carve-out; a clamp() with a raw pixel bound still reports."
+    },
+    {
+      "path": "src/styles/globals.css",
+      "syntax": "padding-top: max(var(--space-2-5), env(safe-area-inset-top,var(--space-0)))",
+      "decision": "approve",
+      "category": "safe-area env() with validated closed-scale fallback",
+      "evidence": "line 277: the scanner emits this extension-boundary only AFTER validating the fallback term (spacing.mjs::analyzeEnvironmentSpacing runs analyzeSpacingTerm on it and reports a boundary only when that produced no finding), so the fallback is a registered scale value. The inset itself is device-reported at runtime and cannot be on any closed scale, which is why the rule is a boundary rather than debt."
+    },
+    {
+      "path": "src/styles/library.css",
+      "syntax": "font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum))",
+      "decision": "approve",
+      "category": "root font-size clamp() bounded by registered tokens",
+      "evidence": "line 63: every bound in the clamp() is a registered token; the only non-token leaf is --user-font-size, the runtime user font-size preference written by ProfileSection.tsx -- a founder-approved permanent non-token category. typography.mjs reclassifies this to extension-boundary (not a silent pass) only when every OTHER leaf is a registered token, mirroring the safe-area env() carve-out; a clamp() with a raw pixel bound still reports."
+    },
+    {
+      "path": "src/components/chat/tools/FileTreeView.tsx",
+      "syntax": "padding-left: `calc(var(--space-2-5) * ${...})`",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 129 (anchored on `calc(var(--space-2-5)`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-left: calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 960, line 1003, line 1018 (anchored on `--sidebar-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/layout/Sidebar.tsx",
+      "syntax": "padding-left: calc(var(--space-2-5) + var(--sidebar-indent-depth) * var(--space-3) + var(--space-3))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 960, line 1003, line 1018 (anchored on `--sidebar-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/library/knowledge/KnowledgeOutline.tsx",
+      "syntax": "padding-left: calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 265, line 266 (anchored on `--knowledge-outline-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/search/SearchModal.tsx",
+      "syntax": "padding-left: calc(var(--search-modal-indent-depth) * var(--space-3))",
+      "decision": "approve",
+      "category": "tree-indent runtime depth multiplied by registered tokens",
+      "evidence": "line 110 (anchored on `--search-modal-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomPill#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 246: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 272 -- no transformation, no conditional replacement."
+    },
+    {
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomableMediaSurface#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 630: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 658 -- the other two `cn()` arguments are literal/computed cursor classes, `className` itself is never transformed."
+    },
+    {
+      "path": "src/components/workspaces/PriorityBadge.tsx",
+      "syntax": "PriorityBadge#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 40: destructured `className` prop, forwarded unmodified to 5 sink(s) -- one `cn(<literal priority classes>, className)` call per `switch` branch (lines 44, 50, 56, 62, 72) -- with no transformation in any branch."
+    },
+    {
+      "path": "src/components/workspaces/StatusBadge.tsx",
+      "syntax": "StatusBadge#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 61: destructured `className` prop, forwarded unmodified into `cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)` at line 62 -- no transformation."
+    }
+  ]
+}

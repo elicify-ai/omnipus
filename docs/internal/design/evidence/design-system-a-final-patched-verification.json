@@ -1,0 +1,281 @@
+{
+  "version": 1,
+  "status": "automated-matrix-completed-known-button-review-bug-still-open",
+  "inputFingerprint": "089623f8427e893be5ea7c0ce9ca94f4f9d1c4663078a41f5d44719a087ea2ec",
+  "inputFiles": 1344,
+  "storybook": {
+    "buildExit": 0,
+    "stories": 151,
+    "artifact": "dist/design-system-browser-a-089623f8427e",
+    "url": "http://127.0.0.1:6226"
+  },
+  "verified": {
+    "dependencyAudit": {
+      "exit": 0,
+      "vulnerabilities": 0,
+      "sha256": "cfe843c8f2d386f508a0bb4ae113863821a8648e481147b9767c0f1da2b7c90e"
+    },
+    "tools": {
+      "exit": 0,
+      "passed": 50,
+      "sha256": "e1ef9a72ac061a9c72e4a6fe6cd4226cfba5121b361f74815a2e49febc9c7a29"
+    },
+    "applicationStyles": {
+      "exit": 0,
+      "passed": 3,
+      "browsers": [
+        "chromium",
+        "firefox",
+        "webkit"
+      ],
+      "sha256": "0160bf3bd7b346ea6869c35e0a045a9adb363f4d537af53a1e2beb2539dacfac"
+    },
+    "tokens": {
+      "exit": 0,
+      "log": "dist/design-system-baseline/cli-lanes/a-final-patched-tokens.log"
+    },
+    "components": {
+      "exit": 0,
+      "passed": 412,
+      "files": 42,
+      "report": "test-results/design-system-components.json",
+      "sha256": "c10b79712f0fb15ee7b39f0fc1e8ff97172243b3a55b05049924eab307383124"
+    },
+    "production": {
+      "buildExit": 0,
+      "measurementExit": 0,
+      "budgetExit": 0,
+      "budget": {
+        "schemaVersion": 1,
+        "pass": true,
+        "checks": {
+          "storybookOutputScanClean": true,
+          "storybookModuleProvenanceClean": true,
+          "provenanceMatchesCandidateAssets": true,
+          "initialGzipWithinBudget": true,
+          "totalRawWithinBudget": true
+        },
+        "budgets": {
+          "initialGzipBytes": 25600,
+          "totalRawBytes": 256000
+        },
+        "deltas": {
+          "initialGzipBytes": 16726,
+          "totalRawBytes": 31282
+        },
+        "baseline": {
+          "revision": "92aeb4d5dcb0d545e2370ddd1c57c099a03392ba",
+          "initialGzipBytes": 411908,
+          "totalRawBytes": 26131305
+        },
+        "candidate": {
+          "revision": null,
+          "initialGzipBytes": 428634,
+          "totalRawBytes": 26162587
+        },
+        "storybookEvidence": {
+          "clean": true,
+          "outputPathMatches": [],
+          "contentMatches": [],
+          "limitation": "Output scanning is supporting evidence; module provenance must be audited separately."
+        }
+      },
+      "artifacts": {
+        "docs/internal/design/evidence/design-system-production-candidate-089623.json": "d33556894637c8eb648f6012a82028bb1ac6026e23e3a281ebdcff10082706d1",
+        "docs/internal/design/evidence/design-system-production-budget-089623.json": "e944c2b38b676b8a478fc0fda865ac15d95fe73c8d9146e4847e7c3e7ce7e0e3",
+        "docs/internal/design/evidence/design-system-production-provenance-089623.json": "87cdbe90a8fd6c2b03c5fed71cfbbd0d1bbd95bd8d1cf3b54d97299e3375fe55"
+      },
+      "note": "Initial default output refused overwrite; rerun with unique candidate path succeeded."
+    },
+    "appRender": {
+      "exit": 0,
+      "report": "dist/design-system-baseline/cli-lanes/a-final-patched-app-render.json",
+      "sha256": "cb0c99561d0b61c85a8dc7a6f482ed28923513e3ae3170b73a283a51b4fa94a4",
+      "url": "http://127.0.0.1:6227/#/onboarding",
+      "title": "omnipus.ai \u2014 Elite Simplicity. Sovereign Control.",
+      "headings": [
+        "What should I call you?"
+      ],
+      "buttons": [
+        "Continue"
+      ],
+      "pageErrors": [],
+      "rootTextLength": 128,
+      "scope": "Read-only production onboarding render; no account setup or authenticated workflow performed"
+    },
+    "package": {
+      "exit": 0,
+      "passed": 8,
+      "log": "dist/design-system-baseline/cli-lanes/a-final-patched-package.log"
+    },
+    "storyEngines": {
+      "chromium": {
+        "passed": 151,
+        "failed": 0,
+        "file": "test-results/design-system-storybook-chromium.json",
+        "sha256": "bd8849f17f6b1e3fee992fc0ef7808e08b4b1a19a82412bca8b5694ff15057ad"
+      },
+      "firefox": {
+        "passed": 151,
+        "failed": 0,
+        "file": "test-results/design-system-storybook-firefox.json",
+        "sha256": "66556bfe68e65dcc26d57d17bb5874cc8dc4888d8ae790a65b1c7fcf132341bd"
+      },
+      "webkit": {
+        "passed": 151,
+        "failed": 0,
+        "file": "test-results/design-system-storybook-webkit.json",
+        "sha256": "de41526a9f7ca1964642cc5f0f921f3f49a7c972e6326f6fa64a1e0dae81bfeb"
+      }
+    },
+    "sourceLint": {
+      "exit": 0,
+      "log": "dist/design-system-baseline/cli-lanes/a-final-patched-lint-source.log"
+    },
+    "browser": {
+      "exit": 0,
+      "stats": {
+        "startTime": "2026-09-17T18:07:53.602Z",
+        "duration": 2367338.627,
+        "expected": 1164,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "report": "dist/design-system-baseline/a-089623-completed-evidence/design-system-browser.json",
+      "sha256": "2051ff609fe63f47ab304f29326b0c7d48e2a2ab14a6d34ee2308cbabaac5623",
+      "inputDrift": []
+    }
+  },
+  "pending": [
+    "Full browser matrix",
+    "Independent reviews",
+    "Stage B scanner gaps and audit-mode integration"
+  ],
+  "checkpoint": "Pause after B; do not start C1",
+  "liveSessions": {
+    "storybookServer": 3893,
+    "productionPreview": 82607,
+    "independentUiReview": 74930
+  },
+  "stageB": {
+    "coverage": {
+      "tests": 33,
+      "exit": 0,
+      "fixtureMutation": "missing WebKit evidence rejected"
+    },
+    "spacing": {
+      "tests": 78,
+      "exit": 0,
+      "mutationsKilled": 3,
+      "sourceHash": "499893a02d8d0841ae1cca78a29063760696bcc81d99a9f734db289631550380",
+      "remaining": "Canonical audit and typography module resolution assigned",
+      "currentUnsupported": 129,
+      "comparison": "Prior snapshot119; source revisions differ, no cause attributed"
+    },
+    "auditReview": {
+      "status": "four reproduced gaps assigned for repair",
+      "findings": [
+        "Missing live policy accepted",
+        "Uppercase source extensions skipped",
+        "Duplicate token names bypass exact-map invariant",
+        "Source read errors can bypass structured reporting"
+      ]
+    },
+    "auditRepair": {
+      "focusedTests": 57,
+      "exit": 0,
+      "mutationsKilled": 4,
+      "sourceHash": "ee3e2a9f8b9e177bdae3beea9a0875cb4d27eef7bf6c0e4f77d3f5b85994bb57",
+      "status": "focused-repair-passed-follow-up-filesystem-review-active"
+    },
+    "frozenColorStatusRetest": {
+      "tests": 183,
+      "exit": 0,
+      "log": "dist/design-system-baseline/cli-lanes/b-frozen-css-status-patched-deps.log"
+    },
+    "tsColors": {
+      "tests": 101,
+      "fullAuditFiles": 1228,
+      "scannerErrors": 0,
+      "raw": 440,
+      "unsupported": 145,
+      "extensionBoundary": 156,
+      "undefined": 5,
+      "sourceHash": "9d6b7a54f823558d01ceb281e3c13794e4ebc5f87288a0112c91e452b265c9b5",
+      "status": "resolver verified; runtime-boundary classification now in progress"
+    },
+    "spacingAttributionRepair": {
+      "tests": 89,
+      "exit": 0,
+      "sourceHash": "3bd5b6185b199d7fae16625cfc415e64c05b1d8d0af3e628de0872f1f83daa98",
+      "status": "focused verified; full recount and further capability work assigned"
+    },
+    "calendarDebtFragment": {
+      "occurrences": 5,
+      "fingerprints": 4,
+      "expiry": "C1",
+      "permanentExceptions": 0,
+      "status": "approved-fragment-not-integrated"
+    },
+    "typography": {
+      "tests": 175,
+      "files": 1234,
+      "scannerErrors": 0,
+      "unsupported": 45,
+      "missingTypeHint": 1,
+      "extensionBoundary": 150,
+      "sourceHash": "e6c7524f28ec292420e0a0c0aa5a318b7b5fa9a65744c2d67e698e3b12599c76"
+    }
+  },
+  "inputDriftAtCheckpoint": [],
+  "chromiumStoryFirstRun": {
+    "passed": 149,
+    "failed": 2,
+    "failures": [
+      "Input Default load timeout",
+      "Badge Default load timeout"
+    ],
+    "evidence": "dist/design-system-baseline/cli-lanes/a-final-patched-stories-chromium-first.json",
+    "status": "isolated rerun passed all151; original two timeouts retained as failed evidence, not claimed resolved by source fix"
+  },
+  "lint": {
+    "status": "normal configured source lint passed; authored tool/config errors remain for post-browser repair",
+    "expandedRun": "no-ignore run exposed 5 authored-tool/config errors plus 22 generated-code errors outside normal lint scope; generated sources will not be hand-edited",
+    "pendingAuthoredFiles": [
+      "scripts/design-system/bundle-measure.mjs",
+      "scripts/design-system/catalog.mjs",
+      "scripts/design-system/tokens.mjs",
+      "vite.config.ts"
+    ],
+    "preparedPatch": "dist/design-system-baseline/cli-lanes/a-tooling-lint-repair.patch",
+    "patchStatus": "applied;50tooltests passed;explicit four-file lint exit0;independent review no findings"
+  },
+  "stageAReviewFinding": {
+    "status": "confirmed-native-browser-bug-repair-prepared-not-applied",
+    "component": "Button asChild",
+    "issue": "disabled/pending auxiliary activation is not cancelled",
+    "nativeEvidence": "dist/design-system-baseline/cli-lanes/a-disabled-link-native-middle-probe.json",
+    "impact": "CRITICAL:82 direct dependants,139 affected symbols",
+    "repair": "compose auxiliary click capture guards preserving enabled behavior; add manifest-linked native browser regression",
+    "sourceFreeze": "089 freeze released after completed browser and coverage; Button repair underway"
+  },
+  "coverageFinal": {
+    "exitCode": 0,
+    "manifests": 35,
+    "checks": 405,
+    "evidenceResults": 2029,
+    "errors": [],
+    "log": "dist/design-system-baseline/cli-lanes/a-089623-coverage-final.log"
+  },
+  "additionalAccessibilityReview": {
+    "status": "terminal-read-only-findings-require-triage",
+    "path": "dist/design-system-baseline/cli-lanes/a-patched-ui-review.result.json"
+  },
+  "reviewRepairCheckpoint": {
+    "pendingConfirmation": "Escape regression reproduced2fail13pass; repaired15pass;3mutations killed and restored;final restored run and Chromium stories running",
+    "buttonAuxiliary": "worker34unitpass;story startup failed wrong project filter;native proof pending;lead owns remainder after modelcapacity errors",
+    "catalogValidation": "malformed/duplicate source and export membership repaired;owner focused tests3pass,3mutations killed;full audit.test running",
+    "scope": "A/B only;pause beforeC1"
+  }
+}

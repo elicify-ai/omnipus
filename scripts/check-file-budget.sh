@@ -4,19 +4,12 @@
 # File-size budget gate (founder ruling, 2026-09-15 — see
 # docs/internal/architecture/draft-module-map.md, "Size budgets" and "How we
 # enforce it (test design)"). A file warns over 2,000 lines and fails over
-# 3,155. Same numbers for production and test code — production Go, test Go,
+# 3,000. Same numbers for production and test code — production Go, test Go,
 # and TS/TSX alike.
 #
-# WHY 3,155 AND NOT A ROUND 3,000 (tightened 4,000 -> 3,155 on 2026-09-17,
-# budget-ratchet lane): at 4,000 no non-exempt file could fail. Nine files
-# sit over 3,000 (not one — the seed count covered production Go only, and
-# this gate also scans test Go and TS/TSX), and six of them are LARGER than
-# pkg/agent/loop.go, so any limit that bites loop.go bites those six too.
-# 3,155 is the highest limit whose failing set is exactly the grandfathered
-# set in scripts/budgets/files.txt: the smallest pinned file (loop.go) is
-# 3,156 and the largest unpinned file was 3,130, so every value in
-# [3130, 3155] fails exactly the seven pinned files; the highest was taken.
-# Lowering the limit further means pinning more files first.
+# The FAIL limit is 3,000 lines (founder ruling; CLAUDE.md "Size budgets").
+# Files already over it are pinned in scripts/budgets/files.txt and may only
+# shrink. Lowering the limit further means pinning more files first.
 #
 # WHY A SCRIPT AND NOT A LINTER SETTING
 #
@@ -31,23 +24,34 @@
 #
 #   *.go under pkg/, cmd/, internal/ (if present), scripts/
 #   *.ts and *.tsx under src/, tests/, e2e/ (if present)
+#   *.mjs, *.js and *.cjs under scripts/, tests/ (if present)
+#
+# The .mjs/.js/.cjs roots are deliberately scripts/ and tests/ only, not
+# docs/ or spikes/ — eslint.config.js already draws that exact line
+# ("scripts/**, spikes/**  ad-hoc/prototype scripts, unmaintained to lint
+# standards"; "docs/**  documentation + one-off Node scripts, not part of
+# the UI package"), so this gate follows the same scope boundary instead of
+# inventing a second one. scripts/ and tests/ are where the maintained,
+# CI-wired design-system tooling actually lives (package.json's
+# test:design-system:* / audit:design-system / tokens:* scripts all run
+# files from there).
 #
 # Exempt by construction (generated or vendored, never source a human wrote
 # by hand in this repo): pkg/api/generated/, src/lib/api/generated/,
 # pkg/gateway/spa/, node_modules/, dist/, .gitnexus/, vendor/, .git/.
 #
-# A file already over the FAIL limit (3,155 lines) at seed time is
+# A file already over the FAIL limit (3,000 lines) at seed time is
 # grandfathered by name in scripts/budgets/files.txt (path<TAB>lines) and
 # may only shrink — a grandfathered file whose real line count is now HIGHER
 # than its listed number fails, even though it is on the list. Any file not
-# on the list that is over 3,155 lines fails outright. Any file over 2,000 lines
+# on the list that is over 3,000 lines fails outright. Any file over 2,000 lines
 # (grandfathered or not) that has not already failed is named as a WARN so
 # reviewers see it on every PR without blocking the build.
 #
 # OUTPUT CONTRACT
 #
 #   WARN <path> <lines> > 2000
-#   FAIL <path> <lines> > 3155 (not grandfathered)
+#   FAIL <path> <lines> > 3000 (not grandfathered)
 #   FAIL <path> <lines> > listed <n>
 #   grandfathered: <n> files              (always the last line)
 #
@@ -93,7 +97,6 @@ if [ ! -f "$BUDGET_FILE" ]; then
 fi
 
 WARN_LIMIT=2000
-# See the header for why this is 3,155 and not a round 3,000.
 FAIL_LIMIT=3000
 
 cd "$ROOT"
@@ -117,6 +120,14 @@ for d in src tests e2e; do
 done
 if [ "${#TS_ROOTS[@]}" -gt 0 ]; then
   find "${TS_ROOTS[@]}" -type f \( -name '*.ts' -o -name '*.tsx' \) >> "$TMP_FILES" 2>/dev/null || true
+fi
+
+JS_ROOTS=()
+for d in scripts tests; do
+  [ -d "$d" ] && JS_ROOTS+=("$d")
+done
+if [ "${#JS_ROOTS[@]}" -gt 0 ]; then
+  find "${JS_ROOTS[@]}" -type f \( -name '*.mjs' -o -name '*.js' -o -name '*.cjs' \) >> "$TMP_FILES" 2>/dev/null || true
 fi
 
 sort -u -o "$TMP_FILES" "$TMP_FILES"

@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "component": "Progress",
+  "exports": [
+    "Progress",
+    "ProgressProps"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/progress.tsx",
+  "documentation": "docs/internal/design/components/progress.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "determinate",
+    "indeterminate"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "zero",
+    "progress",
+    "complete",
+    "unknown"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/progress.stories.tsx",
+      "exports": [
+        "Determinate",
+        "Zero",
+        "Indeterminate",
+        "ProtectedDeterminate",
+        "ProtectedIndeterminate"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "progress-unit",
+      "kind": "unit",
+      "file": "src/components/ui/progress.test.tsx",
+      "test": "Progress \u2014 truthful value contract forwards determinate value 50 of 200",
+      "applicable": true
+    },
+    {
+      "id": "progress-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/progress.stories.tsx",
+      "test": "Determinate",
+      "story": "Determinate",
+      "applicable": true
+    },
+    {
+      "id": "progress-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Progress [check:progress-axe] axe",
+      "story": "Determinate",
+      "applicable": true
+    },
+    {
+      "id": "progress-keyboard",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Progress is read-only and exposes no keyboard operation."
+    },
+    {
+      "id": "progress-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Progress [check:progress-browser] browser",
+      "story": "Determinate",
+      "applicable": true
+    },
+    {
+      "id": "progress-pointer",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Progress is read-only and has no pointer target."
+    },
+    {
+      "id": "progress-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Progress [check:progress-reduced-motion] reduced-motion",
+      "story": "Indeterminate",
+      "applicable": true
+    },
+    {
+      "id": "progress-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Progress [check:progress-forced-colors] forced-colors",
+      "story": "Determinate",
+      "applicable": true
+    },
+    {
+      "id": "progress-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Progress [check:progress-root-size] root-size",
+      "story": "Determinate",
+      "applicable": true
+    },
+    {
+      "id": "progress-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Progress [check:progress-zoom] zoom",
+      "story": "Determinate",
+      "applicable": true
+    },
+    {
+      "id": "progress-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Progress [check:progress-reflow] reflow",
+      "story": "Determinate",
+      "applicable": true
+    },
+    {
+      "id": "progress-owned-determinate",
+      "kind": "interaction",
+      "file": "src/components/ui/progress.stories.tsx",
+      "test": "Protected Determinate",
+      "story": "ProtectedDeterminate",
+      "applicable": true
+    },
+    {
+      "id": "progress-owned-indeterminate",
+      "kind": "interaction",
+      "file": "src/components/ui/progress.stories.tsx",
+      "test": "Protected Indeterminate",
+      "story": "ProtectedIndeterminate",
+      "applicable": true
+    },
+    {
+      "id": "progress-numeric-ownership-unit",
+      "kind": "unit",
+      "file": "src/components/ui/progress.test.tsx",
+      "test": "Progress \u2014 numeric accessibility ownership ignores conflicting numeric ARIA input and keeps the announced range aligned with its fill",
+      "applicable": true
+    },
+    {
+      "id": "progress-custom-text-unit",
+      "kind": "unit",
+      "file": "src/components/ui/progress.test.tsx",
+      "test": "Progress \u2014 numeric accessibility ownership retains caller naming and custom value text while deriving numeric semantics",
+      "applicable": true
+    }
+  ]
+}

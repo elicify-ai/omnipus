@@ -28,6 +28,7 @@ import { ShikiCodeBlock } from '@/components/chat/markdown-shared'
 import { LibraryTextPreview } from './LibraryTextPreview'
 import { shikiLanguageFor } from './libraryLanguages'
 import type { LibraryEntry } from '@/lib/api'
+import { Button } from '@/components/ui/button'
 
 /** A line longer than this is never handed to the highlighter (D-38). */
 export const LONG_LINE_CHARS = 10_000
@@ -148,21 +149,20 @@ function CodeValidityNotice({
     <div
       role="status"
       data-testid="library-code-invalid-notice"
-      className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-2 text-xs text-[var(--color-warning)]"
+      className="mb-[var(--space-2)] flex flex-wrap items-center gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <span className="min-w-0 flex-1">
         This file is not valid {name} — {problem}. It was saved exactly as written; nothing that
         reads it as {name} will accept it until this is fixed.
       </span>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="outline"
         onClick={onFix}
         data-testid="library-code-invalid-fix"
-        className="rounded border border-[var(--color-warning)]/60 px-2 py-0.5 text-[11px] font-medium hover:bg-[var(--color-warning)]/10"
+        className="h-auto rounded border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
       >
         Fix
-      </button>
+      </Button>
     </div>
   )
 }
@@ -192,7 +192,7 @@ export function LibraryCodePreview({ workspaceId, entry, content, onSaved }: Lib
           // theme's muted text (#9ca3af on the pane ≈ 8:1) at 11 px.
           <div
             data-testid="library-code-view"
-            className="[&_[data-slot=language-label]]:!text-[11px] [&_[data-slot=language-label]]:!text-[var(--color-muted)]"
+            className="[&_[data-slot=language-label]]:!text-[length:var(--type-caption-size)] [&_[data-slot=language-label]]:!text-[var(--color-muted)]"
           >
             {validated !== null && plainReason === null && (
               <CodeValidityNotice language={validated} text={draft} onFix={switchToEdit} />
@@ -202,13 +202,13 @@ export function LibraryCodePreview({ workspaceId, entry, content, onSaved }: Lib
                 <p
                   role="status"
                   data-testid="library-code-plain-notice"
-                  className="mb-2 text-xs text-[var(--color-muted)]"
+                  className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
                 >
                   Shown as plain text without highlighting: {plainReason}.
                 </p>
                 <pre
                   data-testid="library-code-plain"
-                  className="whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-2)] px-4 py-3 font-mono text-[11px] leading-[1.65] text-[var(--color-secondary)]"
+                  className="whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] font-mono text-[length:var(--type-caption-size)] leading-[var(--font-line-height-body)] text-[var(--color-secondary)]"
                 >
                   {draft}
                 </pre>

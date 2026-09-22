@@ -8,8 +8,9 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
-import { PRIORITY_BADGE } from './TaskCard'
+import { PriorityBadge } from './PriorityBadge'
 import { TaskActionButton } from './TaskActionButton'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 // 6-state unified vocabulary + colour — single source of truth.
 import { STATUS_ORDER, statusLabel, taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
@@ -30,9 +31,17 @@ type AgentRef = Pick<Agent, 'id' | 'name'>
 const UNTAGGED = '\u0000untagged'
 const UNASSIGNED = '\u0000unassigned'
 
-// Priority domain sourced from PRIORITY_BADGE (the single source of the 1..5
-// priorities), in canonical ascending order, rather than a restated literal.
-const PRIORITY_ORDER = Object.keys(PRIORITY_BADGE)
+// Priority domain: PRIORITY_BADGE's own keys (PriorityBadge.tsx), kept in the
+// exact insertion/ascending order that record declares (1 through 5) --
+// spelled out as a literal rather than Object.keys(PRIORITY_BADGE) because
+// the design-system spacing scanner's record-safety proof treats
+// Object.keys/values/entries on a scanned record as an escape (it could hide
+// a value derived from a dynamically enumerated key elsewhere), which blocks
+// every reader of PRIORITY_BADGE across every importing file, not just this
+// one. Order-identical to PRIORITY_BADGE's own declaration; behaviour
+// unchanged (Object.keys on an object with only integer-like keys already
+// enumerates in ascending numeric order, exactly this list).
+const PRIORITY_ORDER: string[] = ['1', '2', '3', '4', '5']
 
 interface ListViewProps {
   /**
@@ -239,31 +248,31 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
             columns) instead — content can no longer drive column width, so
             the unwidthed Title column always gets exactly "whatever's left"
             and its own `truncate` (see TaskRow below) finally has effect. */}
-        <table className="w-full table-fixed text-sm">
+        <table className="w-full table-fixed text-[length:var(--type-body-compact-size)]">
           <thead className="sticky top-0 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)]">
             <tr>
-              <th className="w-12 px-4 py-2 text-left" aria-sort={ariaSort('priority')}>
+              <th className="w-12 px-[var(--space-3)] py-[var(--space-2)] text-left" aria-sort={ariaSort('priority')}>
                 <ColumnMenu label="Pri" sort={sortCfg('priority')} filter={buildFilter(priValues, priFilter, setPriFilter)} />
               </th>
-              <th className="px-2 py-2 text-left" aria-sort={ariaSort('title')}>
+              <th className="px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('title')}>
                 <ColumnMenu label="Title" sort={sortCfg('title')} />
               </th>
-              <th className="w-24 px-2 py-2 text-left" aria-sort={ariaSort('status')}>
+              <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('status')}>
                 <ColumnMenu label="Status" sort={sortCfg('status')} filter={buildFilter(statusValues, statusFilter, setStatusFilter)} />
               </th>
-              <th className="w-28 px-2 py-2 text-left">
+              <th className="w-28 px-[var(--space-2)] py-[var(--space-2)] text-left">
                 <ColumnMenu label="Tags" filter={buildFilter(tagValues, tagFilter, setTagFilter)} />
               </th>
-              <th className="w-24 px-2 py-2 text-left" aria-sort={ariaSort('agent')}>
+              <th className="w-24 px-[var(--space-2)] py-[var(--space-2)] text-left" aria-sort={ariaSort('agent')}>
                 <ColumnMenu label="Agent" sort={sortCfg('agent')} filter={buildFilter(agentValues, agentFilter, setAgentFilter)} />
               </th>
-              <th className="w-28 px-4 py-2 text-right" aria-sort={ariaSort('updated')}>
+              <th className="w-28 px-[var(--space-3)] py-[var(--space-2)] text-right" aria-sort={ariaSort('updated')}>
                 <ColumnMenu label="Updated" align="right" sort={sortCfg('updated')} />
               </th>
               {/* ADR-052 §6.8 — a row action column (▶ Play / ■ Stop per
                   task state). Not sortable/filterable, so it's a plain
                   header rather than a ColumnMenu trigger. */}
-              <th className="w-10 px-2 py-2 text-right">
+              <th className="w-10 px-[var(--space-2)] py-[var(--space-2)] text-right">
                 <span className="sr-only">Actions</span>
               </th>
             </tr>
@@ -271,7 +280,7 @@ export function ListView({ tasks, agents, onTaskClick }: ListViewProps) {
           <tbody>
             {sorted.length === 0 ? (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-xs text-[var(--color-muted)]">
+                <td colSpan={7} className="px-[var(--space-3)] py-[var(--space-5)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   {anyFilterActive ? 'No tasks match the column filters' : 'No tasks to show'}
                 </td>
               </tr>
@@ -348,18 +357,15 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button
-          // tabIndex={0}: repo WebKit-tabbability convention (Safari only Tabs
-          // to elements with an explicit tabindex). See tabindex-convention.test.ts.
-          tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           aria-label={`${label} column — ${affordance}`}
           className={cn(
-            'flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider transition-colors',
+            'h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider hover:bg-transparent',
             isSorted || isFiltered
               ? 'text-[var(--color-secondary)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-            align === 'right' && 'ml-auto',
+            align === 'right' ? 'ml-auto' : undefined,
           )}
         >
           {`${label}${arrow}`}
@@ -368,18 +374,18 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
               legible (an opacity-50 caret on the muted header colour was almost
               invisible). */}
           <CaretDown size={10} weight="bold" />
-        </button>
+        </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align={align === 'right' ? 'end' : 'start'} className="w-48">
         {sort != null && (
           <>
-            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'asc')} className="text-xs">
-              <ArrowUp size={12} className="mr-2 opacity-70" />
+            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'asc')} className="text-[length:var(--type-utility-xs-size)]">
+              <ArrowUp size={12} className="mr-[var(--space-2)] opacity-70" />
               Sort ascending
               {isSorted && sort.activeDir === 'asc' && <Check size={12} className="ml-auto" />}
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'desc')} className="text-xs">
-              <ArrowDown size={12} className="mr-2 opacity-70" />
+            <DropdownMenuItem onClick={() => sort.onSort(sort.key, 'desc')} className="text-[length:var(--type-utility-xs-size)]">
+              <ArrowDown size={12} className="mr-[var(--space-2)] opacity-70" />
               Sort descending
               {isSorted && sort.activeDir === 'desc' && <Check size={12} className="ml-auto" />}
             </DropdownMenuItem>
@@ -390,7 +396,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
           <>
             <div className="max-h-56 overflow-y-auto">
               {filter.values.length === 0 ? (
-                <div className="px-2 py-1.5 text-[11px] text-[var(--color-muted)]">No values</div>
+                <div className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No values</div>
               ) : (
                 filter.values.map((v) => (
                   <DropdownMenuCheckboxItem
@@ -400,7 +406,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
                     // Keep the menu open while toggling several values (Radix
                     // closes a checkbox item's menu on select by default).
                     onSelect={(e) => e.preventDefault()}
-                    className="text-xs"
+                    className="text-[length:var(--type-utility-xs-size)]"
                   >
                     {v.label}
                   </DropdownMenuCheckboxItem>
@@ -410,7 +416,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
             {isFiltered && (
               <>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={filter.onClear} className="text-xs text-[var(--color-muted)]">
+                <DropdownMenuItem onClick={filter.onClear} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   Clear filter
                 </DropdownMenuItem>
               </>
@@ -432,7 +438,6 @@ function TaskRow({
   onClick: () => void
 }) {
   const priority = task.priority ?? 3
-  const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const tags = task.tags ?? []
   const agentName = resolveAgentName(task, agents)
 
@@ -441,15 +446,15 @@ function TaskRow({
     // entry point is the Title button below (one tab stop per row, announced as
     // actionable). Borderless — separation is padding + hover, not a rule.
     <tr onClick={onClick} className="cursor-pointer transition-colors hover:bg-[var(--color-surface-2)]/40">
-      <td className="px-4 py-2.5">
-        <span className={cn('rounded px-1.5 py-0.5 text-[10px] font-bold', badge.className)}>{badge.label}</span>
+      <td className="px-[var(--space-3)] py-[var(--space-2)]">
+        <PriorityBadge
+          priority={priority}
+          className="rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold"
+        />
       </td>
-      <td className="px-2 py-2.5">
-        <button
-          // tabIndex={0}: repo WebKit-tabbability convention (Safari only Tabs
-          // to elements with an explicit tabindex). See tabindex-convention.test.ts.
-          tabIndex={0}
-          type="button"
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
+        <Button
+          variant="ghost"
           onClick={(e) => {
             // The <tr> also has onClick — stop the button's click bubbling so it
             // doesn't fire onClick twice. A native <button> already activates on
@@ -469,53 +474,53 @@ function TaskRow({
           // instead of one that grows to fit the very content it's meant to
           // truncate.
           title={task.title}
-          className="block w-full truncate text-left text-sm text-[var(--color-secondary)]"
+          className="h-auto w-full min-w-0 justify-start truncate p-0 text-left text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {task.title}
-        </button>
+        </Button>
       </td>
-      <td className="px-2 py-2.5">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {/* ADR-052 FR-015/US-8 — a user-cancelled task renders "Cancelled"
             (orange), distinct from a genuine "Failed" (red), via the shared
             taskDisplayColor/taskDisplayLabel helpers (statusColors.ts). */}
-        <span className="text-xs font-medium" style={{ color: taskDisplayColor(task) }}>
+        <span className="text-[length:var(--type-utility-xs-size)] font-medium" style={{ color: taskDisplayColor(task) }}>
           {taskDisplayLabel(task)}
         </span>
       </td>
-      <td className="px-2 py-2.5">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {tags.length > 0 ? (
-          <div className="flex max-w-[7rem] flex-wrap items-center gap-1">
+          <div className="flex max-w-[7rem] flex-wrap items-center gap-[var(--space-1)]">
             {tags.slice(0, 2).map((tag) => (
               <span
                 key={tag}
                 title={tag}
-                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-1 py-0.5 text-[10px] text-[var(--color-accent)]"
+                className="max-w-[4rem] truncate rounded bg-[var(--color-accent)]/10 px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
               >
                 {tag}
               </span>
             ))}
-            {tags.length > 2 && <span className="text-[10px] text-[var(--color-muted)]">+{tags.length - 2}</span>}
+            {tags.length > 2 && <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{tags.length - 2}</span>}
           </div>
         ) : (
-          <span className="text-xs text-[var(--color-muted)]">—</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">—</span>
         )}
       </td>
-      <td className="px-2 py-2.5">
+      <td className="px-[var(--space-2)] py-[var(--space-2)]">
         {agentName ? (
-          <span className="block max-w-[5rem] truncate text-xs text-[var(--color-secondary)]">{agentName}</span>
+          <span className="block max-w-[5rem] truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{agentName}</span>
         ) : (
-          <span className="text-xs text-[var(--color-muted)]">—</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">—</span>
         )}
       </td>
-      <td className="px-4 py-2.5 text-right">
-        <span className="text-[10px] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
+      <td className="px-[var(--space-3)] py-[var(--space-2)] text-right">
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatUpdated(task.updated_at)}</span>
       </td>
       {/* ADR-052 §6.8 row action (▶ Play / ■ Stop per task state) — always
           visible (not hover-gated) so it's reachable on touch devices, which
           can't hover a row to discover it. TaskActionButton itself already
           stops the click/pointerdown/keydown from bubbling into the row's
           own onClick (open task). */}
-      <td className="px-2 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+      <td className="px-[var(--space-2)] py-[var(--space-2)] text-right" onClick={(e) => e.stopPropagation()}>
         <TaskActionButton task={task} />
       </td>
     </tr>

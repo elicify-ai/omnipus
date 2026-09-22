@@ -664,8 +664,11 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, bool, 
 					"error", err,
 					"mode", string(as.mode),
 					"backend", as.backendName)
-				// Fail closed, matching the Linux contract: if the operator
-				// asked for enforcement and the backend cannot deliver it,
+				// Fail closed: Seatbelt has no equivalent of a ruleset the
+				// kernel positively rejects as unsupported (Apply either
+				// installs a profile or errors on a real problem), so every
+				// Apply failure here keeps the same hard-fail Linux applies
+				// to everything except sandbox.ErrLandlockRulesetRejected —
 				// booting unconfined would silently downgrade the boundary.
 				return as.result, true, fmt.Errorf("sandbox: Seatbelt Apply failed: %w", err)
 			}
@@ -740,12 +743,31 @@ func (as *applySandboxState) applyLinuxSandbox() (*SandboxApplyResult, error) {
 	// (FR-J-002) because seccomp filters all syscalls including
 	// landlock_*; reversing the order would cause Install to block
 	// Apply's syscalls.
+	//
+	// Only a landlock_create_ruleset rejection of the requested rights mask
+	// (sandbox.ErrLandlockRulesetRejected — the kernel does not know a bit
+	// the ABI-gating table asked for) degrades to FallbackBackend, matching
+	// the non-Linux path above (applyNonLinuxSandbox / kernel too old /
+	// missing sandbox-exec). Hard Constraint #4 requires graceful
+	// degradation on kernels that cannot deliver what the operator asked
+	// for; refusing to boot over a missing feature would turn it into a
+	// service outage for an operator who picked the default mode on
+	// purpose. Every other Apply failure — a net-port rule rejected by a
+	// kernel that claims to support it (B1.4-c, below), or a restrict_self
+	// failure — is a real misconfiguration on a kernel that should have
+	// worked, and keeps the hard-fail: it returns to SandboxBootError so
+	// the operator sees it rather than booting with silently incomplete
+	// enforcement.
 	if err := as.linuxBE.ApplyWithMode(as.policy, as.mode); err != nil {
+		if errors.Is(err, sandbox.ErrLandlockRulesetRejected) {
+			return as.degradeAfterLandlockFailure(err)
+		}
 		slog.Error("sandbox.apply_failed",
 			"error", err,
 			"mode", string(as.mode),
-			"backend", as.backendName)
-		return as.result, fmt.Errorf("sandbox: Apply failed on capable kernel: %w", err)
+			"backend", as.backendName,
+			"abi_version", as.abiVersion)
+		return as.result, fmt.Errorf("sandbox: Landlock Apply failed on capable kernel: %w", err)
 	}
 
 	// Step 7 — Install seccomp. Permissive mode uses RET_LOG; enforce
@@ -803,6 +825,97 @@ func (as *applySandboxState) applyLinuxSandbox() (*SandboxApplyResult, error) {
 			"seccomp_syscalls", len(seccompProg.BlockedSyscalls()))
 	}
 
+	return as.result, nil
+}
+
+// degradeAfterLandlockFailure swaps the selected backend to FallbackBackend
+// after LinuxBackend.ApplyWithMode returned an error wrapping
+// sandbox.ErrLandlockRulesetRejected — a kernel that advertised Landlock but
+// rejected the requested rights mask on landlock_create_ruleset. The
+// contract matches applyNonLinuxSandbox / FallbackBackend: WARN the
+// operator, keep serving at application-level enforcement, do NOT escalate
+// to SandboxBootError (exit 78). Hard Constraint #4 (CLAUDE.md) — Linux
+// 5.13+ features must degrade gracefully to app-level enforcement on older
+// kernels — and the parallel non-LinuxSandbox path above are the reasons
+// this exists.
+//
+// Scope: exactly the ruleset-creation rejection, identified via errors.Is
+// at the call site — not a net-port rule rejection (B1.4-c) or a
+// restrict_self failure, both of which indicate a capable kernel behaving
+// inconsistently rather than a genuinely unsupported feature, and both of
+// which keep returning to SandboxBootError.
+//
+// Side effects: replaces as.backend / as.backendName with FallbackBackend,
+// clears the linuxApplier handle and the kernelConfiner handle (so any
+// later code that asserts on as.isLinux sees the same shape as the
+// non-Linux boot path), drops as.abiVersion to 0, and re-registers the
+// per-turn policy base as non-enforcing so spawn sites do not derive a
+// kernel policy nothing will enforce.
+func (as *applySandboxState) degradeAfterLandlockFailure(applyErr error) (*SandboxApplyResult, error) {
+	// Capture the originals so the WARN log names what we tried.
+	originalBackend := as.backendName
+	originalABI := as.abiVersion
+
+	// FallbackBackend is the application-level backend on every platform
+	// (sandbox.go::FallbackBackend). Recreating it here is cheap (no
+	// syscall, no state) and keeps the result consistent with the
+	// non-Linux boot path, which also returns a fresh FallbackBackend
+	// instance from selectBackendPlatform.
+	fallback := sandbox.NewFallbackBackend()
+	if fbErr := fallback.Apply(as.policy); fbErr != nil {
+		// The FallbackBackend only fails Apply on path canonicalization
+		// errors (sandbox.go:842-844) — those would also have failed the
+		// LinuxBackend's path-rule build. Surface them here so a corrupt
+		// $OMNIPUS_HOME doesn't silently boot with neither kernel nor
+		// app-level rules in place.
+		slog.Error("sandbox.degraded.fallback_apply_failed",
+			"error", fbErr,
+			"requested_backend", originalBackend,
+			"requested_abi", originalABI,
+			"requested_mode", string(as.mode),
+			"original_apply_error", applyErr)
+		return as.result, fmt.Errorf("sandbox: Landlock rejected ruleset (%w) and FallbackBackend.Apply failed: %v", applyErr, fbErr)
+	}
+
+	as.backend = fallback
+	as.backendName = fallback.Name()
+	as.linuxBE = nil
+	as.isLinux = false
+	as.kernelConfiner = nil
+	as.confinesChildren = false
+	as.abiVersion = 0
+
+	slog.Warn("sandbox.degraded",
+		"reason", "kernel_rejected_ruleset",
+		"requested_backend", originalBackend,
+		"requested_abi", originalABI,
+		"requested_mode", string(as.mode),
+		"fallback_backend", as.backendName,
+		"error", applyErr)
+
+	// Spawn sites use the registered base to derive kernel policies at
+	// fork time. After this degrade, no kernel policy will be enforced, so
+	// unregister the base — passing `false` here makes
+	// RegisterTurnPolicyBase(nil) run, which is exactly the "nothing will
+	// enforce" state DeriveKernelPolicy is documented to handle (a nil
+	// registered base means no overlay, and spawn inherits nothing).
+	as.registerTurnPolicyBase(false)
+
+	as.result.Backend = as.backend
+	as.result.BackendName = as.backendName
+	as.result.Mode = as.mode
+	as.result.ApplyState = sandbox.ApplyState{
+		Mode: as.mode,
+		ExtraNotes: []string{
+			fmt.Sprintf(
+				"kernel rejected the Landlock ruleset on %s (ABI v%d reported, %s); "+
+					"falling back to application-level enforcement. No kernel confinement is active "+
+					"for this boot — secret set, port allow-list, and per-turn confinement are NOT "+
+					"enforced at the kernel layer. See the sandbox.degraded WARN above for the "+
+					"kernel-side error.",
+				originalBackend, originalABI, string(as.mode)),
+		},
+	}
 	return as.result, nil
 }
 
@@ -981,8 +1094,19 @@ func registerSandboxHealthCheck(srv sandboxHealthSetter, result *SandboxApplyRes
 	// config, so the values never change after boot. The closure captures
 	// the pre-built map to avoid re-allocating on every /health request
 	// (this endpoint is hit frequently by k8s readiness probes).
+	//
+	// "applied" requires BackendName != "fallback" in addition to the mode
+	// check: FR-J-008's own contract above is "false on off/fallback", but
+	// Mode alone cannot tell fallback apart from real kernel enforcement.
+	// Mode is the OPERATOR'S request and survives every degrade path
+	// unchanged (applyNonLinuxSandbox's kernel-too-old/seatbelt-unavailable
+	// branch and degradeAfterLandlockFailure's ruleset-rejection branch both
+	// keep result.Mode = enforce/permissive while swapping BackendName to
+	// "fallback"). Gating on Mode alone would report "applied": true for a
+	// process that is running application-level enforcement only.
 	info := map[string]any{
-		"applied": result.Mode == sandbox.ModeEnforce || result.Mode == sandbox.ModePermissive,
+		"applied": (result.Mode == sandbox.ModeEnforce || result.Mode == sandbox.ModePermissive) &&
+			result.BackendName != "fallback",
 		"mode":    string(result.Mode),
 		"backend": result.BackendName,
 	}

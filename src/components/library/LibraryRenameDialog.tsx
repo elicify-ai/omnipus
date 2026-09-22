@@ -97,7 +97,7 @@ export function LibraryRenameDialog({
         <DialogHeader>
           <DialogTitle>Rename {entry.is_dir ? 'folder' : 'file'}</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="library-rename-input">New name</Label>
           <Input
             id="library-rename-input"
@@ -110,29 +110,29 @@ export function LibraryRenameDialog({
             }}
           />
           {hasSlash && (
-            <p className="text-xs text-[var(--color-error)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
               A name can't contain "/" — use Move… to change its folder.
             </p>
           )}
           {!hasSlash && isDotName && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-dot">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-rename-dot">
               "{trimmed}" isn't a valid name.
             </p>
           )}
           {!hasSlash && hiddenName && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-hidden">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-rename-hidden">
               A name starting with "." would make this a hidden {entry.is_dir ? 'folder' : 'file'} —
               it wouldn't show in the list unless "Show hidden" is on. Choose a name without the
               leading dot.
             </p>
           )}
           {collides && !hasSlash && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-collision">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-rename-collision">
               An entry named "{trimmed}" already exists here.
             </p>
           )}
           {rewritesLinks && !entry.is_dir && (
-            <p className="text-xs text-[var(--color-muted)]" data-testid="library-rename-links-note">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="library-rename-links-note">
               Links to this note from other notes in this knowledge base will be updated to the new name.
             </p>
           )}

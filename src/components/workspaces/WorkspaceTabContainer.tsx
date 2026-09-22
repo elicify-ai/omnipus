@@ -11,6 +11,9 @@ import { useWorkspaceSetupKickoff } from '@/hooks/useWorkspaceSetupKickoff'
 import { clearLibraryAttachments } from '@/lib/library-attachment'
 import { ChatControls } from '@/components/chat/ChatControls'
 import { QueryErrorState } from '@/components/shared/QueryErrorState'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { Card } from '@/components/ui/card'
 import { WorkspaceTabBar, resolveActiveSegment } from './WorkspaceTabBar'
 
 // React context carrying the resolved workspace to every tab.
@@ -167,23 +170,23 @@ function WorkspaceTabContainerView({
           className="@container flex items-center h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)] flex-shrink-0"
           data-testid="workspace-top-bar"
         >
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             id="sidebar-hamburger"
             onClick={toggle}
             aria-label="Toggle navigation sidebar"
             data-testid="workspace-hamburger"
-            className="flex items-center justify-center h-chrome-header min-h-chrome-header w-11 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
+            variant="ghost"
+            className="h-chrome-header min-h-chrome-header w-11 rounded-none text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex-shrink-0"
           >
             <List size={20} />
-          </button>
+          </IconButton>
 
           {/* The workspace name renders INSIDE WorkspaceTabBar as the first
               tablist item (→ settings) — one menu component, no stray button. */}
           <WorkspaceTabBar workspaceId={workspace.id} workspaceName={workspace.name} />
 
           {activeSegment === 'chat' && (
-            <div className="flex-1 min-w-0 flex @6xl:justify-end px-3" data-testid="workspace-chat-controls">
+            <div className="flex-1 min-w-0 flex @6xl:justify-end px-[var(--space-2-5)]" data-testid="workspace-chat-controls">
               <ChatControls />
             </div>
           )}
@@ -217,21 +220,20 @@ function WorkspaceNotFoundState() {
 
   return (
     <div
-      className="flex flex-col items-center justify-center h-full gap-4 p-8 text-center"
+      className="flex flex-col items-center justify-center h-full gap-[var(--space-3)] p-[var(--space-5)] text-center"
       data-testid="workspace-not-found"
     >
-      <p className="text-[var(--color-muted)] text-sm">Workspace not found.</p>
-      <p className="text-[var(--color-muted)] text-xs max-w-xs">
+      <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">Workspace not found.</p>
+      <p className="text-[var(--color-muted)] text-[length:var(--type-utility-xs-size)] max-w-xs">
         This workspace may have been deleted or the link may be outdated.
       </p>
-      <button tabIndex={0}
-        type="button"
+      <Button
         onClick={handleBackToWorkspace}
         data-testid="workspace-not-found-back-btn"
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-[var(--color-accent)] text-[var(--color-primary)] font-semibold text-sm hover:opacity-90 transition-opacity"
+        className="hover:opacity-90"
       >
         Back to my workspace
-      </button>
+      </Button>
     </div>
   )
 }
@@ -239,16 +241,17 @@ function WorkspaceNotFoundState() {
 function WorkspaceShellSkeleton() {
   return (
     <div className="absolute inset-0 flex flex-col">
-      <div className="flex gap-2 px-3 h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)]">
+      <div className="flex gap-[var(--space-2)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header bg-[var(--color-surface-0)]">
         {[1, 2, 3, 4, 5, 6, 7].map((i) => (
-          <div key={i} className="h-11 w-20 my-1 rounded bg-[var(--color-surface-2)] animate-pulse" />
+          <div key={i} className="h-11 w-20 my-[var(--space-1)] rounded bg-[var(--color-surface-2)] animate-pulse" />
         ))}
       </div>
-      <div className="flex gap-3 p-4 flex-1">
+      <div className="flex gap-[var(--space-2-5)] p-[var(--space-3)] flex-1">
         {[1, 2, 3, 4, 5].map((i) => (
-          <div
+          <Card
             key={i}
-            className="flex-1 min-w-[180px] h-48 rounded-xl border border-[var(--color-border)] animate-pulse bg-[var(--color-surface-1)]"
+            variant="default"
+            className="flex-1 min-w-[180px] h-48 rounded-xl animate-pulse"
           />
         ))}
       </div>

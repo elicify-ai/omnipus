@@ -679,7 +679,7 @@ func NewAgentDeleteTool(d *Deps) *AgentDeleteTool { return &AgentDeleteTool{deps
 func (t *AgentDeleteTool) Name() string           { return "delete_agent" }
 func (t *AgentDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentDeleteTool) Description() string {
-	return "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and applicable SOUL.md instructions. Preserves unrelated files in its home, including HEARTBEAT.md, MEMORY.md and local skills. Also cascades: " +
+	return "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and applicable SOUL.md instructions. Preserves unrelated files in its home, including HEARTBEAT.md, local skills, and any vestigial MEMORY.md left by an older install. Also cascades: " +
 		"every chat session in the shared session store that belongs SOLELY to this agent is deleted, together " +
 		"with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation " +
 		"agent switch) is left untouched to avoid destroying that agent's history, and is reported separately " +

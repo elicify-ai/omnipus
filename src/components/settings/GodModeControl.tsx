@@ -42,6 +42,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Warning, ShieldCheck, SpinnerGap } from '@phosphor-icons/react'
 import { fetchGodMode, setGodMode, getErrorMessage } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
 import { useStepUp } from './useStepUp'
 import { isReAuthCancelled } from './useReAuthGate'
 import { GatewayRestartModal } from './GatewayRestartModal'
@@ -172,15 +173,15 @@ export function GodModeControl() {
   const busy = isSaving
 
   return (
-    <div className="space-y-3">
-      <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">
+    <div className="space-y-[var(--space-2-5)]">
+      <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">
         Danger zone
       </h3>
 
       <div
         data-testid="god-mode-control"
         className={[
-          'rounded-lg border px-4 py-3.5 transition-colors',
+          'rounded-lg border px-[var(--space-3)] py-[var(--space-3)] transition-colors',
           // Danger styling keys on `persisted`, NOT `enabled` — same signal the
           // switch itself binds to (see requestToggle) and the same one the
           // Security Health check uses server-side (rest.go's god-mode-armed
@@ -198,25 +199,25 @@ export function GodModeControl() {
             : 'border-[var(--color-error)]/30 bg-[var(--color-surface-1)]',
         ].join(' ')}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 space-y-1.5">
-            <div className="flex items-center gap-2">
+        <div className="flex items-start justify-between gap-[var(--space-3)]">
+          <div className="min-w-0 space-y-[var(--space-1)]">
+            <div className="flex items-center gap-[var(--space-2)]">
               <Warning
                 size={16}
                 weight="fill"
                 // Keyed on `persisted` for the same reason as the card border
                 // above: S1 (armed, pending restart) must not render as calm.
-                className={persisted ? 'text-[var(--color-error)]' : 'text-amber-400'}
+                className={persisted ? 'text-[var(--color-error)]' : 'text-[var(--color-warning)]'}
               />
-              <p className="text-sm font-semibold text-[var(--color-secondary)]">God-mode</p>
+              <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">God-mode</p>
             </div>
             <div id="god-mode-consequence-copy">
-              <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
                 Removes <strong className="text-[var(--color-secondary)]">all permission prompts</strong> and
                 disables the kernel sandbox, outbound-network restrictions, and the shell guard for every agent.
                 Audit logging, the prompt-guard, and rate limiting stay on.
               </p>
-              <p className="flex items-center gap-1.5 text-[11px] text-[var(--color-muted)]">
+              <p className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 <ShieldCheck size={12} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
                 Changing this requires re-typing your password.
               </p>
@@ -229,7 +230,7 @@ export function GodModeControl() {
               {isError && (
                 <p
                   data-testid="god-mode-fetch-error-note"
-                  className="text-[11px] text-[var(--color-error)]"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
                 >
                   Could not fetch god-mode status — gateway may be offline. The state shown here may
                   be stale.
@@ -238,7 +239,7 @@ export function GodModeControl() {
               {knownUnsupported && (
                 <p
                   data-testid="god-mode-unavailable-note"
-                  className="text-[11px] text-[var(--color-muted)] italic"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
                 >
                   Not available in this build — god-mode support is compiled out.
                 </p>
@@ -250,10 +251,10 @@ export function GodModeControl() {
                   never-touched fresh install and falsely claimed it was
                   "authorized but not yet active". */}
               {persisted && !available && !isLoading && (
-                <div className="space-y-1">
+                <div className="space-y-[var(--space-1)]">
                   <p
                     data-testid="god-mode-restart-note"
-                    className="text-[11px] text-[var(--color-muted)] italic"
+                    className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
                   >
                     Authorized but not yet active — restart the gateway to activate god-mode.
                   </p>
@@ -261,15 +262,16 @@ export function GodModeControl() {
                       able to cancel a pending authorization without waiting
                       for (or triggering) a restart. Replays the existing
                       setGodMode(false, token) re-auth flow; no new endpoint. */}
-                  <button tabIndex={0}
+                  <Button
                     type="button"
+                    variant="link"
                     data-testid="god-mode-cancel-authorization"
                     disabled={busy || isLoading}
                     onClick={requestDisarm}
-                    className="text-[11px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40 disabled:cursor-not-allowed"
+                    className="text-[length:var(--type-caption-size)] font-medium disabled:opacity-40"
                   >
                     Cancel authorization
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
@@ -281,8 +283,15 @@ export function GodModeControl() {
               process). Binding to `enabled` made an armed-but-pending-
               restart switch render as OFF, and made requestToggle()'s
               `!enabled` negation re-arm instead of disarm on every click. */}
-          <button tabIndex={0}
+          {/* Kept on Button (not the catalogued Switch): the checked-state
+              track color here is danger red (--color-error), not the
+              Switch's accent gold, and the thumb hosts a busy spinner — both
+              are behaviour Switch doesn't express. Button with the same
+              role="switch"/aria-checked semantics preserves the D1/D19
+              contract exactly (see file header). */}
+          <Button
             type="button"
+            variant="ghost"
             role="switch"
             aria-checked={persisted}
             aria-label="God-mode"
@@ -291,20 +300,22 @@ export function GodModeControl() {
             disabled={knownUnsupported || busy || isLoading}
             onClick={requestToggle}
             className={[
-              'relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors',
-              'disabled:opacity-40 disabled:cursor-not-allowed',
-              persisted ? 'bg-[var(--color-error)]' : 'bg-[var(--color-surface-3)]',
+              'relative h-6 w-11 shrink-0 rounded-full p-0 transition-colors',
+              'disabled:opacity-40',
+              persisted
+                ? 'bg-[var(--color-error)] hover:bg-[var(--color-error)]'
+                : 'bg-[var(--color-surface-3)] hover:bg-[var(--color-surface-3)]',
             ].join(' ')}
           >
             <span
               className={[
-                'inline-flex items-center justify-center h-5 w-5 rounded-full bg-white shadow transition-transform',
+                'inline-flex items-center justify-center h-5 w-5 rounded-full bg-[var(--color-secondary)] shadow transition-transform',
                 persisted ? 'translate-x-[22px]' : 'translate-x-0.5',
               ].join(' ')}
             >
               {busy && <SpinnerGap size={11} className="animate-spin text-[var(--color-error)]" />}
             </span>
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -350,12 +361,12 @@ export function GodModeActiveBanner() {
       <div
         role="alert"
         data-testid="god-mode-status-unknown-banner"
-        className="flex items-start gap-3 rounded-lg border border-amber-500/60 bg-amber-500/10 px-4 py-3"
+        className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-warning)]/60 bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
       >
-        <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-amber-400" />
-        <div className="space-y-1">
-          <p className="text-sm font-semibold text-amber-400">God-mode status unavailable</p>
-          <p className="text-xs text-amber-400/80">
+        <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-warning)]" />
+        <div className="space-y-[var(--space-1)]">
+          <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-warning)]">God-mode status unavailable</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/80">
             Could not fetch god-mode status from the gateway — it may be offline. If god-mode was
             previously active, sandboxing may still be disabled right now and this banner cannot
             confirm it either way. Check your connection and reload.
@@ -369,12 +380,12 @@ export function GodModeActiveBanner() {
     <div
       role="alert"
       data-testid="god-mode-active-banner"
-      className="flex items-start gap-3 rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-4 py-3"
+      className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-[var(--color-error)]" />
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-[var(--color-error)]">God-mode is active</p>
-        <p className="text-xs text-[var(--color-error)]/80">
+      <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-error)]" />
+      <div className="space-y-[var(--space-1)]">
+        <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">God-mode is active</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/80">
           All permission prompts are bypassed and the kernel sandbox, network restrictions, and shell guard are
           disabled for every agent. Audit logging, the prompt-guard, and rate limiting remain on. Turn god-mode
           off below to restore the previous protections.

@@ -139,7 +139,7 @@ describe('ProvidersSection — AWS region control (issue #800)', () => {
     fireEvent.change(screen.getByTestId('api-key-input-amazon-bedrock'), { target: { value: 'sk-bedrock-secret' } })
     fireEvent.click(screen.getByTestId('save-provider-amazon-bedrock'))
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save API key' }))
 
     await waitFor(() => {
       expect(api.configureProvider).toHaveBeenCalledTimes(1)

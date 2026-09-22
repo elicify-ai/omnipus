@@ -5,6 +5,7 @@ import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { createSession } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 interface ChatControlsProps {
   className?: string
@@ -126,7 +127,7 @@ export function ChatControls({ className }: ChatControlsProps) {
       className={cn(
         // Single inline cluster — never wraps; overflow-x-auto scrolls rather
         // than clips on extreme sizes (≤320px).
-        'flex items-center gap-1.5 min-w-0 overflow-x-auto',
+        'flex items-center gap-[var(--space-1)] min-w-0 overflow-x-auto',
         className,
       )}
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
@@ -137,8 +138,9 @@ export function ChatControls({ className }: ChatControlsProps) {
 
       {/* Open browser — ADR-039 D-A1: user-initiated live browser session,
           independent of any agent tool call. */}
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={() => void handleOpenBrowser()}
         disabled={creatingBrowserSession}
         // Composer tab ring — full map (single source of truth; other spots
@@ -165,38 +167,39 @@ export function ChatControls({ className }: ChatControlsProps) {
         aria-busy={creatingBrowserSession}
         title="Open a live browser session"
         className={cn(
-          'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
+          'shrink-0 px-[var(--space-2)] h-8 gap-[var(--space-1)]',
           'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
-          'transition-colors text-xs whitespace-nowrap',
-          'disabled:cursor-not-allowed disabled:opacity-50',
-          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
+          'text-[length:var(--type-utility-xs-size)] whitespace-nowrap',
+          'disabled:cursor-not-allowed',
+          'pointer-coarse:min-h-[44px] pointer-coarse:px-[var(--space-2-5)]',
         )}
       >
         {creatingBrowserSession ? <SpinnerGap size={15} className="animate-spin" /> : <Monitor size={15} />}
         <span className="hidden @2xl:inline">Open browser</span>
-      </button>
+      </Button>
 
       {/* Open Library — library-spec D-3's second entry point. Scoped to the
           active workspace (the sidebar entry opens the all-workspaces virtual
           root instead). tabIndex 8 continues the closed composer ring
           documented on the browser button above; it sits after browser=7 so
           the existing 1-7 order is untouched. */}
-      <button
+      <Button
         type="button"
+        variant="ghost"
         onClick={handleOpenLibrary}
         tabIndex={8}
         aria-label="Open library"
         title="Browse this workspace's files"
         className={cn(
-          'flex items-center justify-center shrink-0 px-2 h-8 gap-1.5 rounded-md',
+          'shrink-0 px-[var(--space-2)] h-8 gap-[var(--space-1)]',
           'text-[var(--color-muted)] hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-2)]',
-          'transition-colors text-xs whitespace-nowrap',
-          'pointer-coarse:min-h-[44px] pointer-coarse:px-3',
+          'text-[length:var(--type-utility-xs-size)] whitespace-nowrap',
+          'pointer-coarse:min-h-[44px] pointer-coarse:px-[var(--space-2-5)]',
         )}
       >
         <Files size={15} />
         <span className="hidden @2xl:inline">Library</span>
-      </button>
+      </Button>
     </div>
   )
 }

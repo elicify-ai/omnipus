@@ -15,6 +15,8 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   MagnifyingGlass, Calendar, PencilSimple, Trash, Check, X,
   CaretRight, CaretDown, Folder, ArrowRight,
@@ -102,8 +104,12 @@ function AgentSessionList({
 
   const renderRow = (row: SessionTreeFlatRow) => {
     const s = row.node.session
+    // No base offset at depth 0 (there is no row here to indent). The legacy
+    // per-level step was 14px, a 14px-root Tailwind value D10 maps to the
+    // nearest closed-scale step, 16px (--space-3) -- see
+    // docs/internal/design/evidence/c1-execution-record.md's tree-indent row.
     return (
-      <div className="flex items-center" style={row.depth > 0 ? { paddingLeft: row.depth * 14 } : undefined}>
+      <div className="flex items-center" style={row.depth > 0 ? { '--search-modal-indent-depth': row.depth, paddingLeft: 'calc(var(--search-modal-indent-depth) * var(--space-3))' } as import('react').CSSProperties : undefined}>
         {row.hasChildren ? (
           <SessionExpandToggle
             expanded={row.isExpanded}
@@ -201,10 +207,10 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
 }) {
   return (
     <div className={cn('flex items-center w-full rounded-md', isHighlighted && 'bg-[var(--color-surface-2)]')}>
-      <button tabIndex={0}
-        type="button"
+      <Button
+        variant="ghost"
         onClick={onToggle}
-        className="min-w-0 flex-1 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[var(--color-muted)] uppercase tracking-wider hover:text-[var(--color-secondary)] transition-colors"
+        className="h-auto min-w-0 flex-1 justify-start gap-[var(--space-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] uppercase tracking-wider hover:bg-transparent hover:text-[var(--color-secondary)]"
         aria-expanded={!isCollapsed}
         aria-controls={panelId}
       >
@@ -212,12 +218,11 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
         <Folder size={14} className="shrink-0" />
         <span className="flex-1 text-left truncate">{name}</span>
         {isHighlighted && (
-          <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-normal normal-case tracking-normal text-[var(--color-muted)]" aria-hidden="true">↵</span>
+          <span className="shrink-0 rounded border border-[var(--color-border)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] normal-case tracking-[var(--font-letter-spacing-normal)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
         )}
-      </button>
+      </Button>
       {onSwitch && (
-        <button tabIndex={0}
-          type="button"
+        <IconButton
           onClick={onSwitch}
           data-testid="workspace-switch-arrow"
           aria-label={`Switch to workspace ${name}`}
@@ -226,10 +231,10 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
           // 24px, and the collapse toggle is flush-adjacent so the spacing
           // exception can't cover an undersized target). Matches the file's
           // rename/delete icon-button sizing.
-          className="shrink-0 mr-2 flex items-center justify-center rounded p-1.5 text-[var(--color-accent)] opacity-80 hover:opacity-100 transition-all"
+          className="h-auto w-auto shrink-0 mr-[var(--space-2)] rounded p-[var(--space-1)] text-[var(--color-accent)] opacity-80 hover:opacity-100 hover:bg-transparent"
         >
           <ArrowRight size={13} />
-        </button>
+        </IconButton>
       )}
     </div>
   )
@@ -239,16 +244,16 @@ function WorkspaceHeader({ name, isCollapsed, onToggle, panelId, onSwitch, isHig
 
 function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: Agent | undefined; name: string; isCollapsed: boolean; onToggle: () => void; panelId: string }) {
   return (
-    <button tabIndex={0}
-      type="button"
+    <Button
+      variant="ghost"
       onClick={onToggle}
-      className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+      className="h-auto w-full justify-start gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
       aria-expanded={!isCollapsed}
       aria-controls={panelId}
     >
       {isCollapsed ? <CaretRight size={9} className="shrink-0" /> : <CaretDown size={9} className="shrink-0" />}
       <span
-        className="w-4 h-4 rounded-full border border-[var(--color-primary)] flex items-center justify-center text-[7px] shrink-0"
+        className="w-4 h-4 rounded-full border border-[var(--color-primary)] flex items-center justify-center text-[length:var(--type-caption-size)] shrink-0"
         style={{ backgroundColor: agent?.color ?? 'var(--color-surface-3)' }}
         aria-hidden="true"
       >
@@ -259,7 +264,7 @@ function AgentHeader({ agent, name, isCollapsed, onToggle, panelId }: { agent: A
         )}
       </span>
       <span className="flex-1 text-left truncate">{name}</span>
-    </button>
+    </Button>
   )
 }
 
@@ -309,7 +314,7 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
 
   if (editing) {
     return (
-      <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)] mx-2">
+      <div className="flex items-center gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] py-[var(--space-2)] bg-[var(--color-surface-2)] mx-[var(--space-2)]">
         <Input autoFocus value={val} onChange={(e) => setVal(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') { e.preventDefault(); commit() }
@@ -322,9 +327,9 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
             // onEditingChange.
             if (e.key === 'Escape') { e.preventDefault(); setEditing(false); setVal(session.title || '') }
           }}
-          className="h-7 flex-1 text-sm" />
-        <button tabIndex={0} onClick={commit} className="shrink-0 rounded p-1.5 text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></button>
-        <button tabIndex={0} onClick={() => { setEditing(false); setVal(session.title || '') }} className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></button>
+          className="h-7 flex-1 text-[length:var(--type-body-compact-size)]" />
+        <IconButton onClick={commit} className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-success)] hover:bg-[var(--color-surface-3)]" aria-label="Confirm rename"><Check size={14} weight="bold" /></IconButton>
+        <IconButton onClick={() => { setEditing(false); setVal(session.title || '') }} className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]" aria-label="Cancel rename"><X size={14} /></IconButton>
       </div>
     )
   }
@@ -332,42 +337,42 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
   // Destructive action requires explicit confirmation — mistakes must be cheap.
   if (confirmDelete) {
     return (
-      <div className="flex items-center gap-2 rounded-md px-3 py-2 bg-[var(--color-surface-2)] mx-2 text-sm">
+      <div className="flex items-center gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] py-[var(--space-2)] bg-[var(--color-surface-2)] mx-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
         <span className="flex-1 truncate text-[var(--color-secondary)]">Delete "{session.title || 'Untitled session'}"?</span>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onClick={() => { setConfirmDelete(false); onDelete() }}
           disabled={deleting}
-          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-error)] hover:bg-[var(--color-error)]/10 disabled:opacity-50"
+          className="h-auto shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/10"
         >
           Delete
-        </button>
-        <button tabIndex={0}
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
           onClick={() => setConfirmDelete(false)}
-          className="shrink-0 rounded px-2 py-1 text-xs text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
+          className="h-auto shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)]"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     )
   }
 
   return (
     <div id={`search-result-${session.id}`} className={cn(
-      'group flex items-center gap-2 rounded-md px-3 py-2 mx-1 transition-colors hover:bg-[var(--color-surface-2)]',
+      'group flex items-center gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] py-[var(--space-2)] mx-[var(--space-1)] transition-colors hover:bg-[var(--color-surface-2)]',
       // Keyboard highlight = what Enter selects; follows ArrowUp/Down.
       isHighlighted && 'bg-[var(--color-surface-2)]',
     )}>
-      <button tabIndex={0} type="button" onClick={onSelect} className="min-w-0 flex-1 text-left">
-        <div className={cn('truncate text-sm font-medium flex items-center gap-1.5', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
+      <Button variant="ghost" onClick={onSelect} className="h-auto min-w-0 flex-1 justify-start p-0 text-left hover:bg-transparent">
+        <div className={cn('truncate text-[length:var(--type-body-compact-size)] font-medium flex items-center gap-[var(--space-1)]', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]')}>
           <span className="truncate">{session.title || 'Untitled session'}</span>
           {isHighlighted && (
-            <span className="shrink-0 rounded border border-[var(--color-border)] px-1 text-[9px] font-normal text-[var(--color-muted)]" aria-hidden="true">↵</span>
+            <span className="shrink-0 rounded border border-[var(--color-border)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)]" aria-hidden="true">↵</span>
           )}
         </div>
         {/* flex-wrap + hiding the token count under 400px keeps the metadata legible on phones */}
-        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0 text-[11px] text-[var(--color-muted)]">
+        <div className="mt-[var(--space-0-5)] flex flex-wrap items-center gap-x-[var(--space-1)] gap-y-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {/* formatRelative returns '' for an unparseable date (documented
               contract in src/lib/formatRelative.ts) — fall back to an em
               dash here rather than rendering a dangling "Started ". */}
@@ -375,16 +380,29 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
           <span aria-hidden>·</span>
           <span>Active {formatRelative(session.updated_at) || '—'}</span>
           {session.total_tokens ? (<span className="hidden min-[400px]:inline"><span aria-hidden>· </span><span className="font-mono">{formatTokens(session.total_tokens)}</span></span>) : null}
-          {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[9px]">HB</span></>)}
+          {session.type === 'heartbeat' && (<><span aria-hidden>·</span><span className="uppercase tracking-wider text-[length:var(--type-caption-size)]">HB</span></>)}
         </div>
-      </button>
+      </Button>
       {/* Hover-revealed on pointer devices; always visible on touch ([@media(hover:none)]). */}
-      <button tabIndex={0} ref={renameButtonRef} type="button" onClick={() => { setVal(session.title || ''); setEditing(true) }}
-        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)] transition-all"
-        aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></button>
-      <button tabIndex={0} type="button" onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
-        className="shrink-0 rounded p-1.5 text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-        aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : 'Delete'}><Trash size={13} /></button>
+      <IconButton ref={renameButtonRef} onClick={() => { setVal(session.title || ''); setEditing(true) }}
+        className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
+        aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></IconButton>
+      <IconButton
+        onClick={() => {
+          // aria-disabled (not the native `disabled` attribute) — a truly
+          // `disabled` button carries `disabled:pointer-events-none`
+          // (button.tsx's base variant), which blocks hover entirely and
+          // with it the native `title` tooltip below — the only explanation
+          // a pointer user gets for why delete is greyed out on a protected
+          // (heartbeat) or in-flight-delete session. Staying focusable/hoverable
+          // and no-opping the click here instead (same pattern as
+          // EdgeModeEditor's mode chips) keeps that explanation reachable.
+          if (deleting || session.protected === true) return
+          setConfirmDelete(true)
+        }}
+        aria-disabled={deleting || session.protected === true}
+        className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] aria-disabled:opacity-30 aria-disabled:cursor-not-allowed aria-disabled:hover:text-[var(--color-muted)] aria-disabled:hover:bg-transparent"
+        aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : deleting ? 'Deleting…' : 'Delete'}><Trash size={13} /></IconButton>
     </div>
   )
 }
@@ -829,16 +847,16 @@ export function SearchModal() {
         overlayClassName="bg-transparent"
         className="max-w-2xl gap-0 overflow-hidden p-0 flex flex-col max-h-[85dvh] bg-[var(--color-surface-1)] border border-[var(--color-muted)]/40 rounded-2xl shadow-2xl">
         {/* Header with search input + date toggle */}
-        <DialogHeader className="space-y-0 px-5 pt-5 pb-3 shrink-0 border-b border-[var(--color-border)]">
-          <DialogTitle className="flex items-center gap-2 text-base mb-2">
+        <DialogHeader className="space-y-0 px-[var(--space-3)] pt-[var(--space-3)] pb-[var(--space-2-5)] shrink-0 border-b border-[var(--color-border)]">
+          <DialogTitle className="flex items-center gap-[var(--space-2)] text-base mb-[var(--space-2)]">
             <MagnifyingGlass size={16} className="text-[var(--color-accent)]" />
             {mode === 'workspaces' ? 'Switch workspace' : 'Search sessions'}
             {mode === 'sessions' && wsFilter && (
-              <span className="ml-1 inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] font-normal text-[var(--color-secondary)]">
+              <span className="ml-[var(--space-1)] inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-secondary)]">
                 {workspaces.find((w) => w.id === wsFilter)?.name ?? 'Filtered'}
-                <button tabIndex={0} type="button" onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
+                <IconButton onClick={() => useUiStore.setState({ searchModalWorkspaceFilter: null })} className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]" aria-label="Clear workspace filter">
                   <X size={10} />
-                </button>
+                </IconButton>
               </span>
             )}
           </DialogTitle>
@@ -874,40 +892,50 @@ export function SearchModal() {
                   }
                 }
               }}
-              className="pl-9" aria-label={mode === 'workspaces' ? 'Filter workspaces' : 'Search sessions'} />
+              className="pl-[var(--space-5)]" aria-label={mode === 'workspaces' ? 'Filter workspaces' : 'Search sessions'} />
             {mode === 'sessions' && (
-              <button tabIndex={0} type="button" onClick={() => setShowDateFilter((v) => !v)}
-                className={cn('absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded transition-colors',
-                  showDateFilter ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)]' : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]')}
+              <IconButton onClick={() => setShowDateFilter((v) => !v)}
+                className={cn('absolute right-2 top-1/2 h-7 w-7 p-0 -translate-y-1/2 rounded',
+                  showDateFilter
+                    ? 'bg-[var(--color-surface-2)] text-[var(--color-accent)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]')}
                 title="Date range filter" aria-label="Toggle date range filter" aria-pressed={showDateFilter}>
                 <Calendar size={15} />
-              </button>
+              </IconButton>
             )}
           </div>
 
           {mode === 'sessions' && showDateFilter && (
-            <div className="mt-2 flex items-center gap-2">
+            <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-2)]">
               <Input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="max-w-[180px]" aria-label="From date" />
-              <span className="text-xs text-[var(--color-muted)]">to</span>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">to</span>
               <Input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="max-w-[180px]" aria-label="To date" />
-              {(fromDate || toDate) && <button tabIndex={0} type="button" onClick={() => { setFromDate(''); setToDate('') }} className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:underline">Clear</button>}
+              {(fromDate || toDate) && (
+                <Button
+                  variant="ghost"
+                  onClick={() => { setFromDate(''); setToDate('') }}
+                  className="h-auto p-0 font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] hover:underline"
+                >
+                  Clear
+                </Button>
+              )}
             </div>
           )}
         </DialogHeader>
 
         {/* Results — collapsible workspace → agent → sessions */}
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-2">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain py-[var(--space-2)]">
           {sessionsError || workspacesError ? (
             // Do not fall through to the grouped list on a workspaces-fetch
             // failure — that would silently bucket everything under "Unfiled"
             // and present a transient outage as if no session had a workspace.
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-error)]">Could not load sessions — try again</div>
+            <div className="px-[var(--space-2-5)] py-[var(--space-6)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load sessions — try again</div>
           ) : loading ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
+            <div className="px-[var(--space-2-5)] py-[var(--space-6)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               {mode === 'workspaces' ? 'Loading workspaces...' : 'Loading sessions...'}
             </div>
           ) : total === 0 ? (
-            <div className="px-3 py-10 text-center text-sm text-[var(--color-muted)]">
+            <div className="px-[var(--space-2-5)] py-[var(--space-6)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               {mode === 'workspaces' ? (
                 <p>No workspaces found{debouncedSearch ? ` for "${debouncedSearch}"` : ''}.</p>
               ) : (
@@ -915,22 +943,22 @@ export function SearchModal() {
               )}
               {mode === 'workspaces' ? (
                 debouncedSearch && (
-                  <button tabIndex={0}
-                    type="button"
+                  <Button
+                    variant="link"
                     onClick={() => setSearchText('')}
-                    className="mt-2 text-xs text-[var(--color-accent)] hover:underline"
+                    className="mt-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)]"
                   >
                     Clear filter
-                  </button>
+                  </Button>
                 )
               ) : (wsFilter || debouncedSearch || fromDate || toDate) && (
-                <button tabIndex={0}
-                  type="button"
+                <Button
+                  variant="link"
                   onClick={() => { setSearchText(''); setFromDate(''); setToDate(''); useUiStore.setState({ searchModalWorkspaceFilter: null }) }}
-                  className="mt-2 text-xs text-[var(--color-accent)] hover:underline"
+                  className="mt-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)]"
                 >
                   Clear all filters
-                </button>
+                </Button>
               )}
             </div>
           ) : (
@@ -939,7 +967,7 @@ export function SearchModal() {
               const wsCollapsed = isWsCollapsed(wsKey)
               const wsHighlighted = mode === 'workspaces' && idx === highlightIndex
               return (
-                <div key={wsKey} id={`search-ws-${wsKey}`} className="mb-1">
+                <div key={wsKey} id={`search-ws-${wsKey}`} className="mb-[var(--space-1)]">
                   <WorkspaceHeader
                     name={group.workspace?.name ?? 'Unfiled'}
                     isCollapsed={wsCollapsed}
@@ -953,7 +981,7 @@ export function SearchModal() {
                     isHighlighted={wsHighlighted}
                   />
                   {!wsCollapsed && (
-                    <div id={`ws-panel-${wsKey}`} role="region" className="space-y-0.5 px-2 pb-1">
+                    <div id={`ws-panel-${wsKey}`} role="region" className="space-y-[var(--space-0-5)] px-[var(--space-2)] pb-[var(--space-1)]">
                       {group.agentGroups.map((ag) => {
                         const agentKey = `${wsKey}::${ag.agentId}`
                         const agentCollapsed = collapsedAgent.has(agentKey)
@@ -970,7 +998,7 @@ export function SearchModal() {
                                 workspace has. */}
                             <AgentHeader agent={ag.agent} name={agentName} isCollapsed={agentCollapsed} onToggle={() => toggleAgent(agentKey)} panelId={`agent-panel-${agentKey}`} />
                             {!agentCollapsed && (
-                              <div id={`agent-panel-${agentKey}`} role="region" className="space-y-0.5 pl-3">
+                              <div id={`agent-panel-${agentKey}`} role="region" className="space-y-[var(--space-0-5)] pl-[var(--space-2-5)]">
                                 {/* ADR-057 US-19/FR-093/FR-094: a root session
                                     with delegated children (child_count > 0)
                                     renders with an expand toggle; children

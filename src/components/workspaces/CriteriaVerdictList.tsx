@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Check, X, CircleDashed, CaretDown, CaretRight } from '@phosphor-icons/react'
 import type { AcceptanceCriterion, JudgeVerdict, EvidenceRecord } from '@/lib/api'
 import { EvidenceViewer } from './EvidenceViewer'
+import { IconButton } from '@/components/ui/icon-button'
 
 // Fallback denominator of the "attempt N of M" counter, used ONLY when the
 // caller has no server-resolved maximum (`Task.effective_max_attempts`). MUST
@@ -96,14 +97,14 @@ export function CriteriaVerdictList({
   if (criteria.length === 0 && dod.length === 0) return null
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-[var(--space-1)]">
       {typeof displayedAttempt === 'number' && (
-        <p className="text-xs text-[var(--color-muted)]" data-testid="attempt-counter">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="attempt-counter">
           attempt {displayedAttempt} of {effectiveMax}
         </p>
       )}
       {criteria.length > 0 && (
-        <ul className="space-y-1.5">
+        <ul className="space-y-[var(--space-1)]">
           {criteria.map((c) => (
             <CriterionRow
               key={c.id ?? c.text}
@@ -117,11 +118,11 @@ export function CriteriaVerdictList({
         </ul>
       )}
       {dod.length > 0 && (
-        <div className="mt-1" data-testid="criteria-verdict-dod">
-          <p className="text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide">
+        <div className="mt-[var(--space-1)]" data-testid="criteria-verdict-dod">
+          <p className="text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide">
             Definition of Done
           </p>
-          <ul className="space-y-1.5">
+          <ul className="space-y-[var(--space-1)]">
             {dod.map((c) => (
               <CriterionRow
                 key={c.id ?? c.text}
@@ -149,8 +150,8 @@ interface CriterionRowProps {
 
 function CriterionRow({ criterion: c, verdict, evidenceRecord: ev, isExpanded, onToggleExpand }: CriterionRowProps) {
   return (
-    <li className="rounded-md bg-[var(--color-surface-2)] text-xs p-2">
-      <div className="flex items-start gap-2">
+    <li className="rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)] p-[var(--space-2)]">
+      <div className="flex items-start gap-[var(--space-2)]">
         <CriterionStatusIcon status={c.status} />
         <div className="flex-1 min-w-0">
           <p className="text-[var(--color-secondary)]">{c.text}</p>
@@ -158,7 +159,7 @@ function CriterionRow({ criterion: c, verdict, evidenceRecord: ev, isExpanded, o
             // ADR-074 D5.3: the judge's reason IS the verdict
             // statement — criterion-text size, no longer 10px muted.
             <p
-              className="text-[var(--color-muted)] whitespace-pre-wrap mt-0.5"
+              className="text-[var(--color-muted)] whitespace-pre-wrap mt-[var(--space-0-5)]"
               data-testid="verdict-reason"
             >
               {verdict.reason}
@@ -171,7 +172,7 @@ function CriterionRow({ criterion: c, verdict, evidenceRecord: ev, isExpanded, o
             // Renders ONLY when non-empty — fail-closed, pre-D7 and
             // old-soul verdicts carry none and show no line.
             <p
-              className="border-l-2 border-[var(--color-border)] pl-2 mt-1 text-[var(--color-muted)] italic whitespace-pre-wrap"
+              className="border-l-2 border-[var(--color-border)] pl-[var(--space-2)] mt-[var(--space-1)] text-[var(--color-muted)] italic whitespace-pre-wrap"
               data-testid="verdict-evidence-quote"
             >
               {verdict.evidence_quote}
@@ -179,19 +180,20 @@ function CriterionRow({ criterion: c, verdict, evidenceRecord: ev, isExpanded, o
           )}
         </div>
         {ev && (
-          <button tabIndex={0}
-            type="button"
+          <IconButton
             onClick={onToggleExpand}
             aria-expanded={isExpanded}
             aria-label={`${isExpanded ? 'Collapse' : 'Expand'} evidence for ${c.text}`}
-            className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+            variant="ghost"
+            size="sm"
+            className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             {isExpanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-          </button>
+          </IconButton>
         )}
       </div>
       {isExpanded && ev && (
-        <div className="mt-2">
+        <div className="mt-[var(--space-2)]">
           <EvidenceViewer evidence={ev} />
         </div>
       )}
@@ -201,10 +203,10 @@ function CriterionRow({ criterion: c, verdict, evidenceRecord: ev, isExpanded, o
 
 function CriterionStatusIcon({ status }: { status: AcceptanceCriterion['status'] }) {
   if (status === 'met') {
-    return <Check size={13} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-success)]" />
+    return <Check size={13} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[color:var(--color-success)]" />
   }
   if (status === 'unmet') {
-    return <X size={13} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-error)]" />
+    return <X size={13} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[color:var(--color-error)]" />
   }
-  return <CircleDashed size={13} className="shrink-0 mt-0.5 text-[var(--color-muted)]" />
+  return <CircleDashed size={13} className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-muted)]" />
 }

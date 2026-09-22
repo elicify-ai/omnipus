@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "component": "Label",
+  "exports": [
+    "Label"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/label.tsx",
+  "documentation": "docs/internal/design/components/label.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default",
+    "disabled-peer"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/label.stories.tsx",
+      "exports": [
+        "Default",
+        "DisabledPeer"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "label-unit",
+      "kind": "unit",
+      "file": "src/components/ui/label.test.tsx",
+      "test": "Label — control association uses htmlFor to give a native control its accessible name",
+      "applicable": true
+    },
+    {
+      "id": "label-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/label.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Label has no motion."
+    },
+    {
+      "id": "label-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "label-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Label [check:label-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

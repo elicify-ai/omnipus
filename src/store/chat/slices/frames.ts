@@ -35,6 +35,68 @@ import { handleReplayAndStatusFrame } from './replay-and-status-frames'
 
 type FrameSlice = Pick<ChatStore, 'handleFrame'>
 type ToolCallResultFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'tool_call_result' }>
+type MessageStatusFrame = Extract<Parameters<ChatStore['handleFrame']>[0], { type: 'message_status' }>
+
+// Both helpers below are kept at module scope (not inlined in handleFrame)
+// so their bodies don't count against handleFrame's/createFrameSlice's
+// grandfathered line budgets (scripts/budgets/functions.txt) — that function
+// was already at its recorded ceiling before #823, so any net-new line
+// inside it fails `make lint-budgets`; extracting is the prescribed fix
+// ("Grandfathered entries may only shrink — do not add to one, extract
+// first.", CLAUDE.md "Size budgets").
+
+// #823 state A: received/working/failed map onto the user message's own
+// deliveryStatus.
+function applyMessageStatusFrame(bucket: SessionChatState, frame: MessageStatusFrame): Partial<SessionChatState> {
+  return produce(bucket, (draft) => {
+    const message = draft.messagesById[frame.client_message_id]
+    if (!message || message.role !== 'user') return
+    message.deliveryStatus = frame.state === 'failed' ? 'failed' : frame.state
+    message.status = frame.state === 'failed' ? 'error' : 'done'
+  }) as Partial<SessionChatState>
+}
+
+// I1: advance the reconnect `since` cursor from whatever frame carries a
+// `timestamp` field. The cursor is sent as `since` on attach_session so the
+// gateway skips transcript entries the SPA already saw.
+//
+// What this actually covers today — the generic `frame.timestamp` read
+// below reads broadly, but the set of frames that can satisfy it is small
+// and worth stating plainly rather than leaving as "any frame":
+//   - `replay_error` is the ONLY frame the gateway currently sends with a
+//     populated timestamp (pkg/gateway/replay.go, `buildReplayErrorFrame`
+//     is the single `Timestamp:` assignment in the replay path).
+//   - `replay_message` declares an OPTIONAL `timestamp` in the contract
+//     (contracts/components/schemas/ReplayMessageFrame.yaml) but neither
+//     gateway construction site populates it, so in production it never
+//     advances the cursor. The reducer still honours it if that changes.
+//   - `token` / `done` / `session_state` have no `timestamp` field at all
+//     and never advance the cursor.
+//
+// So the cursor moves rarely and lags the true high-water mark. That is
+// conservative in the SAFE direction: too-old a `since` costs a duplicate
+// replay the dedup paths absorb, whereas too-new would silently skip
+// messages. Do not "fix" the lag by advancing on a frame whose timestamp
+// is not a transcript-entry time — the server compares `since` against
+// TranscriptEntry.Timestamp, so only those values are meaningful here.
+//
+// advanceEventTime is monotonic (only moves forward) and compares
+// chronologically, not lexicographically — see its doc comment for why the
+// difference matters on RFC3339Nano's variable-width fractional seconds.
+// Being monotonic, it is safe to run before the per-frame reducer
+// regardless of dedup/early-return paths.
+function advanceReceivedEventTime(
+  frame: unknown,
+  targetSid: string | null,
+  withBucket: FrameContext['withBucket'],
+): void {
+  const frameTimestamp = (frame as { timestamp?: string }).timestamp
+  if (frameTimestamp && targetSid) {
+    withBucket(targetSid, (b) => ({
+      lastReceivedEventTime: advanceEventTime(b.lastReceivedEventTime, frameTimestamp),
+    }))
+  }
+}
 
 function appendUnmatchedToolError(
   bucket: SessionChatState,
@@ -104,6 +166,24 @@ function recordPendingSpanUpdate(
     delete next[keys[0]]
   }
   return next
+
+// Issue #822: a real done can arrive at the reconnect bind boundary before
+// its catch-up token. That next token is the completed snapshot, not a new
+// live stream. New turns are already streaming before their first token.
+function isTerminalCatchUpToken(bucket: SessionChatState): boolean {
+  return bucket.terminalCatchUpPending === true && !bucket.isStreaming
+}
+
+function applyTokenStreamingState(bucket: SessionChatState, message: ChatMessage): void {
+  const isStreaming = !isTerminalCatchUpToken(bucket)
+  message.isStreaming = isStreaming
+  message.status = isStreaming ? 'streaming' : 'done'
+  bucket.isStreaming = isStreaming
+  bucket.terminalCatchUpPending = false
+}
+
+function needsTerminalCatchUp(bucket: SessionChatState, wasReplaying: boolean): boolean {
+  return wasReplaying && !!bucket.activeTurnId && !bucket.activeTurnBubbleOpened
 }
 
 interface FrameContext {
@@ -199,43 +279,10 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       runtime.unknownFrameCount = 0
 
-      // I1: advance the reconnect `since` cursor from whatever frame carries a
-      // `timestamp` field. The cursor is sent as `since` on attach_session so the
-      // gateway skips transcript entries the SPA already saw.
-      //
-      // What this actually covers today — the generic `frame.timestamp` read
-      // below reads broadly, but the set of frames that can satisfy it is small
-      // and worth stating plainly rather than leaving as "any frame":
-      //   - `replay_error` is the ONLY frame the gateway currently sends with a
-      //     populated timestamp (pkg/gateway/replay.go, `buildReplayErrorFrame`
-      //     is the single `Timestamp:` assignment in the replay path).
-      //   - `replay_message` declares an OPTIONAL `timestamp` in the contract
-      //     (contracts/components/schemas/ReplayMessageFrame.yaml) but neither
-      //     gateway construction site populates it, so in production it never
-      //     advances the cursor. The reducer still honours it if that changes.
-      //   - `token` / `done` / `session_state` have no `timestamp` field at all
-      //     and never advance the cursor.
-      //
-      // So the cursor moves rarely and lags the true high-water mark. That is
-      // conservative in the SAFE direction: too-old a `since` costs a duplicate
-      // replay the dedup paths absorb, whereas too-new would silently skip
-      // messages. Do not "fix" the lag by advancing on a frame whose timestamp
-      // is not a transcript-entry time — the server compares `since` against
-      // TranscriptEntry.Timestamp, so only those values are meaningful here.
-      //
-      // advanceEventTime is monotonic (only moves forward) and compares
-      // chronologically, not lexicographically — see its doc comment for why the
-      // difference matters on RFC3339Nano's variable-width fractional seconds.
-      // Being monotonic, it is safe to run before the per-frame reducer
-      // regardless of dedup/early-return paths.
-      {
-        const frameTimestamp = (frame as { timestamp?: string }).timestamp
-        if (frameTimestamp && targetSid) {
-          withBucket(targetSid, (b) => ({
-            lastReceivedEventTime: advanceEventTime(b.lastReceivedEventTime, frameTimestamp),
-          }))
-        }
-      }
+      // I1: advance the reconnect `since` cursor — see advanceReceivedEventTime's
+      // own doc comment above (moved there so this addition doesn't grow
+      // handleFrame past its grandfathered line budget).
+      advanceReceivedEventTime(frame, targetSid, withBucket)
 
       if (handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear })) {
         syncForeground()
@@ -243,6 +290,9 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       }
 
       switch (frame.type) {
+        case 'message_status':
+          withBucket(targetSid, (bucket) => applyMessageStatusFrame(bucket, frame))
+          break
         case 'session_started': {
           // Server minted a new session_id in response to a message sent without one.
           const newSid = frame.session_id
@@ -588,9 +638,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   msg.pendingTextBoundary = false
                 }
                 msg.content = msg.content + frame.content
-                msg.isStreaming = true
-                msg.status = 'streaming'
-                draft.isStreaming = true
+                applyTokenStreamingState(draft, msg)
                 // ADR-082 review S1/CR1: a token proves the announced turn's
                 // bubble now exists, regardless of which frame order got us
                 // here (fixed-contract session_state-first, an older
@@ -928,6 +976,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 draft.activeTurnId = null
                 draft.activeTurnAgentId = null
                 draft.activeTurnBubbleOpened = false
+                draft.terminalCatchUpPending = needsTerminalCatchUp(priorBucket, wasReplaying)
                 if (clearReplayingNow) {
                   draft.isReplaying = false
                 }

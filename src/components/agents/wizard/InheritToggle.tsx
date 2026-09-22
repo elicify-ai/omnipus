@@ -8,6 +8,8 @@
 // revealed, explicit value sent).
 
 import { ArrowsLeftRight } from '@phosphor-icons/react'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 
 export interface InheritToggleProps {
   /** Field label shown next to the switch (e.g. "Model", "Tools"). */
@@ -21,24 +23,29 @@ export interface InheritToggleProps {
 
 export function InheritToggle({ label, inherit, onChange, testId }: InheritToggleProps) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 cursor-pointer">
-      <span className="flex items-center gap-2 min-w-0">
+    <Label className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] cursor-pointer">
+      <span className="flex items-center gap-[var(--space-2)] min-w-0">
         <ArrowsLeftRight size={14} className="shrink-0 text-[var(--color-muted)]" aria-hidden="true" />
-        <span className="text-sm font-medium text-[var(--color-secondary)]">{label}</span>
-        <span className="text-[11px] text-[var(--color-muted)]">
+        <span className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{label}</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {inherit ? 'Inherited from caller' : 'Overridden'}
         </span>
       </span>
-      <input tabIndex={0}
-        type="checkbox"
-        role="switch"
+      {/* Was a native <input type="checkbox" role="switch">: role="switch" on
+          a plain checkbox is a masquerade (controls/checkbox-as-switch) —
+          the accent-color checkbox never actually rendered switch-shaped,
+          it only claimed the switch role. Switch is the real primitive:
+          same controlled boolean (checked/onCheckedChange ↔
+          inherit/onChange), genuine role="switch" + aria-checked from
+          Radix, and Radix's Label + Switch pairing already forwards a
+          label click to the switch (label-click behavior is unchanged). */}
+      <Switch
         checked={inherit}
-        onChange={(e) => onChange(e.target.checked)}
+        onCheckedChange={onChange}
         aria-label={`Inherit ${label} from caller`}
         data-testid={testId}
-        className="shrink-0 accent-[var(--color-accent)]"
       />
-    </label>
+    </Label>
   )
 }
 

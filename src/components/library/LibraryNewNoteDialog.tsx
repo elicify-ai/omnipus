@@ -115,7 +115,7 @@ export function LibraryNewNoteDialog({
             searchable as soon as it is saved.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="library-new-note-input">Note name</Label>
           <Input
             id="library-new-note-input"
@@ -129,27 +129,27 @@ export function LibraryNewNoteDialog({
             }}
           />
           {!invalid && fileName !== trimmed && (
-            <p className="text-xs text-[var(--color-muted)]" data-testid="library-new-note-resolved">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="library-new-note-resolved">
               Will be saved as "{fileName}".
             </p>
           )}
           {hasTraversal && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-note-traversal">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-note-traversal">
               A note name can't contain "..".
             </p>
           )}
           {!hasTraversal && hasSlash && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-note-slash">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-note-slash">
               A note name can't contain "/".
             </p>
           )}
           {wrongExtension && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-note-extension">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-note-extension">
               A note is a markdown file — leave the extension off, or use ".md".
             </p>
           )}
           {!hasSlash && !hasTraversal && !wrongExtension && collides && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-note-collision">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-note-collision">
               A file named "{fileName}" already exists here.
             </p>
           )}

@@ -40,7 +40,7 @@ export function OpenInChatButton({ task, occurrence, onNavigate }: OpenInChatBut
     <Button
       variant="outline"
       size="sm"
-      className="w-full gap-2 text-xs h-8"
+      className="w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8"
       onClick={() => {
         void navigate({ to: '/sessions/$sessionId', params: { sessionId } })
         onNavigate?.()

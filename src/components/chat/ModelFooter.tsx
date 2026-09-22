@@ -49,7 +49,7 @@ export function ModelFooter({ model }: { model: string | undefined }) {
   return (
     <span
       data-testid="message-model"
-      className="text-[10px] font-mono text-[var(--color-muted)] truncate max-w-[160px]"
+      className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)] truncate max-w-[160px]"
     >
       {model.trim()}
     </span>

@@ -14,8 +14,38 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowsClockwise } from '@phosphor-icons/react'
 import { fetchSubtasks, tasksQueryKeys } from '@/lib/api'
 import type { Task } from '@/lib/api'
-import { STATUS_COLORS as STATUS_DOT, STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
+import { STATUS_LABELS as STATUS_LABEL } from '@/lib/statusColors'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+
+/**
+ * Status-dot / label tint per child status — a literal `switch` over the
+ * closed `Task['status']` set, not a dynamic record lookup (the
+ * design-system static scanners cannot resolve a style value read out of a
+ * record via a runtime key). Each branch is the matching
+ * `--status-<name>-foreground` token (`src/styles/tokens.generated.css`),
+ * which resolves to the same value `src/design-system/status.ts`'s
+ * `statusContract` publishes for that status. Mirrors `BoardView.tsx`'s
+ * `statusHeaderColorVar`.
+ */
+function childStatusColorVar(status: Task['status']): string {
+  switch (status) {
+    case 'inbox':
+      return 'var(--status-inbox-foreground)'
+    case 'next':
+      return 'var(--status-next-foreground)'
+    case 'in_progress':
+      return 'var(--status-in-progress-foreground)'
+    case 'blocked':
+      return 'var(--status-blocked-foreground)'
+    case 'done':
+      return 'var(--status-done-foreground)'
+    case 'failed':
+      return 'var(--status-failed-foreground)'
+    default:
+      return 'var(--status-inbox-foreground)'
+  }
+}
 
 interface TaskChildrenProps {
   parentTaskId: string
@@ -36,7 +66,7 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
 
   if (isLoading) {
     return (
-      <div className="mt-2 space-y-1.5 pl-2 border-l-2 border-[var(--color-border)]">
+      <div className="mt-[var(--space-2)] space-y-[var(--space-1)] pl-[var(--space-2)] border-l-2 border-[var(--color-border)]">
         {[1, 2].map((i) => (
           <div key={i} className="h-5 rounded bg-[var(--color-surface-2)] animate-pulse" />
         ))}
@@ -50,18 +80,18 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
   // with a way to retry, scaled to fit the compact nested-list context.
   if (isError) {
     return (
-      <div className="mt-2 pl-2 border-l-2 border-[var(--color-error)]/40">
-        <button tabIndex={0}
-          type="button"
+      <div className="mt-[var(--space-2)] pl-[var(--space-2)] border-l-2 border-[var(--color-error)]/40">
+        <Button
+          variant="ghost"
           onClick={(e) => {
             e.stopPropagation()
             refetch()
           }}
-          className="flex items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] transition-colors"
+          className="h-auto gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-error)]"
         >
           <ArrowsClockwise size={11} />
           Couldn&apos;t load subtasks — Retry
-        </button>
+        </Button>
       </div>
     )
   }
@@ -76,19 +106,19 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
     // row as pressable at all. Wrapping each row's button in its own <li>
     // keeps exactly one tab stop per row (the button) while the <li> itself
     // carries the listitem semantics.
-    <ul className="mt-2 list-none space-y-1 pl-2 border-l-2 border-[var(--color-border)]" aria-label="Subtasks">
+    <ul className="mt-[var(--space-2)] list-none space-y-[var(--space-1)] pl-[var(--space-2)] border-l-2 border-[var(--color-border)]" aria-label="Subtasks">
       {children.map((child) => (
         <li key={child.id}>
-          <button tabIndex={0}
-            type="button"
+          <Button
+            variant="ghost"
             onClick={(e) => {
               e.stopPropagation()
               onChildClick(child)
             }}
             className={cn(
-              'w-full flex items-center gap-1.5 rounded px-1.5 py-1 text-left',
-              'text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-              'hover:bg-[var(--color-surface-2)] transition-colors',
+              'h-auto w-full items-center justify-start gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-left',
+              'text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
+              'hover:bg-[var(--color-surface-2)]',
             )}
             aria-label={`Subtask: ${child.title} — ${STATUS_LABEL[child.status]}`}
           >
@@ -98,17 +128,17 @@ export function TaskChildren({ parentTaskId, preloaded, onChildClick }: TaskChil
               style={{
                 width: 6,
                 height: 6,
-                backgroundColor: STATUS_DOT[child.status],
+                backgroundColor: childStatusColorVar(child.status),
               }}
             />
             <span className="flex-1 truncate leading-tight">{child.title}</span>
             <span
-              className="flex-shrink-0 text-[10px] font-medium"
-              style={{ color: STATUS_DOT[child.status] }}
+              className="flex-shrink-0 text-[length:var(--type-caption-size)] font-medium"
+              style={{ color: childStatusColorVar(child.status) }}
             >
               {STATUS_LABEL[child.status]}
             </span>
-          </button>
+          </Button>
         </li>
       ))}
     </ul>

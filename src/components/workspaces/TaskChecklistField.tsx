@@ -13,6 +13,7 @@ import { setTaskTodos, isApiError, tasksQueryKeys } from '@/lib/api'
 import type { Task, Todo } from '@/lib/api'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { useUiStore } from '@/store/ui'
 import { CheckSquare, Square, CircleHalf, Trash, Plus } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
@@ -98,20 +99,29 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
   const doneTodos = todos.filter((t: Todo) => t.status === 'completed').length
 
   return (
-    <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+    <div className="space-y-[var(--space-1)]">
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         {/* GOAL-FR-057 — relabelled Todos (visible text only; the three
             aria-labels below stay byte-identical, C-62/C-79). */}
         {`Todos${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}
       </p>
-      <div className="space-y-1">
+      <div className="space-y-[var(--space-1)]">
         {todos.map((todo: Todo, idx: number) => (
           <div
             key={idx}
-            className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
+            className="w-full flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
           >
-            <button tabIndex={0}
-              type="button"
+            {/* Button, not the catalogued Checkbox primitive — a decorative
+                Checkbox-echo (same call as TaskDetailPanel.tsx's and
+                CreateTaskSlideOver.tsx's dependency-picker rows). The
+                catalogued Checkbox's Indicator hardcodes a single check
+                glyph for both `checked` and `indeterminate`
+                (`src/components/ui/checkbox.tsx`, out of this lane's scope),
+                which would collapse this row's distinct completed
+                (CheckSquare) vs. in-progress (CircleHalf) glyphs into the
+                same icon — a real information loss, not a cosmetic one. */}
+            <Button
+              variant="ghost"
               onClick={() => handleToggleTodo(idx)}
               disabled={disabled}
               aria-label={`Toggle ${todo.text}`}
@@ -119,36 +129,37 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
               aria-checked={
                 todo.status === 'completed' ? true : todo.status === 'in_progress' ? 'mixed' : false
               }
-              className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity disabled:opacity-50 disabled:pointer-events-none"
+              className="h-auto flex-1 justify-start gap-[var(--space-2)] p-0 text-left hover:bg-transparent hover:opacity-80"
             >
               {todo.status === 'completed' ? (
                 <CheckSquare size={13} className="shrink-0 text-[color:var(--color-success)]" />
               ) : todo.status === 'in_progress' ? (
-                <CircleHalf size={13} className="shrink-0 text-[color:var(--color-warning)]" />
+                <CircleHalf size={13} className="shrink-0 text-[color:var(--color-status-in-progress)]" />
               ) : (
                 <Square size={13} className="shrink-0 text-[var(--color-muted)]" />
               )}
               <span className={cn(
                 'flex-1 text-[var(--color-secondary)]',
-                todo.status === 'completed' && 'line-through text-[var(--color-muted)]',
-                todo.status === 'in_progress' && 'text-[color:var(--color-warning)]',
+                todo.status === 'completed' ? 'line-through text-[var(--color-muted)]' : undefined,
+                todo.status === 'in_progress' ? 'text-[color:var(--color-status-in-progress)]' : undefined,
               )}>
                 {todo.text}
               </span>
-            </button>
-            <button tabIndex={0}
-              type="button"
+            </Button>
+            <IconButton
               onClick={() => handleRemoveTodo(idx)}
               disabled={disabled}
               aria-label={`Remove checklist item ${todo.text}`}
-              className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              variant="ghost"
+              size="sm"
+              className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
             >
               <Trash size={12} />
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>
-      <div className="flex items-center gap-2 mt-1.5">
+      <div className="flex items-center gap-[var(--space-2)] mt-[var(--space-1)]">
         <Input
           aria-label="New checklist item"
           value={newTodo}
@@ -162,13 +173,13 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
           placeholder="Add a todo…"
           maxLength={500}
           disabled={disabled}
-          className="text-xs flex-1 h-8"
+          className="text-[length:var(--type-utility-xs-size)] flex-1 h-8"
         />
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className="h-8 px-2 shrink-0"
+          className="h-8 px-[var(--space-2)] shrink-0"
           onClick={handleAddTodo}
           aria-label="Add checklist item"
           disabled={disabled || !newTodo.trim()}

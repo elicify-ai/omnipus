@@ -32,7 +32,7 @@ const AlertDialogOverlay = React.forwardRef<
     ref={ref}
     className={cn(
       'fixed inset-0 z-50 bg-[var(--color-primary)]/80 backdrop-blur-sm',
-      'data-[state=open]:animate-in data-[state=closed]:animate-out',
+      'data-[state=open]:animate-in data-[state=closed]:animate-out motion-reduce:animate-none',
       'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
       className
     )}
@@ -49,30 +49,36 @@ const AlertDialogContent = React.forwardRef<
     <AlertDialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      {...props}
       role="alertdialog"
       // A confirmation must be deliberate: do not dismiss on outside click.
-      onPointerDownOutside={(e) => e.preventDefault()}
-      onInteractOutside={(e) => e.preventDefault()}
+      onPointerDownOutside={(event) => {
+        event.preventDefault()
+        props.onPointerDownOutside?.(event)
+      }}
+      onInteractOutside={(event) => {
+        event.preventDefault()
+        props.onInteractOutside?.(event)
+      }}
       className={cn(
-        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-md translate-x-[-50%] translate-y-[-50%] gap-4',
-        'max-h-[90dvh] overflow-y-auto',
-        'border border-[var(--color-border)] bg-[var(--color-surface-1)] p-6 shadow-2xl',
+        'fixed left-[50%] top-[50%] z-50 grid w-full max-w-md translate-x-[-50%] translate-y-[-50%] gap-[var(--space-3)]',
+        'max-h-[90dvh] overflow-y-auto overscroll-contain',
+        'border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-4)] shadow-2xl',
         'rounded-xl text-[var(--color-secondary)]',
-        'data-[state=open]:animate-in data-[state=closed]:animate-out',
+        'data-[state=open]:animate-in data-[state=closed]:animate-out motion-reduce:animate-none',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
         'data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%]',
         'data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]',
         className
       )}
-      {...props}
     />
   </AlertDialogPortal>
 ))
 AlertDialogContent.displayName = 'AlertDialogContent'
 
 const AlertDialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn('flex flex-col space-y-1.5 text-center sm:text-left', className)} {...props} />
+  <div className={cn('flex flex-col space-y-[var(--space-1)] text-center sm:text-left', className)} {...props} />
 )
 AlertDialogHeader.displayName = 'AlertDialogHeader'
 
@@ -83,9 +89,20 @@ AlertDialogHeader.displayName = 'AlertDialogHeader'
 // is unaffected: the row is `justify-end`, so the visual RIGHT-most
 // (Action, last in DOM) button still lands right-most, same as before
 // this fix.
+//
+// Stacked gap: keep unprefixed `gap-2` for fine-pointer narrow layouts.
+// D7 coarse-pointer 44px hit-regions overlap at `gap-2` when Button chrome
+// stays `h-9`, so `max-sm:pointer-coarse:gap-6` applies 1.5rem only when
+// BOTH `pointer: coarse` and width < sm. Do not use unprefixed `gap-6` or
+// `pointer-coarse:gap-6` — the former densifies fine-pointer stacks, the
+// latter can fight `sm:gap-0` on a coarse `sm+` row. The `sm+` row keeps
+// `sm:space-x-2 sm:gap-0`.
 const AlertDialogFooter = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
   <div
-    className={cn('flex flex-col gap-2 sm:flex-row sm:justify-end sm:space-x-2 sm:gap-0', className)}
+    className={cn(
+      'flex flex-col gap-[var(--space-2)] max-sm:pointer-coarse:gap-[var(--space-4)] sm:flex-row sm:justify-end sm:space-x-[var(--space-2)] sm:gap-0',
+      className,
+    )}
     {...props}
   />
 )
@@ -109,7 +126,7 @@ const AlertDialogDescription = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Description
     ref={ref}
-    className={cn('text-sm text-[var(--color-muted)] whitespace-pre-line', className)}
+    className={cn('text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] whitespace-pre-line', className)}
     {...props}
   />
 ))

@@ -4,6 +4,7 @@ import { Database, Archive, ArrowCounterClockwise, Trash } from '@phosphor-icons
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Dialog,
@@ -177,14 +178,14 @@ export function DataSection() {
 
   const isLoading = configLoading || statsLoading
 
-  if (isLoading) return <div className="text-sm text-[var(--color-muted)]">Loading...</div>
+  if (isLoading) return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">{localMode ? 'Data & Backup' : 'Data'}</h2>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             {localMode ? 'Manage session retention, storage, and backups.' : 'Manage session retention and storage.'}
           </p>
         </div>
@@ -192,9 +193,9 @@ export function DataSection() {
       </div>
 
       {/* Storage stats */}
-      <section className="space-y-2">
-        <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Storage</h3>
-        <div className="grid grid-cols-3 gap-3">
+      <section className="space-y-[var(--space-2)]">
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Storage</h3>
+        <div className="grid grid-cols-3 gap-[var(--space-2-5)]">
           <StatBox
             icon={<Database size={16} />}
             label="Workspace"
@@ -212,27 +213,27 @@ export function DataSection() {
       </section>
 
       {/* Session retention */}
-      <section className="space-y-2">
-        <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Session Retention</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
+      <section className="space-y-[var(--space-2)]">
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Session Retention</h3>
+        <Card className="p-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-[var(--color-secondary)]">Retention period</p>
-              <p className="text-xs text-[var(--color-muted)]">Days to keep session transcripts before auto-deletion</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Retention period</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Days to keep session transcripts before auto-deletion</p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-[var(--space-2)]">
               <Input
                 type="number"
                 min="1"
                 max="365"
                 value={retentionDays}
                 onChange={(e) => { markDirty(); setRetentionDays(e.target.value) }}
-                className="w-20 h-8 text-xs font-mono"
+                className="w-20 h-8 text-[length:var(--type-utility-xs-size)] font-mono"
               />
-              <span className="text-xs text-[var(--color-muted)]">days</span>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">days</span>
             </div>
           </div>
-        </div>
+        </Card>
       </section>
 
       {/* Backup & Restore — WP4 (ADR-0010): local backup, off in platform
@@ -240,13 +241,13 @@ export function DataSection() {
           answers 404 for these three routes outside local mode, so a
           visible-but-broken control would be worse than no control. */}
       {localMode && (
-        <section className="space-y-3">
+        <section className="space-y-[var(--space-2-5)]">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Backup & Restore</h3>
+            <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Backup & Restore</h3>
             <Button
               size="sm"
               variant="outline"
-              className="h-7 px-2 gap-1 text-xs"
+              className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
               onClick={() => doBackup()}
               disabled={isCreatingBackup}
             >
@@ -255,28 +256,28 @@ export function DataSection() {
             </Button>
           </div>
 
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
+          <Card className="divide-y divide-[var(--color-border)]">
             {backupsLoading && (
-              <div className="p-4 text-sm text-[var(--color-muted)]">Loading backups...</div>
+              <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading backups...</div>
             )}
             {backupsError && (
-              <div className="p-4 text-sm text-red-400">Failed to load backups. Please try again.</div>
+              <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]">Failed to load backups. Please try again.</div>
             )}
             {!backupsLoading && !backupsError && backups.length === 0 && (
-              <div className="p-4 text-sm text-[var(--color-muted)]">No backups yet.</div>
+              <div className="p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No backups yet.</div>
             )}
             {backups.map((b) => (
-              <div key={b.filename} className="flex items-center justify-between px-4 py-2.5">
+              <div key={b.filename} className="flex items-center justify-between px-[var(--space-3)] py-[var(--space-2)]">
                 <div>
-                  <p className="text-xs font-mono text-[var(--color-secondary)]">{b.filename}</p>
-                  <p className="text-[10px] text-[var(--color-muted)]">
+                  <p className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{b.filename}</p>
+                  <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                     {formatBytes(b.size_bytes)} &middot; {new Date(b.created_at).toLocaleString()}
                   </p>
                 </div>
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 px-2 gap-1 text-xs"
+                  className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
                   onClick={() => setRestoreTarget(b.filename)}
                 >
                   <ArrowCounterClockwise size={11} />
@@ -284,30 +285,30 @@ export function DataSection() {
                 </Button>
               </div>
             ))}
-          </div>
+          </Card>
         </section>
       )}
 
       <Separator />
 
       {/* Danger zone */}
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold text-[var(--color-error)] uppercase tracking-wider">Danger Zone</h3>
-        <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-surface-1)] p-4 flex items-center justify-between">
+      <section className="space-y-[var(--space-2-5)]">
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-error)] uppercase tracking-wider">Danger Zone</h3>
+        <Card className="border-[var(--color-error)]/30 p-[var(--space-3)] flex items-center justify-between">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">Clear all sessions</p>
-            <p className="text-xs text-[var(--color-muted)]">Permanently delete all session transcripts. Cannot be undone.</p>
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Clear all sessions</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Permanently delete all session transcripts. Cannot be undone.</p>
           </div>
           <Button
             variant="outline"
             size="sm"
-            className="h-8 gap-1.5 text-xs text-[var(--color-error)] border-[var(--color-error)]/40 hover:bg-[var(--color-error)]/10"
+            className="h-8 gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] border-[var(--color-error)]/40 hover:bg-[var(--color-error)]/10"
             onClick={() => setClearConfirmOpen(true)}
           >
             <Trash size={12} />
             Clear sessions
           </Button>
-        </div>
+        </Card>
       </section>
 
       {/* Clear sessions confirmation */}
@@ -316,7 +317,7 @@ export function DataSection() {
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Clear all sessions?</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-[var(--color-muted)] py-2">
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-[var(--space-2)]">
             This will permanently delete all session transcripts. This action cannot be undone.
           </p>
           <DialogFooter>
@@ -339,7 +340,7 @@ export function DataSection() {
           <DialogHeader>
             <DialogTitle className="font-headline text-base">Restore backup?</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-[var(--color-muted)] py-2">
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-[var(--space-2)]">
             Restore from <span className="font-mono text-[var(--color-secondary)]">{restoreTarget}</span>?
             Current data will be overwritten. Gateway restart required after restore.
           </p>
@@ -384,10 +385,10 @@ function StatBox({
   icon?: React.ReactNode
 }) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3">
-      {icon && <div className="text-[var(--color-muted)] mb-1">{icon}</div>}
+    <Card className="p-[var(--space-2-5)]">
+      {icon && <div className="text-[var(--color-muted)] mb-[var(--space-1)]">{icon}</div>}
       <div className="font-headline font-bold text-base text-[var(--color-secondary)]">{value}</div>
-      <div className="text-[10px] text-[var(--color-muted)] mt-0.5">{label}</div>
-    </div>
+      <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">{label}</div>
+    </Card>
   )
 }

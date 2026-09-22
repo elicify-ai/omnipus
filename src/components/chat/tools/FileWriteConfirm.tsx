@@ -90,16 +90,27 @@ function FileOpBlock({
   // live/replay divergence introduced by the very commit that fixed the last
   // one. The distinction is also the point of W5: the file being already there
   // is frequently the correct outcome, not a failure.
-  const statusConfig = isRefusal && !isRunning
+  const isRefusalDisplay = isRefusal && !isRunning
+  const statusConfig = isRefusalDisplay
     ? {
         indicator: <span className="inline-block size-[8px] shrink-0 rounded-full bg-[var(--color-warning)]" />,
         label: 'File already exists',
-        textClass: 'text-[var(--color-warning)]',
       }
     : getToolBadgeStatusConfig(
         isRunning ? 'running' : isCancelled ? 'cancelled' : isError ? 'error' : 'success',
         { size: 12, cancelledVariant: 'muted' }
       )
+  // Split out of `statusConfig` so the scanner-provable value is a plain
+  // literal-vs-undefined ternary: `getToolBadgeStatusConfig` never assigns
+  // `textClass` in any branch (see codemod-dead-textclass-read.mjs's P1
+  // proof of that same fact), so folding it into `statusConfig.textClass`
+  // made the design-system scanners unable to prove the read — they cannot
+  // see across the shared factory's switch without also being able to
+  // prove EVERY one of its returns carries a null prototype, which this
+  // file has no business asserting about a function four other components
+  // also call. Computing it locally sidesteps that: `textClass` is either
+  // the literal warning class or `undefined`, never anything else.
+  const textClass = isRefusalDisplay ? 'text-[var(--color-warning)]' : undefined
   // Shown on failure or cancellation, and deliberately NOT truncated the way
   // the path is — a reason clipped to fit is a reason you have to go looking
   // for elsewhere, which is the state this replaces. A successful write has
@@ -111,7 +122,7 @@ function FileOpBlock({
   // positionally — a wrapper div would have broken four existing tests for a
   // purely cosmetic reason.
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-xs font-mono">
+    <div className="mt-[var(--space-2)] flex flex-wrap items-center gap-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-mono">
       {statusConfig.indicator}
       <span className="text-[var(--color-muted)] shrink-0">{label}</span>
       <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">
@@ -120,11 +131,11 @@ function FileOpBlock({
       {detail && !isRunning && (
         <span className="text-[var(--color-muted)] shrink-0">{detail}</span>
       )}
-      <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+      <span className={cn('text-[var(--color-muted)] shrink-0', textClass)}>
         {statusConfig.label}
       </span>
       {showReason && (
-        <span className={cn('basis-full pl-5 break-words', statusConfig.textClass)}>{reason}</span>
+        <span className={cn('basis-full pl-[var(--space-3)] break-words', textClass)}>{reason}</span>
       )}
     </div>
   )

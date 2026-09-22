@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Label } from '@/components/ui/label'
 import { testAgentRunner } from '@/lib/api'
 import type { ExecutorConfig, RunnerTestResponse } from '@/lib/api'
 import { getErrorMessage } from '@/lib/api'
@@ -110,11 +111,11 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
   }
 
   return (
-    <div className="space-y-3" data-testid="executor-selector">
-      <div className="space-y-1.5">
-        <label htmlFor="executor-kind" className="text-xs text-[var(--color-muted)]">
+    <div className="space-y-[var(--space-2-5)]" data-testid="executor-selector">
+      <div className="space-y-[var(--space-2)]">
+        <Label htmlFor="executor-kind">
           Runtime
-        </label>
+        </Label>
         <Select
           value={kind}
           onValueChange={(v) => handleKindChange(v as ExecutorKind)}
@@ -150,7 +151,7 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
             })}
           </SelectContent>
         </Select>
-        <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
           {kind === 'native'
             ? 'Runs the sub-agent inside the Omnipus agent loop. The default and only fully-wired runtime.'
             : kind === 'external-cli'
@@ -160,10 +161,10 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
       </div>
 
       {kind === 'external-cli' && (
-        <div className="space-y-1.5" data-testid="executor-cli-block">
-          <label htmlFor="executor-cli" className="text-xs text-[var(--color-muted)]">
+        <div className="space-y-[var(--space-2)]" data-testid="executor-cli-block">
+          <Label htmlFor="executor-cli">
             CLI tool
-          </label>
+          </Label>
           <Select
             value={cli ?? 'claude-code'}
             onValueChange={(v) => handleCliChange(v as ExecutorCLI)}
@@ -189,10 +190,10 @@ export function ExecutorSelector({ value, onChange, agentId, disabled = false, e
       {kind === 'remote-a2a' && (
         <div
           data-testid="executor-remote-a2a-note"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Info size={14} className="text-[var(--color-muted)] shrink-0 mt-0.5" weight="fill" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+          <Info size={14} className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
             Remote (A2A) executors are <strong className="text-[var(--color-secondary)]">reserved — not available in v0.1.0</strong>.
             Selecting this will cause delegated sub-turns to fail with an error until A2A resolution ships.
           </p>
@@ -225,7 +226,7 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
   })
 
   return (
-    <div className="space-y-2 pt-1">
+    <div className="space-y-[var(--space-2)] pt-[var(--space-1)]">
       <Button
         type="button"
         variant="outline"
@@ -236,7 +237,7 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
           mutate()
         }}
         data-testid="runner-test-button"
-        className="gap-1.5"
+        className="gap-[var(--space-1)]"
       >
         {isPending && <Spinner size={13} className="animate-spin" />}
         {isPending ? 'Testing…' : 'Test Connection'}
@@ -245,10 +246,10 @@ function RunnerTestButton({ agentId }: { agentId: string }) {
       {error && (
         <div
           data-testid="runner-test-request-error"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <XCircle size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
-          <p className="text-[11px] text-[var(--color-error)] leading-snug">
+          <XCircle size={14} className="text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-error)] leading-snug">
             Test request failed: {getErrorMessage(error, 'Test request failed')}
           </p>
         </div>
@@ -264,23 +265,23 @@ function RunnerTestResult({ result }: { result: RunnerTestResponse }) {
   const Icon = status.tone === 'ok' ? CheckCircle : status.tone === 'warn' ? WarningCircle : XCircle
   const toneClass =
     status.tone === 'ok'
-      ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400'
+      ? 'border-[var(--color-success)]/40 bg-[var(--color-success)]/10 text-[var(--color-success)]'
       : status.tone === 'warn'
-        ? 'border-amber-500/40 bg-amber-500/10 text-amber-400'
+        ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]'
         : 'border-[var(--color-error)]/40 bg-[var(--color-error)]/10 text-[var(--color-error)]'
 
   return (
     <div
       data-testid="runner-test-result"
       data-reason={result.reason || 'ok'}
-      className={`flex items-start gap-2 rounded-md border px-3 py-2.5 ${toneClass}`}
+      className={`flex items-start gap-[var(--space-2)] rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] ${toneClass}`}
     >
-      <Icon size={15} className="shrink-0 mt-0.5" weight="fill" />
-      <div className="min-w-0 space-y-0.5">
-        <p className="text-xs font-medium leading-tight">{status.title}</p>
-        <p className="text-[11px] opacity-90 leading-snug break-words">{result.message}</p>
+      <Icon size={15} className="shrink-0 mt-[var(--space-0-5)]" weight="fill" />
+      <div className="min-w-0 space-y-[var(--space-0-5)]">
+        <p className="text-[length:var(--type-utility-xs-size)] font-medium leading-tight">{status.title}</p>
+        <p className="text-[length:var(--type-caption-size)] opacity-90 leading-snug break-words">{result.message}</p>
         {result.cli_version && (
-          <p className="text-[10px] font-mono opacity-75">
+          <p className="text-[length:var(--type-caption-size)] font-mono opacity-75">
             {result.cli}
             {result.cli_version ? ` · v${result.cli_version}` : ''}
           </p>

@@ -19,7 +19,7 @@ import {
 import { Info } from '@phosphor-icons/react'
 import { TaskCard } from './TaskCard'
 import { isRecurringTrigger, isScheduledTrigger } from './taskFormFields'
-import { STATUS_COLORS, STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
+import { STATUS_LABELS, STATUS_ORDER } from '@/lib/statusColors'
 import { taskMoveErrorMessage } from '@/lib/api'
 import type { Task, Agent, Plan } from '@/lib/api'
 import type { BoardAltitude } from '@/store/workspacesStore'
@@ -35,13 +35,42 @@ interface ColumnConfig {
   headerColor: string
 }
 
+/**
+ * Header tint per status — a literal `switch` over the closed `TaskStatus`
+ * set, not a dynamic record lookup (the design-system static scanners cannot
+ * resolve a class/style value read out of a record via a runtime key — same
+ * shape as `PriorityBadge.tsx`'s switch-per-branch `className`). Each branch
+ * is the matching `--status-<name>-foreground` token
+ * (`src/styles/tokens.generated.css`), which resolves to the same value
+ * `@/lib/statusColors`' `STATUS_COLORS` does (both ultimately read
+ * `src/design-system/status.ts`'s `statusContract`).
+ */
+function statusHeaderColorVar(status: TaskStatus): string {
+  switch (status) {
+    case 'inbox':
+      return 'var(--status-inbox-foreground)'
+    case 'next':
+      return 'var(--status-next-foreground)'
+    case 'in_progress':
+      return 'var(--status-in-progress-foreground)'
+    case 'blocked':
+      return 'var(--status-blocked-foreground)'
+    case 'done':
+      return 'var(--status-done-foreground)'
+    case 'failed':
+      return 'var(--status-failed-foreground)'
+    default:
+      return 'var(--status-inbox-foreground)'
+  }
+}
+
 // Columns are read off STATUS_ORDER — NEVER hardcoded here (ADR-051 D5 drops
 // `planning` from the canonical status set; this board just follows suit and
 // renders however many columns STATUS_ORDER holds, with no board-side edit).
 const COLUMNS: ColumnConfig[] = STATUS_ORDER.map((status) => ({
   status,
   label: STATUS_LABELS[status],
-  headerColor: STATUS_COLORS[status],
+  headerColor: statusHeaderColorVar(status),
 }))
 
 /** The canonical status vocabulary, for spotting tasks whose `status` isn't
@@ -322,7 +351,7 @@ export function BoardView({
       {orphanTasks.length > 0 && (
         <div
           role="status"
-          className="flex items-center gap-1.5 border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)] px-3 py-1 text-[10px] text-[var(--color-warning)] flex-shrink-0"
+          className="flex items-center gap-[var(--space-1)] border-b border-[var(--color-border)]/15 bg-[var(--color-surface-0)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)] flex-shrink-0"
         >
           <Info size={11} weight="fill" className="shrink-0" />
           {orphanTasks.length} task{orphanTasks.length === 1 ? '' : 's'} with an unrecognized status{' '}
@@ -367,8 +396,8 @@ export function BoardView({
  * genuinely task-free) board must never read as a load failure. */
 function BoardEmptyState({ filtered }: { filtered: boolean }) {
   return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-8">
-      <p className="text-sm text-[var(--color-muted)]">
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-[var(--space-5)]">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
         {filtered ? 'No tasks match the current filter.' : 'No tasks yet.'}
       </p>
     </div>
@@ -382,11 +411,11 @@ function StatusHeaderRow({ counts }: { counts: Record<TaskStatus, number> }) {
     <div className="flex sticky top-0 z-10 bg-[var(--color-surface-0)] border-b border-[var(--color-border)]/15">
       {COLUMNS.map((col) => (
         // Compact status header: a thin label + count strip.
-        <div key={col.status} className="flex-1 min-w-[162px] flex items-center gap-2 px-3 h-[25px]">
-          <span className="text-xs font-semibold leading-none" style={{ color: col.headerColor }}>
+        <div key={col.status} className="flex-1 min-w-[162px] flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-[25px]">
+          <span className="text-[length:var(--type-utility-xs-size)] font-semibold leading-none" style={{ color: col.headerColor }}>
             {col.label}
           </span>
-          <span className="rounded-full bg-[var(--color-surface-2)] px-1.5 text-[10px] font-semibold leading-none text-[var(--color-muted)]">
+          <span className="rounded-full bg-[var(--color-surface-2)] px-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold leading-none text-[var(--color-muted)]">
             {counts[col.status] ?? 0}
           </span>
         </div>
@@ -620,12 +649,16 @@ function StatusColumn({
   activeTask,
   onTaskClick,
 }: StatusColumnProps) {
-  const { setNodeRef, isOver } = useDroppable({ id: config.status })
+  const { setNodeRef, isOver: isOverDroppable } = useDroppable({ id: config.status })
+  const isOver = !!isOverDroppable
 
   // Visual feedback: highlight a cell the dragged card can legally land in.
-  const canAccept = activeTask
+  // `!!(...)` (matching `isOver` above) is what lets the design-system spacing
+  // scanner prove this is a plain boolean guard rather than a class value it
+  // must resolve — see scripts/design-system-locks/spacing.mjs::isProvenBoolean.
+  const canAccept = !!(activeTask
     ? canDropTransition(activeTask.status, config.status, isRecurringTrigger(activeTask.trigger)).ok
-    : true
+    : true)
 
   return (
     <div
@@ -643,9 +676,9 @@ function StatusColumn({
         // count above) stays visible/meaningful regardless of how far a
         // neighboring lane has been scrolled, and scrolling one lane never
         // bleeds into the page/board underneath (`overscroll-contain`).
-        'flex flex-col flex-1 min-w-[162px] min-h-0 gap-2 p-2 overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
+        'flex flex-col flex-1 min-w-[162px] min-h-0 gap-[var(--space-2)] p-[var(--space-2)] overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
-        isOver && !canAccept && 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40',
+        isOver && !canAccept ? 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40' : undefined,
       )}
     >
       {tasks.map((task) => (
@@ -696,7 +729,7 @@ function DraggableTaskCard({
     <div
       ref={setNodeRef}
       // The card while being dragged is shown in the DragOverlay; hide the source.
-      className={cn(isDragging && 'opacity-40')}
+      className={cn(isDragging ? 'opacity-40' : undefined)}
     >
       <TaskCard
         task={task}

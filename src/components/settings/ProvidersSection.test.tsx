@@ -785,9 +785,9 @@ describe('ProvidersSection — save confirmation (ADR-0008 ruling 6)', () => {
     fireEvent.change(screen.getByTestId('api-key-input-anthropic'), { target: { value: 'sk-ant-secret' } })
     fireEvent.click(screen.getByTestId('save-provider-anthropic'))
 
-    const dialog = await screen.findByTestId('confirm-dialog')
-    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Save API key')
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(within(dialog).getByRole('button', { name: 'Save API key' })).toHaveTextContent('Save API key')
     // No input of any kind — this is a decision, not a credential prompt.
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
     expect(api.configureProvider).not.toHaveBeenCalled()
@@ -804,7 +804,7 @@ describe('ProvidersSection — save confirmation (ADR-0008 ruling 6)', () => {
     fireEvent.change(screen.getByTestId('api-key-input-anthropic'), { target: { value: 'sk-ant-secret' } })
     fireEvent.click(screen.getByTestId('save-provider-anthropic'))
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save API key' }))
 
     await waitFor(() => {
       expect(api.configureProvider).toHaveBeenCalledWith(
@@ -832,10 +832,10 @@ describe('ProvidersSection — save confirmation (ADR-0008 ruling 6)', () => {
     fireEvent.change(screen.getByTestId('api-key-input-anthropic'), { target: { value: 'sk-ant-secret' } })
     fireEvent.click(screen.getByTestId('save-provider-anthropic'))
 
-    fireEvent.click(await screen.findByTestId('confirm-cancel'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
     expect(api.configureProvider).not.toHaveBeenCalled()
   })
@@ -900,7 +900,7 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
 
     // Save → confirm → PUT with the new models array
     fireEvent.click(screen.getByTestId('save-provider-mygw'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save API key' }))
 
     await waitFor(() => {
       expect(api.configureProvider).toHaveBeenCalledWith(
@@ -929,7 +929,7 @@ describe('ProvidersSection — manual provider (Sheet)', () => {
     expect(screen.getByText(/no models added yet/i)).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('save-provider-mygw'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save API key' }))
 
     await waitFor(() => {
       expect(api.configureProvider).toHaveBeenCalledWith(
@@ -972,7 +972,7 @@ describe('ProvidersSection — validation integration (MAJOR-3 / US8)', () => {
     await waitFor(() => screen.getByTestId('provider-config-sheet'))
     fireEvent.change(screen.getByTestId('api-key-input-openrouter'), { target: { value: key } })
     fireEvent.click(screen.getByTestId('save-provider-openrouter'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save API key' }))
   }
 
   it('US8.1 — 422 (InvalidKey) shows blocking error toast and Sheet stays open', async () => {
@@ -1282,12 +1282,12 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
     await openSheetWithKey('sk-test-123')
 
     // Radix defers a left-button pointer-down-outside to the following click,
-    // so the gesture is both events on the overlay — the element rendered
-    // immediately before the sheet inside the portal.
-    const overlay = screen.getByTestId('provider-config-sheet').previousElementSibling
-    expect(overlay).not.toBeNull()
-    fireEvent.pointerDown(overlay as Element, { button: 0 })
-    fireEvent.click(overlay as Element, { button: 0 })
+    // so the gesture is both events on the actual overlay. Address the overlay
+    // by its stable hook: Button live-region portals are also body siblings and
+    // make portal-relative sibling position an invalid locator.
+    const overlay = screen.getByTestId('sheet-overlay')
+    fireEvent.pointerDown(overlay, { button: 0 })
+    fireEvent.click(overlay, { button: 0 })
 
     await waitFor(() => {
       expect(screen.getByTestId('discard-key-prompt')).toBeInTheDocument()
@@ -1345,7 +1345,7 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
 
     await openSheetWithKey('sk-saved-key')
     fireEvent.click(screen.getByTestId('save-provider-openrouter'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Save API key' }))
 
     await waitFor(() => {
       expect(screen.getByTestId('save-validation-banner-openrouter')).toBeInTheDocument()

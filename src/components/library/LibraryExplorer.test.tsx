@@ -548,7 +548,19 @@ describe('LibraryExplorer — unsaved-edit navigation guard', () => {
   // depends on the guard's boolean state, not on how it got set. The
   // editor's own dirty-tracking (draft !== last-saved) is covered separately
   // by useLibraryFileEditor.test.ts.
-  it('warns before switching to a different file while an editor has unsaved edits, and stays put if the user cancels', async () => {
+  //
+  // confirmDiscardLibraryEdits() is async (it opens the catalogued
+  // ConfirmDialog in place of window.confirm — see unsavedGuard.ts). This
+  // test is also the mutation-proof required by the migration task: it
+  // asserts navigation has NOT happened in the same tick as the click,
+  // before the dialog's Promise ever resolves. Drop the `await` in
+  // LibraryExplorer's handleSelectFile and the guard's `!expr` check
+  // evaluates a Promise object — always truthy — so `if (!x) return` never
+  // returns and the click navigates immediately; this test would then fail
+  // on the "still on report.md, nothing awaited yet" assertion. Verified by
+  // hand (2026-09-21): removing that one `await` failed this test with
+  // draft.md open before the dialog even rendered; restoring it fixed it.
+  it('opens the discard-unsaved-changes dialog before switching files, stays put on Cancel, and navigates on Discard', async () => {
     mockedFetchWorkspaces.mockResolvedValue([])
     mockedFetchEntries.mockResolvedValue([
       makeEntry({ name: 'report.md', path: 'report.md' }),
@@ -559,20 +571,42 @@ describe('LibraryExplorer — unsaved-edit navigation guard', () => {
 
     await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-report.md'))
-    await waitFor(() => expect(screen.getByTestId('library-preview-pane')).toBeInTheDocument())
+    // Wait for the EDITOR itself to be mounted (the View/Edit toggle only
+    // renders once useLibraryFileEditor is up), not just the preview
+    // pane/title — those render immediately from `selectedEntry` alone,
+    // before the content fetch (and so the editor's own mount effect,
+    // which sets the guard's dirty flag false on mount) has resolved.
+    // Setting the guard dirty before that effect has run would only have it
+    // clobbered back to false the moment the effect finally fires.
+    await screen.findByTestId('library-preview-mode-view')
 
     const { setLibraryEditorDirty } = await import('./preview/unsavedGuard')
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     setLibraryEditorDirty(true)
 
     fireEvent.click(screen.getByTestId('library-row-draft.md'))
 
-    expect(confirmSpy).toHaveBeenCalled()
-    // Still on report.md — draft.md's content was never requested.
+    // Synchronous assertion, no waitFor: the guard's Promise has not
+    // resolved yet, so navigation must not have happened. This is the line
+    // that only a real `await` in handleSelectFile keeps true.
+    expect(screen.getByTestId('library-preview-title')).toHaveTextContent('report.md')
+
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Discard unsaved changes?')
+    expect(dialog).toHaveTextContent('You have unsaved changes in the Library editor.')
+
+    // Cancel: stays on report.md, draft.md's content never requested.
+    fireEvent.click(within(dialog).getByText('Cancel'))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+    expect(screen.getByTestId('library-preview-title')).toHaveTextContent('report.md')
     expect(mockedFetchContent).not.toHaveBeenCalledWith('ws-1', 'draft.md')
 
-    confirmSpy.mockRestore()
-    setLibraryEditorDirty(false)
+    // Still dirty (Cancel does not clear it) — clicking draft.md again
+    // re-opens the same dialog; this time answer Discard.
+    fireEvent.click(screen.getByTestId('library-row-draft.md'))
+    const secondDialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(secondDialog).getByText('Discard'))
+
+    await waitFor(() => expect(screen.getByTestId('library-preview-title')).toHaveTextContent('draft.md'))
   })
 })
 
@@ -1128,25 +1162,29 @@ describe('LibraryExplorer — list/preview split and inline media', () => {
 // assert an absence (nothing selected locally, no remount, no stale entry)
 // rather than a presence, because a component keeping its own copy would pass
 // the presence assertions just as well.
-describe('LibraryExplorer — deep-linking (addressed mode)', () => {
-
-  function renderAddressed(address: { workspaceId?: string; path?: string }) {
-    const client = makeClient()
-    const onAddressChange = vi.fn()
-    const tree = (a: { workspaceId?: string; path?: string }) => (
-      <QueryClientProvider client={client}>
-        <LibraryExplorer address={a} onAddressChange={onAddressChange} />
-      </QueryClientProvider>
-    )
-    const utils = render(tree(address))
-    return {
-      ...utils,
-      onAddressChange,
-      /** Simulates the URL changing under the component — back button, a
-       *  pasted link, or a link a later wave hands it. */
-      navigateTo: (next: { workspaceId?: string; path?: string }) => utils.rerender(tree(next)),
-    }
+// Shared by both deep-linking describe blocks below — a function-size
+// budget requirement (scripts/check-function-budget.sh; see
+// scripts/budgets/functions.txt's grandfathered entry for this file).
+function renderAddressedLibraryExplorer(address: { workspaceId?: string; path?: string }) {
+  const client = makeClient()
+  const onAddressChange = vi.fn()
+  const tree = (a: { workspaceId?: string; path?: string }) => (
+    <QueryClientProvider client={client}>
+      <LibraryExplorer address={a} onAddressChange={onAddressChange} />
+    </QueryClientProvider>
+  )
+  const utils = render(tree(address))
+  return {
+    ...utils,
+    onAddressChange,
+    /** Simulates the URL changing under the component — back button, a
+     *  pasted link, or a link a later wave hands it. */
+    navigateTo: (next: { workspaceId?: string; path?: string }) => utils.rerender(tree(next)),
   }
+}
+
+describe('LibraryExplorer — deep-linking (addressed mode)', () => {
+  const renderAddressed = renderAddressedLibraryExplorer
 
   it('opens the addressed file selected, listing the folder that contains it (US-3 AS-3)', async () => {
     mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1' })])
@@ -1192,7 +1230,13 @@ describe('LibraryExplorer — deep-linking (addressed mode)', () => {
     await waitFor(() => expect(screen.getByTestId('library-row-report.md')).toBeInTheDocument())
     fireEvent.click(screen.getByTestId('library-row-report.md'))
 
-    expect(onAddressChange).toHaveBeenCalledWith({ workspaceId: 'ws-1', path: 'report.md' })
+    // The unsaved-edits guard is now async (confirmDiscardLibraryEdits()
+    // always returns a Promise, even on its not-dirty fast path — see
+    // unsavedGuard.ts), so goTo()/onAddressChange fire one microtask after
+    // the click rather than synchronously within it.
+    await waitFor(() =>
+      expect(onAddressChange).toHaveBeenCalledWith({ workspaceId: 'ws-1', path: 'report.md' }),
+    )
     // The caller has not yet handed a new address back, so nothing opened.
     // A component that also kept the selection locally would show the pane
     // here and would go on showing it even if the URL never changed.
@@ -1230,7 +1274,11 @@ describe('LibraryExplorer — deep-linking (addressed mode)', () => {
     const closeButton = await screen.findByTestId('library-preview-close')
     fireEvent.click(closeButton)
 
-    expect(onAddressChange).toHaveBeenCalledWith({ workspaceId: 'ws-1', path: undefined })
+    // Async guard (see the comment on the sibling test above) — one
+    // microtask after the click, not synchronously within it.
+    await waitFor(() =>
+      expect(onAddressChange).toHaveBeenCalledWith({ workspaceId: 'ws-1', path: undefined }),
+    )
 
     navigateTo({ workspaceId: 'ws-1', path: undefined })
     await waitFor(() => expect(screen.queryByTestId('library-preview-pane')).toBeNull())
@@ -1248,6 +1296,13 @@ describe('LibraryExplorer — deep-linking (addressed mode)', () => {
     expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', 'a/b', false)
     expect(screen.getByTestId('library-row-a/b/deep.md')).toBeInTheDocument()
   })
+})
+
+// A function-size budget split from the describe block above — same
+// "addressed mode" contract, same shared `renderAddressed` helper; no
+// behavioural boundary between the two blocks.
+describe('LibraryExplorer — deep-linking (addressed mode): missing path and edge cases', () => {
+  const renderAddressed = renderAddressedLibraryExplorer
 
   it('opens the containing folder with a message naming the missing path, not an error state (US-3 AS-5)', async () => {
     mockedFetchWorkspaces.mockResolvedValue([])
@@ -1350,21 +1405,27 @@ describe('LibraryExplorer — deep-linking (addressed mode)', () => {
     })
 
     const { onAddressChange } = renderAddressed({ workspaceId: 'ws-1', path: 'report.md' })
-    await screen.findByTestId('library-preview-pane')
+    // The editor itself (not just the pane) must be mounted before setting
+    // the guard dirty — see the sibling test's comment above for why: its
+    // own mount effect otherwise clobbers this back to false once the
+    // content fetch resolves.
+    await screen.findByTestId('library-preview-mode-view')
 
     const { setLibraryEditorDirty } = await import('./preview/unsavedGuard')
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     setLibraryEditorDirty(true)
 
     fireEvent.click(screen.getByTestId('library-row-draft.md'))
 
-    expect(confirmSpy).toHaveBeenCalled()
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Discard unsaved changes?')
+    fireEvent.click(within(dialog).getByText('Cancel'))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
+
     // The URL must not move either — a blocked navigation that still rewrote
     // the address would leave the address pointing at a file the pane never
     // opened.
     expect(onAddressChange).not.toHaveBeenCalled()
 
-    confirmSpy.mockRestore()
     setLibraryEditorDirty(false)
   })
 

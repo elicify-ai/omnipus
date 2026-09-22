@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef } from 'react'
 import { CaretDown, CaretUp, Trash, Plus } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 // SSRF preset definitions — also consumed by SandboxSection for the
 // configData→state hydration effect and the re-auth-cancel-revert helper
@@ -70,79 +72,84 @@ export function SsrfEditor({
   }
 
   return (
-    <div className="space-y-2 border-t border-[var(--color-border)] pt-3">
-      <p className="text-xs font-semibold text-[var(--color-secondary)]">
+    <div className="space-y-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]">
+      <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
         SSRF internal-network policy
       </p>
 
-      <div className="flex flex-wrap gap-2">
+      <SegmentedControl
+        aria-label="SSRF internal-network preset"
+        value={activePreset === null ? '' : String(activePreset)}
+        onValueChange={(value) => onPresetClick(Number(value))}
+        className="h-auto flex-wrap gap-[var(--space-2)] border-0 bg-transparent p-0"
+      >
         {SSRF_PRESETS.map((preset, idx) => (
-          <button tabIndex={0}
+          <SegmentedControlItem
             key={preset.label}
-            type="button"
-            onClick={() => onPresetClick(idx)}
+            value={String(idx)}
             className={[
-              'rounded border px-3 py-1 text-xs transition-colors focus:outline-none cursor-pointer',
+              'h-auto rounded border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shadow-none',
               activePreset === idx
-                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50',
+                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)] hover:bg-[var(--color-accent)]/10 hover:text-[var(--color-accent)]'
+                : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-surface-2)] hover:text-[var(--color-muted)]',
             ].join(' ')}
-            aria-pressed={activePreset === idx}
           >
             {preset.label}
-          </button>
+          </SegmentedControlItem>
         ))}
-      </div>
+      </SegmentedControl>
 
-      <button tabIndex={0}
+      <Button
+        variant="ghost"
         type="button"
         onClick={onAdvancedToggle}
-        className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors focus:outline-none"
+        className="h-auto w-auto gap-[var(--space-1)] p-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
         aria-expanded={advancedOpen}
       >
         {advancedOpen ? <CaretUp size={10} /> : <CaretDown size={10} />}
         Advanced (custom list)
-      </button>
+      </Button>
 
       {advancedOpen && (
-        <div className="space-y-1 pl-3 border-l border-[var(--color-border)]">
+        <div className="space-y-[var(--space-1)] pl-[var(--space-2-5)] border-l border-[var(--color-border)]">
           {list.length === 0 && (
-            <p className="text-xs text-[var(--color-muted)] italic">Empty — all internal traffic blocked.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">Empty — all internal traffic blocked.</p>
           )}
           {list.map((entry, i) => {
             const entryErrorId = advancedErrors[i] ? `ssrf-entry-error-${i}` : undefined
             return (
-              <div key={i} className="flex flex-col gap-0.5">
-                <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1">
-                  <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
+              <div key={i} className="flex flex-col gap-[var(--space-0-5)]">
+                <div className="flex items-center gap-[var(--space-2)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)]">
+                  <span className="flex-1 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] break-all">
                     {entry}
                   </span>
-                  <button tabIndex={0}
+                  <IconButton
+                    variant="ghost"
                     ref={(el) => { deleteButtonRefs.current[i] = el }}
                     type="button"
                     aria-label={`Delete SSRF entry ${entry}`}
                     aria-describedby={entryErrorId}
-                    className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
+                    className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                     onClick={() => handleDeleteAdvanced(i)}
                   >
                     <Trash size={12} />
-                  </button>
+                  </IconButton>
                 </div>
                 {entryErrorId && (
-                  <p id={entryErrorId} className="text-[10px] text-[var(--color-error)] pl-2">{advancedErrors[i]}</p>
+                  <p id={entryErrorId} className="text-[length:var(--type-caption-size)] text-[var(--color-error)] pl-[var(--space-2)]">{advancedErrors[i]}</p>
                 )}
               </div>
             )
           })}
 
-          <div className="space-y-1 pt-1">
-            <div className="flex items-center gap-2">
+          <div className="space-y-[var(--space-1)] pt-[var(--space-1)]">
+            <div className="flex items-center gap-[var(--space-2)]">
               <Input
                 ref={newEntryInputRef}
                 value={newSsrfEntry}
                 onChange={(e) => onNewSsrfEntryChange(e.target.value)}
                 placeholder="10.0.0.0/8 or internal.corp"
-                className="h-7 text-xs font-mono flex-1"
+                className="h-7 text-[length:var(--type-utility-xs-size)] font-mono flex-1"
                 aria-label="New SSRF allow entry"
                 aria-invalid={ssrfAddError ? true : undefined}
                 aria-describedby={ssrfAddError ? addErrorId : undefined}
@@ -154,7 +161,7 @@ export function SsrfEditor({
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-7 px-2 gap-1 text-xs shrink-0"
+                className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shrink-0"
                 onClick={onAddSsrfEntry}
                 aria-label="Add SSRF entry"
               >
@@ -163,7 +170,7 @@ export function SsrfEditor({
               </Button>
             </div>
             {ssrfAddError && (
-              <p id={addErrorId} className="text-[10px] text-[var(--color-error)]">{ssrfAddError}</p>
+              <p id={addErrorId} className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">{ssrfAddError}</p>
             )}
           </div>
         </div>

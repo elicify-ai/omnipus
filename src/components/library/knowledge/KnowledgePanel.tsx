@@ -61,6 +61,7 @@ import { cn } from '@/lib/utils'
 
 import { KnowledgeEmptyState, type KnowledgeFirstRunState } from './KnowledgeEmptyState'
 import { KnowledgeViewsList, type LoadCollectionViewsFn } from './KnowledgeViewsList'
+import { Button } from '@/components/ui/button'
 
 /** Last path segment of a workspace-relative folder path; '' for the root. */
 function folderNameOf(rootPath: string): string {
@@ -243,7 +244,7 @@ export function KnowledgePanel({
         data-testid="knowledge-panel-checking"
         role="status"
         className={cn(
-          'flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-2.5 text-xs text-[var(--color-muted)]',
+          'flex items-center gap-[var(--space-2)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]',
           className,
         )}
       >
@@ -265,11 +266,11 @@ export function KnowledgePanel({
         data-testid="knowledge-panel-error"
         role="alert"
         className={cn(
-          'flex items-start gap-2 rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-4 py-2.5',
+          'flex items-start gap-[var(--space-2)] rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2)]',
           className,
         )}
       >
-        <div className="min-w-0 flex-1 space-y-1 text-xs leading-relaxed text-[var(--color-error)]">
+        <div className="min-w-0 flex-1 space-y-[var(--space-1)] text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-error)]">
           <p>
             Omnipus could not check whether this folder is a knowledge base, so search and linked
             mentions are unavailable here. This is not the same as the folder being an ordinary
@@ -284,15 +285,14 @@ export function KnowledgePanel({
             accessible name on one screen are ambiguous to anyone navigating by
             name — a screen-reader user, or a test. This one names the thing it
             re-does. */}
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="outline"
           data-testid="knowledge-panel-retry"
           onClick={() => void query.refetch()}
-          className="shrink-0 rounded-md border border-[var(--color-error)]/50 px-2 py-1 text-xs font-medium text-[var(--color-error)] transition-colors hover:bg-[var(--color-error)]/15"
+          className="h-auto shrink-0 rounded-md border-[var(--color-error)]/50 px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-error)] hover:bg-[var(--color-error)]/15 hover:text-[var(--color-error)]"
         >
           Check again
-        </button>
+        </Button>
       </div>
     )
   }
@@ -319,14 +319,14 @@ export function KnowledgePanel({
   if (state.kind === 'not_a_knowledge_base' && !onCreateCollection) return null
 
   return (
-    <div data-testid="knowledge-panel" className={cn('flex flex-col gap-2', className)}>
+    <div data-testid="knowledge-panel" className={cn('flex flex-col gap-[var(--space-2)]', className)}>
       <KnowledgeEmptyState
         state={state}
         onCreateCollection={onCreateCollection}
         onCreateNote={onCreateNote}
       />
       {surfaceEnabled && (
-        <div data-testid="knowledge-panel-surface" className="flex flex-col gap-2">
+        <div data-testid="knowledge-panel-surface" className="flex flex-col gap-[var(--space-2)]">
           {children}
           {/* UAT D-13 (web half): the collection's own Views list. A view
               authored through knowledge_configure writes no `.base` file, so

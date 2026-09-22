@@ -1,0 +1,17 @@
+{
+  "version":1,"component":"Textarea","exports":["Textarea"],"category":"primitive","source":"src/components/ui/textarea.tsx","documentation":"docs/internal/design/components/textarea.md","owner":"design-system","themes":["dark"],"variants":["default"],"sizes":["default"],"states":["default","read-only","invalid","disabled"],
+  "stories":[{"file":"src/components/ui/textarea.stories.tsx","exports":["Default","ReadOnly","Invalid","Disabled","NarrowViewport"]}],
+  "checks":[
+    {"id":"textarea-unit","kind":"unit","file":"src/components/ui/textarea.test.tsx","test":"Textarea — native form contract preserves identity, controlled value, read-only, required and invalid state","applicable":true},
+    {"id":"textarea-interaction","kind":"interaction","file":"src/components/ui/textarea.stories.tsx","test":"Default","story":"Default","applicable":true},
+    {"id":"textarea-axe","kind":"axe","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-axe] axe","story":"Default","applicable":true},
+    {"id":"textarea-keyboard","kind":"keyboard","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-keyboard] keyboard","story":"Default","applicable":true},
+    {"id":"textarea-browser","kind":"browser","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-browser] browser","story":"Default","applicable":true},
+    {"id":"textarea-pointer","kind":"pointer","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-pointer] pointer","story":"Default","applicable":true},
+    {"id":"textarea-reduced-motion","kind":"reduced-motion","applicable":false,"reason":"Textarea has no motion."},
+    {"id":"textarea-forced-colors","kind":"forced-colors","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-forced-colors] forced-colors","story":"Default","applicable":true},
+    {"id":"textarea-root-size","kind":"root-size","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-root-size] root-size","story":"Default","applicable":true},
+    {"id":"textarea-zoom","kind":"zoom","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-zoom] zoom","story":"Default","applicable":true},
+    {"id":"textarea-reflow","kind":"reflow","file":"tests/design-system/browser.spec.ts","test":"Textarea [check:textarea-reflow] reflow","story":"Default","applicable":true}
+  ]
+}

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { CaretDown, CaretUp, ArrowSquareOut } from '@phosphor-icons/react'
+import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
@@ -107,56 +108,44 @@ function WebSearchBlock({
     // frame — see GenericToolCall.tsx/toolStatusConfig.tsx for the reference
     // language. The decorative MagnifyingGlass tool-type icon is gone; the
     // leading slot is the status dot/spinner only, same as the other rows.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => hasDetail && setExpanded((e) => !e)}
-        className={cn(
-          'flex w-full items-center gap-2 py-1 transition-colors text-left',
-          hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-          !hasDetail && 'cursor-default'
-        )}
-        aria-expanded={hasDetail ? expanded : undefined}
-        disabled={!hasDetail}
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        expandable={hasDetail}
+        data-testid="web-search-toggle"
       >
         {statusConfig.indicator}
         <span className="text-[var(--color-muted)] shrink-0">web_search</span>
         <span className="text-[var(--color-secondary)] truncate flex-1 min-w-0 italic">{query}</span>
-        <span className="flex items-center gap-1.5 shrink-0">
-          <span className={cn('text-[var(--color-muted)]', statusConfig.textClass)}>
-            {countOrStatusLabel}
-          </span>
-          {hasDetail && (
-            <span className="ml-1 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-            </span>
-          )}
+        <span className={cn('text-[var(--color-muted)] shrink-0')}>
+          {countOrStatusLabel}
         </span>
-      </button>
+      </DisclosureRow>
 
       {/* Results panel — left-accent block, no bordered card. Inner content
           keeps its identity (numbered result list / raw preview) but the
           old divide-y row dividers are gone; spacing carries the separation. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           {hasStructured ? (
-            <div className="space-y-2">
+            <div className="space-y-[var(--space-2)]">
               {parsed.map((item) => (
-                <div key={item.index} className="flex items-start gap-1.5">
-                  <span className="text-[var(--color-muted)] shrink-0 mt-0.5">{item.index}.</span>
+                <div key={item.index} className="flex items-start gap-[var(--space-1)]">
+                  <span className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]">{item.index}.</span>
                   <div className="min-w-0">
                     <p className="text-[var(--color-secondary)] font-medium leading-snug break-words">
                       {item.title}
                     </p>
                     {item.url && (
-                      <p className="text-[var(--color-accent)] font-mono text-[10px] truncate flex items-center gap-1">
+                      <p className="text-[var(--color-accent)] font-mono text-[length:var(--type-caption-size)] truncate flex items-center gap-[var(--space-1)]">
                         {item.url}
                         <ArrowSquareOut size={9} className="shrink-0" />
                       </p>
                     )}
                     {item.snippet && (
-                      <p className="text-[var(--color-muted)] text-[10px] leading-relaxed mt-0.5 line-clamp-2">
+                      <p className="text-[var(--color-muted)] text-[length:var(--type-caption-size)] leading-relaxed mt-[var(--space-0-5)] line-clamp-2">
                         {item.snippet}
                       </p>
                     )}
@@ -165,7 +154,7 @@ function WebSearchBlock({
               ))}
             </div>
           ) : (
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+            <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
               {content}
             </pre>
           )}

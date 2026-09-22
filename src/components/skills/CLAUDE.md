@@ -4,6 +4,12 @@ Skill browse/install surface (`SkillBrowser.tsx`, opened from
 `SkillsScreen.tsx` in `src/components/screens/`) and MCP server management
 (`McpServerModal.tsx`).
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## Not everything here is skills
 
 - `ChannelConfigPanel.tsx` is the per-channel Configure slide-over for the

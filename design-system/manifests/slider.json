@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "component": "Slider",
+  "exports": [
+    "Slider"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/slider.tsx",
+  "documentation": "docs/internal/design/components/slider.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default",
+    "disabled",
+    "vertical"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/slider.stories.tsx",
+      "exports": [
+        "Default",
+        "Disabled",
+        "Vertical"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "slider-unit",
+      "kind": "unit",
+      "file": "src/components/ui/slider.test.tsx",
+      "test": "Slider — value contract exposes controlled value and keyboard changes through the slider role",
+      "applicable": true
+    },
+    {
+      "id": "slider-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/slider.stories.tsx",
+      "test": "Default",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-disabled-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/slider.stories.tsx",
+      "test": "Disabled",
+      "story": "Disabled",
+      "applicable": true
+    },
+    {
+      "id": "slider-vertical-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/slider.stories.tsx",
+      "test": "Vertical",
+      "story": "Vertical",
+      "applicable": true
+    },
+    {
+      "id": "slider-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "slider-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Slider [check:slider-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

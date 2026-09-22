@@ -33,6 +33,9 @@ import { Check, X } from '@phosphor-icons/react'
 import type { AskUserQuestionCard as AskUserCard } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore } from '@/store/chat'
 import { HistoricalMessageMarkdown } from './historical-markdown'
+import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /** Grace window before the client auto-submits a fully-answered card. */
 export const ASK_GRACE_MS = 5 * 60 * 1000
@@ -160,6 +163,8 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
 
   // 1s tick drives the countdown line; only armed while one is visible.
   const hasCountdown = card.status === 'pending' && Boolean(card.default_safe_at)
+  // The card's own answer state (pending/answered/cancelled), not a task status.
+  const isCancelledCard = card.status === 'cancelled'
   useEffect(() => {
     if (!hasCountdown) return
     const t = setInterval(() => setNow(Date.now()), 1000)
@@ -195,26 +200,26 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
     return (
       <div
         data-testid="ask-user-collapsed"
-        className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-xs"
+        className="my-[var(--space-2)] border-y border-[var(--color-border)] py-[var(--space-2)] px-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
       >
-        <div className="flex items-center gap-2 mb-1.5">
+        <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
           {card.status === 'answered' ? (
             <Check size={12} weight="bold" className="text-[color:var(--color-success)]" aria-hidden="true" />
           ) : (
             <X size={12} weight="bold" className="text-[var(--color-muted)]" aria-hidden="true" />
           )}
-          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+          <span className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
             {card.status === 'answered' ? 'Answered' : 'Cancelled'} · {card.agent_id}&apos;s questions
           </span>
         </div>
         {card.status === 'answered' &&
           (card.answers ?? []).map((a) => (
-            <div key={a.header} className="flex items-baseline gap-3 my-1" data-testid="ask-user-record-row">
+            <div key={a.header} className="flex items-baseline gap-[var(--space-2-5)] my-[var(--space-1)]" data-testid="ask-user-record-row">
               <span className="flex-1 text-[var(--color-muted)] break-words">{a.question}</span>
               <span className="text-[color:var(--color-success)] font-medium whitespace-nowrap">
                 {a.free_text ?? (a.selected ?? []).join(', ')}
                 {a.auto_default && (
-                  <span className="text-[var(--color-accent)] font-normal" data-testid="ask-user-auto-marker">
+                  <span className="text-[var(--color-accent)] font-[var(--font-weight-regular)]" data-testid="ask-user-auto-marker">
                     {' '}
                     · auto
                   </span>
@@ -222,7 +227,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               </span>
             </div>
           ))}
-        {card.status === 'cancelled' && (
+        {isCancelledCard && (
           <p className="text-[var(--color-muted)]">Questions dismissed — no answers were sent.</p>
         )}
       </div>
@@ -238,51 +243,59 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
       data-testid="ask-user-question-card"
       role="group"
       aria-label={`Questions from ${card.agent_id}`}
-      className="my-2 border-y border-[var(--color-border)] py-2.5 text-xs"
+      className="my-[var(--space-2)] border-y border-[var(--color-border)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
     >
       {/* Header: label + tabs */}
-      <div className="flex items-center gap-2.5 mb-3">
-        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--color-muted)]">
+      <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-2-5)]">
+        <span className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-widest text-[var(--color-muted)]">
           <b className="text-[var(--color-accent)] font-medium">{card.agent_id}</b> needs your input
         </span>
-        <div className="flex gap-1.5 ml-auto" role="tablist">
+        {/* Question switcher — SegmentedControlItem, not role="tab"/"tablist":
+            every item keeps its own normal Tab stop with no roving tabindex
+            and no aria-controls wiring to a tabpanel, which is exactly the
+            shape that primitive's own doc comment (segmented-control.tsx)
+            calls out as the case role="tablist"/"tab" would misrepresent —
+            see CalendarToolbar.tsx's precedent cited there. */}
+        <SegmentedControl
+          aria-label="Questions"
+          value={String(active)}
+          onValueChange={(v) => {
+            touch()
+            setActive(Number(v))
+          }}
+          className="ml-auto gap-[var(--space-1)] rounded-none border-0 bg-transparent p-0"
+        >
           {questions.map((tq, i) => {
             const done = isAnswered(tq)
             return (
-              <button tabIndex={0}
+              <SegmentedControlItem
                 key={tq.header}
-                type="button"
-                role="tab"
-                aria-selected={i === active}
+                value={String(i)}
                 data-testid={`ask-user-tab-${i}`}
-                onClick={() => {
-                  touch()
-                  setActive(i)
-                }}
-                className={
-                  'font-mono text-[11px] bg-transparent border-0 border-b-2 px-1.5 pb-1 cursor-pointer ' +
-                  (i === active
-                    ? 'text-[var(--color-primary-fg,var(--color-secondary))] border-[var(--color-accent)]'
+                className={cn(
+                  'h-auto shrink-0 rounded-none border-0 border-b-2 px-[var(--space-2)] pb-[var(--space-1)] font-mono text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] shadow-none',
+                  i === active
+                    ? 'bg-transparent text-[var(--color-secondary)] border-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-secondary)]'
                     : done
-                      ? 'text-[color:var(--color-success)] border-transparent'
-                      : 'text-[var(--color-muted)] border-transparent hover:text-[var(--color-secondary)]')
-                }
+                      ? 'bg-transparent text-[color:var(--color-success)] border-transparent hover:bg-transparent hover:text-[color:var(--color-success)]'
+                      : 'bg-transparent text-[var(--color-muted)] border-transparent hover:bg-transparent hover:text-[var(--color-secondary)]',
+                )}
               >
                 {i + 1} {tq.header}
-                {done && <Check size={9} className="inline ml-0.5" aria-hidden="true" />}
-              </button>
+                {done && <Check size={9} className="inline ml-[var(--space-0-5)]" aria-hidden="true" />}
+              </SegmentedControlItem>
             )
           })}
-        </div>
+        </SegmentedControl>
       </div>
 
       {/* Active question panel */}
-      <div role="tabpanel" data-testid="ask-user-panel">
-        <p className="text-sm font-medium text-[var(--color-secondary)] mb-3">{q.question}</p>
+      <div data-testid="ask-user-panel">
+        <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] mb-[var(--space-2-5)]">{q.question}</p>
 
         {q.context && (
           <div
-            className="border-l-2 border-[var(--color-border)] pl-3 mb-3 text-[var(--color-secondary)]"
+            className="border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] mb-[var(--space-2-5)] text-[var(--color-secondary)]"
             data-testid="ask-user-context"
           >
             <HistoricalMessageMarkdown content={q.context} />
@@ -294,21 +307,24 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
             const d = draftFor(q.header)
             const selected = d.selected.includes(o.label)
             return (
-              <button tabIndex={0}
+              <Button
                 key={o.label}
                 type="button"
+                variant="ghost"
                 aria-pressed={selected}
                 onClick={() => selectOption(q, o.label)}
                 data-testid="ask-user-option"
-                className={
-                  'flex gap-3 items-start text-left w-full bg-transparent border-0 rounded-md px-2 py-2 cursor-pointer ' +
-                  (selected ? 'bg-[var(--color-accent)]/10' : 'hover:bg-[var(--color-accent)]/10')
-                }
+                className={cn(
+                  'h-auto w-full items-start justify-start gap-[var(--space-2-5)] px-[var(--space-2)] py-[var(--space-2)] text-left font-[var(--font-weight-regular)]',
+                  selected
+                    ? 'bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/10'
+                    : 'hover:bg-[var(--color-accent)]/10',
+                )}
               >
                 <span
                   aria-hidden="true"
                   className={
-                    'mt-0.5 shrink-0 w-3 h-3 border ' +
+                    'mt-[var(--space-0-5)] shrink-0 w-3 h-3 border ' +
                     (q.multi_select ? 'rounded-sm ' : 'rounded-full ') +
                     (selected
                       ? 'border-[var(--color-accent)] bg-[var(--color-accent)]'
@@ -316,11 +332,11 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                   }
                 />
                 <span className="min-w-0">
-                  <span className="font-medium text-[13px] text-[var(--color-secondary)] flex items-center gap-2 flex-wrap">
+                  <span className="font-medium text-[length:var(--type-caption-size)] text-[var(--color-secondary)] flex items-center gap-[var(--space-2)] flex-wrap">
                     {o.label}
                     {q.recommended === o.label && (
                       <span
-                        className="font-mono text-[9px] uppercase tracking-wider text-[var(--color-accent)]"
+                        className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-accent)]"
                         data-testid="ask-user-recommended-badge"
                       >
                         Recommended
@@ -328,7 +344,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                     )}
                     {autoResolved.has(q.header) && q.recommended === o.label && (
                       <span
-                        className="font-mono text-[9px] uppercase tracking-wider text-[var(--color-muted)]"
+                        className="font-mono text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)]"
                         data-testid="ask-user-auto-resolved"
                       >
                         auto-selected
@@ -336,13 +352,13 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
                     )}
                   </span>
                   {o.description && (
-                    <span className="block text-[var(--color-muted)] mt-0.5">{o.description}</span>
+                    <span className="block text-[var(--color-muted)] mt-[var(--space-0-5)]">{o.description}</span>
                   )}
                 </span>
-              </button>
+              </Button>
             )
           })}
-          <div className="px-2 pt-1.5">
+          <div className="px-[var(--space-2)] pt-[var(--space-1)]">
             <input
               type="text"
               tabIndex={0}
@@ -350,14 +366,14 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               onChange={(e) => typeFreeText(q, e.target.value)}
               placeholder="Something else — type your own answer…"
               data-testid="ask-user-free-text"
-              className="w-full bg-transparent border-0 border-b border-dashed border-[var(--color-border)] focus:border-solid focus:border-[var(--color-accent)] outline-none py-1.5 px-0.5 text-[13px] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]"
+              className="w-full bg-transparent border-0 border-b border-dashed border-[var(--color-border)] focus:border-solid focus:border-[var(--color-accent)] outline-none py-[var(--space-1)] px-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)]"
             />
           </div>
         </div>
 
         {q.default_safe && q.recommended && card.default_safe_at && !autoResolved.has(q.header) && (
           <div
-            className="flex items-center gap-1.5 mt-2.5 font-mono text-[11px] text-[var(--color-muted)]"
+            className="flex items-center gap-[var(--space-1)] mt-[var(--space-2)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             data-testid="ask-user-countdown"
           >
             <span className="w-1 h-1 rounded-full bg-[var(--color-accent)]" aria-hidden="true" />
@@ -367,26 +383,30 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
       </div>
 
       {/* Footer: Answer + Cancel + counter */}
-      <div className="flex items-center gap-3.5 mt-3.5">
-        <button tabIndex={0}
+      <div className="flex items-center gap-[var(--space-2-5)] mt-[var(--space-2-5)]">
+        <Button
           type="button"
+          variant="default"
+          size="sm"
           disabled={!allAnswered}
           onClick={submit}
           data-testid="ask-user-submit"
-          className="text-[13px] font-medium rounded-lg px-4 py-1.5 bg-[var(--color-accent)] text-[#1a1503] disabled:opacity-35 disabled:cursor-not-allowed cursor-pointer border-0"
+          className="h-auto rounded-lg px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)]"
         >
           Answer
-        </button>
-        <button tabIndex={0}
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           onClick={cancel}
           data-testid="ask-user-cancel"
-          className="text-[13px] bg-transparent border-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] cursor-pointer px-1"
+          className="h-auto rounded-none px-[var(--space-1)] text-[length:var(--type-caption-size)] hover:bg-transparent"
         >
           Cancel
-        </button>
+        </Button>
         <span
-          className="ml-auto font-mono text-[11px] text-[var(--color-muted)]"
+          className="ml-auto font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="ask-user-progress"
         >
           {answeredCount} / {questions.length} answered
@@ -410,10 +430,10 @@ export function AskUserQuestionThreadTail() {
   // `max-w-3xl mx-auto`) so the card never spans the full viewport.
   if (!pendingAsk || pendingAsk.status !== 'pending') return null
   return (
-    <div className="w-full max-w-3xl mx-auto px-4" data-testid="ask-user-thread-tail">
+    <div className="w-full max-w-3xl mx-auto px-[var(--space-3)]" data-testid="ask-user-thread-tail">
       <AskUserQuestionCard card={pendingAsk} />
       <p
-        className="text-center font-mono text-[11px] text-[var(--color-muted)] mt-1.5"
+        className="text-center font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-1)]"
         data-testid="ask-user-composer-note"
       >
         chat input is locked while questions are pending — Cancel to unlock

@@ -707,7 +707,15 @@ type ABIResult struct {
 }
 
 // DetectLandlockABI returns ABI information based on a probed or mocked ABI version.
-// Pass 0 for unavailable, 1-3 for specific ABI versions.
+// Pass 0 for unavailable, 1-N for specific ABI versions.
+//
+// Each per-ABI gate matches the kernel header (include/uapi/linux/landlock.h
+// at v6.10) — REFER is ABI v2 (kernel 5.19), TRUNCATE is ABI v3 (kernel 6.2),
+// NET_BIND_TCP / NET_CONNECT_TCP are ABI v4 (kernel 6.7), IOCTL_DEV is ABI v5
+// (kernel 6.10) — matching the same per-ABI gates
+// landlock_abi_rights.go::landlockRightsForABI uses for the ruleset attr, so the
+// status endpoint's feature list never claims a capability the ruleset
+// does not also request.
 func DetectLandlockABI(abiVersion int) ABIResult {
 	if abiVersion <= 0 {
 		return ABIResult{Available: false, Version: 0}
@@ -717,16 +725,19 @@ func DetectLandlockABI(abiVersion int) ABIResult {
 		"EXECUTE", "WRITE_FILE", "READ_FILE", "READ_DIR",
 		"REMOVE_DIR", "REMOVE_FILE", "MAKE_CHAR", "MAKE_DIR",
 		"MAKE_REG", "MAKE_SOCK", "MAKE_FIFO", "MAKE_BLOCK",
-		"MAKE_SYM", "REFER",
+		"MAKE_SYM",
 	}
 	if abiVersion >= 2 {
-		features = append(features, "TRUNCATE")
+		features = append(features, "REFER")
 	}
 	if abiVersion >= 3 {
-		features = append(features, "IOCTL_DEV")
+		features = append(features, "TRUNCATE")
 	}
 	if abiVersion >= 4 {
 		features = append(features, "NET_BIND_TCP", "NET_CONNECT_TCP")
+	}
+	if abiVersion >= 5 {
+		features = append(features, "IOCTL_DEV")
 	}
 
 	return ABIResult{

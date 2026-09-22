@@ -5,6 +5,7 @@ import { CaretUpDown, Check, CircleNotch, Keyboard, WarningCircle } from '@phosp
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { isKnownModelSlugInList } from '@/lib/agents/model-validation'
 import {
@@ -12,8 +13,10 @@ import {
   orderModels,
   recommendedModelIds,
   shouldVirtualiseModelList,
-} from '@/components/ui/model-ordering'
+} from '@/lib/model-ordering'
 import type { CatalogModel, components } from '@/lib/api/generated/openapi-types'
+import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
+
 
 /** The six provider statuses, straight off the wire contract (ADR-068 FR-038). */
 export type ProviderStatus = components['schemas']['Provider']['status']
@@ -35,23 +38,6 @@ export interface ModelPair {
    *  backend. Empty string when the provider could not be resolved (e.g. the
    *  group has no `providerId` or the model was entered via free-text). */
   provider: string
-}
-
-/**
- * ADR-068 FR-030 catalog mode. Where `providerGroups` carries bare slugs, this
- * carries the catalog rows themselves, which is what ordering by release date
- * and awarding a "Recommended for chat" chip need — neither is derivable from a
- * string. Supplying `catalogGroups` switches the list to catalog rendering;
- * omitting it leaves every existing call site on the string path untouched.
- */
-export interface ModelCatalogGroup {
-  /** Provider routing key — the configured provider's `id`. */
-  providerId: string
-  /** Display name, used as the vendor heading fallback for bare model ids. */
-  providerName: string
-  /** Connection status, so `filterProviders` can keep connected rows only. */
-  status?: ProviderStatus
-  models: CatalogModel[]
 }
 
 /**
@@ -407,8 +393,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         role="alert"
         className={
           isGhost
-            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-xs'
-            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-sm'
+            ? 'flex items-center gap-[var(--space-1)] h-7 rounded-md px-[var(--space-1)] text-[length:var(--type-utility-xs-size)]'
+            : 'flex w-full items-center gap-[var(--space-2)] h-10 rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)]'
         }
         style={
           isGhost
@@ -421,12 +407,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         }
       >
         <WarningCircle size={12} weight="fill" className="shrink-0" aria-hidden="true" />
-        <span className="truncate text-xs flex-1">
+        <span className="truncate text-[length:var(--type-utility-xs-size)] flex-1">
           {catalogErrorMessage ?? 'Failed to load providers'}
         </span>
         {onRetryCatalog && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onRetryCatalog}
             // Explicit tabIndex: src/lib/tabindex-convention.test.ts requires
             // every native interactive element in src/ to declare one — WebKit
@@ -434,11 +421,11 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             // silently costs keyboard users this control on Safari.
             tabIndex={tabIndex}
             data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
-            className="shrink-0 text-xs font-medium underline underline-offset-2 hover:opacity-80"
+            className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
             style={{ color: 'var(--color-accent)' }}
           >
             Retry
-          </button>
+          </Button>
         )}
         {/* Dead-end fix: Retry alone is not enough when the underlying
             problem is not transient (e.g. the network path really is down).
@@ -446,16 +433,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             visible "Unresolved" chip every unconstrained picker already
             uses for an unverified value — an explicit, visibly-flagged
             escape hatch, not a silent reopening of free text. */}
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setManualOverride(true)}
           tabIndex={tabIndex}
           data-testid={triggerTestId ? `${triggerTestId}-enter-manually` : undefined}
-          className="shrink-0 text-xs font-medium underline underline-offset-2 hover:opacity-80"
+          className="h-auto w-auto shrink-0 p-0 text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
           style={{ color: 'var(--color-muted)' }}
         >
           Enter manually
-        </button>
+        </Button>
       </div>
     )
   }
@@ -503,8 +491,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
         aria-disabled="true"
         className={
           isGhost
-            ? 'flex items-center gap-1.5 h-7 rounded-md px-1.5 text-xs cursor-not-allowed opacity-70'
-            : 'flex w-full items-center gap-2 h-10 rounded-md border px-3 py-2 text-sm cursor-not-allowed opacity-70'
+            ? 'flex items-center gap-[var(--space-1)] h-7 rounded-md px-[var(--space-1)] text-[length:var(--type-utility-xs-size)] cursor-not-allowed opacity-70'
+            : 'flex w-full items-center gap-[var(--space-2)] h-10 rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] cursor-not-allowed opacity-70'
         }
         style={
           isGhost
@@ -516,12 +504,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
               }
         }
       >
-        <span className="truncate text-xs flex-1">
+        <span className="truncate text-[length:var(--type-utility-xs-size)] flex-1">
           {emptyCatalogHint ?? 'No models available — connect a provider first'}
         </span>
         {onRetryCatalog && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={onRetryCatalog}
             // Explicit tabIndex, opted out of the parent's cursor-not-allowed
             // styling (this control itself IS actionable — only the picker
@@ -529,11 +518,11 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             // button above for the identical rationale on tabIndex.
             tabIndex={tabIndex}
             data-testid={triggerTestId ? `${triggerTestId}-retry` : undefined}
-            className="shrink-0 cursor-pointer text-xs font-medium underline underline-offset-2 hover:opacity-80"
+            className="h-auto w-auto shrink-0 p-0 cursor-pointer text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
             style={{ color: 'var(--color-accent)' }}
           >
             Retry
-          </button>
+          </Button>
         )}
         {/* Dead-end fix (see the block comment above): the operator decision
             was "non-catalogue model not selectable", which is sound only
@@ -542,16 +531,17 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             start itself), "Enter manually" is the deliberate, explicit,
             visibly-flagged way out — never a silent reopening of free text
             for a picker whose catalogue is simply working fine. */}
-        <button
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => setManualOverride(true)}
           tabIndex={tabIndex}
           data-testid={triggerTestId ? `${triggerTestId}-enter-manually` : undefined}
-          className="shrink-0 cursor-pointer text-xs font-medium underline underline-offset-2 hover:opacity-80"
+          className="h-auto w-auto shrink-0 p-0 cursor-pointer text-[length:var(--type-utility-xs-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
           style={{ color: 'var(--color-muted)' }}
         >
           Enter manually
-        </button>
+        </Button>
       </div>
     )
   }
@@ -581,7 +571,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     const valueUnresolved =
       showUnresolvedIndicator && (!constrainToCatalog || overriding) && value.trim() !== ''
     return (
-      <div className="space-y-1">
+      <div className="space-y-[var(--space-1)]">
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -591,25 +581,26 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           aria-describedby={valueUnresolved ? `${descriptionId}-unresolved` : undefined}
           disabled={disabled}
           {...(triggerTestId ? { 'data-testid': triggerTestId } : {})}
-          className="font-mono text-sm"
+          className="font-mono text-[length:var(--type-body-compact-size)]"
         />
         {overriding && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => setManualOverride(false)}
             tabIndex={tabIndex}
             data-testid={triggerTestId ? `${triggerTestId}-use-catalog` : undefined}
-            className="text-[10px] font-medium underline underline-offset-2 hover:opacity-80"
+            className="h-auto w-auto p-0 text-[length:var(--type-caption-size)] font-medium underline underline-offset-2 hover:bg-transparent hover:opacity-80"
             style={{ color: 'var(--color-muted)' }}
           >
             ← Back to catalogue picker
-          </button>
+          </Button>
         )}
         {valueUnresolved && (
           <p
             id={`${descriptionId}-unresolved`}
             data-testid={triggerTestId ? `${triggerTestId}-unresolved` : undefined}
-            className="flex items-center gap-1 text-[10px] text-[var(--color-warning)]"
+            className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
             role="status"
           >
             <WarningCircle size={11} weight="fill" aria-hidden="true" />
@@ -696,7 +687,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       key={row.key}
       data-testid="model-selector-vendor-heading"
       role="presentation"
-      className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider"
+      className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
       style={{ color: 'var(--color-muted)' }}
     >
       {row.label}
@@ -724,13 +715,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       >
         <Check
           size={14}
-          className="mr-2 shrink-0"
+          className="mr-[var(--space-2)] shrink-0"
           style={{ opacity: chosen ? 1 : 0, color: 'var(--color-accent)' }}
         />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs">{row.model.id}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[length:var(--type-utility-xs-size)]">{row.model.id}</span>
         {row.recommended && (
           <span
-            className="ml-2 shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+            className="ml-[var(--space-2)] shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider"
             style={{
               backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
               color: 'var(--color-accent)',
@@ -775,7 +766,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       })}
     </div>
   ) : (
-    <div className="p-1">{visibleCatalogRows.map(renderCatalogRow)}</div>
+    <div className="p-[var(--space-1)]">{visibleCatalogRows.map(renderCatalogRow)}</div>
   )
 
   const isGhost = variant === 'ghost'
@@ -783,9 +774,10 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
+        <Button
           type="button"
           role="combobox"
+          variant="ghost"
           aria-expanded={open}
           aria-busy={catalogStatus === 'loading' || undefined}
           aria-label={
@@ -807,8 +799,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           data-unresolved={valueUnresolved || undefined}
           className={
             isGhost
-              ? 'flex items-center gap-1 h-7 rounded-md px-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 hover:bg-[var(--color-surface-2)]'
-              : 'flex w-full items-center justify-between h-10 rounded-md border px-3 py-2 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50'
+              ? 'h-7 justify-start gap-[var(--space-1)] rounded-md px-[var(--space-1)] font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] disabled:cursor-not-allowed hover:bg-[var(--color-surface-2)]'
+              : 'h-10 w-full justify-between gap-[var(--space-2)] rounded-md border px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] disabled:cursor-not-allowed'
           }
           style={
             isGhost
@@ -820,13 +812,13 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                 }
           }
         >
-          <span className="flex items-center gap-2 min-w-0 flex-1">
-            <span className="truncate font-mono text-sm">{displayValue}</span>
+          <span className="flex items-center gap-[var(--space-2)] min-w-0 flex-1">
+            <span className="truncate font-mono text-[length:var(--type-body-compact-size)]">{displayValue}</span>
             {valueUnresolved && (
               <span
                 id={`${descriptionId}-unresolved`}
                 data-testid={triggerTestId ? `${triggerTestId}-unresolved` : undefined}
-                className="inline-flex shrink-0 items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider border"
+                className="inline-flex shrink-0 items-center gap-[var(--space-1)] px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider border"
                 style={{
                   backgroundColor: 'color-mix(in srgb, var(--color-warning) 15%, transparent)',
                   color: 'var(--color-warning)',
@@ -840,7 +832,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
             )}
           </span>
           <CaretUpDown size={14} className="shrink-0 opacity-50" />
-        </button>
+        </Button>
       </PopoverTrigger>
       <PopoverContent
         className="w-[--radix-popover-trigger-width] p-0"
@@ -882,7 +874,7 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
           <CommandList ref={catalogListRef} style={{ maxHeight: 300 }}>
             {catalogStatus === 'loading' ? (
               <div
-                className="flex items-center gap-2 px-3 py-6 text-sm"
+                className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)]"
                 style={{ color: 'var(--color-muted)' }}
                 role="status"
                 aria-live="polite"
@@ -915,10 +907,10 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                       >
                         <Check
                           size={14}
-                          className="mr-2 shrink-0"
+                          className="mr-[var(--space-2)] shrink-0"
                           style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
                         />
-                        <span className="font-mono text-xs">{model}</span>
+                        <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
                       </CommandItem>
                     ))}
                   </CommandGroup>
@@ -941,10 +933,10 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                     >
                       <Check
                         size={14}
-                        className="mr-2 shrink-0"
+                        className="mr-[var(--space-2)] shrink-0"
                         style={{ opacity: value === model ? 1 : 0, color: 'var(--color-accent)' }}
                       />
-                      <span className="font-mono text-xs">{model}</span>
+                      <span className="font-mono text-[length:var(--type-utility-xs-size)]">{model}</span>
                     </CommandItem>
                   ))}
               </CommandGroup>
@@ -955,8 +947,8 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
                   value={`custom:${queryLower}`}
                   onSelect={() => handleUnknownSelect(queryRaw)}
                 >
-                  <Keyboard size={14} className="mr-2 shrink-0" style={{ color: 'var(--color-muted)' }} />
-                  <span className="text-xs">
+                  <Keyboard size={14} className="mr-[var(--space-2)] shrink-0" style={{ color: 'var(--color-muted)' }} />
+                  <span className="text-[length:var(--type-utility-xs-size)]">
                     Use "<span className="font-mono" style={{ color: 'var(--color-accent)' }}>{queryRaw}</span>"
                   </span>
                 </CommandItem>

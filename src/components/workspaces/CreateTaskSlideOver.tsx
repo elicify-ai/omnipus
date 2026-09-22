@@ -9,6 +9,7 @@ import {
   SheetFooter,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -39,8 +40,7 @@ import type { Task, TaskCreateRequest, Todo, AcceptanceCriterion } from '@/lib/a
 import { useUiStore } from '@/store/ui'
 import { useAuthStore } from '@/store/auth'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
-import { cn } from '@/lib/utils'
-import { PRIORITY_BADGE } from './TaskCard'
+import { PriorityBadge } from './PriorityBadge'
 import { TagInput } from './TagInput'
 import { JoinMemberCheckbox, WriteSetField } from './PlanMemberFields'
 import { AcceptanceCriteriaEditor } from './AcceptanceCriteriaEditor'
@@ -454,21 +454,20 @@ export function CreateTaskSlideOver({
   }
 
   const isPending = createMutation.isPending || createAndRunMutation.isPending
-  const priorityBadge = PRIORITY_BADGE[form.priority] ?? PRIORITY_BADGE[3]
 
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>
             New task
           </SheetTitle>
         </SheetHeader>
 
-        <div className="flex flex-col flex-1 gap-5 px-6 py-4 overflow-y-auto">
+        <div className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)] overflow-y-auto">
           {/* Title */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-title" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-title">
               Title <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
@@ -482,14 +481,14 @@ export function CreateTaskSlideOver({
               aria-describedby={titleError ? 'ct-title-error' : undefined}
             />
             {titleError && (
-              <p id="ct-title-error" className="text-xs text-[var(--color-error)]">{titleError}</p>
+              <p id="ct-title-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{titleError}</p>
             )}
           </div>
 
           {/* Goal (GOAL-FR-056 — was "Prompt"; this becomes the goal record
               once the task starts its own session). Required. */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-prompt" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-prompt">
               Goal <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Textarea
@@ -499,22 +498,23 @@ export function CreateTaskSlideOver({
               placeholder="What should this task achieve?"
               rows={4}
               maxLength={10000}
-              className="text-xs font-mono resize-none"
+              className="text-[length:var(--type-utility-xs-size)] font-mono resize-none"
               aria-invalid={!!goalError}
               aria-describedby={goalError ? 'ct-goal-error' : undefined}
             />
             {goalError && (
-              <p id="ct-goal-error" className="text-xs text-[var(--color-error)]">{goalError}</p>
+              <p id="ct-goal-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{goalError}</p>
             )}
           </div>
 
           {/* Priority */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-priority" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-priority">
               Priority
-              <span className={cn('ml-2 rounded border px-1.5 py-0.5 text-[10px] font-bold', priorityBadge.className)}>
-                {priorityBadge.label}
-              </span>
+              <PriorityBadge
+                priority={form.priority}
+                className="ml-[var(--space-2)] rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold"
+              />
             </Label>
             <Select
               value={String(form.priority)}
@@ -524,11 +524,11 @@ export function CreateTaskSlideOver({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1" className="text-xs text-[color:var(--color-error)]">P1 — Critical</SelectItem>
-                <SelectItem value="2" className="text-xs text-[color:var(--color-warning)]">P2 — High</SelectItem>
-                <SelectItem value="3" className="text-xs text-[color:var(--color-warning)]">P3 — Medium</SelectItem>
-                <SelectItem value="4" className="text-xs text-[color:var(--color-accent)]">P4 — Low</SelectItem>
-                <SelectItem value="5" className="text-xs text-[var(--color-muted)]">P5 — Minimal</SelectItem>
+                <SelectItem value="1" className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-error)]">P1 — Critical</SelectItem>
+                <SelectItem value="2" className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-warning)]">P2 — High</SelectItem>
+                <SelectItem value="3" className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-warning)]">P3 — Medium</SelectItem>
+                <SelectItem value="4" className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-accent)]">P4 — Low</SelectItem>
+                <SelectItem value="5" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">P5 — Minimal</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -536,8 +536,8 @@ export function CreateTaskSlideOver({
           {/* Plan (GOAL-FR-059) — defaults to the inherited board plan
               filter, but is now a real, changeable picker instead of a
               silent inherit-only value. */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Plan</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Plan</Label>
             <SmartSelect
               value={form.planId}
               onValueChange={handlePlanChange}
@@ -559,10 +559,10 @@ export function CreateTaskSlideOver({
               adjacent to what triggers it. */}
           {effectivePlanId && (
             <div
-              className="flex flex-col gap-4 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3"
+              className="flex flex-col gap-[var(--space-3)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)]"
               data-testid="ct-plan-member-fields"
             >
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Plan member
               </p>
 
@@ -581,8 +581,8 @@ export function CreateTaskSlideOver({
           )}
 
           {/* Tags (ADR-049 — replaces the milestone selector) */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-tags" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-tags">
               Tags
             </Label>
             <TagInput
@@ -598,8 +598,8 @@ export function CreateTaskSlideOver({
               retired; a plain instruction replaces it (C-80: the `emptyHint`
               prop itself survives on AcceptanceCriteriaEditor, only this
               call site's attribute is removed). */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Acceptance criteria <span className="text-[var(--color-error)]">*</span>
             </Label>
             <AcceptanceCriteriaEditor
@@ -607,9 +607,9 @@ export function CreateTaskSlideOver({
               onChange={(criteria) => { setForm((s) => ({ ...s, criteria })); setCriteriaError('') }}
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
             />
-            <p className="text-xs text-[var(--color-muted)]">Add at least one.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Add at least one.</p>
             {criteriaError && (
-              <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{criteriaError}</p>
             )}
           </div>
 
@@ -618,20 +618,20 @@ export function CreateTaskSlideOver({
               same as Acceptance criteria. `DefinitionOfDoneEditor` (U1) is a
               thin wrapper around `AcceptanceCriteriaEditor` and already
               supplies its own label, asterisk and standing helper line. */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <DefinitionOfDoneEditor
               dod={form.dod}
               onChange={(dod) => { setForm((s) => ({ ...s, dod })); setDodError('') }}
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
             />
             {dodError && (
-              <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{dodError}</p>
             )}
           </div>
 
           {/* Agent */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Agent</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Agent</Label>
             <SmartSelect
               value={form.agentId}
               onValueChange={(v) => setForm((s) => ({ ...s, agentId: v }))}
@@ -667,7 +667,7 @@ export function CreateTaskSlideOver({
                 surface that degrade instead of leaving it indistinguishable
                 from a healthy, unrestricted workspace. */}
             {teamError && (
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Team list unavailable — showing all agents
               </p>
             )}
@@ -685,14 +685,14 @@ export function CreateTaskSlideOver({
               (joint delivery plan U4 row). */}
 
           {/* Depends on (blocked_by) */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Depends on</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Depends on</Label>
             <Popover>
               <PopoverTrigger asChild>
                 <Button
                   type="button"
                   variant="outline"
-                  className="justify-between h-9 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-normal"
+                  className="justify-between h-9 text-[length:var(--type-utility-xs-size)] bg-[var(--color-surface-2)] border-[var(--color-border)] text-[var(--color-secondary)] font-[var(--font-weight-regular)]"
                   disabled={depCandidates.length === 0}
                 >
                   <span className="truncate">
@@ -705,16 +705,16 @@ export function CreateTaskSlideOver({
                   <CaretDown size={12} className="shrink-0 opacity-70" />
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-1" align="start">
+              <PopoverContent className="w-[var(--radix-popover-trigger-width)] max-h-64 overflow-y-auto p-[var(--space-1)]" align="start">
                 {depCandidates.map((t) => {
                   const checked = form.blockedBy.includes(t.id)
                   return (
-                    <button tabIndex={0}
+                    <Button
                       key={t.id}
-                      type="button"
+                      variant="ghost"
                       onClick={() => toggleDep(t.id)}
                       aria-pressed={checked}
-                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-left hover:bg-[var(--color-surface-2)] transition-colors"
+                      className="h-auto w-full justify-start gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] text-left hover:bg-[var(--color-surface-2)]"
                     >
                       {/* The row button carries the checked state via
                           aria-pressed — this Checkbox is a decorative visual
@@ -728,29 +728,30 @@ export function CreateTaskSlideOver({
                         className="pointer-events-none"
                       />
                       <span className="flex-1 truncate text-[var(--color-secondary)]">{t.title}</span>
-                    </button>
+                    </Button>
                   )
                 })}
               </PopoverContent>
             </Popover>
             {form.blockedBy.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-1">
+              <div className="flex flex-wrap gap-[var(--space-1)] mt-[var(--space-1)]">
                 {form.blockedBy.map((id) => {
                   const t = depCandidates.find((x) => x.id === id)
                   return (
                     <span
                       key={id}
-                      className="inline-flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-secondary)]"
+                      className="inline-flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                     >
                       <span className="max-w-[120px] truncate">{t?.title ?? id}</span>
-                      <button tabIndex={0}
-                        type="button"
+                      <IconButton
                         onClick={() => toggleDep(id)}
                         aria-label={`Remove dependency ${t?.title ?? id}`}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                        variant="ghost"
+                        size="sm"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <X size={9} />
-                      </button>
+                      </IconButton>
                     </span>
                   )
                 })}
@@ -759,8 +760,8 @@ export function CreateTaskSlideOver({
           </div>
 
           {/* Due date */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ct-due" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ct-due">
               Due date
             </Label>
             <DateTimePicker
@@ -772,9 +773,9 @@ export function CreateTaskSlideOver({
           </div>
 
           {/* Todos */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Todos</Label>
-            <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Todos</Label>
+            <div className="flex items-center gap-[var(--space-2)]">
               <Input
                 aria-label="New checklist item"
                 value={newTodo}
@@ -787,13 +788,13 @@ export function CreateTaskSlideOver({
                 }}
                 placeholder="Add a todo…"
                 maxLength={500}
-                className="text-xs flex-1"
+                className="text-[length:var(--type-utility-xs-size)] flex-1"
               />
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-9 px-2 shrink-0"
+                className="h-9 px-[var(--space-2)] shrink-0"
                 onClick={addTodo}
                 aria-label="Add checklist item"
                 disabled={!newTodo.trim()}
@@ -802,21 +803,22 @@ export function CreateTaskSlideOver({
               </Button>
             </div>
             {form.todos.length > 0 && (
-              <ul className="space-y-1 mt-1">
+              <ul className="space-y-[var(--space-1)] mt-[var(--space-1)]">
                 {form.todos.map((text, idx) => (
                   <li
                     key={idx}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
+                    className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
                   >
                     <span className="flex-1 text-[var(--color-secondary)] truncate">{text}</span>
-                    <button tabIndex={0}
-                      type="button"
+                    <IconButton
                       onClick={() => removeTodo(idx)}
                       aria-label={`Remove checklist item ${text}`}
-                      className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                     >
                       <Trash size={12} />
-                    </button>
+                    </IconButton>
                   </li>
                 ))}
               </ul>
@@ -831,13 +833,13 @@ export function CreateTaskSlideOver({
         {submitError && (
           <p
             role="alert"
-            className="px-6 pt-3 text-xs text-[var(--color-error)] flex-shrink-0"
+            className="px-[var(--space-4)] pt-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-shrink-0"
           >
             {submitError}
           </p>
         )}
 
-        <SheetFooter className="flex-row gap-2 px-6 py-4 flex-shrink-0">
+        <SheetFooter className="flex-row gap-[var(--space-2)] px-[var(--space-4)] py-[var(--space-3)] flex-shrink-0">
           <Button
             type="button"
             variant="ghost"

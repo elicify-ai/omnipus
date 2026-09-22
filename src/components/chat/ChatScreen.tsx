@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { useSettledFlag } from '@/hooks/useSettledFlag'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -25,9 +24,6 @@ import {
   ListChecks,
   Plus,
   File,
-  WifiSlash,
-  ArrowClockwise,
-  Clock,
   Lightning,
 } from '@phosphor-icons/react'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
@@ -50,18 +46,10 @@ import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { IconButton } from '@/components/ui/icon-button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage, PositionedToolCall } from '@/store/chat'
+import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage } from '@/store/chat'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
@@ -85,6 +73,11 @@ import { ChatImage } from './ChatImage'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
+import {
+  AssistantMessageConnectionStatus,
+  ChatConnectionNotice,
+  UserMessageDeliveryStatus,
+} from './ConnectionStatus'
 
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
 
@@ -133,17 +126,17 @@ export function renderSkillAwareContent(
   if (matchedSkill && skillMatch) {
     // R2: compact skill indicator — show message text + chip, or chip alone
     return (
-      <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-1">
+      <div className="rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm flex flex-col gap-[var(--space-1)]">
         {skillMatch[2] ? (
           <>
             <p className="whitespace-pre-wrap break-words">{skillMatch[2]}</p>
-            <span className="flex items-center gap-1 text-[10px] text-[var(--color-muted)]">
+            <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               <Lightning size={10} weight="fill" className="text-[var(--color-accent)]" />
               skill: {matchedSkill.name}
             </span>
           </>
         ) : (
-          <span className="flex items-center gap-1 text-xs">
+          <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]">
             <Lightning size={12} weight="fill" className="text-[var(--color-accent)]" />
             {matchedSkill.name}
           </span>
@@ -180,6 +173,8 @@ export function commandLabelsWithAliases(commands: SlashCommand[]): string[] {
 // here: see ChatScreen.goalCommandMarker.live.test.tsx.
 export function UserMessage() {
   const message = useMessage()
+  const storeMessage = useChatStore((state) => state.messagesById[message.id])
+  const activeAgentId = useSessionStore((state) => state.activeAgentId)
   const { data: skills = [] } = useQuery<Skill[]>({
     queryKey: ['skills'],
     queryFn: () => fetchSkills(),
@@ -190,6 +185,8 @@ export function UserMessage() {
     queryFn: () => fetchCommands('web'),
     staleTime: 60_000,
   })
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  const agentName = agents.find((agent) => agent.id === activeAgentId)?.name ?? 'Omnipus'
 
   const content = (() => {
     const parts = message.content
@@ -213,15 +210,15 @@ export function UserMessage() {
       data-testid="user-message"
       data-message-id={message.id}
       data-goal-command={setsGoal ? 'true' : undefined}
-      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)] flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
-      <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
+      <div className="flex flex-col items-end gap-[var(--space-1)] max-w-[85%] min-w-0">
         {setsGoal && <GoalCommandMarker />}
         {renderSkillAwareContent(content, skills, commandLabels, () => (
-          <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
+          <div className="rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
             <MessagePrimitive.Parts>
               {({ part }) => {
                 if (part.type !== 'text') return null
@@ -230,6 +227,14 @@ export function UserMessage() {
             </MessagePrimitive.Parts>
           </div>
         ))}
+        {storeMessage?.deliveryStatus && storeMessage.deliveryStatus !== 'sending' && (
+          <UserMessageDeliveryStatus
+            state={storeMessage.deliveryStatus}
+            agentName={agentName}
+            latest
+            onRetry={() => useChatStore.getState().sendMessage(storeMessage.content)}
+          />
+        )}
       </div>
     </MessagePrimitive.Root>
   )
@@ -258,17 +263,17 @@ function SystemMessage() {
   // always shown, never gated by Verbose chat. See src/lib/goalOutcome.ts.
   if (storeMsg?.goalOutcome) {
     return (
-      <MessagePrimitive.Root className="flex justify-center px-4 py-2">
+      <MessagePrimitive.Root className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
         <GoalOutcomeRow outcome={storeMsg.goalOutcome} />
       </MessagePrimitive.Root>
     )
   }
   return (
     <MessagePrimitive.Root
-      className="flex justify-center py-2"
+      className="flex justify-center py-[var(--space-2)]"
       data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
     >
-      <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
         <MessagePrimitive.Parts>
           {({ part }) => {
             if (part.type !== 'text') return null
@@ -507,13 +512,13 @@ function ThinkingIndicator({ label }: { label?: string | null } = {}) {
   const displayText = label ?? rotatingPhrase
 
   return (
-    <span className="text-[var(--color-muted)] italic flex items-center gap-2.5 py-1">
-      <span className="flex gap-1">
+    <span className="text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)] py-[var(--space-1)]">
+      <span className="flex gap-[var(--space-1)]">
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '0ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
       </span>
-      <span className="text-xs transition-opacity duration-300">{displayText}</span>
+      <span className="text-[length:var(--type-utility-xs-size)] transition-opacity duration-300">{displayText}</span>
     </span>
   )
 }
@@ -693,16 +698,16 @@ function AssistantMessageRetryButton() {
   }
 
   return (
-    <button tabIndex={0}
-      type="button"
+    <Button
+      variant="ghost"
       onClick={handleRetry}
       aria-label="Retry — resend the last user message"
-      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
       title="Retry — resend the last user message"
     >
       <ArrowCounterClockwise size={11} />
       <span>Retry</span>
-    </button>
+    </Button>
   )
 }
 
@@ -718,7 +723,7 @@ function InlineMedia() {
   if (!storeMsg?.media?.length) return null
 
   return (
-    <div className="flex flex-col gap-2 mt-2">
+    <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-2)]">
       {storeMsg.media.map((m, i) =>
         m.type === 'image' ? (
           <div key={`${m.url}-${i}`} className="max-w-2xl">
@@ -728,7 +733,7 @@ function InlineMedia() {
               filename={m.filename}
             />
             {m.caption && (
-              <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
             )}
           </div>
         ) : (
@@ -736,7 +741,7 @@ function InlineMedia() {
             key={`${m.url}-${i}`}
             href={m.url}
             download={m.filename}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+            className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
           >
             <File size={14} />
             {m.filename}
@@ -938,7 +943,7 @@ function InterruptedMessageMarkers() {
           key={m.id}
           data-testid="interrupted-marker"
           data-message-id={m.id}
-          className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
         >
           (interrupted)
         </div>
@@ -948,7 +953,7 @@ function InterruptedMessageMarkers() {
           key={m.id}
           data-testid="truncated-marker"
           data-message-id={m.id}
-          className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
+          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic text-center pb-[var(--space-1)]"
         >
           (cut off at the output limit)
         </div>
@@ -961,35 +966,6 @@ function InterruptedMessageMarkers() {
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
 
 /** Inline retry button for user messages that failed to send (#253b). */
-function UserMessageRetryButton({ message }: { message: ChatMessage }) {
-  const sendMessage = useChatStore((s) => s.sendMessage)
-  const isStreaming = useChatStore((s) => s.isStreaming)
-
-  if (message.status !== 'error' || isStreaming) return null
-
-  function handleRetry() {
-    // #253(c): resend the original user message content.
-    sendMessage(message.content)
-  }
-
-  return (
-    <div className="flex items-center justify-end gap-2 mt-1">
-      <span className="text-[10px] text-[var(--color-error)]">Send failed</span>
-      <button tabIndex={0}
-        type="button"
-        data-testid="user-message-retry"
-        onClick={handleRetry}
-        aria-label="Retry — resend this message"
-        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
-        title="Retry — resend this message"
-      >
-        <ArrowCounterClockwise size={11} />
-        <span>Retry</span>
-      </button>
-    </div>
-  )
-}
-
 /** Standalone user message row for the virtualizer. */
 // useSkillChipData fetches the skills + web commands ONCE per message list (not
 // per row) for the R2 skill-chip detection. Cache hits are free (staleTime 60s).
@@ -1016,12 +992,15 @@ export function VirtualUserMessageRow({
   message,
   skills,
   commandLabels,
+  agentName = 'Omnipus',
+  latest = false,
 }: {
   message: ChatMessage
   skills: Skill[]
   commandLabels: string[]
+  agentName?: string
+  latest?: boolean
 }) {
-  const isError = message.status === 'error'
   // See UserMessage above — the virtualized row is the other half of the same
   // rendering and must carry the same goal marker, or the trace would appear
   // and disappear depending on which path renders the thread. Both paths are
@@ -1036,17 +1015,17 @@ export function VirtualUserMessageRow({
       data-message-id={message.id}
       data-status={message.status}
       data-goal-command={setsGoal ? 'true' : undefined}
-      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)] flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
-      <div className="flex flex-col items-end gap-1.5 max-w-[85%] min-w-0">
+      <div className="flex flex-col items-end gap-[var(--space-1)] max-w-[85%] min-w-0">
         {setsGoal && <GoalCommandMarker />}
         {/* Attachments the user sent — image thumbnails + colour-coded file
             cards, shown above the text like ChatGPT. */}
         {message.media && message.media.length > 0 && (
-          <div className="flex flex-wrap gap-2 justify-end">
+          <div className="flex flex-wrap gap-[var(--space-2)] justify-end">
             {message.media.map((m, i) =>
               m.type === 'image' ? (
                 // Sent images (screenshots) get the full ChatImage treatment — hover
@@ -1064,19 +1043,20 @@ export function VirtualUserMessageRow({
             skills,
             commandLabels,
             () => (
-              <div className={cn(
-                "rounded-xl px-4 py-3 text-sm leading-relaxed rounded-tr-sm",
-                isError
-                  ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
-                  : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
-              )}>
+              <div className="rounded-xl rounded-tr-sm bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
                 <p className="whitespace-pre-wrap break-words">{message.content}</p>
               </div>
             ),
           )
         )}
-        {/* #253(b): show error + Retry when message failed to send */}
-        <UserMessageRetryButton message={message} />
+        {message.deliveryStatus && message.deliveryStatus !== 'sending' && (
+          <UserMessageDeliveryStatus
+            state={message.deliveryStatus}
+            agentName={agentName}
+            latest={latest}
+            onRetry={() => useChatStore.getState().sendMessage(message.content)}
+          />
+        )}
       </div>
     </div>
   )
@@ -1093,7 +1073,7 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
   // Goal outcome line — see SystemMessage's identical branch (live path).
   if (message.goalOutcome) {
     return (
-      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-4 py-2">
+      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-[var(--space-3)] py-[var(--space-2)]">
         <GoalOutcomeRow outcome={message.goalOutcome} />
       </div>
     )
@@ -1103,9 +1083,9 @@ function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
       data-message-role="system"
       data-message-id={message.id}
       data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
-      className="flex justify-center py-2"
+      className="flex justify-center py-[var(--space-2)]"
     >
-      <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] rounded-full">
         <span>{message.content}</span>
       </div>
     </div>
@@ -1122,11 +1102,11 @@ function StaticCopyButton({ text }: { text: string }) {
     })
   }, [text])
   return (
-    <button tabIndex={0}
-      type="button"
+    <Button
+      variant="ghost"
       aria-label="Copy message"
       onClick={handleCopy}
-      className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+      className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
       title="Copy message"
     >
       {copied ? (
@@ -1140,7 +1120,7 @@ function StaticCopyButton({ text }: { text: string }) {
           <span>Copy</span>
         </>
       )}
-    </button>
+    </Button>
   )
 }
 
@@ -1290,7 +1270,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
       data-message-role="assistant"
       data-message-id={message.id}
       data-status="complete"
-      className="group flex gap-3 px-4 py-3"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <div
         className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-[var(--color-secondary)]"
@@ -1303,17 +1283,17 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           <Robot size={14} weight="bold" />
         )}
       </div>
-      <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
+      <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">
+          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {agentDisplayName}
           </span>
         )}
-        <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
+        <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
-            <div className="flex flex-col gap-2 mb-2">
+            <div className="flex flex-col gap-[var(--space-2)] mb-[var(--space-2)]">
               {mediaItems.map((m, i) =>
                 m.type === 'image' ? (
                   <div key={`${m.url}-${i}`} className="max-w-2xl">
@@ -1323,7 +1303,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                       filename={m.filename}
                     />
                     {m.caption && (
-                      <p className="text-xs text-[var(--color-muted)] px-2 py-1">{m.caption}</p>
+                      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] px-[var(--space-2)] py-[var(--space-1)]">{m.caption}</p>
                     )}
                   </div>
                 ) : (
@@ -1331,7 +1311,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                     key={`${m.url}-${i}`}
                     href={m.url}
                     download={m.filename}
-                    className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--color-border)] text-xs text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                    className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border border-[var(--color-border)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
                   >
                     <File size={14} />
                     {m.filename}
@@ -1502,7 +1482,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             terminal-empty variant (isTerminalEmpty): the turn finished with
             nothing to show, so there is still nothing to copy. */}
         {!showEmptyPlaceholder && !isTerminalEmpty && (
-          <div className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
+          <div className="flex items-center gap-[var(--space-1)] opacity-70 hover:opacity-100 transition-opacity duration-150">
             <StaticCopyButton text={message.content ?? ''} />
           </div>
         )}
@@ -1511,7 +1491,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             "(cut off at the output limit)"; getMessageStatusSuffix decides
             which (or neither), never both. */}
         {statusSuffix && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
 
         {/* ADR-051 — verbose-only "Technical details" disclosure for typed
@@ -1528,21 +1508,21 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           && verboseChatEnabled
           && message.errorDetail
           && message.errorDetail.length > 0 && (
-          <details className="px-1 mt-1" data-testid="error-detail-disclosure">
+          <details className="px-[var(--space-1)] mt-[var(--space-1)]" data-testid="error-detail-disclosure">
             <summary
               tabIndex={0}
               className={cn(
-                'text-[10px] text-[var(--color-muted)] cursor-pointer select-none',
-                'inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors',
+                'text-[length:var(--type-caption-size)] text-[var(--color-muted)] cursor-pointer select-none',
+                'inline-flex items-center gap-[var(--space-1)] hover:text-[var(--color-secondary)] transition-colors',
               )}
             >
               Technical details
             </summary>
             <pre
               className={cn(
-                'mt-1 px-2 py-1.5 rounded-md',
+                'mt-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded-md',
                 'bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
-                'font-mono text-[10px] leading-relaxed whitespace-pre-wrap break-all',
+                'font-mono text-[length:var(--type-caption-size)] leading-relaxed whitespace-pre-wrap break-all',
                 'max-h-40 overflow-y-auto',
               )}
             >
@@ -1555,21 +1535,23 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             replay sessions show the same model footer as the live
             AssistantUI render. */}
         {message.role === 'assistant' && <ModelFooter model={message.model} />}
+        <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
       </div>
     </div>
   )
 })
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
-function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
+function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
   // verbose-only inline) — same store read as every other verbose-gated row.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   return (
     <div
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
+      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
     >
       <div className="max-w-4xl mx-auto w-full">
         {messages.map((msg) => {
@@ -1589,6 +1571,8 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
                 message={msg}
                 skills={skills}
                 commandLabels={commandLabels}
+                agentName={agentName}
+                latest={msg.id === latestUserMessageId}
               />
             )
           if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
@@ -1608,9 +1592,11 @@ let _resizeObserverWarnEmitted = false
 function VirtualizedMessageList({
   messages,
   liteMode,
+  agentName,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
+  agentName: string
 }) {
   // Feature-detect ResizeObserver at render time (not module load) so test
   // environments that stub it in beforeEach are detected correctly.
@@ -1621,9 +1607,9 @@ function VirtualizedMessageList({
       _resizeObserverWarnEmitted = true
       console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
     }
-    return <PlainMessageList messages={messages} liteMode={liteMode} />
+    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} />
   }
-  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} />
+  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} />
 }
 
 /**
@@ -1677,9 +1663,11 @@ function VirtualizerAutoFollow({
 function VirtualizedMessageListInner({
   messages,
   liteMode,
+  agentName,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
+  agentName: string
 }) {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -1687,6 +1675,7 @@ function VirtualizedMessageListInner({
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
@@ -1709,7 +1698,7 @@ function VirtualizedMessageListInner({
       return <JudgeVerdictThreadCard verdict={msg.verdict} />
     }
     if (msg.role === 'user')
-      return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} />
+      return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
   }
@@ -1742,7 +1731,7 @@ function VirtualizedMessageListInner({
       ref={scrollContainerRef}
       autoScroll
       data-testid="virtualized-message-list"
-      className="flex-1 overflow-y-auto overscroll-contain pt-4 pb-2"
+      className="flex-1 overflow-y-auto overscroll-contain pt-[var(--space-3)] pb-[var(--space-2)]"
       style={{ position: 'relative' }}
     >
       <VirtualizerAutoFollow scrollRef={scrollContainerRef} contentRef={contentRef} />
@@ -1887,14 +1876,14 @@ function AssistantMessage() {
       data-testid="assistant-message"
       data-message-id={message.id}
       data-status={message.status?.type ?? 'complete'}
-      className="group flex gap-3 px-4 py-3"
+      className="group flex gap-[var(--space-2-5)] px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <AssistantMessageAvatar agent={agent} />
-      <div className="flex flex-col gap-1 max-w-[85%] min-w-0 flex-1">
+      <div className="flex flex-col gap-[var(--space-1)] max-w-[85%] min-w-0 flex-1">
         {agentDisplayName && (
-          <span data-testid="agent-label" className="text-[10px] text-[var(--color-muted)]">{agentDisplayName}</span>
+          <span data-testid="agent-label" className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{agentDisplayName}</span>
         )}
-        <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
+        <div className="text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
           {showEmptyPlaceholder ? (
             // Nothing has streamed in yet — show only the thinking indicator,
             // not an empty text bubble + Copy affordance (D-fix).
@@ -1940,12 +1929,12 @@ function AssistantMessage() {
             the terminal-empty variant (isTerminalEmpty): the turn is over
             and there is still nothing to copy or retry. */}
         {!showEmptyPlaceholder && !isTerminalEmpty && (
-          <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
+          <ActionBarPrimitive.Root className="flex items-center gap-[var(--space-1)] opacity-70 hover:opacity-100 transition-opacity duration-150">
             <ActionBarPrimitive.Copy asChild>
-              <button tabIndex={0}
-                type="button"
+              <Button
+                variant="ghost"
                 aria-label="Copy message"
-                className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors"
+                className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
                 title="Copy message"
               >
                 <AuiIf condition={(s) => s.message.isCopied}>
@@ -1956,7 +1945,7 @@ function AssistantMessage() {
                   <Copy size={11} />
                   <span>Copy</span>
                 </AuiIf>
-              </button>
+              </Button>
             </ActionBarPrimitive.Copy>
             <AssistantMessageRetryButton />
           </ActionBarPrimitive.Root>
@@ -1965,8 +1954,9 @@ function AssistantMessage() {
             cancelled ("(interrupted)") or cut off at the provider's
             output-token limit ("(cut off at the output limit)"). */}
         {statusSuffix && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
+        <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
       </div>
     </MessagePrimitive.Root>
   )
@@ -2005,7 +1995,7 @@ function ComposerAttachmentChip() {
       filename={attachment.name}
       contentType={contentType}
       imageUrl={imageUrl}
-      className={cn('group', imageUrl && 'w-16 h-16')}
+      className={cn('group', !!imageUrl && 'w-16 h-16')}
       removeButton={
         <AttachmentPrimitive.Remove
           tabIndex={0}
@@ -2026,30 +2016,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const isReplaying = useChatStore((s) => s.isReplaying)
   const isConnected = useConnectionStore((s) => s.isConnected)
   const reconnectPhase = useConnectionStore((s) => s.reconnectPhase)
-  const reconnectAttempt = useConnectionStore((s) => s.reconnectAttempt)
-  const reconnect = useConnectionStore((s) => s.reconnect)
-  // Operator report 2026-07-31: a red "Disconnected" banner flashed top-left
-  // for a split second whenever the socket blipped and immediately recovered.
-  // The drop is real (the gateway logs 1006 abnormal closures on the
-  // Batam<->Frankfurt path) but a self-healing sub-second reconnect is not
-  // actionable, and an error-coloured banner for it reads as a fault. Gate
-  // BOTH transient banners — the amber "Reconnecting…" and the red
-  // reconnectPhase===null limbo one — on the disconnect having actually
-  // persisted. Reconnect logic itself is untouched and still fires instantly;
-  // only the rendering waits. A genuine outage still surfaces after 2s, and
-  // the terminal "gave_up" banner below is deliberately NOT gated — that one
-  // is already late by construction and always needs to be seen.
-  const showTransientDisconnect = useSettledFlag(
-    !isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow',
-    2000,
-  )
-  const outboundQueue = useChatStore((s) => s.outboundQueue)
-  // BUG FIX (2026-07): messages moved out of outboundQueue by drainOutboundQueue
-  // are sent one at a time (see maybeDrainNext in store/chat.ts) rather than all
-  // at once, so a still-draining batch must keep counting here — otherwise this
-  // banner would drop to 0 the instant reconnect fires even though several
-  // messages are still waiting for their turn to go out.
-  const pendingDrainQueue = useChatStore((s) => s.pendingDrainQueue)
   const cancelStream = useChatStore((s) => s.cancelStream)
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
@@ -2489,84 +2455,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Fix 2: multi-phase reconnect banner.
-          gave_up   → error banner with "Reconnect now" CTA (input locked).
-          reconnecting/slow → amber pulsing indicator with attempt counter.
-          null (connected) → nothing shown. */}
-      {reconnectPhase === 'gave_up' && (
-        <div
-          data-testid="reconnect-banner"
-          className="mb-2 rounded-lg px-3 py-2 bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 flex items-center gap-2"
-        >
-          <WifiSlash size={14} className="text-[var(--color-error)] shrink-0" />
-          <span className="text-xs text-[var(--color-error)] flex-1">
-            Connection lost after all retry attempts.
-          </span>
-          <button tabIndex={0}
-            type="button"
-            onClick={reconnect}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 transition-colors shrink-0"
-            aria-label="Reconnect now"
-          >
-            <ArrowClockwise size={12} weight="bold" />
-            Reconnect now
-          </button>
-        </div>
-      )}
-      {showTransientDisconnect && (reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
-        <div
-          data-testid="reconnect-banner"
-          className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] inline-block animate-pulse" />
-          {reconnectPhase === 'slow'
-            ? `Reconnecting… (attempt ${reconnectAttempt} — slow retry)`
-            : `Reconnecting… (attempt ${reconnectAttempt})`}
-        </div>
-      )}
-      {showTransientDisconnect && !isConnected && reconnectPhase === null && (
-        <div data-testid="reconnect-banner" className="mb-2 text-xs text-[var(--color-error)] flex items-center gap-1">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
-          Disconnected — reconnecting...
-        </div>
-      )}
-      {/* Fix 3: outbound queue indicator — shown while messages are buffered
-          (outboundQueue, while offline) or actively being drained one at a
-          time after reconnect (pendingDrainQueue — see maybeDrainNext in
-          store/chat.ts). Without the pendingDrainQueue branch this banner
-          would disappear the instant reconnect fires even though several
-          messages are still waiting for their turn to go out.
-          Task 4 fix: on a flaky connection both arrays can be simultaneously
-          non-empty (e.g. some messages bounced back to outboundQueue on a
-          mid-drain disconnect while others are still parked in
-          pendingDrainQueue — see the chat.ts store's own doc comments on
-          drainOutboundQueue/maybeDrainNext). The previous if/else only ever
-          showed ONE of the two counts, undercounting the true total still
-          queued. Sum both counts whenever both are non-empty. */}
-      {(outboundQueue.length > 0 || pendingDrainQueue.length > 0) && (
-        <div
-          data-testid="outbound-queue-indicator"
-          className="mb-2 text-xs text-[var(--color-warning)] flex items-center gap-1.5"
-        >
-          <Clock size={12} className="shrink-0" />
-          {(() => {
-            const total = outboundQueue.length + pendingDrainQueue.length
-            if (outboundQueue.length > 0 && pendingDrainQueue.length > 0) {
-              return total === 1
-                ? '1 message queued — will send on reconnect'
-                : `${total} messages queued — will send on reconnect`
-            }
-            if (outboundQueue.length > 0) {
-              return outboundQueue.length === 1
-                ? '1 message queued — will send on reconnect'
-                : `${outboundQueue.length} messages queued — will send on reconnect`
-            }
-            return pendingDrainQueue.length === 1
-              ? '1 queued message sending…'
-              : `${pendingDrainQueue.length} queued messages sending…`
-          })()}
-        </div>
-      )}
 
       {/* Slash command + skills + "@" agent-mention partitioned dropdown
           (FR-005). One container/list renders three different sections
@@ -2606,7 +2494,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           // max-h + scroll: the menu opens UPWARD from the composer, so a tall
           // list (many commands + skills) pushed its top rows above the
           // viewport. 40dvh caps it to the visible area; overflow-y scrolls.
-          className="mb-2 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
+          className="mb-[var(--space-2)] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)] overflow-hidden shadow-2xl max-h-[40dvh] overflow-y-auto overscroll-contain"
         >
           {/* LOW S8: fetchCommands('web') errored — surface the gap instead
               of letting every backend command silently vanish from the
@@ -2630,7 +2518,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             <div
               data-testid="slash-commands-error"
               role="presentation"
-              className="px-3 py-2 text-xs text-[var(--color-error)] italic"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] italic"
             >
               Commands unavailable
             </div>
@@ -2654,7 +2542,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   <div
                     role="presentation"
                     className={cn(
-                      'px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
+                      'px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]',
                       globalIndex === 0
                         ? 'border-b border-[var(--color-border)]'
                         : 'border-t border-[var(--color-border)]',
@@ -2694,7 +2582,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   // rather than serializing as `data-highlighted="false"`).
                   data-highlighted={globalIndex === clampedSlashHighlight || undefined}
                   className={cn(
-                    'w-full flex items-baseline gap-3 px-3 py-2 text-left transition-colors',
+                    'w-full flex items-baseline gap-[var(--space-2-5)] px-[var(--space-2-5)] py-[var(--space-2)] text-left transition-colors',
                     globalIndex === clampedSlashHighlight
                       ? 'bg-[var(--color-accent)]/10 text-[var(--color-secondary)]'
                       : 'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
@@ -2723,7 +2611,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   {item.section === 'agents' && (
                     <div
                       aria-hidden="true"
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[length:var(--type-caption-size)] font-bold shrink-0"
                       style={{ backgroundColor: item.agentColor ?? 'var(--color-surface-3)' }}
                     >
                       {item.agentIcon
@@ -2734,18 +2622,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   {/* Fixed-width label column so descriptions align across rows
                       (a two-column table, not per-row flow). 9.5rem fits the
                       longest current label; truncate guards outliers. */}
-                  <span className="w-[9.5rem] shrink-0 truncate font-mono text-xs text-[var(--color-accent)]">{item.label}</span>
-                  <span className="text-[11px] flex-1 min-w-0 truncate">{item.description}</span>
+                  <span className="w-[9.5rem] shrink-0 truncate font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)]">{item.label}</span>
+                  <span className="text-[length:var(--type-caption-size)] flex-1 min-w-0 truncate">{item.description}</span>
                   {/* FR-014/R3: show argument_hint as muted help text for skills;
                       SD-C7 extends this to `delivery: agent` commands (e.g. /goal, /loop). */}
                   {(item.section === 'skills' || item.section === 'commands') && item.argumentHint && (
-                    <span className="ml-auto text-[10px] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
+                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)] opacity-70 font-mono shrink-0">
                       {item.argumentHint}
                     </span>
                   )}
                   {/* Mirrors AgentPicker's "active" marker (composer/AgentPicker.tsx) */}
                   {item.section === 'agents' && item.isActiveAgent && (
-                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[10px]">active</span>
+                    <span className="ml-auto shrink-0 text-[var(--color-success)] text-[length:var(--type-caption-size)]">active</span>
                   )}
                 </button>
                 {/* Deferred item 3: "+N more" footer — rendered right after
@@ -2761,7 +2649,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   <div
                     data-testid="slash-menu-footer"
                     role="presentation"
-                    className="px-3 py-1.5 text-[10px] text-[var(--color-muted)] italic"
+                    className="px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic"
                   >
                     {/* Cap-footer copy fix (gate 2 LOW): `footerCopy` (declared
                         above, alongside `menuIsRendered`) already accounts for
@@ -2794,7 +2682,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           vertical breathing room the focus ring on the controls was cut off
           at the top. Compact h-7 controls + py-0.5 keeps the ring visible. */}
       <div
-        className="flex items-center gap-1.5 min-w-0 overflow-x-auto px-1 py-1"
+        className="flex items-center gap-[var(--space-1)] min-w-0 overflow-x-auto px-[var(--space-1)] py-[var(--space-1)]"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
       >
         {/* Agent → model. Attach lives INSIDE the input card (leading the
@@ -2823,7 +2711,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         {/* Input row — single ComposerPrimitive.Root, items-end: textarea and
             send/stop share one flex container + one bottom baseline. */}
         <ComposerPrimitive.Root
-          className="flex items-end gap-2 p-2"
+          className="flex items-end gap-[var(--space-2)] p-[var(--space-2)]"
           onSubmit={(e) => {
             // Mid-turn steering: this native form-submit path is NEVER
             // actually reached while streaming (verified — see
@@ -2870,7 +2758,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <ComposerPrimitive.AddAttachment
             disabled={attachDisabled}
             tabIndex={5}
-            className="shrink-0 h-7 w-7 mb-1.5 rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="shrink-0 h-7 w-7 mb-[var(--space-1)] rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             aria-label="Add files or context"
             title="Add files or context"
           >
@@ -2921,10 +2809,10 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 // ~6px descender line-box gap below the element inside its block
                 // wrapper — the wrapper (not the textarea) is what items-end
                 // aligns, so the gap read as send sitting below the input.
-                'block w-full resize-none bg-transparent px-3 py-2 text-sm text-[var(--color-secondary)] outline-none',
+                'block w-full resize-none bg-transparent px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] outline-none',
                 'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
                 'focus:outline-none focus:ring-0',
-                (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
+                (!inputEnabled || isStreaming) ? 'opacity-60 cursor-not-allowed' : undefined,
               )}
               aria-label="Message input"
               // Deferred item 2 (W3C APG combobox pattern — combobox with
@@ -2979,7 +2867,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             {slashMenu.showGhostText && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-0 px-3 py-2.5 text-sm leading-6 flex items-start"
+                className="pointer-events-none absolute inset-0 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] leading-6 flex items-start"
                 data-testid="ghost-text"
               >
                 <span className="invisible whitespace-pre">{slashMenu.inputValue}</span>
@@ -3002,8 +2890,9 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             // so Stop keeps its own dedicated element rather than being
             // folded into a menu/toggle.
             <>
-              <button tabIndex={6}
-                type="button"
+              <Button
+                tabIndex={6}
+                variant="ghost"
                 data-testid="stop-btn"
                 onClick={() => {
                   // EC-15 / FR-21: cancelUnconditional() sets the label synchronously
@@ -3016,20 +2905,20 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 className={cn(
                   // h-9 + mb-0.5: same footprint as the send button it replaces
                   // mid-stream (keeps the row from jumping on morph).
-                  'shrink-0 rounded-lg mb-0.5 flex items-center justify-center transition-colors',
+                  'h-auto shrink-0 rounded-lg mb-[var(--space-0-5)]',
                   cancelState.stopLabel === 'stopping'
-                    ? 'px-3 h-9 gap-1.5 text-xs font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                    : 'w-9 h-9',
+                    ? 'px-[var(--space-2-5)] h-9 gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]'
+                    : 'w-9 h-9 p-0',
                   isStreaming
-                    ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30'
-                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-wait',
+                    ? 'bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)]'
+                    : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-muted)] cursor-wait',
                 )}
                 aria-label={cancelState.stopLabel === 'stopping' ? 'Stopping...' : 'Stop generation'}
                 title="Stop (Escape)"
               >
                 <Stop size={15} weight="fill" />
                 {cancelState.stopLabel === 'stopping' && <span>Stopping...</span>}
-              </button>
+              </Button>
               {/* Mid-turn steering Send — a PLAIN button, deliberately not
                   ComposerPrimitive.Send: verified (see submitMidStreamMessage's
                   doc comment above) that the primitive's own useComposerSend()
@@ -3044,23 +2933,24 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                   empty composer has nothing to send, and Stop alone already
                   covers "I have nothing more to add, stop the response." */}
               {hasComposerText && (
-                <button tabIndex={6}
+                <IconButton
+                  tabIndex={6}
                   type="button"
                   data-testid="chat-send-mid-stream"
                   disabled={!inputEnabled}
                   onClick={submitMidStreamMessage}
                   className={cn(
-                    'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
+                    'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg',
                     inputEnabled
-                      ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)]'
-                      : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] cursor-not-allowed',
+                      ? 'bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent-hover)] hover:text-[var(--color-primary)]'
+                      : 'bg-[var(--color-surface-3)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-muted)] cursor-not-allowed',
                   )}
                   aria-label="Send into the running response"
                   title="Send into the running response"
                   aria-describedby="mid-stream-send-hint"
                 >
                   <PaperPlaneRight size={15} weight="bold" />
-                </button>
+                </IconButton>
               )}
             </>
           ) : (
@@ -3110,7 +3000,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 }
               }}
               className={cn(
-                'shrink-0 w-9 h-9 mb-0.5 rounded-lg flex items-center justify-center transition-colors',
+                'shrink-0 w-9 h-9 mb-[var(--space-0-5)] rounded-lg flex items-center justify-center transition-colors',
                 inputEnabled && !isReplaying
                   ? reconnectPhase === 'reconnecting' || reconnectPhase === 'slow'
                     // Muted accent while reconnecting — functional but visually signals
@@ -3150,7 +3040,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           <div
             id="mid-stream-send-hint"
             data-testid="mid-stream-send-hint"
-            className="px-3 pb-1.5 -mt-1 text-[10px] text-[var(--color-muted)]"
+            className="px-[var(--space-2-5)] pb-[var(--space-1)] -mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           >
             Send into the running response
           </div>
@@ -3162,7 +3052,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
             them on send and threads the media:// ref into our transport via onNew.
             LibraryAttachmentChips renders staged workspace-library reuse refs
             (ADR-051 Rev 4 / Slice H) alongside them. */}
-        <div className="flex flex-wrap gap-2 px-2 empty:hidden [&:has(*)]:pb-2">
+        <div className="flex flex-wrap gap-[var(--space-2)] px-[var(--space-2)] empty:hidden [&:has(*)]:pb-[var(--space-2)]">
           <ComposerPrimitive.Attachments components={{ Attachment: ComposerAttachmentChip }} />
           <LibraryAttachmentChips />
         </div>
@@ -3174,63 +3064,47 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
           direction), Claude-Code style. Opens the ActivityPanel slide-out on
           click. ActivityBar renders null when idle, so `empty:hidden`
           collapses this wrapper — no stray padding when nothing runs. */}
-      <div className="px-1 pt-1.5 empty:hidden">
+      <div className="px-[var(--space-1)] pt-[var(--space-1)] empty:hidden">
         <ActivityBar />
       </div>
 
       {/* Harmful-file upload double-confirm — replaces the native window.confirm pair.
           Stage 1 warns and lists the flagged files; stage 2 is the second
-          confirmation. Files are only attached after the user confirms stage 2. */}
-      <AlertDialog
-        open={fileUpload.harmfulConfirm !== null}
+          confirmation. Files are only attached after the user confirms stage 2.
+          Two catalogued ConfirmDialogs, mutually exclusive on `harmfulStage`
+          (only one is ever `open` at a time), rather than one dialog switching
+          its content by stage — ConfirmDialog's closed API takes static
+          title/description/confirmLabel per instance, not a stage switch. */}
+      <ConfirmDialog
+        open={fileUpload.harmfulConfirm !== null && fileUpload.harmfulStage === 1}
         onOpenChange={(open) => {
           if (!open) fileUpload.dismissHarmfulConfirm()
         }}
-      >
-        <AlertDialogContent>
-          {fileUpload.harmfulStage === 1 ? (
-            <>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Potentially harmful file(s)</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {fileUpload.harmfulConfirm
-                    ? `${fileUpload.harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
-                    : ''}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={fileUpload.advanceHarmfulStage}
-                >
-                  Continue
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </>
-          ) : (
-            <>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Confirm upload</AlertDialogTitle>
-                <AlertDialogDescription>
-                  {fileUpload.harmfulConfirm
-                    ? `Please confirm again: Upload ${fileUpload.harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
-                    : ''}
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={fileUpload.confirmHarmfulUpload}
-                >
-                  Upload
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </>
-          )}
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Potentially harmful file(s)"
+        description={
+          fileUpload.harmfulConfirm
+            ? `${fileUpload.harmfulConfirm.harmfulNames.join(', ')} may be potentially harmful file(s).\n\nAre you sure you want to upload?`
+            : ''
+        }
+        confirmLabel="Continue"
+        destructive
+        onConfirm={fileUpload.advanceHarmfulStage}
+      />
+      <ConfirmDialog
+        open={fileUpload.harmfulConfirm !== null && fileUpload.harmfulStage === 2}
+        onOpenChange={(open) => {
+          if (!open) fileUpload.dismissHarmfulConfirm()
+        }}
+        title="Confirm upload"
+        description={
+          fileUpload.harmfulConfirm
+            ? `Please confirm again: Upload ${fileUpload.harmfulConfirm.harmfulNames.length} potentially harmful file(s)?`
+            : ''
+        }
+        confirmLabel="Upload"
+        destructive
+        onConfirm={fileUpload.confirmHarmfulUpload}
+      />
     </div>
   )
 }
@@ -3239,18 +3113,18 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
 
 function WelcomeState({ hasAgent }: { hasAgent: boolean }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-8 p-8">
-      <div className="flex flex-col items-center gap-6 text-center max-w-md">
+    <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-[var(--space-5)] p-[var(--space-5)]">
+      <div className="flex flex-col items-center gap-[var(--space-4)] text-center max-w-md">
         <img
           src={OmnipusAvatar}
           alt="omnipus.ai mark"
           className="h-20 w-20 drop-shadow-lg"
         />
         <div>
-          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)] mb-2">
+          <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)] mb-[var(--space-2)]">
             Welcome to <Wordmark className="text-2xl" />
           </h1>
-          <p className="text-[var(--color-muted)] text-sm">
+          <p className="text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
             {hasAgent
               ? 'Your agent is ready. Start a conversation below.'
               : 'Select an agent in the session bar to get started.'}
@@ -3284,6 +3158,24 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   // the status read below) is then looked up via `messagesById[id]` — the same
   // O(1)-lookup idiom AssistantMessage/SubagentSpansRenderer use.
   const messages = useChatStore((s) => s.messages)
+  const outboundQueue = useChatStore((s) => s.outboundQueue)
+  const pendingDrainQueue = useChatStore((s) => s.pendingDrainQueue)
+  const queuedMessages = useMemo(() => {
+    const existingIds = new Set(messages.map((message) => message.id))
+    return [...pendingDrainQueue, ...outboundQueue]
+      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id))
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+      .map((item): ChatMessage => ({
+        id: item.id,
+        session_id: activeSessionId ?? undefined,
+        role: 'user',
+        content: item.content,
+        timestamp: item.timestamp,
+        status: 'done',
+        deliveryStatus: 'queued',
+      }))
+  }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
+  const displayMessages = useMemo(() => [...messages, ...queuedMessages], [messages, queuedMessages])
   const lastAssistantMessageId = useChatStore((s) => s.lastAssistantMessageId)
   const lastAssistantMessage = useChatStore((s) =>
     lastAssistantMessageId === null
@@ -3413,9 +3305,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
       {agentRemoved && (
         <div
           data-testid="agent-removed-banner"
-          className="px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-2"
+          className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 flex items-center gap-[var(--space-2)]"
         >
-          <span className="text-xs text-[var(--color-error)] flex-1">
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
             Agent removed — this session is read-only
           </span>
         </div>
@@ -3423,9 +3315,9 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
 
       {/* Task session banner — shown when viewing a task execution transcript */}
       {attachedSessionType === 'task' && (
-        <div className="px-4 py-2 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-2">
+        <div className="px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] flex items-center gap-[var(--space-2)]">
           <ListChecks size={14} className="text-[var(--color-accent)] shrink-0" />
-          <span className="text-xs text-[var(--color-secondary)] flex-1 truncate">
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 truncate">
             Task: {attachedTaskTitle ?? 'Task Execution'}
           </span>
         </div>
@@ -3433,7 +3325,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
 
       {/* History fetch error */}
       {historyError ? (
-        <div className="flex flex-col items-center justify-center flex-1 gap-3 text-sm text-[var(--color-muted)]">
+        <div className="flex flex-col items-center justify-center flex-1 gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           <p>Could not load messages.</p>
           <Button variant="outline" size="sm" onClick={() => refetchHistory()}>
             <ArrowCounterClockwise size={14} /> Retry
@@ -3450,12 +3342,12 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           </div>
 
           {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
-          {messages.length === 0 ? (
-            <div className="flex-1 overflow-y-auto pt-4 pb-2">
+          {displayMessages.length === 0 ? (
+            <div className="flex-1 overflow-y-auto pt-[var(--space-3)] pb-[var(--space-2)]">
               <WelcomeState hasAgent={!!activeAgentId} />
             </div>
           ) : (
-            <VirtualizedMessageList messages={messages} liteMode={liteMode} />
+            <VirtualizedMessageList messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
           )}
 
           {/* FR-21: Interrupted-message status markers — rendered inside
@@ -3465,11 +3357,13 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               Playwright locates these elements via text=(interrupted). */}
           <InterruptedMessageMarkers />
 
+          <ChatConnectionNotice />
+
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
               (including `bash`) are handled by the global ToolApprovalModal
               (ADR-036 §3.4 retired the dedicated exec-only approval flow). */}
           {rateLimitEvent && (
-            <div className="px-4 space-y-2 pb-2">
+            <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
               <RateLimitIndicator
                 scope={rateLimitEvent.scope}
                 resource={rateLimitEvent.resource}
@@ -3487,7 +3381,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               goalStatus=null so GoalIndicator's goal branch is dormant.
               GoalIndicator renders nothing when loopStatus is also absent. */}
           {loopStatus && (
-            <div className="px-4 space-y-2 pb-2">
+            <div className="px-[var(--space-3)] space-y-[var(--space-2)] pb-[var(--space-2)]">
               <GoalIndicator goalStatus={null} loopStatus={loopStatus} />
             </div>
           )}
@@ -3527,7 +3421,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
             <GoalPillTray />
             {/* Gradient fade above composer */}
             <div className="absolute -top-8 left-0 right-0 h-8 bg-gradient-to-t from-[var(--color-primary)] to-transparent pointer-events-none" />
-            <div className="w-full max-w-3xl mx-auto px-4 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+            <div className="w-full max-w-3xl mx-auto px-[var(--space-3)] pt-[var(--space-2)] pb-[max(var(--space-2),env(safe-area-inset-bottom,var(--space-0)))]">
               <OmnipusComposer agentRemoved={agentRemoved} />
             </div>
           </div>

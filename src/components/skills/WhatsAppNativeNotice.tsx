@@ -6,6 +6,7 @@ import { useConnectionStore } from '@/store/connection'
 import { disableChannel, enableChannel } from '@/lib/api'
 import { logError } from '@/lib/telemetry'
 import { WhatsAppPairingBody } from './WhatsAppPairingBody'
+import { Card } from '@/components/ui/card'
 
 // RETRY_TIMEOUT_MS is the bounded window after a user presses Retry during which
 // we wait for a fresh `code` frame from the backend. Retry restarts the channel
@@ -247,16 +248,16 @@ export function WhatsAppNativeNotice({ channelId }: { channelId: string }) {
         : pairing
 
   return (
-    <div className="space-y-2 mt-1">
-      <div
-        className="flex flex-col items-center gap-3 p-4 rounded-lg bg-[var(--color-surface-1)] border border-[var(--color-border)]"
+    <div className="space-y-[var(--space-2)] mt-[var(--space-1)]">
+      <Card
+        className="flex flex-col items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
         aria-live="polite"
       >
         <WhatsAppPairingBody pairing={effectivePairing} onRetry={handleRetry} />
-      </div>
-      <div className="flex gap-2 p-3 rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">
-        <Warning size={14} className="text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" />
-        <p className="text-xs text-[var(--color-muted)]">
+      </Card>
+      <div className="flex gap-[var(--space-2)] p-[var(--space-2-5)] rounded-md bg-[var(--color-surface-2)] border border-[var(--color-error)]/30">
+        <Warning size={14} className="text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]" weight="fill" />
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           WhatsApp native mode stores sessions locally. The gateway must keep running for the session
           to stay active.
         </p>

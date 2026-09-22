@@ -28,6 +28,8 @@ import {
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter, UnitValue } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
 import { EditableCell, canEditCell, type RecordEditContext } from './RecordFieldEditor'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 /** The row-level click target every openable part shares: mouse convenience
  *  on the row/card itself, plus one real, keyboard-reachable button that is
@@ -48,19 +50,18 @@ function RowOpenButton({
   className: string
 }) {
   return (
-    <button
-      type="button"
-      tabIndex={0}
+    <Button
+      variant="ghost"
       onClick={(event) => {
         event.stopPropagation()
         onOpen()
       }}
       aria-label={`Open ${rowTitle}`}
       data-testid="viewpart-row-open"
-      className={className}
+      className={cn('h-auto min-w-0 rounded-none p-0 font-[var(--font-weight-regular)] text-[length:inherit] hover:bg-transparent', className)}
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -83,7 +84,7 @@ function NoRecordIdMark() {
       data-testid="viewpart-row-no-id"
       title={NO_RECORD_ID_REASON}
       aria-label={NO_RECORD_ID_REASON}
-      className="ml-1.5 rounded border border-[var(--color-border)] px-1 text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
+      className="ml-[var(--space-1)] rounded border border-[var(--color-border)] px-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]"
     >
       no id
     </span>
@@ -138,14 +139,13 @@ function Cell({
   // the whole <td>, padding included, not just the text inside it.
   const inert =
     editContext !== undefined && !primary && cell !== undefined && cell.type !== undefined && !canEditCell(editContext, row, cell)
-  const inertProps = inert
-    ? { className: 'cursor-default', onClick: (event: MouseEvent<HTMLTableCellElement>) => event.stopPropagation() }
-    : { className: '' }
+  const inertClassName = inert ? 'cursor-default' : ''
+  const inertOnClick = inert ? (event: MouseEvent<HTMLTableCellElement>) => event.stopPropagation() : undefined
   if (!numeric) {
     return (
       <td
-        className={`max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)] ${inertProps.className}`}
-        {...(inert ? { onClick: inertProps.onClick, 'data-inert': 'true' } : {})}
+        className={`max-w-[16rem] truncate border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[var(--color-secondary)] ${inertClassName}`}
+        {...(inert ? { onClick: inertOnClick, 'data-inert': 'true' } : {})}
       >
         {primary && onOpenPath ? (
           <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="block w-full truncate text-left">
@@ -176,7 +176,7 @@ function Cell({
       </span>
     )
   return (
-    <td className="whitespace-nowrap border-b border-[var(--color-border)] px-3 py-1.5 text-right">
+    <td className="whitespace-nowrap border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right">
       {primary && onOpenPath ? (
         <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="inline-block text-right">
           {numberBody}
@@ -287,13 +287,13 @@ export function TablePart({
   return (
     <div className="flex min-h-0 flex-col" data-testid="viewpart-table">
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-[13px]">
+        <table className="w-full border-collapse text-[length:var(--type-caption-size)]">
           <thead>
             <tr>
               {columns.map((property) => (
                 <th
                   key={property}
-                  className={`border-b border-[var(--color-border)] px-3 py-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)] ${
+                  className={`border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-[var(--font-letter-spacing-table-header)] text-[var(--color-muted)] ${
                     numeric.has(property) ? 'text-right' : 'text-left'
                   }`}
                 >
@@ -370,7 +370,7 @@ function FragmentRows({
       <tr data-testid="viewpart-group-header">
         <td
           colSpan={columns.length}
-          className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1"
+          className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)]"
         >
           <GroupHeaderLabel label={group.key} count={group.count} absent={group.absent} />
         </td>
@@ -396,13 +396,13 @@ function FragmentRows({
             // its own column, so the label claims one anyway rather than an
             // invalid 0.
             colSpan={Math.max(columns.length - 1, 1)}
-            className="border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[11px] text-[var(--color-muted)]"
+            className="border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           >
             Subtotal · {s.property}
             {s.unit !== undefined && ` · ${s.unit}`} · {s.count} {s.count === 1 ? 'row' : 'rows'}
           </td>
-          <td className="whitespace-nowrap border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-right font-medium">
-            <span className="font-mono text-[13px] tabular-nums text-[var(--color-secondary)]">
+          <td className="whitespace-nowrap border-b border-t border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-right font-medium">
+            <span className="font-mono text-[length:var(--type-caption-size)] tabular-nums text-[var(--color-secondary)]">
               {formatNumberText(s.value)}
             </span>
           </td>
@@ -412,7 +412,7 @@ function FragmentRows({
         <tr data-testid="viewpart-group-excluded">
           <td
             colSpan={columns.length}
-            className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1 text-[11px] text-[var(--color-warning)]"
+            className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
           >
             {group.excluded_reason ?? `${group.excluded_count} excluded from this subtotal.`}
           </td>

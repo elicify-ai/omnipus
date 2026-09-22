@@ -4,6 +4,8 @@ import { Shield } from '@phosphor-icons/react'
 import { fetchPromptGuardLevel, updatePromptGuardLevel, getErrorMessage } from '@/lib/api'
 import type { PromptInjectionLevel } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { Card } from '@/components/ui/card'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
 
 // ── Level metadata ────────────────────────────────────────────────────────────
@@ -33,11 +35,11 @@ const LEVELS: { value: PromptInjectionLevel; label: string; subtitle: string }[]
 
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3 animate-pulse">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
-    </div>
+    </Card>
   )
 }
 
@@ -87,7 +89,7 @@ export function PromptGuardSection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-sm" style={{ color: 'var(--color-error)' }}>
+      <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }}>
         Failed to load prompt guard settings:{' '}
         {error instanceof Error ? error.message : 'Unknown error'}
       </p>
@@ -95,13 +97,13 @@ export function PromptGuardSection(): React.ReactElement {
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
           <Shield size={14} className="text-[var(--color-muted)]" />
           Prompt Injection Defense
           {restartRequired && (
-            <span className="ml-2 text-[10px] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-1.5 py-0.5">
+            <span className="ml-[var(--space-2)] text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-warning)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 rounded px-[var(--space-1)] py-[var(--space-0-5)]">
               Restart required
             </span>
           )}
@@ -109,31 +111,32 @@ export function PromptGuardSection(): React.ReactElement {
         <SaveStatus state={saveState} errorMessage={errorMessage} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Controls how untrusted tool output is sanitised before passing to the agent.
         </p>
 
-        <div className="space-y-2" role="radiogroup" aria-label="Prompt injection defense level">
+        <RadioGroup
+          className="space-y-[var(--space-2)]"
+          orientation="vertical"
+          aria-label="Prompt injection defense level"
+          value={selected}
+          onValueChange={(value) => handleChange(value as PromptInjectionLevel)}
+        >
           {LEVELS.map((lvl) => {
             const isActive = selected === lvl.value
             return (
-              <button tabIndex={0}
+              <RadioGroupItem
                 key={lvl.value}
-                type="button"
-                role="radio"
-                aria-checked={isActive}
-                onClick={() => {
-                  if (selected !== lvl.value) handleChange(lvl.value)
-                }}
+                value={lvl.value}
                 className={[
-                  'w-full text-left rounded-md border p-3 transition-colors disabled:opacity-60 disabled:cursor-not-allowed',
+                  'flex-col items-start gap-0 rounded-md border p-[var(--space-2-5)] transition-colors',
                   isActive
-                    ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/8'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border-hover)]',
+                    ? 'border-[var(--color-accent)]/60 bg-[var(--color-accent)]/8 hover:bg-[var(--color-accent)]/8'
+                    : 'border-[var(--color-border)] bg-[var(--color-surface-2)] hover:border-[var(--color-border)]/80 hover:bg-[var(--color-surface-2)]',
                 ].join(' ')}
               >
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-[var(--space-2)]">
                   <span
                     className={[
                       'flex-shrink-0 inline-block w-3.5 h-3.5 rounded-full border-2 transition-colors',
@@ -145,21 +148,21 @@ export function PromptGuardSection(): React.ReactElement {
                   />
                   <span
                     className={[
-                      'text-sm font-medium',
+                      'text-[length:var(--type-body-compact-size)] font-medium',
                       isActive ? 'text-[var(--color-secondary)]' : 'text-[var(--color-muted)]',
                     ].join(' ')}
                   >
                     {lvl.label}
                   </span>
                 </div>
-                <p className="text-xs text-[var(--color-muted)] mt-1 ml-5 leading-relaxed">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)] ml-[var(--space-3)] leading-relaxed">
                   {lvl.subtitle}
                 </p>
-              </button>
+              </RadioGroupItem>
             )
           })}
-        </div>
-      </div>
+        </RadioGroup>
+      </Card>
     </section>
   )
 }

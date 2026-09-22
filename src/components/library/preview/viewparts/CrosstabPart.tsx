@@ -29,17 +29,17 @@ function UnitGrid({ crosstab, unit }: { crosstab: ViewResultCrosstab; unit: stri
     crosstab.cells.find((c) => c.row === row && c.column === column && c.unit === unit)
   return (
     <div className="overflow-x-auto" data-testid="viewpart-crosstab-grid">
-      <table className="w-full border-collapse text-[13px]">
+      <table className="w-full border-collapse text-[length:var(--type-caption-size)]">
         <thead>
           <tr>
-            <th className="border-b border-[var(--color-border)] px-3 py-1.5 text-left text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]">
+            <th className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-left text-[length:var(--type-caption-size)] font-medium uppercase tracking-[var(--font-letter-spacing-table-header)] text-[var(--color-muted)]">
               {crosstab.row_property}
               {unit !== undefined && ` · ${unit}`}
             </th>
             {crosstab.column_keys.map((ck) => (
               <th
                 key={ck}
-                className="border-b border-[var(--color-border)] px-3 py-1.5 text-right text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--color-muted)]"
+                className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right text-[length:var(--type-caption-size)] font-medium uppercase tracking-[var(--font-letter-spacing-table-header)] text-[var(--color-muted)]"
               >
                 {keyLabel(ck)}
               </th>
@@ -49,7 +49,7 @@ function UnitGrid({ crosstab, unit }: { crosstab: ViewResultCrosstab; unit: stri
         <tbody>
           {crosstab.row_keys.map((rk) => (
             <tr key={rk} data-testid="viewpart-crosstab-row">
-              <td className="border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">
+              <td className="border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[var(--color-secondary)]">
                 {keyLabel(rk)}
               </td>
               {crosstab.column_keys.map((ck) => {
@@ -57,7 +57,7 @@ function UnitGrid({ crosstab, unit }: { crosstab: ViewResultCrosstab; unit: stri
                 return (
                   <td
                     key={ck}
-                    className="whitespace-nowrap border-b border-[var(--color-border)] px-3 py-1.5 text-right font-mono text-[13px] tabular-nums"
+                    className="whitespace-nowrap border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-right font-mono text-[length:var(--type-caption-size)] tabular-nums"
                   >
                     {cell === undefined ? (
                       <span className="text-[var(--color-muted)]">—</span>
@@ -81,19 +81,19 @@ export function CrosstabPart({ part }: { part: ViewResultPart }) {
   const crosstab = part.crosstab
   if (crosstab === undefined) {
     return (
-      <p className="px-3 py-3 text-[12px] text-[var(--color-muted)]" data-testid="viewpart-crosstab">
+      <p className="px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="viewpart-crosstab">
         No grid was computed for this part.
       </p>
     )
   }
   const units = cellUnits(crosstab)
   return (
-    <div className="flex flex-col gap-2" data-testid="viewpart-crosstab">
+    <div className="flex flex-col gap-[var(--space-2)]" data-testid="viewpart-crosstab">
       {units.map((unit) => (
         <UnitGrid key={unit ?? ' '} crosstab={crosstab} unit={unit} />
       ))}
       {units.filter((u) => u !== undefined).length > 1 && (
-        <p className="px-3 text-[11px] leading-snug text-[var(--color-muted)]" data-testid="viewpart-no-grand-total">
+        <p className="px-[var(--space-2-5)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]" data-testid="viewpart-no-grand-total">
           <span className="font-medium text-[var(--color-warning)]">One grid per unit. </span>
           Values in different units are never added into one cell.
         </p>

@@ -462,6 +462,10 @@ describe('WebSearchBlock — flat text-line status dot', () => {
     const { container } = renderSearch(structuredResult, 'complete')
     fireEvent.click(container.querySelector('button')!)
     const root = container.firstElementChild as HTMLElement
+    // DisclosureRow (a catalogued Button) renders as a single <button> node —
+    // Button's actionState live region (button.tsx's ActionAnnouncement) is
+    // portalled straight to document.body, never a DOM child here — so the
+    // results panel is root.children[1], right after the header button.
     const panel = root.children[1] as HTMLElement
     expect(panel.className).toContain('border-l-2')
     expect(panel.className).not.toContain('divide-y')

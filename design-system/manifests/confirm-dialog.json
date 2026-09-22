@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "component": "ConfirmDialog",
+  "exports": [
+    "ConfirmDialog"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/confirm-dialog.tsx",
+  "documentation": "docs/internal/design/components/confirm-dialog.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "ConfirmationContract",
+        "ConfirmationKeyboard",
+        "PendingConfirmationEscape"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "confirm-dialog-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/overlays.test.tsx",
+      "test": "overlay contracts keeps confirmation open after confirm, blocks pending repeats, and permits Escape"
+    },
+    {
+      "id": "confirm-dialog-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Confirmation Contract",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-axe] axe",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-keyboard] keyboard",
+      "story": "ConfirmationKeyboard"
+    },
+    {
+      "id": "confirm-dialog-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-browser] browser",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-pointer] pointer",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-reduced-motion] reduced-motion",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-forced-colors] forced-colors",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-root-size] root-size",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-zoom] zoom",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-reflow] reflow",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "confirm-dialog-pending-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Pending Confirmation Escape",
+      "story": "PendingConfirmationEscape"
+    },
+    {
+      "id": "confirm-dialog-pending-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ConfirmDialog [check:confirm-dialog-pending-keyboard] keyboard",
+      "story": "PendingConfirmationEscape"
+    }
+  ]
+}

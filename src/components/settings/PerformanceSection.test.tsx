@@ -111,7 +111,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
 
     // Before debounce fires — dialog must NOT be open yet.
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
 
     // Advance past the autosave debounce (600 ms).
@@ -122,12 +122,12 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
 
     // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
     // the confirm is not the destructive variant.
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Change the performance settings?')
-    expect(screen.getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(screen.getByTestId('confirm-accept')).toHaveTextContent('Change performance settings')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(screen.getByRole('button', { name: 'Change performance settings' })).toHaveTextContent('Change performance settings')
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(screen.getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(screen.getByRole('button', { name: 'Change performance settings' }).className).not.toMatch(/color-error/)
     // PUT must still NOT have been called — user hasn't confirmed yet.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
@@ -145,7 +145,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
@@ -167,7 +167,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     vi.useRealTimers()
 
     // Dialog must NOT open — a negative value is silently skipped by autosave.
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     // PUT must not have been called.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
@@ -188,7 +188,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
@@ -217,7 +217,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
@@ -364,7 +364,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     fireEvent.click(screen.getByLabelText('Tool loading'))
 
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-accept')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Change performance settings' })).toBeInTheDocument()
     })
     // PUT must NOT have been called before the confirmation.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
@@ -380,7 +380,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     // Toggle OFF (from default ON).
     fireEvent.click(screen.getByLabelText('Tool loading'))
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       // tools_on_demand flipped to false; max_parallel_agents still 4 (from SETTINGS).
@@ -420,7 +420,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     await new Promise((r) => setTimeout(r, 50))
 
     // The confirmation must NOT have opened (no valid body → no setPending/setConfirmOpen).
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
 
     // updatePerformanceSettings must NOT have been called.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
@@ -466,7 +466,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
 
     // No save was attempted.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('shows an error toast and reverts the switch when toggled OFF-to-ON while max_parallel_agents is out of range', async () => {
@@ -504,7 +504,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     })
 
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('shows an error toast when the debounced max_parallel_agents input settles out of range (Bug 1)', async () => {
@@ -529,7 +529,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     })
 
     // Dialog never opens and no PUT fires for the invalid value.
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
@@ -556,7 +556,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
@@ -589,18 +589,18 @@ describe('PerformanceSection — Tool loading toggle', () => {
     fireEvent.click(toggle)
 
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-dialog')).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
     // Switch is optimistically OFF while the dialog is open.
     expect(screen.getByLabelText('Tool loading')).not.toBeChecked()
 
     // Cancel instead of confirming.
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     // Dialog closes and the switch reverts to the server's true value (ON) —
     // it must not keep showing the unsaved OFF state.
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
     await waitFor(() => {
       expect(screen.getByLabelText('Tool loading')).toBeChecked()

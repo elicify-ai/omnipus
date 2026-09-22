@@ -8,71 +8,27 @@
 // Graph/Team visual pattern so a failed query renders IDENTICALLY everywhere
 // it appears: same icon, same copy style, same optional Retry affordance.
 //
-// D9's second half — the deterministic-race fix: every one of these screens
-// is ALSO subscribed to the global forced-logout handler (queryClient.ts's
-// 401 subscriber). On a 401, both fire from the SAME event: the query's
-// isError flips true (this component would paint) AND forceLogout() redirects
-// to /login. Historically that was a race — whichever happened to flush
-// first determined whether the user saw a flash of "Retry" before the bounce.
-// isForceLoggingOut() (authLogout.ts) is set SYNCHRONOUSLY the instant
-// forceLogout() runs, and the global 401 subscriber (registered at
-// queryClient.ts module-init, before any screen mounts) fires before a
-// screen's own hook-driven re-render is flushed — so by the time THIS
-// component's render body executes, the flag is already accurate. Rendering
-// null in that window means no screen ever paints a stale actionable error
-// for the redirect to interrupt.
-import { WarningCircle } from '@phosphor-icons/react'
+// Once forceLogout() begins, its synchronous flag suppresses actionable
+// error UI during the redirect. The global 401 handler first awaits a fresh
+// session-validity check, so this adapter does not suppress query errors
+// during that preceding validation window.
 import { isForceLoggingOut } from '@/lib/authLogout'
+import {
+  QueryErrorState as QueryErrorStatePresentation,
+  type QueryErrorStateProps,
+} from '@/components/ui/query-error-state'
 
-export interface QueryErrorStateProps {
-  /** User-facing explanation of what failed. Keep it screen-specific — this
-   *  component only owns the chrome, not the copy. */
-  message: string
-  /** Omit for a failure with no meaningful retry action. */
-  onRetry?: () => void
-  /**
-   * 'absolute' fills the nearest positioned ancestor (matches the Graph/Team
-   * full-bleed tab pattern — use when this IS the entire tab body).
-   * 'fill' participates in a flex/block layout instead, filling whatever
-   * space its parent already allocated (use when siblings like a toolbar or
-   * banner render above/around it, e.g. WorkspaceTasksTab's toolbar row).
-   * Defaults to 'absolute' since that is the more common full-tab case.
-   */
-  layout?: 'absolute' | 'fill'
-  testId?: string
-}
+export type { QueryErrorStateProps }
 
 export function QueryErrorState({
   message,
   onRetry,
   layout = 'absolute',
   testId,
+  className,
 }: QueryErrorStateProps) {
-  // See the deterministic-race note above — skip painting entirely while a
-  // forced logout is already in flight.
+  // Skip painting while a confirmed forced logout is in flight.
   if (isForceLoggingOut()) return null
 
-  return (
-    <div
-      className={
-        layout === 'absolute'
-          ? 'absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center'
-          : 'flex flex-1 h-full flex-col items-center justify-center gap-3 p-8 text-center'
-      }
-      data-testid={testId ?? 'query-error-state'}
-    >
-      <WarningCircle size={24} className="text-[var(--color-error)]" aria-hidden="true" />
-      <p className="text-sm text-[var(--color-muted)]">{message}</p>
-      {onRetry && (
-        <button
-          tabIndex={0}
-          type="button"
-          onClick={onRetry}
-          className="text-xs text-[var(--color-accent)] underline underline-offset-2"
-        >
-          Retry
-        </button>
-      )}
-    </div>
-  )
+  return <QueryErrorStatePresentation message={message} onRetry={onRetry} layout={layout} testId={testId} className={className} />
 }

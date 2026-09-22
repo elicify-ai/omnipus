@@ -92,6 +92,10 @@ export default tseslint.config(
       'react-hooks': reactHooks,
     },
   },
+  {
+    files: ['**/*.cjs'],
+    languageOptions: { globals: { module: 'readonly', exports: 'readonly' } },
+  },
   // Node-run scripts and harnesses execute under Node, not in a browser, so
   // `process`/`console`/`fetch`/`AbortSignal` are legitimately defined there.
   // Without this, the base `no-undef` rule judges them by browser globals and

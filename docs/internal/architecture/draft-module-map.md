@@ -10,7 +10,7 @@
 - `rest.go` file list (10 new `rest_*`; do not recreate tasks/workspaces/plans/auth). **Founder agreed 2026-09-12.**
 
 - Tools: channel grain (one package per family, not per `Name()`); dissolve `pkg/sysagent/tools` into product families. **Founder agreed 2026-09-12.**
-- Size budgets: a file warns at 2,000 lines and fails at 4,000; a function warns at 120 lines and fails at 240. Same numbers for production and test code. **React components warn at both lines and never fail.** **Founder ruled 2026-09-15.** Test design in "How we enforce it" below.
+- Size budgets: a file warns at 2,000 lines and fails at 3,000; a function warns at 120 lines and fails at 240. Same numbers for production and test code. **React components warn at both lines and never fail.** **Founder ruled 2026-09-15; the file fail limit was set to 3,000 on 2026-09-22.** Test design in "How we enforce it" below.
 
 **Changes 2026-09-15** (validation after ff11e8249; every number below is re-measured against `release/v0.1.1` @ `1f996b01d`, not carried over):
 
@@ -28,7 +28,7 @@
 - PR #685 touched nothing outside the browser module that this map measures: `loop.go`, `rest.go`, `chat.ts`, `api.ts`, `config.go`, `plan_engine.go`, `delegate.go` are line-for-line unchanged; `gateway.go` +4, `websocket.go` +2. Function counts, `rest_*.go` count, `pkg/tools` count and the root `CLAUDE.md` length all match.
 - PR #685 doubled the browser file count: `pkg/tools/browser` 51 to 110 non-test files, its `webrtc/` subpackage 8 to 25, `pkg/gateway/browser_*.go` 5 to 27. 81 new files, 9,174 lines, largest 667. The three browser rows in the giants tables are rewritten against that structure. `browser_webrtc.go` fell from 2,108 to 1,378 lines and leaves the list.
 - Lesson from PR #685, recorded in "How files grew": siblings were added but the two giants barely moved (`manager.go` +43 to 4,167, `live.go` -56 to 3,616). New code went to new files; old code stayed put. A ratchet that only blocks growth would have passed this. The warn threshold exists so the giants are named on every PR, not only when they grow.
-- Founder ruling on budgets (files warn 2,000 / fail 4,000; functions warn 120 / fail 240; React components warn only, no fail line) replaces the earlier "target / hard" wording. "How we enforce it" is now a test design, with grandfather-list sizes measured at `d9a0c6941`.
+- Founder ruling on budgets (files warn 2,000 / fail 3,000, set 2026-09-22; functions warn 120 / fail 240; React components warn only, no fail line) replaces the earlier "target / hard" wording. "How we enforce it" is now a test design, with grandfather-list sizes measured at `d9a0c6941`.
 - A separate sizing study (`function-size-recommendation-2026-09-15.md`) added statement counts and nesting depth. Its proposed numbers are superseded by the ruling; its two durable findings are kept below: a statement-count signal for phase two, and the order of the first ten functions to bring down.
 - **Trial split of `loop.go` done (2026-09-15, branch `refactor/split-loop-go`, not merged).** The splitter moved 181 functions into 13 `loop_*.go` files and appended 17 to `goal_loop.go` / `task_executor.go`; build, vet and gofmt clean on the first run; the 2,465-test inventory identical before and after; the `^func` multiset identical (428 lines). Three tests fail before and after (pre-existing); two guard tests that scanned `loop.go` by filename panicked and were fixed to scan every `loop*.go`. `loop.go` landed at 8,591 lines, not the ~5,000 estimated, because **the plan's tables do not name 65 of its 246 functions (7,612 lines)**; see the new "Left in `loop.go`" note under the split table.
 - **Budget gates built (2026-09-15, branch `feat/size-budget-file-gate`, carries both gates and the wiring, not merged).** Both pass on GitHub's runner. The design's wiring section was wrong: `scripts/guards.sh` already auto-discovers every `check-*.sh` with its self-check and is the only guard step in `pr.yml` and `runci.sh` (C-92); what the guard job lacked was Go, Node and `node_modules`. The function gate matches a grandfathered entry by exact file+name, then by package directory+name, so a same-package file split keeps the entry.
@@ -779,7 +779,7 @@ Also from the study: `pkg/tools/task.go::TaskUpdateTool.Execute` (397) and `pkg/
 
 ### Root `CLAUDE.md` gets three lines
 
-The one-job rule; "a file warns at 2,000 and fails at 4,000, a function warns at 120 and fails at 240, a React component only warns"; "do not add to a grandfathered file or function, extract first". No essay.
+The one-job rule; "a file warns at 2,000 and fails at 3,000, a function warns at 120 and fails at 240, a React component only warns"; "do not add to a grandfathered file or function, extract first". No essay.
 
 The splitter at `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` is the mechanical *how* for a file cut, not the gate. The gate is CI.
 

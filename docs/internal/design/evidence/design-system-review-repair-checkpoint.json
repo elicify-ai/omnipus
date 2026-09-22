@@ -1,0 +1,898 @@
+{
+  "status": "Blocked on authorized CLI provider availability; Stage A/B formal acceptance incomplete, C1-C6 not started",
+  "pauseAfter": "B;no C1 without founder realignment",
+  "completed": {
+    "toolingLint": {
+      "tests": 50,
+      "lintExit": 0,
+      "independentReview": "no findings"
+    },
+    "catalogAudit": {
+      "tests": 26,
+      "exitCode": 0,
+      "mutationsKilled": 3
+    },
+    "confirmationEscape": {
+      "red": "2 failed,13 passed",
+      "restored": "15 passed,exit0",
+      "mutationsKilled": 3
+    },
+    "buttonAuxiliary": {
+      "restored": "34 passed,exit0",
+      "mutationsKilled": 3
+    },
+    "chromiumStories": {
+      "tests": 36,
+      "exitCode": 0,
+      "scope": "button and overlays before strengthened native fixture;not final fullmatrix"
+    },
+    "liveRegions": {
+      "Button": "36unitpass,3mutations killed/restored",
+      "CollectionJob": "46focusedpass,3mutations killed/restored",
+      "stories": "48scopedstories perengine passed Chromium/Firefox/WebKit before exactquery/waitFor edits",
+      "combinedComponents": "428/428 passed across42files exit0;log a-live-regions-components-fixed.log",
+      "typecheck": "latest nativehelper typecheck4135 exit0"
+    },
+    "buttonFailureDuringDwell": {
+      "tests": 37,
+      "restoredExitCode": 0,
+      "mutationsKilled": 3,
+      "mutationsRestored": true,
+      "report": "dist/design-system-baseline/cli-lanes/a-button-failure-dwell-mutations.json",
+      "scope": "Immediate error announcement during retained spinner and retry; pending announcement remains delayed until 400ms."
+    },
+    "badgeContrast": {
+      "componentTests": 11,
+      "styledBadgeAndButtonStories": 31,
+      "tokenTests": 9,
+      "mutationsKilled": 3,
+      "tokens": 297,
+      "scope": "Error label foreground only; canonical D3/D4 and existing tint preserved. Full current verification remains pending."
+    },
+    "fieldValidationPrecedence": {
+      "red": "1 failed,7 passed: false child overrode Field error",
+      "restored": "8 passed,exit0",
+      "mutationsKilled": 3,
+      "report": "dist/design-system-baseline/cli-lanes/a-field-validation-mutations.json",
+      "scope": "Field error precedence, preserved child validation after clearing error, compound Select root/trigger wiring. Compound wiring test passed before repair; it validates existing behavior.",
+      "impact": "UNKNOWN: exact Field symbol not indexed",
+      "independentReview": "Read-only code reviewer: no actionable findings; did not independently rerun tests",
+      "lintExitCode": 0,
+      "typecheckExitCode": 0
+    },
+    "fieldOptionalIndicator": {
+      "red": "2 failed,9 passed before optionalLabel implementation",
+      "restored": "11 passed,exit0",
+      "mutationsKilled": 3,
+      "mutationReport": "dist/design-system-baseline/cli-lanes/a-field-optional-mutations.json",
+      "stories": "21 passed across Chromium/Firefox/WebKit,exit0",
+      "lintExitCode": 0,
+      "review": "Independent code review: no actionable correctness/API/simplification findings; no independent test rerun",
+      "scope": "Caller-localized optionalLabel, no default label change, required precedence, no wrapper prop leakage",
+      "typecheckExitCode": 0
+    },
+    "overlayDocumentation": "Seven component docs repaired to describe their own contracts; source unchanged and manual native-zoom limitation preserved.",
+    "bNamedNumericTypes": {
+      "tests": 127,
+      "exitCode": 0,
+      "mutationsKilled": 3,
+      "lintExitCode": 0,
+      "impact": "UNKNOWN, symbol not indexed",
+      "scannerHash": "f5a39edbbeb06eb792460e130e3685d05f7acf263a3876ddf4b1fc595c39dca1",
+      "targetedDiagnostic": "Earlier scanner976a diagnostic AgentProfile10 to9 with297-token policy. Current repaired scanner requires fresh integrated scan; no global count claimed.",
+      "evidence": "dist/design-system-baseline/cli-lanes/b-numeric-named-types-real-source.json",
+      "independentReview": "All namespace/rest/switch findings and nested/class variants confirmed resolved by same reviewer; valid module numeric controls accepted. No further findings in bounded review.",
+      "status": "bounded patch reviewed; integrated836fixtures pass; fresh diagnostic complete; B acceptance pending",
+      "criticalRepairMutations": "namespace/rest/required then3scopeguards all caught/restored"
+    },
+    "currentComponentSuite": {
+      "tests": 437,
+      "files": 42,
+      "exitCode": 0,
+      "log": "dist/design-system-baseline/cli-lanes/a-field-final-components.log",
+      "scope": "Current A component suite after Badge/Button/Field repairs; not full A acceptance or full styled browser matrix."
+    },
+    "buttonComposedFormTypes": {
+      "red": "3 failed,38 passed before repair",
+      "restored": "41 passed,exit0",
+      "mutationsKilled": 3,
+      "stories": "66 passed across Chromium/Firefox/WebKit,exit0",
+      "lintExitCode": 0,
+      "independentReview": "Original reviewer reproduced button/reset/submit behavior after repair; child precedence and anchor behavior retained; no new findings.",
+      "report": "dist/design-system-baseline/cli-lanes/a-button-slot-type-mutations.json",
+      "typecheckExitCode": 0
+    },
+    "dateTimeFieldAndLocale": {
+      "testsPerLocale": 28,
+      "locales": [
+        "en-US",
+        "en-GB"
+      ],
+      "exitCode": 0,
+      "localeRed": "isolatedGB runner1failed26passed; standardrunnerpinsUS, shelllocalealone did not change it",
+      "mutationsKilled": 4,
+      "runtimeChanged": false,
+      "lintExitCode": 0,
+      "review": "Independent review: no actionable findings; only enUS/enGB locale checks, DOM focus and synthetic click\u2014not native keyboard or human speech evidence.",
+      "report": "dist/design-system-baseline/cli-lanes/a-datetime-field-mutations.json"
+    },
+    "collectionJobReviewCoverage": {
+      "tests": 56,
+      "newCases": 10,
+      "exitCode": 0,
+      "mutationsKilled": 5,
+      "runtimeRestored": true,
+      "lintExitCode": 0,
+      "report": "dist/design-system-baseline/cli-lanes/a-collection-job-review-mutations.json",
+      "review": "Independent review found event-argument assertion exceeded ()=>void API. Corrected to exactly one invocation; remaining callback/state assertions retained.56tests rerun exit0 after correction."
+    },
+    "progressNumericOwnership": {
+      "red": "3failed16passed",
+      "restored": "19passed,exit0",
+      "mutationsKilled": 3,
+      "runtimeReport": "dist/design-system-baseline/cli-lanes/a-progress-aria-mutations.json",
+      "typeConsumerProof": "Valid consumer compiles; all3numeric ARIA overrides fail withTS2322. a-progress-aria-types.json",
+      "independentReview": "Original reviewer confirmed unknown/determinate/name/customtext behaviors; no new API issues",
+      "stories": "15 passed across Chromium/Firefox/WebKit,exit0; inline transform and rendered25%geometry checked",
+      "lintExitCode": 0
+    }
+  },
+  "nativeBrowser": {
+    "status": "targeted native proof passed8/8 exit0; not final fullmatrix",
+    "artifact": "dist/design-system-review-repairs-static",
+    "artifactInputFingerprint": "155a327d2c54a35df5a1f027633994c1d90e1ae4438029f541a1041f6286dee2",
+    "report": "dist/design-system-baseline/cli-lanes/a-confirm-aux-native-trusted.json",
+    "scope": "Four projects: pendingEscape/focusrestore; trusted enabled auxiliary default uncancelled, disabled/pending cancelled. Chromium/Firefox/coarse additionally prove new-tab enabled control and blocked tabs. WebKit plain anchor probe proves trusted auxclick without newtab; no newtab claim in WebKit.",
+    "contextMenu": "a-button-native-contextmenu-proof.json: trusted right contextmenu preventedfalse, right auxclick preventedtrue"
+  },
+  "remainingA": [
+    "Consolidate completed A2ec execution evidence and independent review closure into final gate record; later workflow-only changes have separate scoped verification",
+    "Human screen-reader, native zoom and founder visual acceptance remain unverified; no claim of overall completion"
+  ],
+  "remainingB": [
+    "Close remaining colour, spacing and typography syntax coverage and independent-review findings; historical full diagnostic has 230 unsupported, not a current count",
+    "Integrate independently reviewed exact source boundaries; approve owned migration baseline only after frozen complete audit",
+    "Install and verify repository/CI enforcement commands, all lock fixtures and public coverage blocking gate"
+  ],
+  "hashes": {
+    "src/components/ui/button.tsx": "78992e827c8b758e7dcfb8892ece919df23bbe347e38d73011fb403fff335a1b",
+    "src/components/ui/button.test.tsx": "fafa5885f71d27ed19b751d9806d8228a127f487cef9075b187a212643f68123",
+    "src/components/ui/confirm-dialog.tsx": "bcbad07b0ec80ff0999db0fa0e9f445347b074ef3564d167bd2a8c7ec40d87d4",
+    "src/components/ui/overlays.test.tsx": "cd2309c58b365adcaaf26ca2dc02580bab4ebb69b77a41ee69caedc53abbfe21",
+    "src/components/ui/overlays.stories.tsx": "0442d7ed1023af4ffb04b9117070cf3fbb2c30c8ccba0f0ff2fc256ab59f3bfb",
+    "tests/design-system/browser.spec.ts": "dba12d2af08e0e01d86826d8b2cc3962bb59ef708f118330e5e5701a8e4a86a9",
+    "scripts/design-system-locks/audit.mjs": "e0e4bc7798d4deb6c725d9e32024680ea99a394fc5fbcd5d1e2b508823181351",
+    "src/components/ui/field.tsx": "526515a97d6c3d1c060d2f3d671afef838ffb98f673698f46042584f37db1bfb",
+    "src/components/ui/field.test.tsx": "eb7f42db212ddf42a31159b0d49a08d5e7c26f1d1a56f5923ad3fd9ccaf04a21",
+    "design-system/manifests/field.json": "f392c4418960528a2cc25adaf611e2f7119c357a9242509fed29ac21c50cd230",
+    "src/components/ui/field.stories.tsx": "a1231b3fd7bf9eb2ccc2f1c767487bb607a98cf8864c4408f2f2931fd0332440",
+    "src/components/ui/button.stories.tsx": "b32cc795a5ab861f4517c3c2734aa5df8a8ccef90586b08518f421f33b4d1aef",
+    "design-system/manifests/button.json": "866bfbaed78c9e93bd4d188bbf431c7cbfae0a2656e13832b945579776255799",
+    "src/components/ui/date-time-picker.test.tsx": "c1f113d3fb446b35f0f61dd806e868b46010672484d4b67ce6ee6e4848935ffe",
+    "src/components/ui/collection-state.test.tsx": "bc48276242e5bbd42e05d7e5f493320fa1560405713d81c781fe98f394908db1",
+    "src/components/ui/job-status.test.tsx": "da99b4666a85badbda6e555a75ad3ad34b47b8cc36a6998e0676e371c3203b04",
+    "design-system/manifests/date-time-picker.json": "a115ad189e56c716ed9e6acdf241e809e5d067bb5fdbcf6e23a08e80e723665e",
+    "design-system/manifests/collection-state.json": "d11615f16aa49bbb06b4f963413256399a34886e122475e208b57fba54ceaf51",
+    "design-system/manifests/job-status.json": "1145962b9d02ba150d37fe582bfbe4bec647a59006b8825305b9e7fa60be1f66",
+    "src/components/ui/progress.tsx": "0308f2078f7dfc4f391ba57d948fb2595bc163bec741e275a7dda2cec3288e5b",
+    "src/components/ui/progress.test.tsx": "381d2cd8307d3d7ba9f2c9003e501a1f185fcba11cd0cc6caea0427e4920183a",
+    "src/components/ui/progress.stories.tsx": "dafa6af9ef843ed10acefa5d621da51d418a4a8be5e3bc7d851ddfbc3766de77",
+    "design-system/manifests/progress.json": "870318195d439536720cdb8d754d202e90fba9cd87d91dd0bcd69075ca69691a"
+  },
+  "independentReviewTriage": {
+    "source": "a-confirm-aux-independent-review.result.json",
+    "findings": [
+      {
+        "claim": "Testing Library string role name matches substrings",
+        "status": "rejected:installedquery uses exact matches, existing3engine playspassed; newtestqueryregex used to fix unrelated unsupported exact option"
+      },
+      {
+        "claim": "right auxiliary preventDefault suppresses contextmenu",
+        "status": "rejected by native trustedcontextmenu preventedfalse while auxiliary preventedtrue; retain disabledcallbackguard"
+      },
+      {
+        "claim": "native observer incompatible with WebKit",
+        "status": "confirmed and repaired with trusted-event proof + specific verified platformbehavior;8checks pass"
+      },
+      {
+        "claim": "pendingEscape play races unmount",
+        "status": "added waitFor disappearance and focus; newstory verification pending"
+      }
+    ]
+  },
+  "liveSessions": {
+    "components": null,
+    "nativeHelperTypecheck": null,
+    "formAPIReview": null,
+    "coverageReview": null,
+    "silentFailureReview": null,
+    "commentReview": null,
+    "staticServer": 54080,
+    "styledPickerStories": null,
+    "styledFullChromium": null,
+    "bFixtures": null
+  },
+  "storybookStyleGap": {
+    "status": "Tailwind plugin fixed; full styled Chromium run had152 pass/3fail. Badge contrast and pending interaction repaired; scoped31 Badge/Button and7 picker stories pass. Full three-engine run pending.",
+    "proof": "Static155 disabledopacity0.5/readonly1. Unstyled story runnerdisabled1; compiledstyles runner correctlyblocks pointer-events none. Explicitdisabled-interaction rejection now asserted rather than attempting unreachablepointerclick.",
+    "files": [
+      ".storybook/vitest.config.ts",
+      "src/components/ui/date-picker.stories.tsx",
+      "src/components/ui/date-time-picker.stories.tsx"
+    ]
+  },
+  "bIntegratedFixtures": {
+    "firstRun": "819pass9fail of828",
+    "failures": "8missing catalog fixture setup;1FIFO child startup includedin1500msoperationwatchdog",
+    "repair": "validexplicitcatalog fixtures;readiness handshake separatesbootstrapfromunchanged1500msdeadlockwatchdog;actualblockingFIFO negativecontrol killed",
+    "focused": "22pass exit0",
+    "fullRerun": "829/829 passed,61 suites,0 skipped,exit0; a subsequent Badge token addition requires current final verification",
+    "latest": {
+      "tests": 836,
+      "suites": 61,
+      "exitCode": 0,
+      "skipped": 0,
+      "fingerprint": "df061f2b3919afd2582bbba57c890f2f8729801ea06d822705730039f75392f9",
+      "inputFiles": 1362,
+      "changedInputs": []
+    }
+  },
+  "reviewFollowup": {
+    "docs": "ConfirmDialog now states caller-owned operation handling; CollectionState distinguishes loading placeholder from cached content.",
+    "remaining": [
+      "Collection/Job new coverage independent review; full current A component/story/browser/package/production verification",
+      "Collection/Job coverage findings",
+      "Independent correctness/security and simplification reviews",
+      "Fresh complete A verification",
+      "B real-tree coverage closure, reviewed debt ledger and CI integration"
+    ],
+    "buttonFormRegression": "Repaired and reviewed; final full component/browser program verification still pending.",
+    "progressNumericOwnership": {
+      "status": "repaired and independently reviewed; finalbrowserstories and rebuilt integrationpending",
+      "cases": [
+        "null value with aria-valuenow75 announces fabricated determinatevalue",
+        "value25/max100 with aria-valuemax50 contradicts25%fill"
+      ],
+      "impact": "LOW3direct0flows",
+      "next": "After frozencomponentrun, add red tests; own numeric ARIA through types/runtime while preserving naming and customvaluetext; rebuild beforefullbrowser."
+    },
+    "productionReportCollision": {
+      "status": "GLM cause preservation correction completed; CLI contract and scoped lint passed; prior independent functional review valid",
+      "cause": "measure:design-system-bundle targets existing docs evidence file with exclusive wx write; CI invokes same command and will collide with versioned candidate report",
+      "evidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/a-2ec-current-measure.log",
+      "repair": "Route fresh CI candidate to test-results/design-system-production-candidate.json and align budget input/upload; preserve immutable historical reports. Verify package script rerun behavior separately.",
+      "scope": "shared package/CI configuration; do not alter current frozen A inputs mid-run",
+      "changedFiles": [
+        "package.json",
+        ".github/workflows/pr.yml",
+        "scripts/design-system/bundle-measure.mjs",
+        "tests/design-system/bundle-measure.test.mjs"
+      ],
+      "tests": 6,
+      "mutationsCaught": 3,
+      "independentReview": "glm-report-path-independent-review.md; real CLI repeat protection, explicit force, nested directory, dirty Storybook exit, immutable baseline hashes and budget consumer verified",
+      "remaining": "Real CI runner end-to-end unverified; low-priority malformed-argument notes retained in review",
+      "leadLintExitCode": 1,
+      "leadLintFinding": "preserve-caught-error at bundle-measure.mjs EEXIST diagnostic",
+      "fixSession": null,
+      "toolingSuiteSession": 87030,
+      "leadToolingSuiteExitCode": 0,
+      "workerCorrection": "{ cause: error } added to EEXIST diagnostic; no behavior or output message change"
+    }
+  },
+  "latestTSColorDiagnostic": {
+    "status": "diagnostic",
+    "startedAt": "2026-09-17T21:08:34.732Z",
+    "finishedAt": "2026-09-17T21:08:54.335Z",
+    "policyHash": "67691ff3d3be604b78da477fd769dba16653fdc7f76749f61ea6c21bd85b2803",
+    "policyHashAfter": "67691ff3d3be604b78da477fd769dba16653fdc7f76749f61ea6c21bd85b2803",
+    "scannerBefore": "e2a128a8002a892356aa448c0b978bb839ff98ab6f9193842b304be85cb7606e",
+    "scannerAfter": "e2a128a8002a892356aa448c0b978bb839ff98ab6f9193842b304be85cb7606e",
+    "changedInputs": [],
+    "tokenCount": 297,
+    "scannerHash": "e2a128a8002a892356aa448c0b978bb839ff98ab6f9193842b304be85cb7606e",
+    "sourceHash": "6814159e3591f6d764cc18341cbd68e2d5008bc24ffe03b931387fcfbbdba887",
+    "roots": [
+      "src",
+      "packages/ui/src"
+    ],
+    "scannedFiles": 1228,
+    "perRule": {
+      "ts-colors/raw-color": 466,
+      "ts-colors/extension-boundary": 183,
+      "ts-colors/unsupported": 120,
+      "ts-colors/undefined-token": 5
+    },
+    "errors": [],
+    "limitation": "Historical frozen e2a128 scanner; nested borrowed-object bypass subsequently reproduced and repair in progress."
+  },
+  "aReviewClosureVerification": {
+    "build": {
+      "exitCode": 0,
+      "fingerprint": "e0367dad11e1224529c64891f2f3bb89642fe893e613c040bbba8e74de6e405a",
+      "inputFiles": 1344,
+      "artifact": "dist/design-system-browser-a-e0367dad11e1",
+      "changedInputs": []
+    },
+    "staticServer": {
+      "port": 6230,
+      "session": 91601,
+      "entries": 157
+    },
+    "stories": {
+      "session": null,
+      "exitCode": 0,
+      "testsPerEngine": 157,
+      "engines": [
+        "chromium",
+        "firefox",
+        "webkit"
+      ]
+    },
+    "components": {
+      "session": null,
+      "exitCode": 0,
+      "tests": 452,
+      "files": 42
+    },
+    "typecheck": {
+      "session": null,
+      "exitCode": 0
+    },
+    "limitation": "All current evidence predates pending Progress ARIA ownership repair; not A acceptance."
+  },
+  "bAbsentClassProperty": {
+    "status": "dot/bracket parity repaired; independent lead probes confirm raw retention and mutation uncertainty; broader coverage unresolved",
+    "priorScanner": "430108cbec6a8ca1ec3416a41664f26e968f5517c2e7741e81ad7cf76639b4c7",
+    "priorFocusedTests": 148,
+    "findings": [
+      "Known return targets hide opaque or recursive alternatives",
+      "Fresh ordinary objects may inherit class property through modified Object.prototype"
+    ],
+    "scope": "Completeness and cycle safety repair; ordinary absent-property cases remain unsupported unless sound proof established; ten-case reduction not accepted.",
+    "scannerHash": "d5e3e52239c9991dd779b332e3aed1e1190af0367981de69bb1e81c623dda4d0",
+    "focusedTests": 184,
+    "mutationsKilled": 3,
+    "actualTargetedClosure": 0,
+    "sourceCasesStillUnsupported": 12,
+    "independentFinding": "config={nested:shared}; shared.textClass=external or mutate(shared); config['nested'].textClass produces zero findings",
+    "independentEvidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/b-dot-parity-lead-review.json",
+    "remainingCoverage": [
+      "Stable borrowed objects conservatively remain unsupported",
+      "Spread/getter paths fail closed but omit partial known raw classes"
+    ]
+  },
+  "aProgressRepairedVerification": {
+    "build": {
+      "exitCode": 0,
+      "fingerprint": "2ec18929d5a8d678a31e011a2b4e9b4db00fc168c8e86d28338c4404e5538bfe",
+      "inputFiles": 1344,
+      "artifact": "dist/design-system-browser-a-2ec18929d5a8",
+      "changedInputs": []
+    },
+    "server": {
+      "session": 39685,
+      "port": 6231,
+      "entries": 159
+    },
+    "browser": {
+      "session": null,
+      "status": "completed exit0;1172 passed,0failed/skipped/flaky;zero source drift",
+      "log": "dist/design-system-baseline/cli-lanes/a-progress-repaired-full-browser.log",
+      "result": {
+        "fingerprint": "2ec18929d5a8d678a31e011a2b4e9b4db00fc168c8e86d28338c4404e5538bfe",
+        "exitCode": 0,
+        "stats": {
+          "startTime": "2026-09-17T20:59:49.149Z",
+          "duration": 1775444.067,
+          "expected": 1172,
+          "skipped": 0,
+          "unexpected": 0,
+          "flaky": 0
+        },
+        "changedInputs": [],
+        "artifact": "dist/design-system-browser-a-2ec18929d5a8"
+      }
+    },
+    "checks": {
+      "session": null,
+      "status": "complete: components, stories and typecheck passed with zero source drift",
+      "report": "dist/design-system-baseline/cli-lanes/a-2ec-current-checks.json",
+      "latestReport": {
+        "fingerprint": "2ec18929d5a8d678a31e011a2b4e9b4db00fc168c8e86d28338c4404e5538bfe",
+        "checks": [
+          {
+            "check": "components",
+            "exitCode": 0
+          },
+          {
+            "check": "stories",
+            "exitCode": 0
+          },
+          {
+            "check": "typecheck",
+            "exitCode": 0
+          }
+        ],
+        "changedInputs": []
+      }
+    },
+    "production": {
+      "session": null,
+      "status": "build, unique-path measure/budget and 8 package checks passed; source drift zero; default report path repair pending",
+      "report": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/a-2ec-current-production-checks.json",
+      "latestReport": {
+        "fingerprint": "2ec18929d5a8d678a31e011a2b4e9b4db00fc168c8e86d28338c4404e5538bfe",
+        "checks": [
+          {
+            "check": "production",
+            "command": [
+              "npm",
+              "run",
+              "build"
+            ],
+            "exitCode": 0,
+            "changedInputs": []
+          },
+          {
+            "check": "measure",
+            "command": [
+              "npm",
+              "run",
+              "measure:design-system-bundle"
+            ],
+            "exitCode": 1,
+            "changedInputs": []
+          },
+          {
+            "check": "measure-unique",
+            "command": [
+              "node",
+              "scripts/design-system/bundle-measure.mjs",
+              "--dist",
+              "dist/spa",
+              "--output",
+              "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/a-2ec-production-candidate.json",
+              "--revision",
+              "2ec18929d5a8d678a31e011a2b4e9b4db00fc168c8e86d28338c4404e5538bfe"
+            ],
+            "exitCode": 0,
+            "changedInputs": []
+          },
+          {
+            "check": "budget-unique",
+            "command": [
+              "node",
+              "scripts/design-system/bundle-audit.mjs",
+              "--baseline",
+              "docs/internal/design/evidence/design-system-production-baseline-verified.json",
+              "--candidate",
+              "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/a-2ec-production-candidate.json",
+              "--provenance",
+              "docs/internal/design/evidence/design-system-production-provenance.json",
+              "--output",
+              "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/a-2ec-production-budget.json"
+            ],
+            "exitCode": 0,
+            "changedInputs": []
+          },
+          {
+            "check": "package",
+            "command": [
+              "npm",
+              "run",
+              "test:design-system:package"
+            ],
+            "exitCode": 0,
+            "changedInputs": []
+          }
+        ]
+      },
+      "budget": {
+        "schemaVersion": 1,
+        "pass": true,
+        "checks": {
+          "storybookOutputScanClean": true,
+          "storybookModuleProvenanceClean": true,
+          "provenanceMatchesCandidateAssets": true,
+          "initialGzipWithinBudget": true,
+          "totalRawWithinBudget": true
+        },
+        "budgets": {
+          "initialGzipBytes": 25600,
+          "totalRawBytes": 256000
+        },
+        "deltas": {
+          "initialGzipBytes": 16835,
+          "totalRawBytes": 32929
+        },
+        "baseline": {
+          "revision": "92aeb4d5dcb0d545e2370ddd1c57c099a03392ba",
+          "initialGzipBytes": 411908,
+          "totalRawBytes": 26131305
+        },
+        "candidate": {
+          "revision": "2ec18929d5a8d678a31e011a2b4e9b4db00fc168c8e86d28338c4404e5538bfe",
+          "initialGzipBytes": 428743,
+          "totalRawBytes": 26164234
+        },
+        "storybookEvidence": {
+          "clean": true,
+          "outputPathMatches": [],
+          "contentMatches": [],
+          "limitation": "Output scanning is supporting evidence; module provenance must be audited separately."
+        }
+      }
+    },
+    "tooling": {
+      "session": null,
+      "status": "tokens, 51 tooling tests, application styles and lint passed; zero source drift",
+      "report": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/a-2ec-current-tooling-checks.json",
+      "latestReport": {
+        "fingerprint": "2ec18929d5a8d678a31e011a2b4e9b4db00fc168c8e86d28338c4404e5538bfe",
+        "checks": [
+          {
+            "check": "tokens",
+            "exitCode": 0,
+            "changedInputs": []
+          },
+          {
+            "check": "tooling",
+            "exitCode": 0,
+            "changedInputs": []
+          },
+          {
+            "check": "application-styles",
+            "exitCode": 0,
+            "changedInputs": []
+          },
+          {
+            "check": "lint",
+            "exitCode": 0,
+            "changedInputs": []
+          }
+        ]
+      }
+    },
+    "baselineIntegrity": {
+      "baselineRevision": "92aeb4d5dcb0d545e2370ddd1c57c099a03392ba",
+      "assetCount": 872,
+      "mismatches": [],
+      "status": "verified"
+    },
+    "productionSmoke": {
+      "status": "completed exit0: onboarding rendered, HTTP200, zero page errors, served index matches current build",
+      "report": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/a-2ec-production-browser-smoke.json",
+      "limitation": "Unauthenticated startup only; not authenticated inventory, human screen reader or founder visual acceptance"
+    },
+    "coverage": {
+      "exitCode": 0,
+      "pass": true,
+      "manifests": 35,
+      "checks": 437,
+      "evidenceResults": 2105,
+      "errors": []
+    }
+  },
+  "bSpacingUndefined": {
+    "status": "frozen, independently reviewed; full-tree diagnostic complete; B not accepted",
+    "scope": "globalundefined inline style branch only; reject shadow/dynamic lexicalscope and keepoppositebranch governed",
+    "impact": "UNKNOWN,visitStyleLike unindexed",
+    "potentialCases": 6,
+    "historicalReport": "112unsupported is historical, notcurrentcount",
+    "scannerHash": "b357f137f5659a8112a180d001f96ff617fef1d983498556e3d9a586afec6fea",
+    "tests": 120,
+    "mutationsKilled": 3,
+    "targetedFindingsClosed": 6,
+    "independentReview": "No additional findings in bounded shadowing/opposite-branch probes"
+  },
+  "latestSpacingDiagnostic": {
+    "status": "diagnostic",
+    "tokenCount": 297,
+    "scannerHash": "b357f137f5659a8112a180d001f96ff617fef1d983498556e3d9a586afec6fea",
+    "sourceHash": "5bebfc27b4914fa7cbb2746b73d71a92393e1b4be5d1538cd5a28a5018570fb5",
+    "roots": [
+      "src",
+      "packages/ui/src"
+    ],
+    "scannedFiles": 1212,
+    "perRule": {
+      "spacing/root-dependent": 4112,
+      "spacing/extension-boundary": 156,
+      "spacing/unsupported": 89,
+      "spacing/off-scale": 44,
+      "spacing/missing-safe-area-fallback": 17
+    },
+    "errors": [],
+    "evidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/b-spacing-real-source-after-undefined.json"
+  },
+  "bSpacingLogicalGuards": {
+    "status": "helper reassignment repaired; independently reproduced fixed; integrated verification running",
+    "candidateCases": 23,
+    "scope": "Complete logical class expressions only; preserve concatenated/template and style checks",
+    "classification": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/b-spacing-unsupported-classification-review.json",
+    "scannerHash": "d205e7994552ebe19c270de850606843660d13653b7bc4a66cbd385d41c18c95",
+    "sameSourceUnsupportedBefore": 89,
+    "sameSourceUnsupportedAfter": 66,
+    "independentFinding": "Imported cn declared authentic then reassigned directly or inside called helper still yields zero findings",
+    "evidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/b-spacing-guard-independent-reassignment.json",
+    "focusedTests": 146,
+    "stabilityMutationsCaught": 3,
+    "independentEvidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/b-spacing-guard-independent-reassignment-fixed.json"
+  },
+  "latestTypographyDiagnostic": {
+    "status": "diagnostic",
+    "tokenCount": 297,
+    "scannerHash": "e6c7524f28ec292420e0a0c0aa5a318b7b5fa9a65744c2d67e698e3b12599c76",
+    "sourceHash": "ac8fbdac860762f0bf0c5af5b37b26d7dfe0882ebfa4d9a7aa26e8d6140aec0f",
+    "roots": [
+      "src",
+      "packages/ui/src"
+    ],
+    "scannedFiles": 1234,
+    "perRule": {
+      "typography/line-height-arbitrary": 19,
+      "typography/text-size-below-floor": 1383,
+      "typography/arbitrary-text-size": 666,
+      "typography/font-weight-arbitrary": 31,
+      "typography/extension-boundary": 150,
+      "typography/unsupported-text-utility": 45,
+      "typography/missing-arbitrary-type-hint": 3,
+      "typography/font-size-below-floor": 28,
+      "typography/unregistered-font-size-token": 13,
+      "typography/font-family-off-token": 22,
+      "typography/letter-spacing-arbitrary": 13,
+      "typography/font-family-literal": 3,
+      "typography/token-shadow": 32
+    },
+    "errors": [],
+    "evidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/b-typography-real-source-2ec.json"
+  },
+  "bTypographyNestedFallback": {
+    "status": "frozen; bounded independent review found no actionable issues",
+    "impact": "UNKNOWN: exact classifier UID unindexed",
+    "scannerHash": "42e6484d0ea7012ec633789ed06d4020893a1dc91289fcfc028a8e4634c5f280",
+    "newCases": 11,
+    "mutations": {
+      "results": [
+        {
+          "mutation": "drop-nested",
+          "exitCode": 1,
+          "caught": true
+        },
+        {
+          "mutation": "ignore-registration",
+          "exitCode": 1,
+          "caught": true
+        },
+        {
+          "mutation": "accept-malformed",
+          "exitCode": 1,
+          "caught": true
+        }
+      ],
+      "restoredHash": "42e6484d0ea7012ec633789ed06d4020893a1dc91289fcfc028a8e4634c5f280"
+    },
+    "initialSurvivor": "Registration bypass survived original cases; added unregistered --color-looking token test; rerun caught all3",
+    "lintExitCode": 0,
+    "focusedSuiteExitCode": 0,
+    "targetedEvidence": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/b-typography-nested-var-targeted.json",
+    "scope": "Single actual nested token fallback changes unsupported to blocking type-hint finding. No application edits/exemptions or repository-wide reduction claimed.",
+    "focusedTests": 186,
+    "independentReview": "Field reviewer exact malformed, unknown, registered-colour and registered-type probes; no actionable findings"
+  },
+  "bCurrentIntegratedVerification": {
+    "status": "Fresh frozen verification complete; diagnostic RED, not Stage B acceptance",
+    "report": "dist/design-system-baseline/cli-lanes/b-glm-quota-frozen-result.json",
+    "fingerprint": "4d6e61148118c9a4ca6d36fc5a9dfbc1151a883489e1cf1ca224e6c19e6348f6",
+    "inputFiles": 1352,
+    "fixtureTests": 1044,
+    "fixtureSuites": 70,
+    "fixtureExitCode": 0,
+    "fixtureSkipped": 0,
+    "changedInputs": [],
+    "auditExitCode": 1,
+    "scannedFiles": 1234,
+    "unsupportedByRule": {
+      "ts-colors/unsupported": 116,
+      "typography/unsupported-text-utility": 54,
+      "spacing/unsupported": 63
+    },
+    "unsupported": 233,
+    "newDebtFingerprints": 3768,
+    "appliedBoundaryOccurrences": 408,
+    "scopedExplicitLintExitCode": 0
+  },
+  "delegationBoundary": {
+    "instruction": "All fixes delegated; user authorized claudez/GLM fallback when Grok balance exhausted",
+    "provider": "claudez/GLM",
+    "lanes": 0,
+    "controllerSession": null,
+    "status": "No implementation workers running; blocked by provider availability, user requires fixes delegated",
+    "ownership": [
+      "TS colour checker",
+      "Spacing checker",
+      "Typography checker",
+      "Production report workflow repair and read-only audit review"
+    ],
+    "leadRole": "coordinate, verify and accept; no implementation fixes"
+  },
+  "glmSpacingAliasRepair": {
+    "status": "Helper-array occurrence repair interrupted before source changes; prior frozen183-test state unchanged",
+    "initialScannerHash": "1577aee740c0dee3b1b85df21c8a6c73c153c6eea00989162b4740423408ad0a",
+    "reportedTests": 183,
+    "finding": "Renamed authenticated clsx import formatClasses with p-[7px] and const styles className alias returns zero findings; definition scan was incorrectly assumed",
+    "severity": "HIGH",
+    "followupSession": null,
+    "evidenceCorrection": "Prior worker used /tmp despite project-only instruction; told to copy task-owned logs into project and correct links without deleting ambiguous files",
+    "reportedAuditConsumerTests": 34,
+    "reportedMutationsCaught": 3,
+    "reviewEvidence": "glm-spacing-lead-recheck.json",
+    "frozenHashPrefix": "9de2dc0c3f1ab27e",
+    "independentReview": "dist/design-system-baseline/cli-lanes/glm-spacing-independent-review.md",
+    "reviewSession": null,
+    "scannerHash": "2b7a23aa954269297ead8ad99f85e19c661e328a4e8245414d71e46186e6b92f",
+    "summary": "dist/design-system-baseline/cli-lanes/glm-spacing-review-followup-summary.md",
+    "leadExplicitLintExitCode": 0,
+    "independentFollowup": "dist/design-system-baseline/cli-lanes/glm-spacing-followup-independent-review.md",
+    "reviewCorrection": "Fail-closed on one occurrence is insufficient: added distinct occurrences of existing fingerprint must increase count",
+    "resumeCliSession": "8cf0e028-53da-4400-9354-88176ff86acc"
+  },
+  "glmTypographyForwarding": {
+    "status": "Template traversal fix independently reviewed: no blocking findings in bounded probes; 11 newly visible unsupported expressions still require coverage work",
+    "scannerHash": "462811db9d51e7838ab401865688f62681010a7303c53a097e933aa48ab0505a",
+    "reportedTests": 172,
+    "scope": "Typography file only; prior186 suite comprised164 typography plus22 foundations",
+    "targetedChange": "IconButton className unsupported -> precise IconButton#className blocking extension-boundary; no exception created",
+    "reviewSession": null,
+    "independentTests": 172,
+    "independentProbes": 15,
+    "blockingFinding": "Static-first class template `safe ${c}` ignores unknown interpolation and returns zero findings",
+    "reviewCorrection": "Let-shadow literal case emits unsupported (fail closed); static-first template does not, so reviewer safe-direction characterization is rejected",
+    "followupSession": null,
+    "templateAddedFindings": {
+      "extension-boundary": 8,
+      "unsupported-text-utility": 11
+    },
+    "templateSummary": "dist/design-system-baseline/cli-lanes/glm-typography-template-summary.md",
+    "independentTemplateReview": "dist/design-system-baseline/cli-lanes/glm-typography-template-independent-review.md",
+    "nextCapabilities": [
+      "Static-enumerable conditional joins with proven class-token boundaries",
+      "Unmutated parameter-member whole-class forwarding",
+      "Pure local finite-return helper resolution; exported helper argument provenance needs separate proof"
+    ],
+    "nonblockingReviewNotes": [
+      "Glue-after-with-static behavior verified but not pinned by regression test",
+      "NBSP whitespace modeling over-reports; remains blocking"
+    ]
+  },
+  "glmColourHelperResolution": {
+    "status": "Collision implementation partially delivered; source restored to pre-mutation hash, full fixtures green; remaining mutation proof and independent final review interrupted by quota",
+    "scannerHash": "5b7469fcf8b34a2f28fe29b48ca634a11fbff02863557a363bdfbe4a6f8d02f6",
+    "reportedAdversarialTests": 107,
+    "reportedCombinedTests": 236,
+    "reportedMutationsCaught": 6,
+    "boundedPopulationDelta": {
+      "unsupported": -4,
+      "rawOccurrencesOnExistingFingerprints": 9
+    },
+    "reviewSession": null,
+    "knownResidual": "Import, module declaration, caller-scope and parameter collisions can silence raw colour findings; all four assigned for repair",
+    "impactGap": "Author substituted manual enumeration for required GitNexus CLI impact; risk UNKNOWN, not a verified low-risk result",
+    "followupSession": null,
+    "independentReview": "dist/design-system-baseline/cli-lanes/glm-colours-independent-review.md",
+    "currentScannerHash": "d5084590908b2f248cfb4d16b2b98445a597dc7c8cb48f5ad36898e04853828d",
+    "resumeCliSession": "fa04f4fb-21d0-4279-b5fe-bc4ca4cdf40e",
+    "leadProbe": "dist/design-system-baseline/cli-lanes/glm-colours-collision-lead-probes.json",
+    "leadProbeResult": "Four original collisions report raw; 7/8 bounded oracle checks pass. Nested helper remains unsupported instead of statically reporting raw, fail-closed coverage gap. No TS_MUTATION hooks remain.",
+    "remainingMutation": "C3 omission proof completed by lead on isolated copies: control123/123 exit0, mutant120pass/3fail exit1 at expected raw-value assertions; source/test hashes unchanged. Final independent review and remaining coverage work still pending.",
+    "c3Verification": "dist/design-system-baseline/cli-lanes/colour-frame-mutation-verify/result.json"
+  },
+  "glmBoundaryProposal": {
+    "status": "Installed approved-fragments registry, byte-identical to independently reviewed proposal; replay verifies 9 unsupported boundary findings still block",
+    "files": 682,
+    "testFiles": 651,
+    "storyFiles": 28,
+    "generatedTokenFiles": 3,
+    "predictedAffectedDebtFingerprints": 294,
+    "predictedAffectedDebtOccurrences": 408,
+    "unsupportedStillBlocking": 9,
+    "reviewSession": null,
+    "independentReview": "dist/design-system-baseline/cli-lanes/glm-boundary-independent-findings.md",
+    "reviewCorrections": [
+      "Non-boundary unsupported residue is 221, not 224",
+      "packages/ui/src exists",
+      "Quoted-comment count differs by matching basis; zero executable imports verified"
+    ],
+    "installSession": null,
+    "installedFile": "design-system/enforcement/approved-fragments/reviewed-source-boundaries.ledger.json",
+    "installedHash": "1be14f7c476724d6a50459410248d6268239c23d807a2d23c9cae344ee0c8f98",
+    "summary": "dist/design-system-baseline/cli-lanes/glm-boundary-install-summary.md"
+  },
+  "glmDebtLedgerProposal": {
+    "session": null,
+    "status": "Historical proposal preserved; ownership followup interrupted by quota; no approval",
+    "ownership": "scratch proposal and unresolved queue",
+    "followupSession": null,
+    "summary": "dist/design-system-baseline/cli-lanes/glm-debt-ledger-proposal-summary.md",
+    "correction": "Summary claim that reviewed boundaries suppress nine unsupported is false; installed replay proves all nine stay blocking",
+    "leadOwnershipDecisions": {
+      "shared_catalog_foundations_primitives_composites": "Lead\u2014shared foundations; domain catalog entries require application owner",
+      "calendar_css_and_eventMapping": "Lane 2",
+      "reactflow_theme_css": "Lane 1",
+      "globals_and_library_css": "Lead\u2014shared foundations",
+      "statusColors_and_planStateColors": "Lead\u2014shared D4 status foundations",
+      "providerModelGroups": "Lane 6"
+    },
+    "resumeCliSession": "a4b20ede-7670-4b61-9205-7ddf44047dee",
+    "freshComparison": {
+      "unchangedEntries": 3113,
+      "changedCounts": 9,
+      "removedEntries": 0,
+      "currentFingerprintsOutsideProposal": 650,
+      "report": "dist/design-system-baseline/cli-lanes/b-current-vs-ledger-proposal.json"
+    }
+  },
+  "glmBCommandIntegration": {
+    "session": null,
+    "status": "Installed and full current command executed: correctly RED on233unsupported/3768newdebt; independent CI review interrupted by quota",
+    "ownership": [
+      "package.json",
+      ".github/workflows/pr.yml",
+      "design-system/enforcement/baseline.json",
+      "design-system/enforcement/ledger.json"
+    ],
+    "reviewSession": null,
+    "summary": "dist/design-system-baseline/cli-lanes/glm-b-command-integration-summary.json",
+    "resumeCliSession": "5d380512-4e48-4d30-86a7-f042a02dfd8b",
+    "leadGateVerification": {
+      "report": "dist/design-system-baseline/cli-lanes/b-ci-required-lead-probes.json",
+      "cases": 4,
+      "passed": 4,
+      "scope": "Actual required-gate shell execution with synthetic success/failure/cancellation/change-detection outcomes; live audit already executed",
+      "limitations": [
+        "Independent GLM review unfinished",
+        "Real GitHub runner and branch protection not verified",
+        "45-minute job budget not demonstrated on runner"
+      ]
+    }
+  },
+  "bDefaultCoverageVerification": {
+    "status": "Default Storybook output refreshed after stale-index failure; normal coverage command passes",
+    "report": "dist/design-system-baseline/cli-lanes/b-default-storybook-result.json",
+    "manifests": 35,
+    "checks": 437,
+    "evidenceResults": 2105,
+    "buildExitCode": 0,
+    "coverageExitCode": 0,
+    "limitation": "Reuses completed A execution evidence for unchanged story/component/browser sources; no new browser execution claim"
+  },
+  "providerAvailability": {
+    "checkedAt": "2026-09-17T22:48:51.780876+00:00",
+    "glm": {
+      "status": "429 usage limit; all four jobs terminal",
+      "reportedReset": "2026-09-18 09:52:47 (provider timezone not stated)",
+      "evidence": "dist/design-system-baseline/cli-lanes/glm-colours-collision-fix.result.json",
+      "latestEvidence": "dist/design-system-baseline/cli-lanes/provider-recheck-3-claudez.result.json"
+    },
+    "grok": {
+      "status": "Latest probe503auth_unavailable; previous402balance exhaustion; no available authorized provider verified",
+      "evidence": "dist/design-system-baseline/cli-lanes/grok-capacity-after-glm-limit.result.json",
+      "latestEvidence": "dist/design-system-baseline/cli-lanes/provider-recheck-3-claudeg.result.json"
+    },
+    "constraint": "User requires all implementation fixes delegated to claudeg or claudez; lead verification continues, no self-implementation",
+    "firstObservedThisGoalTurn": true,
+    "recheckSession": null,
+    "recheckStatus": "Third consecutive goal-turn availability check terminal: claudez429 usage limit; claudeg503auth_unavailable; no implementation provider available",
+    "consecutiveGoalTurnsObserved": 3,
+    "goalDisposition": "blocked; resume preserved CLI tasks when authorized provider availability changes"
+  },
+  "resumeOrder": [
+    "Recheck claudeg/claudez capacity; do not change user billing/auth configuration",
+    "Resume spacing helper-array occurrence repair, ledger ownership correction, and independent CI review using stored CLI sessions; obtain independent colour collision review",
+    "Close remaining233unsupported findings with delegated scanner owners; retain frozen1352-input verification as historical evidence",
+    "Review fresh debt ledger and exact runtime/implementation exceptions; never baseline unsupported cases",
+    "Pause edits, rerun full fixtures/audit/CI-appropriate checks and finish A/B gate evidence",
+    "Pause after Stage B and realign with founder; no C1 without realignment"
+  ]
+}

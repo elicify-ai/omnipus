@@ -26,7 +26,10 @@ import {
   CHIP_TEXT_COLOR,
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
+  SKIPPED_STYLE,
 } from '@/components/calendar/types'
+import { contrastRatio } from '@/design-system/status'
+import { resolvedTokens } from '@/design-system/tokens'
 import type { Task, TaskTrigger } from '@/lib/api'
 
 // ─── Factories ────────────────────────────────────────────────────────────────
@@ -148,26 +151,22 @@ describe('mapToCalendarEvents', () => {
   // ─── Test #9: status→{bg,icon} for all 6 statuses (DS-1/row 10, ADR-051 D5) ──
 
   it('#9 status→{bg,icon} table for all 6 task statuses', () => {
-    const cases: Array<{
-      status: Task['status']
-      expectedBg: string
-      expectedIcon: string
-    }> = [
-      { status: 'done', expectedBg: '#34D399', expectedIcon: 'CheckCircle' },
-      { status: 'in_progress', expectedBg: '#60A5FA', expectedIcon: 'CircleNotch' },
-      { status: 'blocked', expectedBg: '#FBBF24', expectedIcon: 'Prohibit' },
-      { status: 'failed', expectedBg: '#F87171', expectedIcon: 'XCircle' },
-      { status: 'inbox', expectedBg: '#94A3B8', expectedIcon: 'Circle' },
-      { status: 'next', expectedBg: '#94A3B8', expectedIcon: 'Circle' },
-    ]
+    // Expected colour/icon come from STATUS_STYLE — the canonical status→chip
+    // style map (FR-005), itself resolved through the governed status
+    // contract (src/design-system/status.ts). Asserting against STATUS_STYLE
+    // rather than a hardcoded hex tests the MAPPING (mapToCalendarEvents wires
+    // task.status to the canonical chip style), not a colour value the design
+    // system owns and can change deliberately (e.g. the in_progress
+    // blue→gold unification, or a future contrast fix).
+    const statuses: Task['status'][] = ['done', 'in_progress', 'blocked', 'failed', 'inbox', 'next']
 
-    for (const { status, expectedBg, expectedIcon } of cases) {
+    for (const status of statuses) {
       const task = makeTask({ status, due: '2026-06-20' })
       const events = mapToCalendarEvents([task])
       expect(events).toHaveLength(1)
       const ev = events[0]
-      expect(ev.backgroundColor, `bg for ${status}`).toBe(expectedBg)
-      expect(ev.extendedProps?.icon, `icon for ${status}`).toBe(expectedIcon)
+      expect(ev.backgroundColor, `bg for ${status}`).toBe(STATUS_STYLE[status].bg)
+      expect(ev.extendedProps?.icon, `icon for ${status}`).toBe(STATUS_STYLE[status].icon)
     }
   })
 
@@ -180,6 +179,38 @@ describe('mapToCalendarEvents', () => {
     expect(events).toHaveLength(1)
     expect(events[0].backgroundColor).toBe(STATUS_STYLE_FALLBACK.bg)
     expect(events[0].extendedProps?.icon).toBe(STATUS_STYLE_FALLBACK.icon)
+  })
+})
+
+// ─── STATUS_STYLE colour contract, independent oracle ───
+//
+// Unlike test #9 above (which deliberately asserts against STATUS_STYLE to test
+// the MAPPING, not the colour values — see its own comment), these assertions
+// never read an "expected" colour back out of STATUS_STYLE. They recompute the
+// WCAG contrast ratio from the map's own RESOLVED hex values (via the exported
+// `contrastRatio` helper and the generated token table) and check that number
+// against the file's documented >=7:1 threshold, and separately assert two
+// chip styles resolve to different hex values. A regression that quietly
+// swaps in a token whose resolved colour fails the ratio, or that collides
+// two distinct statuses on the same hex, fails here even though the mapping
+// itself (task.status -> STATUS_STYLE[status]) is still wired correctly.
+describe('STATUS_STYLE colour contract — independent oracle (B5)', () => {
+  // CHIP_TEXT_COLOR is `var(--color-primary)`, not a literal hex — resolve it
+  // via the generated token table (the same value `--color-primary` computes
+  // to), not by reading it back out of types.ts.
+  const chipTextHex = resolvedTokens['color.surface.page']
+
+  it.each(Object.keys(STATUS_STYLE) as (keyof typeof STATUS_STYLE)[])(
+    '%s chip clears the documented >=7:1 contrast floor against CHIP_TEXT_COLOR',
+    (status) => {
+      const ratio = contrastRatio(STATUS_STYLE[status].bg, chipTextHex)
+      const message = `${status} bg=${STATUS_STYLE[status].bg} vs text=${chipTextHex} -> ${ratio.toFixed(2)}:1`
+      expect(ratio, message).toBeGreaterThanOrEqual(7)
+    },
+  )
+
+  it('blocked resolves to a different hex than skipped, so the two chips are not visually identical', () => {
+    expect(STATUS_STYLE.blocked.bg).not.toBe(SKIPPED_STYLE.bg)
   })
 })
 

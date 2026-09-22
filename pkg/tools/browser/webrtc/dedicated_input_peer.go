@@ -158,7 +158,13 @@ func (p *DedicatedInputPeer) Answer(caller context.Context, sdp string) (string,
 	}
 	p.answered = true
 	p.mu.Unlock()
-	ctx, cancel := context.WithTimeout(caller, gatherTimeout)
+	// The only budget on this negotiation is the caller's own context (30s
+	// from browser_dedicated_input.go's dispatchDedicatedInputOffer), matching
+	// the ingest/viewer legs (ingest.go::handleIngestOfferOnce takes
+	// admission.ctx uncapped). gatherTimeout applies only inside answerNative,
+	// to decide whether to proceed with a partial answer, never to fail the
+	// negotiation outright.
+	ctx, cancel := context.WithCancel(caller)
 	defer cancel()
 	stop := context.AfterFunc(p.ctx, cancel)
 	defer stop()
@@ -180,10 +186,25 @@ func (p *DedicatedInputPeer) Answer(caller context.Context, sdp string) (string,
 func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (string, error) {
 	p.nativeMu.Lock()
 	defer p.nativeMu.Unlock()
+	// Warn, not Info: the gateway's default log level is "warn"
+	// (pkg/config/defaults.go's LogLevel), so Info would be invisible in every
+	// default deployment. Volume is bounded — one-shot per negotiation (offer
+	// summary, one line per candidate, state transitions).
+	logf := func(format string, args ...any) {
+		slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
+	}
+	prefix := fmt.Sprintf("[input-%d]", p.queue.peer)
+	diag := newICEDiag(prefix, "input", logf)
+	// Logged unconditionally, before any outcome is known: distinguishes
+	// "offer never arrived" from "offer arrived and was rejected here" when
+	// reading gateway.log alone.
+	diag.noteRemoteOffer(sdp)
 	if err := ctx.Err(); err != nil {
+		logf("%s caller canceled before negotiation started: %v", prefix, err)
 		return "", err
 	}
 	if err := p.ctx.Err(); err != nil {
+		logf("%s peer canceled before negotiation started: %v", prefix, err)
 		return "", err
 	}
 	// A dedicated offer must contain only an application section.
@@ -191,32 +212,23 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	for _, line := range strings.Split(sdp, "\n") {
 		if strings.HasPrefix(line, "m=") {
 			if !strings.HasPrefix(line, "m=application ") {
+				logf("%s rejected: offer is not data-only", prefix)
 				return "", errors.New("input offer must be data-only")
 			}
 			applications++
 		}
 	}
 	if applications != 1 {
+		logf("%s rejected: offer has %d application section(s), want exactly 1", prefix, applications)
 		return "", errors.New("input offer must have one application section")
-	}
-	// Warn, not Info: the gateway's default log level is "warn"
-	// (pkg/config/defaults.go's LogLevel), so an Info line here is invisible in
-	// every default deployment — which is exactly how this peer's ICE
-	// instrumentation sat merged, tested, and silent while three lanes argued
-	// its defect from absence. The lines are one-shot per negotiation (offer
-	// summary, one line per candidate, state transitions), so Warn-level noise
-	// is bounded the way pion's own ICE warnings already are.
-	logf := func(format string, args ...any) {
-		slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
 	}
 	session := NewSession(p.cfg, nil, logf)
 	pc, err := session.buildPeerConnection(session.apiViewer, true)
 	if err != nil {
+		logf("%s buildPeerConnection failed: %v", prefix, err)
 		return "", err
 	}
 	p.pc = pc
-	prefix := fmt.Sprintf("[input-%d]", p.queue.peer)
-	diag := newICEDiag(prefix, "input", logf)
 	pc.OnICECandidate(diag.noteLocalCandidate)
 	pc.OnICEGatheringStateChange(diag.noteGatheringState)
 	pc.OnICEConnectionStateChange(func(state pion.ICEConnectionState) {
@@ -230,29 +242,25 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 			p.fail("input connection closed")
 		}
 	})
-	diag.noteRemoteOffer(sdp)
 	if err = pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeOffer, SDP: sdp}); err != nil {
+		logf("%s SetRemoteDescription failed: %v", prefix, err)
 		return "", fmt.Errorf("input offer: %w", err)
 	}
 	gathered := pion.GatheringCompletePromise(pc)
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
+		logf("%s CreateAnswer failed: %v", prefix, err)
 		return "", err
 	}
 	if err = pc.SetLocalDescription(answer); err != nil {
+		logf("%s SetLocalDescription failed: %v", prefix, err)
 		return "", err
 	}
-	select {
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case <-p.ctx.Done():
-		return "", p.ctx.Err()
-	case <-gathered:
-	}
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	if err := p.ctx.Err(); err != nil {
+	// Wait for ICE gathering to finish, but only up to gatherTimeout — after
+	// that, proceed with whatever candidates are in hand rather than failing
+	// the whole negotiation outright. See waitForGatherOrProceed's doc
+	// comment for the full rationale and the sibling behavior this mirrors.
+	if err := waitForGatherOrProceed(ctx, p.ctx, gathered, gatherTimeout, prefix, logf); err != nil {
 		return "", err
 	}
 	local := pc.LocalDescription()
@@ -276,6 +284,30 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	p.mu.Unlock()
 	return local.SDP, nil
 }
+
+// waitForGatherOrProceed waits for ICE gathering to finish, up to timeout,
+// then proceeds with the candidates already gathered, as the ingest and
+// viewer legs do (ingest.go::handleIngestOfferOnce, viewer_candidate.go).
+// A slow gather yields a partial answer; caller cancellation or peer close
+// still fails immediately.
+func waitForGatherOrProceed(ctx, peerCtx context.Context, gathered <-chan struct{}, timeout time.Duration, prefix string, logf func(string, ...any)) error {
+	start := time.Now()
+	select {
+	case <-ctx.Done():
+		logf("%s caller canceled while gathering: %v", prefix, ctx.Err())
+		return ctx.Err()
+	case <-peerCtx.Done():
+		logf("%s peer closed while gathering: %v", prefix, peerCtx.Err())
+		return peerCtx.Err()
+	case <-gathered:
+		logf("%s gathering complete in %dms, sending answer", prefix, time.Since(start).Milliseconds())
+		return nil
+	case <-time.After(timeout):
+		logf("%s WARNING: gathering did not complete within %s, sending partial answer", prefix, timeout)
+		return nil
+	}
+}
+
 func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	hover := dc.Label() == "input-hover"
 	valid := inputChannelShapeValid(dc)

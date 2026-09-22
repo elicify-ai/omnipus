@@ -4,13 +4,13 @@ import {
   XCircle,
   Prohibit,
   Lock,
-  CaretDown,
-  CaretUp,
   Warning,
   DownloadSimple,
   Broadcast,
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import type { MessagePartStatus } from '@assistant-ui/react'
@@ -134,9 +134,9 @@ function ToolResultRefDisplay({
   return (
     <div data-testid="result-tool-ref">
       {/* Banner — flat: a warning-tinted left accent stands in for the old
-          amber box (ticket "Tool components in chat"); text stays amber. */}
-      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400">
-        <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
+          amber box (ticket "Tool components in chat"); text stays warning-colored. */}
+      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+        <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
           Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
         </span>
@@ -144,32 +144,33 @@ function ToolResultRefDisplay({
 
       {/* Preview */}
       {!data && (
-        <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto mb-1">
+        <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto mb-[var(--space-1)]">
           {sentinel.preview}
         </pre>
       )}
 
       {/* Full result once fetched */}
       {data !== undefined && (
-        <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-96 overflow-auto mb-1">
+        <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-96 overflow-auto mb-[var(--space-1)]">
           {safeJson(data)}
         </pre>
       )}
 
       {/* Fetch error */}
       {isError && (
-        <div className="text-[var(--color-error)] text-[10px] font-sans mb-1">
+        <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)] font-body mb-[var(--space-1)]">
           Failed to load: {error?.message ?? 'unknown error'}
         </div>
       )}
 
       {/* Fetch button — hidden once data is loaded */}
       {!data && !isError && (
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="link"
           onClick={() => setFetchEnabled(true)}
           disabled={isFetching}
-          className="flex items-center gap-1.5 text-[10px] font-sans text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:cursor-wait"
+          className="rounded-none flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] font-body disabled:cursor-wait"
         >
           {isFetching ? (
             <ArrowsClockwise size={11} className="animate-spin" />
@@ -177,7 +178,7 @@ function ToolResultRefDisplay({
             <DownloadSimple size={11} />
           )}
           {isFetching ? 'Loading...' : 'Show full output'}
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -191,15 +192,15 @@ function ToolResultRefDisplay({
 function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult }) {
   return (
     <div data-testid="result-client-truncated">
-      {/* Flat: warning-tinted left accent instead of the old amber box; text stays amber. */}
-      <div className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400">
-        <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
+      {/* Flat: warning-tinted left accent instead of the old amber box; text stays warning-colored. */}
+      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
+        <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
           Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
           The full result is preserved in the server transcript.
         </span>
       </div>
-      <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+      <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
         {sentinel.preview}
       </pre>
     </div>
@@ -219,12 +220,12 @@ function DelegationFailureDisplay({ failure }: { failure: DelegationFailure }) {
     // box (ticket "Tool components in chat") — icon/label text stay warning-colored.
     <div
       data-testid="result-delegation-denied"
-      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px]"
+      className="border-l-2 pl-[var(--space-2)] py-[var(--space-2)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)]"
       style={{
         borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
       }}
     >
-      <div className="flex items-center gap-2 mb-1.5">
+      <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
         <Prohibit
           size={13}
           weight="fill"
@@ -237,12 +238,12 @@ function DelegationFailureDisplay({ failure }: { failure: DelegationFailure }) {
       </div>
 
       {/* Human-readable reason */}
-      <p className="text-[var(--color-secondary)] leading-relaxed mb-1.5 break-words">
+      <p className="text-[var(--color-secondary)] leading-relaxed mb-[var(--space-1)] break-words">
         {failure.reason}
       </p>
 
       {/* Policy axis + target agent metadata */}
-      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[var(--color-muted)]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-[var(--space-2)] gap-y-[var(--space-0-5)] text-[var(--color-muted)]">
         <dt>Blocked by</dt>
         <dd className="text-[var(--color-secondary)]">{policyAxisLabel(failure.policy)}</dd>
         {failure.target_agent_id && (
@@ -268,12 +269,12 @@ function PermissionDeniedDisplay({ failure }: { failure: PermissionDenied }) {
   return (
     <div
       data-testid="result-permission-denied"
-      className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px]"
+      className="border-l-2 pl-[var(--space-2)] py-[var(--space-2)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)]"
       style={{
         borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)',
       }}
     >
-      <div className="flex items-center gap-2 mb-1.5">
+      <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
         <Lock
           size={13}
           weight="fill"
@@ -285,11 +286,11 @@ function PermissionDeniedDisplay({ failure }: { failure: PermissionDenied }) {
         </span>
       </div>
 
-      <p className="text-[var(--color-secondary)] leading-relaxed mb-1.5 break-words">
+      <p className="text-[var(--color-secondary)] leading-relaxed mb-[var(--space-1)] break-words">
         {failure.message}
       </p>
 
-      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[var(--color-muted)]">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-[var(--space-2)] gap-y-[var(--space-0-5)] text-[var(--color-muted)]">
         <dt>Tool</dt>
         <dd className="text-[var(--color-secondary)] break-all">{failure.tool}</dd>
         <dt>Reason</dt>
@@ -434,7 +435,7 @@ export function GenericToolCall({
     statusConfig = getToolBadgeStatusConfig('success', { size: 12, durationMs })
   }
 
-  const hasDetail = !isRunning && (args !== undefined || result !== undefined || error)
+  const hasDetail = !!(!isRunning && (args !== undefined || result !== undefined || error))
 
   // Resolve result rendering: determine which sentinel type (if any) applies.
   // (marshalErr is already computed above, before the gate.)
@@ -457,7 +458,7 @@ export function GenericToolCall({
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread. Separation comes from `mt-2`
     // spacing and the status dot, not a card frame.
-    <div data-testid="tool-call-badge" data-tool={toolName} className="mt-2 text-xs font-mono">
+    <div data-testid="tool-call-badge" data-tool={toolName} className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header row — the toggle button spans the row (flex-1) and owns the
           caret as its last child (ml-auto pushes it to the toggle's own
           right edge), so the caret is inside the clickable toggle and
@@ -469,46 +470,33 @@ export function GenericToolCall({
           browser rows the toggle only fills the space left of "Watch
           live", so the caret now sits immediately before that launcher
           instead of after it — an acceptable, intentional shift. */}
-      <div className="flex w-full items-center gap-2">
-        <button tabIndex={0}
-          type="button"
-          onClick={() => hasDetail && setExpanded((e) => !e)}
-          className={cn(
-            // flex-1: the toggle spans the whole row (minus the Watch-live
-            // launcher, which stays an independent target) — matching
-            // ToolCallBadge's full-row click target. Without it the toggle
-            // shrinks to its text and the row's middle is dead space.
-            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
-            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            !hasDetail && 'cursor-default'
-          )}
-          aria-expanded={hasDetail ? expanded : undefined}
-          disabled={!hasDetail}
+      <div className="flex w-full items-center gap-[var(--space-2)]">
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={hasDetail}
+          data-testid="tool-call-toggle"
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-secondary)] font-medium">
             {humanizeToolName(toolName)}
           </span>
-          <span className={cn('text-[var(--color-muted)]', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)]')}>
             {statusConfig.label}
           </span>
-          {hasDetail && (
-            <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-            </span>
-          )}
-        </button>
+        </DisclosureRow>
         {isBrowserTool && (
-          <button tabIndex={0}
+          <Button
             type="button"
+            variant="link"
             onClick={handleWatchLive}
             aria-label="Watch live"
             title="Watch this agent's browser live"
-            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
+            className="rounded-none shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)]"
           >
             <Broadcast size={13} />
             <span>Watch live</span>
-          </button>
+          </Button>
         )}
       </div>
 
@@ -516,14 +504,14 @@ export function GenericToolCall({
           stands in for the old bordered panel, aligned under the
           status-dot column instead of boxing the whole row. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] space-y-2 border-l-2 border-[var(--color-border)] py-1 pl-3">
+        <div className="ml-[var(--space-1)] space-y-[var(--space-2)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div>
-            <div className="text-[var(--color-muted)] mb-1 font-sans">Tool</div>
-            <code className="text-[10px] text-[var(--color-secondary)] break-all">{toolName}</code>
+            <div className="text-[var(--color-muted)] mb-[var(--space-1)] font-body">Tool</div>
+            <code className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] break-all">{toolName}</code>
           </div>
           {args !== undefined && (
             <div>
-              <div className="text-[var(--color-muted)] mb-1 font-sans">Parameters</div>
+              <div className="text-[var(--color-muted)] mb-[var(--space-1)] font-body">Parameters</div>
               {/* Keyboard-scrollable: WebKit doesn't put a plain scrollable
                   <pre> in the Tab order by default, so a keyboard-only user
                   can't reach/scroll it at all. tabIndex + role="region" +
@@ -532,7 +520,7 @@ export function GenericToolCall({
                 tabIndex={0}
                 role="region"
                 aria-label="Tool output"
-                className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
               >
                 {safeJson(args)}
               </pre>
@@ -542,16 +530,16 @@ export function GenericToolCall({
           {/* Result section — five rendering paths */}
           {result !== undefined && (
             <div>
-              <div className="text-[var(--color-muted)] mb-1 font-sans">Result</div>
+              <div className="text-[var(--color-muted)] mb-[var(--space-1)] font-body">Result</div>
 
               {/* Marshal-error sentinel: result could not be serialized. Flat:
                   error-tinted left accent instead of the old bordered box. */}
               {marshalErr && (
                 <div
                   data-testid="result-marshal-error"
-                  className="flex items-start gap-2 border-l-2 border-[var(--color-error)]/40 pl-2 py-1 mb-1 font-sans text-[10px] text-[var(--color-error)]"
+                  className="flex items-start gap-[var(--space-2)] border-l-2 border-[var(--color-error)]/40 pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-error)]"
                 >
-                  <XCircle size={12} weight="fill" className="shrink-0 mt-0.5" />
+                  <XCircle size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
                   <span>Result serialization failed: {marshalErr._marshal_error}</span>
                 </div>
               )}
@@ -562,9 +550,9 @@ export function GenericToolCall({
                 <>
                   <div
                     data-testid="result-truncated-banner"
-                    className="flex items-start gap-2 border-l-2 border-amber-500/40 pl-2 py-1 mb-1 font-sans text-[10px] text-amber-400"
+                    className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                   >
-                    <Warning size={12} weight="fill" className="shrink-0 mt-0.5" />
+                    <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
                     <span>
                       Truncated — showing first 10 KiB of {humanSize(truncated.original_size_bytes)}
                     </span>
@@ -573,7 +561,7 @@ export function GenericToolCall({
                     tabIndex={0}
                     role="region"
                     aria-label="Tool output"
-                    className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                    className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
                   >
                     {truncated.preview}
                   </pre>
@@ -592,7 +580,7 @@ export function GenericToolCall({
               {fileExistsRefusal && (
                 <div
                   data-testid="result-file-exists"
-                  className="border-l-2 pl-2.5 py-2 mb-1 font-sans text-[10px] text-[var(--color-secondary)]"
+                  className="border-l-2 pl-[var(--space-2)] py-[var(--space-2)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
                   style={{ borderColor: 'color-mix(in srgb, var(--color-warning) 60%, transparent)' }}
                 >
                   {fileExistsRefusal.reason}
@@ -606,7 +594,7 @@ export function GenericToolCall({
                   tabIndex={0}
                   role="region"
                   aria-label="Tool output"
-                  className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
                 >
                   {safeJson(plainResult)}
                 </pre>
@@ -615,7 +603,7 @@ export function GenericToolCall({
           )}
 
           {error && (
-            <div className="text-[var(--color-error)] text-[10px] font-sans">{error}</div>
+            <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)] font-body">{error}</div>
           )}
         </div>
       )}

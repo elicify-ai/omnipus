@@ -60,8 +60,11 @@ describe('CellText — the three-state honesty model, reused verbatim', () => {
     render(<CellText value="[[Korn Ferry]]" />)
     const link = screen.getByTestId('viewpart-cell-link')
     expect(link).toHaveAttribute('data-kb-state', 'unknown')
-    // Not the verified accent color/underline treatment.
-    expect(link.className).not.toContain('underline')
+    // Not the verified accent color/underline treatment. Matched as a whole
+    // class token, not a substring: Button's link variant legitimately carries
+    // `underline-offset-4` and `hover:no-underline`, neither of which draws an
+    // underline, and a substring check reports both as a false positive.
+    expect(link.className.split(/\s+/)).not.toContain('underline')
   })
 
   it('renders `unresolved` as inert text — no href, no click behavior, and it says so', () => {

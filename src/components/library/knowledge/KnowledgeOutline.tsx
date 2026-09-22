@@ -44,6 +44,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { WarningCircle } from "@phosphor-icons/react";
 import { QueryErrorState } from "@/components/shared/QueryErrorState";
+import { Button } from "@/components/ui/button";
 import {
   KnowledgeRailPanelHeader,
   type KnowledgeRailQualifier,
@@ -75,11 +76,11 @@ export function knowledgeOutlineQueryKey(workspaceId: string, path: string) {
  */
 export const KNOWLEDGE_OUTLINE_MAX_INDENT_DEPTH = 4;
 
-/** Pixels per indent step. */
-const INDENT_STEP_PX = 12;
-
-/** Left padding of a depth-0 row. */
-const INDENT_BASE_PX = 8;
+// Indent step per nesting level is --space-2-5 (12px) and the depth-0 base
+// is --space-2 (8px) -- both already on the registered token scale exactly,
+// unlike Sidebar/SearchModal's legacy 14px-root value, so this file needs
+// only the unitless-count restructuring, not a D10 value change (see
+// docs/internal/design/evidence/c1-execution-record.md's tree-indent row).
 
 /**
  * Nesting depth for each heading, derived from the ladder of levels actually
@@ -195,11 +196,11 @@ export function KnowledgeOutline({
           {query.data?.frontmatter_malformed && (
             <p
               data-testid="knowledge-outline-frontmatter-malformed"
-              className="flex items-start gap-2 px-3 py-2 text-xs text-[var(--color-warning)]"
+              className="flex items-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
             >
               <WarningCircle
                 size={14}
-                className="mt-px shrink-0"
+                className="mt-[var(--border-width-hairline)] shrink-0"
                 aria-hidden="true"
               />
               <span>
@@ -215,7 +216,7 @@ export function KnowledgeOutline({
             // KnowledgeBacklinks.
             <p
               data-testid="knowledge-outline-loading"
-              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               Reading this note&apos;s headings…
             </p>
@@ -233,14 +234,14 @@ export function KnowledgeOutline({
           {query.isSuccess && headings.length === 0 && (
             <p
               data-testid="knowledge-outline-empty"
-              className="px-3 py-2 text-xs text-[var(--color-muted)]"
+              className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               This note has no headings.
             </p>
           )}
 
           {query.isSuccess && headings.length > 0 && (
-            <ul className="flex flex-col py-1">
+            <ul className="flex flex-col py-[var(--space-1)]">
               {headings.map((heading, i) => {
                 const depth = depths[i];
                 const clamped = Math.min(
@@ -252,9 +253,9 @@ export function KnowledgeOutline({
                 const label = heading.text.trim();
                 return (
                   <li key={`${heading.slug}-${i}`}>
-                    <button
+                    <Button
                       type="button"
-                      tabIndex={0}
+                      variant="ghost"
                       data-testid="knowledge-outline-heading"
                       data-slug={heading.slug}
                       data-level={heading.level}
@@ -262,13 +263,13 @@ export function KnowledgeOutline({
                       aria-current={isActive ? "true" : undefined}
                       onClick={() => onNavigate(heading)}
                       style={{
-                        paddingLeft: `${INDENT_BASE_PX + clamped * INDENT_STEP_PX}px`,
-                      }}
+                        '--knowledge-outline-indent-depth': clamped,
+                        paddingLeft: 'calc(var(--space-2) + var(--knowledge-outline-indent-depth) * var(--space-2-5))',
+                      } as import('react').CSSProperties}
                       className={
-                        "flex w-full items-baseline gap-2 py-1 pr-3 text-left text-xs transition-colors " +
-                        "hover:bg-[var(--color-surface-2)] " +
+                        "h-auto w-full items-baseline justify-start gap-[var(--space-2)] rounded-none px-0 py-[var(--space-1)] pr-[var(--space-2-5)] text-left text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)] " +
                         (isActive
-                          ? "text-[var(--color-accent)]"
+                          ? "text-[var(--color-accent)] hover:text-[var(--color-accent)]"
                           : "text-[var(--color-secondary)] hover:text-[var(--color-secondary)]")
                       }
                     >
@@ -276,7 +277,7 @@ export function KnowledgeOutline({
                           states the real level. */}
                       <span
                         aria-hidden="true"
-                        className="shrink-0 font-mono text-[10px] leading-4 text-[var(--color-muted)]"
+                        className="shrink-0 font-mono text-[length:var(--type-caption-size)] leading-4 text-[var(--color-muted)]"
                       >
                         H{heading.level}
                       </span>
@@ -289,7 +290,7 @@ export function KnowledgeOutline({
                       >
                         {label || "Untitled heading"}
                       </span>
-                    </button>
+                    </Button>
                   </li>
                 );
               })}

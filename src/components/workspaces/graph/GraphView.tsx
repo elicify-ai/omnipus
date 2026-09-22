@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   ReactFlowProvider,
   reconnectEdge,
@@ -19,6 +19,13 @@ import {
 import { GraphIcon, Info } from '@phosphor-icons/react'
 import { useLibraryTabIndex } from '@/hooks/useLibraryTabIndex'
 import type { Task } from '@/lib/api'
+import { ZoomPill, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
+import {
+  contentExceedsFrame,
+  useZoomableCanvasOpeningFit,
+  useZoomableCanvasPill,
+  zoomableCanvasFlowProps,
+} from '@/lib/zoomable-view-canvas'
 import { TaskNode } from './TaskNode'
 import { DependencyEdge } from './DependencyEdge'
 import {
@@ -41,11 +48,13 @@ function minimapNodeColor(node: TaskGraphNode): string {
   return statusVisual(node.data?.task?.status).color
 }
 
-// Shared fitView tuning (UAT #26/S3 fix) — module-scope so both the
-// mount-time `fitViewOptions` prop and every imperative `fitView()` call (our
-// own re-fit effect below, AND the <Controls> "fit view" button, which is
-// wired to the same options) agree on one floor, and so it's a stable object
-// identity rather than a fresh literal every render.
+// Shared fitView tuning (UAT #26/S3 fix) — module-scope so the OPENING fit
+// (useZoomableCanvasOpeningFit below), the own re-fit effect below, and every
+// imperative `fitView()` call the shared ZoomPill's Fit action / `0`
+// keyboard shortcut makes (wired to these same options via
+// useZoomableCanvasPill) all agree on one floor, and so it's a stable object
+// identity rather than a fresh literal every render — D18's own requirement
+// that "Fit reproduces the opening frame identically."
 //
 // `minZoom: 0.8` is the fix for "at 50 nodes auto-fit renders labels at
 // 3.22px, unreadable": the node title renders at ~14px at scale 1 (measured:
@@ -58,10 +67,11 @@ function minimapNodeColor(node: TaskGraphNode): string {
 // stops trying to cram every node into the viewport and instead leaves the
 // canvas LARGER than the viewport — the user pans/scrolls/uses the minimap to
 // reach nodes outside the fitted view, rather than everything shrinking to
-// illegible dots. The `minZoom={0.2}` interactive floor on <ReactFlow> below
-// is unchanged, so a user who deliberately wants to zoom out further than
-// this to see the whole graph at once still can — this clamp only bounds the
-// automatic fit, never manual zoom.
+// illegible dots. The 25%–400% interactive floor/ceiling on <ReactFlow> below
+// (`zoomableCanvasFlowProps`, D18's shared range) is unrelated, so a user who
+// deliberately wants to zoom out further than this to see the whole graph at
+// once still can — this clamp only bounds the automatic fit, never manual
+// zoom.
 const GRAPH_FIT_VIEW_OPTIONS = { padding: 0.25, maxZoom: 1.1, minZoom: 0.8 }
 
 interface GraphViewProps {
@@ -214,7 +224,7 @@ function GraphViewInner({
 
   const [nodes, setNodes, onNodesChange] = useNodesState<TaskGraphNode>(nodesWithOpen)
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(edgesWithData)
-  const { fitView } = useReactFlow<TaskGraphNode>()
+  const { fitView, getNodesBounds } = useReactFlow<TaskGraphNode>()
 
   // Re-seed React Flow state whenever the computed layout changes (task added /
   // status changed / agent resolved / dependency edited). React Flow owns
@@ -229,13 +239,13 @@ function GraphViewInner({
 
   // S2 UAT fix (#25) — re-fit the viewport whenever the rendered node SET
   // changes (the plan-scope filter narrowing "All" down to one plan, or
-  // widening back). `fitView` on <ReactFlow> below only ever applies once, at
-  // mount, so without this the canvas kept whatever scale/pan it had before
-  // the scope change: scoping 50 tasks down to 3 left the camera at the
-  // whole-workspace 0.23 zoom (the 3 nodes filling 0.5% of the canvas), and a
-  // manual fit-view on that 3-node scope followed by scoping back to "All"
-  // left the camera at that 3-node 1.40 zoom with 48 of 50 nodes clipped
-  // off-screen — no cue but the minimap.
+  // widening back). Fitting the viewport otherwise only happens once, at
+  // mount (`useZoomableCanvasOpeningFit` below), so without this the canvas
+  // kept whatever scale/pan it had before the scope change: scoping 50 tasks
+  // down to 3 left the camera at the whole-workspace 0.23 zoom (the 3 nodes
+  // filling 0.5% of the canvas), and a manual fit-view on that 3-node scope
+  // followed by scoping back to "All" left the camera at that 3-node 1.40
+  // zoom with 48 of 50 nodes clipped off-screen — no cue but the minimap.
   //
   // Keyed on the SET of node ids (sorted, so member order never matters),
   // not on `layout.nodes`/`nodesWithOpen` themselves — those are fresh
@@ -244,8 +254,8 @@ function GraphViewInner({
   // pan/zoom out from under them for no reason. Only an actual change in
   // WHICH tasks are visible re-fits; the previous key is tracked in a ref
   // (not state) so comparing it never itself triggers a render, and the
-  // very first run (mount, `prevKey === undefined`) is skipped — the
-  // `fitView` prop already frames the initial layout.
+  // very first run (mount, `prevKey === undefined`) is skipped —
+  // `useZoomableCanvasOpeningFit` already frames the initial layout.
   const nodeIdsKey = useMemo(
     () => layout.nodes.map((n) => n.id).sort().join('␟'),
     [layout.nodes],
@@ -336,11 +346,82 @@ function GraphViewInner({
     [onReconnectDependency, setEdges],
   )
 
-  // React Flow renders the <Controls> zoom/fit buttons itself — no JSX site
-  // here can carry the repo's explicit-tabIndex convention, so stamp them
-  // post-render (WebKit Tab reachability; see useLibraryTabIndex).
+  // The zoom pill's own buttons (ZoomPill, catalogued Button/IconButton) stamp
+  // an explicit tabIndex in their own JSX — useLibraryTabIndex is no longer
+  // needed for them. It stays wired for the one remaining library-rendered
+  // interactive element inside this canvas: React Flow's own attribution
+  // `<a href>` link (WebKit Tab reachability; see useLibraryTabIndex).
   const canvasRef = useRef<HTMLDivElement>(null)
   useLibraryTabIndex(canvasRef)
+
+  // ZoomableView canvas preset (D18, docs/internal/design/components/zoomable-view.md):
+  // wires the shared ZoomPill to this live React Flow instance — zoom in/out,
+  // percent-menu (Fit / 100% / Zoom to selection), reactive to the instance's
+  // own zoom/selection state. `pill.min` is the DYNAMIC interactive floor
+  // (2026-09-21 fix): `min(25%, the true fit)`, recomputed for the current
+  // node set and frame — passed straight to `<ReactFlow minZoom>` below so
+  // manual zoom-out/wheel/pinch can always reach Fit on an oversized graph,
+  // not just the pill's own "Fit" action.
+  const pill = useZoomableCanvasPill({ fitViewOptions: GRAPH_FIT_VIEW_OPTIONS })
+
+  // Drives the OPENING fit imperatively instead of the declarative `fitView`
+  // boolean prop (removed below), which read React Flow's STATIC minZoom
+  // before any per-graph measurement was possible. Uses GraphView's own
+  // tuned options UNMODIFIED — including the 0.8 legibility floor (S3 UAT
+  // fix #26) — so a huge graph opens at the smallest scale that keeps
+  // labels readable, anchored at the start of the content, per D18's
+  // "Opening size" rule; it is the explicit "Fit" action (`pill.onFit`)
+  // that reaches the TRUE fit below that floor, not the opening frame.
+  useZoomableCanvasOpeningFit(GRAPH_FIT_VIEW_OPTIONS)
+
+  // D18 keyboard shortcuts ("+ − 0 1 while the view is focused"). Guarded
+  // against an editable target so a shortcut key typed into some future
+  // in-canvas text field never gets hijacked by the zoom action instead —
+  // there is no such field on this canvas today, but the guard costs nothing
+  // and matches the identical guard in WorkspaceTeamGraph (which DOES have
+  // one, the delegation-depth number input).
+  const zoomKeyboard = useZoomableViewKeyboard({
+    onZoomIn: pill.onZoomIn,
+    onZoomOut: pill.onZoomOut,
+    onFit: pill.onFit,
+    onZoomTo100: pill.onZoomTo100,
+  })
+  const handleCanvasKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      const target = event.target as HTMLElement
+      if (target.closest('input, textarea, select, [contenteditable="true"]')) return
+      zoomKeyboard(event)
+    },
+    [zoomKeyboard],
+  )
+
+  // D18: "Graph canvases show a mini-map whenever content exceeds the
+  // frame." Frame size is measured off the canvas wrapper (ResizeObserver,
+  // mirrors ZoomableMediaSurface's own frame measurement in
+  // zoomable-view.tsx); content is the live node set's bounding box via React
+  // Flow's own `getNodesBounds` (reads the instance's internal nodeLookup —
+  // real measured dimensions, and avoids the dev-mode warning the standalone
+  // `getNodesBounds` import emits when called without one), scaled by the
+  // live zoom so the comparison is in the same screen-pixel space
+  // `contentExceedsFrame` expects.
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const el = canvasRef.current
+    if (!el) return undefined
+    const measure = () => setFrameSize({ width: el.clientWidth, height: el.clientHeight })
+    measure()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+  const contentBounds = getNodesBounds(nodes)
+  const showMinimap =
+    frameSize != null &&
+    contentExceedsFrame(
+      { width: contentBounds.width * pill.zoom, height: contentBounds.height * pill.zoom },
+      frameSize,
+    )
 
   // Plan scope with fewer than 2 members can't have a dependency edge at
   // all — mirrors the Board disabling its lane ⑂ button in the same case.
@@ -365,7 +446,7 @@ function GraphViewInner({
   }
 
   return (
-    <div ref={canvasRef} className="absolute inset-0">
+    <div ref={canvasRef} className="absolute inset-0" onKeyDown={handleCanvasKeyDown}>
       <ReactFlow
         className="sovereign-flow"
         nodes={nodes}
@@ -380,10 +461,8 @@ function GraphViewInner({
         onReconnect={handleReconnect}
         edgesReconnectable={!!onReconnectDependency}
         isValidConnection={isValidConnection}
-        fitView
-        fitViewOptions={GRAPH_FIT_VIEW_OPTIONS}
-        minZoom={0.2}
-        maxZoom={1.75}
+        {...zoomableCanvasFlowProps}
+        minZoom={pill.min}
         proOptions={{ hideAttribution: false }}
         nodesConnectable={!!onConnectDependency}
         nodesDraggable
@@ -391,18 +470,18 @@ function GraphViewInner({
         elementsSelectable
         defaultEdgeOptions={{ type: 'smoothstep' }}
       >
-        <Controls
-          showInteractive={false}
-          fitViewOptions={GRAPH_FIT_VIEW_OPTIONS}
-          className="!bottom-4 !left-4"
-        />
-        <MiniMap
-          pannable
-          zoomable
-          nodeColor={minimapNodeColor}
-          nodeStrokeWidth={2}
-          className="!bottom-4 !right-4"
-        />
+        <Panel position="bottom-left">
+          <ZoomPill {...pill} aria-label="Zoom graph" />
+        </Panel>
+        {showMinimap && (
+          <MiniMap
+            pannable
+            zoomable
+            nodeColor={minimapNodeColor}
+            nodeStrokeWidth={2}
+            className="!bottom-4 !right-4"
+          />
+        )}
       </ReactFlow>
       {layout.unlinked.length > 0 && <GraphUnlinkedNotice count={layout.unlinked.length} />}
     </div>
@@ -424,7 +503,7 @@ function GraphUnlinkedNotice({ count }: { count: number }) {
       data-testid="graph-unlinked-notice"
       className="pointer-events-none absolute left-1/2 top-3 z-10 -translate-x-1/2"
     >
-      <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-3 py-1 text-[11px] text-[var(--color-muted)] shadow-[0_2px_8px_rgba(0,0,0,0.35)] backdrop-blur">
+      <div className="pointer-events-auto flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)]/95 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] shadow-[0_2px_8px_color-mix(in_srgb,var(--color-primary)_35%,transparent)] backdrop-blur">
         <Info size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
         <span>
           {count} {count === 1 ? 'task' : 'tasks'} not shown here — not in a plan and not
@@ -451,11 +530,11 @@ function GraphEmptyState({ unlinkedCount = 0 }: { unlinkedCount?: number }) {
   const hasUnlinked = unlinkedCount > 0
   return (
     <div
-      className="absolute inset-0 flex items-center justify-center p-6"
+      className="absolute inset-0 flex items-center justify-center p-[var(--space-4)]"
       data-testid="graph-empty-state"
     >
       <div className="flex max-w-sm flex-col items-center text-center">
-        <div className="relative mb-5">
+        <div className="relative mb-[var(--space-3)]">
           <div className="absolute inset-0 rounded-2xl bg-[var(--color-accent)]/10 blur-xl" />
           <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-[var(--color-accent)]/30 bg-[var(--color-surface-2)]">
             <GraphIcon size={30} weight="duotone" className="text-[var(--color-accent)]" />
@@ -464,7 +543,7 @@ function GraphEmptyState({ unlinkedCount = 0 }: { unlinkedCount?: number }) {
         <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
           {hasUnlinked ? 'No dependencies to graph yet' : 'No tasks yet'}
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+        <p className="mt-[var(--space-2)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-muted)]">
           {hasUnlinked
             ? 'These tasks are not in a plan and not linked by a dependency, so there is nothing to graph yet. Add either on the Board and they will appear here — laid out left to right, with live status colour and a traceable critical path.'
             : 'Create a task on the Board and its dependencies will graph here — laid out left to right, with live status colour and a traceable critical path.'}
@@ -482,11 +561,11 @@ function GraphEmptyState({ unlinkedCount = 0 }: { unlinkedCount?: number }) {
 function GraphPlanEmptyState() {
   return (
     <div
-      className="absolute inset-0 flex items-center justify-center p-6"
+      className="absolute inset-0 flex items-center justify-center p-[var(--space-4)]"
       data-testid="graph-plan-empty-state"
     >
       <div className="flex max-w-sm flex-col items-center text-center">
-        <div className="relative mb-5">
+        <div className="relative mb-[var(--space-3)]">
           <div className="absolute inset-0 rounded-2xl bg-[var(--color-accent)]/10 blur-xl" />
           <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-[var(--color-accent)]/30 bg-[var(--color-surface-2)]">
             <GraphIcon size={30} weight="duotone" className="text-[var(--color-accent)]" />
@@ -495,7 +574,7 @@ function GraphPlanEmptyState() {
         <h2 className="font-headline text-lg font-bold text-[var(--color-secondary)]">
           This plan has no dependencies yet
         </h2>
-        <p className="mt-2 text-sm leading-relaxed text-[var(--color-muted)]">
+        <p className="mt-[var(--space-2)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-muted)]">
           Add a second task to this plan and link it with a dependency to see
           its DAG here — laid out left to right, with live status colour and a
           traceable critical path.

@@ -11,6 +11,7 @@ import type { MediaAction } from './MediaActionToolbar'
 import { useUiStore } from '@/store/ui'
 import { isDisplayableImageSrc } from '@/lib/url-safe'
 import { cn } from '@/lib/utils'
+import { Card } from '@/components/ui/card'
 import {
   canCopyImage,
   canShareFiles,
@@ -20,6 +21,7 @@ import {
   fetchImageBlob,
   fetchImagePng,
 } from './media-actions'
+import { clsx } from 'clsx'
 
 export interface ChatImageProps {
   src: string
@@ -112,7 +114,7 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
   // call sites that don't pre-filter the URL the way the markdown path does. Resolves
   // relative URLs so same-origin uploads (/api/v1/uploads/…) are permitted.
   if (!isDisplayableImageSrc(src)) {
-    return alt ? <span className="text-xs text-[var(--color-muted)] italic">[image: {alt}]</span> : null
+    return alt ? <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">[image: {alt}]</span> : null
   }
 
   // The <img> failed to load (404/network error) — degrade to a visible
@@ -125,33 +127,34 @@ export function ChatImage({ src, alt, filename, className }: ChatImageProps) {
   // upload-failure convention in omnipus-runtime.ts.
   if (imgError) {
     return (
-      <div
+      <Card
+        variant="inset"
         className={cn(
-          'flex flex-col gap-2 pl-2 pr-3 py-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] max-w-[220px]',
+          'flex flex-col gap-[var(--space-2)] pl-[var(--space-2)] pr-[var(--space-2-5)] py-[var(--space-2)] max-w-[220px]',
           className,
         )}
         title={name}
       >
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-[var(--space-2)]">
           <div className="shrink-0 w-9 h-9 rounded-md flex items-center justify-center bg-[var(--color-error)]/10 text-[var(--color-error)]">
             <ImageBroken size={20} weight="fill" />
           </div>
           <div className="min-w-0">
-            <p className="truncate text-xs font-medium text-[var(--color-secondary)]">{name}</p>
-            <p className="text-[10px] uppercase tracking-wide text-[var(--color-muted)]">Image unavailable</p>
+            <p className="truncate text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">{name}</p>
+            <p className="text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]">Image unavailable</p>
           </div>
         </div>
         <MediaActionToolbar
           variant="bar"
           actions={errorActions}
-          className="pt-1.5 border-t border-[var(--color-border)] flex-wrap"
+          className="pt-[var(--space-1)] border-t border-[var(--color-border)] flex-wrap"
         />
-      </div>
+      </Card>
     )
   }
 
   return (
-    <div className={`relative group/chatimg inline-block${className ? ` ${className}` : ''}`}>
+    <div className={clsx("relative group/chatimg inline-block", className)}>
       <img
         src={src}
         alt={alt || ''}

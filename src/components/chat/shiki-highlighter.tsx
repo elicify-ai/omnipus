@@ -16,6 +16,7 @@ import type { SyntaxHighlighterProps, CodeHeaderProps } from '@assistant-ui/reac
 import { MermaidDiagram } from './mermaid-renderer'
 import { ShikiCodeBlock } from './markdown-shared'
 import { useUiStore } from '@/store/ui'
+import { Button } from '@/components/ui/button'
 
 // ── Live mermaid block ────────────────────────────────────────────────────────
 // On the live streaming path the diagram code arrives token-by-token, so the partial
@@ -65,14 +66,15 @@ export function CopyCodeHeader({ language, code }: Omit<CodeHeaderProps, 'node'>
   }
 
   return (
-    <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-surface-2)] border-b border-[var(--color-border)] rounded-t-md">
-      <span className="text-[10px] text-[var(--color-muted)] font-mono uppercase tracking-wide">
+    <div className="flex items-center justify-between px-[var(--space-2-5)] py-[var(--space-1)] bg-[var(--color-surface-2)] border-b border-[var(--color-border)] rounded-t-md">
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono uppercase tracking-wide">
         {language || 'code'}
       </span>
-      <button tabIndex={0}
+      <Button
         type="button"
+        variant="ghost"
         onClick={handleCopy}
-        className="flex items-center gap-1 text-[10px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+        className="h-auto rounded-none p-0 gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
         aria-label="Copy code to clipboard"
       >
         {copied ? (
@@ -86,7 +88,7 @@ export function CopyCodeHeader({ language, code }: Omit<CodeHeaderProps, 'node'>
             <span>Copy</span>
           </>
         )}
-      </button>
+      </Button>
     </div>
   )
 }

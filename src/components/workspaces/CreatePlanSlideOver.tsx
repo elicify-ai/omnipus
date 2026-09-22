@@ -384,19 +384,19 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>{isEdit ? 'Edit plan' : 'New plan'}</SheetTitle>
         </SheetHeader>
 
-        <div className="flex flex-col flex-1 gap-5 px-6 py-4 overflow-y-auto">
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="cp-title" className="text-[var(--color-secondary)]">
+        <div className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)] overflow-y-auto">
+          <div className="flex flex-col gap-[var(--space-1)]">
+            <div className="flex items-center justify-between gap-[var(--space-2)]">
+              <Label htmlFor="cp-title">
                 Title <span className="text-[var(--color-error)]">*</span>
               </Label>
               <span
                 className={cn(
-                  'text-[10px]',
+                  'text-[length:var(--type-caption-size)]',
                   form.title.length >= TITLE_MAX_LEN ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]',
                 )}
               >
@@ -414,15 +414,15 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
               aria-invalid={!!titleError}
               aria-describedby={titleError ? 'cp-title-error' : undefined}
             />
-            {titleError && <p id="cp-title-error" className="text-xs text-[var(--color-error)]">{titleError}</p>}
+            {titleError && <p id="cp-title-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{titleError}</p>}
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center justify-between gap-2">
-              <Label htmlFor="cp-goal" className="text-[var(--color-secondary)]">Goal</Label>
+          <div className="flex flex-col gap-[var(--space-1)]">
+            <div className="flex items-center justify-between gap-[var(--space-2)]">
+              <Label htmlFor="cp-goal">Goal</Label>
               <span
                 className={cn(
-                  'text-[10px]',
+                  'text-[length:var(--type-caption-size)]',
                   form.goal.length >= GOAL_MAX_LEN ? 'text-[var(--color-error)]' : 'text-[var(--color-muted)]',
                 )}
               >
@@ -437,12 +437,12 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
               placeholder="Plain-prose objective the plan judge evaluates against when the DoD is empty…"
               rows={3}
               maxLength={GOAL_MAX_LEN}
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cp-desc" className="text-[var(--color-secondary)]">Description</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="cp-desc">Description</Label>
             <Textarea
               id="cp-desc"
               value={form.description}
@@ -450,12 +450,12 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
               placeholder="Optional free-form description"
               rows={2}
               maxLength={2000}
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
             />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Owner agent <span className="text-[var(--color-error)]">*</span>
             </Label>
             <SmartSelect
@@ -473,14 +473,14 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
                 }),
               ]}
             />
-            {ownerError && <p id="cp-owner-error" className="text-xs text-[var(--color-error)]">{ownerError}</p>}
+            {ownerError && <p id="cp-owner-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{ownerError}</p>}
             {teamError && (
-              <p className="text-xs text-[var(--color-muted)]">Team list unavailable — showing all agents</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Team list unavailable — showing all agents</p>
             )}
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Definition of Done</Label>
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Definition of Done</Label>
             <AcceptanceCriteriaEditor
               criteria={form.dod}
               onChange={(dod) => setForm((s) => ({ ...s, dod }))}
@@ -507,10 +507,10 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
             unexercised by the primary client. Absence is the preservation
             mechanism; see `buildUpdateBody`.
           */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">Bounds</Label>
-            <div className="flex items-start gap-2">
-              <div className="flex-1 flex flex-col gap-1">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>Bounds</Label>
+            <div className="flex items-start gap-[var(--space-2)]">
+              <div className="flex-1 flex flex-col gap-[var(--space-1)]">
                 <Input
                   aria-label="Plan judge max rounds"
                   type="number"
@@ -518,16 +518,16 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
                   value={form.boundsRounds}
                   onChange={(e) => { setForm((s) => ({ ...s, boundsRounds: e.target.value })); setBoundsRoundsError('') }}
                   placeholder={DEFAULT_BOUNDS_ROUNDS}
-                  className="text-xs"
+                  className="text-[length:var(--type-utility-xs-size)]"
                   aria-invalid={!!boundsRoundsError}
                   aria-describedby={boundsRoundsError ? 'cp-bounds-rounds-error' : undefined}
                 />
-                <span className="text-[10px] text-[var(--color-muted)]">Max rounds (default {DEFAULT_BOUNDS_ROUNDS})</span>
+                <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Max rounds (default {DEFAULT_BOUNDS_ROUNDS})</span>
                 {boundsRoundsError && (
-                  <p id="cp-bounds-rounds-error" className="text-xs text-[var(--color-error)]">{boundsRoundsError}</p>
+                  <p id="cp-bounds-rounds-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{boundsRoundsError}</p>
                 )}
               </div>
-              <div className="flex-1 flex flex-col gap-1">
+              <div className="flex-1 flex flex-col gap-[var(--space-1)]">
                 <Input
                   aria-label="Idle expiry days"
                   type="number"
@@ -535,26 +535,26 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
                   value={form.boundsDays}
                   onChange={(e) => { setForm((s) => ({ ...s, boundsDays: e.target.value })); setBoundsDaysError('') }}
                   placeholder={DEFAULT_BOUNDS_DAYS}
-                  className="text-xs"
+                  className="text-[length:var(--type-utility-xs-size)]"
                   aria-invalid={!!boundsDaysError}
                   aria-describedby={boundsDaysError ? 'cp-bounds-days-error' : undefined}
                 />
-                <span className="text-[10px] text-[var(--color-muted)]">Idle-expiry days (default {DEFAULT_BOUNDS_DAYS})</span>
+                <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Idle-expiry days (default {DEFAULT_BOUNDS_DAYS})</span>
                 {boundsDaysError && (
-                  <p id="cp-bounds-days-error" className="text-xs text-[var(--color-error)]">{boundsDaysError}</p>
+                  <p id="cp-bounds-days-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{boundsDaysError}</p>
                 )}
               </div>
             </div>
           </div>
 
           {canApprove && (
-            <div className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] p-3">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-medium text-[var(--color-secondary)]">Approve this plan</p>
+            <div className="flex flex-col gap-[var(--space-1)] rounded-md border border-[var(--color-border)] p-[var(--space-2-5)]">
+              <div className="flex items-center justify-between gap-[var(--space-2)]">
+                <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Approve this plan</p>
                 <Button
                   type="button"
                   size="sm"
-                  className="h-7 text-xs bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90"
+                  className="h-7 text-[length:var(--type-utility-xs-size)] bg-[var(--color-accent)] text-[var(--color-primary)] hover:bg-[var(--color-accent)]/90"
                   onClick={handleApprove}
                   disabled={approveMutation.isPending}
                 >
@@ -562,12 +562,12 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
                 </Button>
               </div>
               {approveErrorMessage && (
-                <p className="text-xs text-[var(--color-error)]">{approveErrorMessage}</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{approveErrorMessage}</p>
               )}
               {approveErrors && approveErrors.length > 0 && (
-                <div className="text-xs text-[var(--color-error)]" data-testid="plan-approve-task-errors">
+                <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="plan-approve-task-errors">
                   <p className="font-medium">Cannot approve — the following tasks are missing criteria:</p>
-                  <ul className="list-disc list-inside mt-1 space-y-0.5">
+                  <ul className="list-disc list-inside mt-[var(--space-1)] space-y-[var(--space-0-5)]">
                     {approveErrors.map((e) => (
                       <li key={e.task_id}>{e.title ?? e.task_id}: {e.reason}</li>
                     ))}
@@ -578,7 +578,7 @@ export function CreatePlanSlideOver({ open, onOpenChange, workspaceId, plan }: C
           )}
         </div>
 
-        <SheetFooter className="flex-row gap-2 px-6 py-4 flex-shrink-0">
+        <SheetFooter className="flex-row gap-[var(--space-2)] px-[var(--space-4)] py-[var(--space-3)] flex-shrink-0">
           <Button
             type="button"
             variant="ghost"

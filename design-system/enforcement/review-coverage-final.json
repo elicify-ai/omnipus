@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "status": "resolved-and-verified",
+  "acceptance": true,
+  "reviewedFiles": [
+    "scripts/design-system-locks/coverage.mjs",
+    "tests/design-system-locks/coverage.test.mjs",
+    "tests/design-system-locks/coverage-adversarial.test.mjs",
+    "scripts/design-system/catalog.mjs"
+  ],
+  "sourceEvidence": {
+    "coverageSha256": "019a1daae6858d200ec16765b169c0ca7d4ae786586fbe12a7e5b56f6f0fd4c8",
+    "ownerTestSha256": "83c840cce4ecc91e25bd8f1ecb15082a31a0fa6f0972705bd7e0fe81c429b278",
+    "adversarialTestSha256": "a78ec8819f730a3ac44b1a743aca7a12c2450df9ee14e4414d59f37aee4e446b",
+    "declaredTests": {
+      "owner": 31,
+      "adversarial": 2
+    },
+    "execution": "Final owner plus independent adversarial run: 33/33 passed, zero skipped, zero errors."
+  },
+  "verifiedRepairs": [
+    {
+      "id": "async-process-cwd-race",
+      "result": "resolved by construction",
+      "evidence": "The host checkCoverage implementation never calls process.chdir. Each composition runs in a separate child with cwd set by spawn, and artifact paths are resolved against the explicit project root before spawning. The owner and adversarial suites contain different-root concurrent calls and assert the host cwd remains unchanged."
+    },
+    {
+      "id": "invalid-root-breaks-return-contract",
+      "result": "resolved for missing and regular-file roots",
+      "evidence": "checkCoverage checks existence and directory type before spawning and returns exactly { errors: string[] }. Owner tests cover missing and regular-file roots; the independent test covers non-rejection and unchanged host cwd."
+    },
+    {
+      "id": "planned-public-distinction",
+      "result": "preserved within the current Stage A model",
+      "evidence": "Only catalog surface verification rows can emit the exact planned-verification prefix. Component public-export gaps continue through verification and catalog validation as blocking errors, while only explicit application surface rows with status planned receive the temporary tolerance. Invalid statuses, incomplete mappings, and missing required surface kinds remain blocking."
+    }
+  ],
+  "findings": [
+    {
+      "id": "nonzero-child-exit-can-return-clean",
+      "severity": "high",
+      "location": "scripts/design-system-locks/coverage.mjs:66",
+      "requirement": "An isolated child failure must never produce an empty-success coverage result.",
+      "finding": "The close handler accepts any syntactically valid { errors: string[] } document before checking the child exit code or signal. A child that writes {\"errors\":[]} and then exits nonzero or is signaled is therefore returned as { errors: [] }. The comment says a zero exit means protocol completion, but the implementation does not enforce that invariant.",
+      "requiredRepair": "Accept the parsed report only when code === 0 and signal is null. For every nonzero exit or signal, return a nonempty isolated-composition failure even if stdout contains a valid empty report. Add a deterministic child-protocol test that writes a valid empty report and exits nonzero, plus a signaled/aborted equivalent if the harness exposes it.",
+      "resolution": "Resolved: parsed child output is accepted only when exit code is zero and signal is null; every other close state returns a nonempty isolated-composition failure.",
+      "verification": {
+        "redFirst": "2/2 process-boundary cases returned {errors:[]} against the original code and failed their exact 0-versus-1 assertions.",
+        "finalSuite": "33/33 passed, zero skipped, zero errors.",
+        "mutations": [
+          {
+            "change": "accept any unsignaled exit, including nonzero",
+            "result": "killed"
+          },
+          {
+            "change": "accept a signaled child",
+            "result": "killed"
+          },
+          {
+            "change": "omit signal identity from failure diagnostic",
+            "result": "killed"
+          }
+        ],
+        "restored": true,
+        "logs": "dist/design-system-baseline/coverage-child-exit-mutations/"
+      }
+    }
+  ],
+  "deferredByInstruction": [
+    "Evidence freshness and source binding remain a later acceptance concern and were not reopened.",
+    "Free-text non-applicability policy remains a later acceptance concern and was not reopened."
+  ],
+  "summary": {
+    "confirmedMaterialFindings": 0,
+    "scope": "Bounded final review and authorized child-exit protocol repair. No Stage A, configuration, manifest, catalog, or application files were modified."
+  }
+}

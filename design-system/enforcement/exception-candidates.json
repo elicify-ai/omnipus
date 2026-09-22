@@ -1,0 +1,181 @@
+{
+  "version": 1,
+  "status": "candidate-only",
+  "sourceRegistry": "src/design-system/status-color-exceptions.ts",
+  "decisionSources": [
+    "docs/internal/design/design-system-definition.md#d3-tokens-have-one-directed-dependency-graph",
+    "docs/internal/design/design-system-definition.md#d14-data-visualization-uses-a-separate-accessible-palette"
+  ],
+  "candidates": [
+    {
+      "path": "src/components/library/preview/LibraryPdfPreview.tsx",
+      "symbol": "LibraryPdfPreview",
+      "category": "documentSurfaces",
+      "owner": "Library previews",
+      "reason": "PDF.js reproduces the source document's own page colors rather than application chrome.",
+      "boundaryDescription": "Only pixels painted by PDF.js into each page canvas; selection, annotation, loading, error, toolbar, and signature-placement chrome remain governed application UI.",
+      "observedValues": ["source PDF page pixel colors", "#ffffff canvas backing surface"]
+    },
+    {
+      "path": "src/components/library/preview/LibrarySignaturePad.tsx",
+      "symbol": "LibrarySignaturePad.configureCanvas",
+      "category": "documentSurfaces",
+      "owner": "Library previews",
+      "reason": "The signature artifact must preserve dark ink on a paper surface when embedded into a document.",
+      "boundaryDescription": "Only the signature canvas bitmap: the bg-white canvas and its 2D-context strokeStyle; dialog controls and surrounding borders remain governed application UI.",
+      "observedValues": ["#111111", "#ffffff"]
+    },
+    {
+      "path": "src/components/library/preview/LibraryPdfPreview.tsx",
+      "symbol": "LibraryPdfPreview.renderSignaturePreview",
+      "category": "documentSurfaces",
+      "owner": "Library previews",
+      "reason": "The placed signature preview is document content and must match the captured signature artifact.",
+      "boundaryDescription": "Only the generated signature-preview canvas pixels; placement handles, deletion controls, focus treatment, and annotation overlays are excluded.",
+      "observedValues": ["#111111", "transparent canvas outside ink strokes"]
+    },
+    {
+      "path": "src/components/skills/WhatsAppPairingBody.tsx",
+      "symbol": "WhatsAppPairingBody",
+      "category": "qrCodes",
+      "owner": "Connector setup",
+      "reason": "The QR module and quiet zone need fixed machine-readable contrast in the dark application theme.",
+      "boundaryDescription": "Only the qrcode.react QRCodeSVG foreground/background and its immediate white quiet-zone container; pairing status, retry, instructions, and modal chrome remain governed UI.",
+      "observedValues": ["#000000 qrcode.react default foreground", "#ffffff qrcode.react default background", "bg-white quiet zone"]
+    },
+    {
+      "path": "src/components/chat/markdown-shared.tsx",
+      "symbol": "ShikiCodeBlock",
+      "category": "syntaxHighlighting",
+      "owner": "Code presentation",
+      "reason": "Shiki grammar scopes require the separately governed vitesse-dark syntax palette.",
+      "boundaryDescription": "Only token colors generated inside ShikiHighlighter's highlighted code body; code-block header, copy state, border, background chrome, and prose remain governed UI.",
+      "observedValues": ["vitesse-dark theme-generated token foregrounds"]
+    },
+    {
+      "path": "src/components/library/preview/LibraryCodeEditor.tsx",
+      "symbol": "LibraryCodeEditor",
+      "category": "syntaxHighlighting",
+      "owner": "Code presentation",
+      "reason": "CodeMirror's oneDark grammar token colors form syntax content rather than application status chrome.",
+      "boundaryDescription": "Only CodeMirror grammar-token spans supplied by theme=dark; selection, active-line, gutter, editor surface, borders, and focus chrome are excluded and must use tokens.",
+      "observedValues": ["CodeMirror oneDark generated token foregrounds"]
+    },
+    {
+      "path": "src/components/chat/mermaid-renderer.tsx",
+      "symbol": "MermaidDiagramImpl",
+      "category": "dataVisualization",
+      "owner": "Data visualization",
+      "reason": "Mermaid diagram nodes, edges, notes, pie series, and quadrant series use a separately governed visualization palette.",
+      "boundaryDescription": "Only Mermaid configuration values and sanitized SVG diagram paint; loading/error chrome and surrounding code-block UI remain governed application UI. Activation requires D14 non-color series cues.",
+      "observedValues": ["#0a0a0b", "#111113", "#141416", "#1d1d23", "#23232a", "#2a2410", "#2b2b33", "#2d3748", "#3a3a44", "#6f8296", "#7f9c8b", "#8a6f9e", "#8f7f9e", "#9a8466", "#9aa7b8", "#a99f86", "#b8b29a", "#bda06a", "#c0c8d4", "#cbd5e1", "#d4af37", "#e2e8f0"]
+    },
+    {
+      "path": "src/components/library/preview/viewparts/ChartPart.tsx",
+      "symbol": "ChartPart.SERIES_COLORS",
+      "category": "dataVisualization",
+      "owner": "Data visualization",
+      "reason": "Chart series may use the separately governed visualization palette when a second distinction channel is present.",
+      "boundaryDescription": "Only SVG series strokes/fills and matching legend swatches indexed from SERIES_COLORS; axes, labels, empty states, and container chrome remain governed UI. Current hue-only multi-series output is not eligible for activation until D14's second cue is implemented.",
+      "observedValues": ["var(--color-accent)", "var(--color-info)", "var(--color-success)", "var(--color-cancelled)", "var(--color-error)"]
+    },
+    {
+      "path": "src/components/chat/AttachmentCard.tsx",
+      "symbol": "fileTypeMeta",
+      "category": "dataVisualization",
+      "owner": "Data visualization",
+      "reason": "File-type indicators are explicitly included in the D14 separately governed encoding palette.",
+      "boundaryDescription": "Only the file-type icon foreground and its derived 13-percent-alpha icon tile; filename, metadata, remove control, focus, border, and upload state remain governed UI.",
+      "observedValues": ["#E5484D", "#2563EB", "#16A34A", "#EA580C", "#B45309", "#7C3AED", "#DB2777", "#4F46E5", "#0EA5E9", "#64748B", "derived <hex>22 tile background"]
+    },
+    {
+      "path": "src/lib/constants.ts",
+      "symbol": "AVATAR_COLORS",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "An agent color is selected by the user and persisted as agent data.",
+      "boundaryDescription": "Only the persisted Agent.color value and its named palette choices; status, validation, selected-control, and surrounding card chrome are excluded.",
+      "observedValues": ["#22C55E", "#3B82F6", "#A855F7", "#EAB308", "#F97316", "#EF4444", "#6B7280", "#D4AF37"]
+    },
+    {
+      "path": "src/components/agents/AgentFormFields.tsx",
+      "symbol": "AvatarColorPicker",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "Palette swatches present and select the persisted agent-authored color value.",
+      "boundaryDescription": "Only each swatch's backgroundColor sourced from AVATAR_COLORS; selection rings, labels, keyboard focus, validation, and form chrome remain governed UI.",
+      "observedValues": ["AVATAR_COLORS values from src/lib/constants.ts"]
+    },
+    {
+      "path": "src/components/agents/AgentCard.tsx",
+      "symbol": "AgentCard",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "The avatar reproduces persisted Agent.color data.",
+      "boundaryDescription": "Only the avatar disk backgroundColor when sourced from agent.color; card status, badges, actions, text, border, and fallback surface remain governed UI.",
+      "observedValues": ["agent.color", "var(--color-surface-3) fallback is not excepted"]
+    },
+    {
+      "path": "src/components/agents/WorkerCard.tsx",
+      "symbol": "WorkerCard",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "The worker avatar reproduces persisted Agent.color data.",
+      "boundaryDescription": "Only the avatar disk backgroundColor when sourced from agent.color; worker status and card chrome remain governed UI.",
+      "observedValues": ["agent.color", "var(--color-surface-3) fallback is not excepted"]
+    },
+    {
+      "path": "src/components/chat/ActivityAvatar.tsx",
+      "symbol": "ActivityAvatar",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "The activity avatar reproduces the agent-selected color carried with activity data.",
+      "boundaryDescription": "Only avatar backgroundColor sourced from item.agentColor; text/icon foreground, fallback, state indicators, and surrounding timeline chrome remain governed UI.",
+      "observedValues": ["item.agentColor", "var(--color-surface-3) fallback is not excepted"]
+    },
+    {
+      "path": "src/components/chat/MessageItem.tsx",
+      "symbol": "avatarStyle",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "Agent message avatars reproduce the selected agent color supplied by message data.",
+      "boundaryDescription": "Only backgroundColor when the agentColor branch is selected; user-avatar accent treatment, foreground, message status, and message chrome remain governed UI.",
+      "observedValues": ["agentColor", "var(--color-surface-3) fallback is not excepted"]
+    },
+    {
+      "path": "src/components/search/SearchModal.tsx",
+      "symbol": "AgentHeader",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "Search agent-group avatars reproduce persisted Agent.color data.",
+      "boundaryDescription": "Only the AgentHeader avatar backgroundColor sourced from agent.color; result highlights, selection, status, text, focus, and modal chrome remain governed UI.",
+      "observedValues": ["agent.color", "var(--color-surface-3) fallback is not excepted"]
+    },
+    {
+      "path": "src/components/workspaces/graph/TaskNode.tsx",
+      "symbol": "TaskNodeComponent",
+      "category": "userAuthoredColors",
+      "owner": "User-authored content",
+      "reason": "Assigned-agent markers reproduce the selected agent color carried in graph node data.",
+      "boundaryDescription": "Only assigned-agent avatar/icon paint sourced from data.agentColor; task status visual.color, node rails, dependency edges, badges, and graph chrome are explicitly excluded because they are application status or visualization semantics.",
+      "observedValues": ["data.agentColor", "derived agentColor alpha tint"]
+    }
+  ],
+  "reviewedNonExceptions": [
+    {
+      "path": "src/lib/statusColors.ts",
+      "symbol": "STATUS_COLORS",
+      "reason": "Application status chrome is governed by D3 semantic tokens and must never enter the visualization or user-authored exception categories."
+    },
+    {
+      "path": "src/components/workspaces/graph/taskGraph.ts",
+      "symbol": "STATUS_VISUALS",
+      "reason": "Graph placement does not turn task lifecycle colors into a visualization exception; these values remain status chrome."
+    },
+    {
+      "path": "src/components/ui",
+      "symbol": "catalog classification: primitive",
+      "reason": "Low-level primitive implementation is an import-boundary concept, not a permanent color exception. Primitive sources still consume design-system tokens and receive no directory-wide exemption."
+    }
+  ]
+}

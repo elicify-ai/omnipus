@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Plus, X } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 
 /**
  * The one add-a-value / removable-chip editor in the workspace forms.
@@ -74,7 +75,7 @@ export interface ChipListInputProps {
 }
 
 /** Layout shared by every chip variant; appearance comes from `chipClassName`. */
-const CHIP_BASE_CLASS = 'inline-flex items-center gap-1 px-2 py-0.5 text-[10px]'
+const CHIP_BASE_CLASS = 'inline-flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)]'
 
 function classes(...parts: (string | undefined)[]): string {
   return parts.filter(Boolean).join(' ')
@@ -126,9 +127,11 @@ export function ChipListInput({
     onChange(values.filter((_, i) => i !== index))
   }
 
+  const resolvedChipClassName = classes(CHIP_BASE_CLASS, chipClassName)
+  const resolvedChipRemoveClassName = classes('h-auto w-auto shrink-0 p-0 hover:bg-transparent', chipRemoveClassName)
   return (
-    <div className="flex flex-col gap-1.5" data-testid={testId}>
-      <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-[var(--space-1)]" data-testid={testId}>
+      <div className="flex items-center gap-[var(--space-2)]">
         <Input
           id={id}
           aria-label={ariaLabel}
@@ -143,13 +146,13 @@ export function ChipListInput({
           placeholder={placeholder}
           maxLength={maxLength}
           aria-invalid={!!error}
-          className={classes('text-xs flex-1', inputClassName)}
+          className={classes('text-[length:var(--type-utility-xs-size)] flex-1', inputClassName)}
         />
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className="h-9 px-2 shrink-0"
+          className="h-9 px-[var(--space-2)] shrink-0"
           onClick={commit}
           aria-label={`Add ${noun}`}
           disabled={!draft.trim()}
@@ -157,9 +160,9 @@ export function ChipListInput({
           <Plus size={13} />
         </Button>
       </div>
-      {error && <p className="text-xs text-[var(--color-error)]">{error}</p>}
+      {error && <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{error}</p>}
       {values.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 mt-1">
+        <div className="flex flex-wrap gap-[var(--space-1)] mt-[var(--space-1)]">
           {values.map((value, index) => (
             <span
               // Position-qualified: a list can legitimately arrive from the
@@ -169,21 +172,22 @@ export function ChipListInput({
               // state onto the wrong copy.
               key={`${index}:${value}`}
               data-testid={chipTestId}
-              className={classes(CHIP_BASE_CLASS, chipClassName)}
+              className={resolvedChipClassName}
               title={value}
             >
               {/* Truncation is plain end-truncation with the full value on
                   hover via `title`. A value long enough to truncate is rare at
                   these widths, and the tooltip covers it. */}
               <span className="truncate">{value}</span>
-              <button tabIndex={0}
-                type="button"
+              <IconButton
                 onClick={() => remove(index)}
                 aria-label={`Remove ${noun} ${value}`}
-                className={classes('shrink-0', chipRemoveClassName)}
+                variant="ghost"
+                size="sm"
+                className={resolvedChipRemoveClassName}
               >
                 <X size={9} />
-              </button>
+              </IconButton>
             </span>
           ))}
         </div>

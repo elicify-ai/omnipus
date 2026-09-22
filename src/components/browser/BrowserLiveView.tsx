@@ -17,7 +17,6 @@ import {
   MOVE_FLUSH_MS,
   VIEWPORT_SETTLE_MS,
   computeDriveMode,
-  resolveDriveChip,
   textFieldHasFocus,
   type BrowserTabStripState,
   type DriveMode,
@@ -27,6 +26,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { HandGrabbing } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 import { BrowserLiveWsConnection, describeVideoHealth, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
 import { BrowserWebRTCSession, translateWebRTCFallbackReason, type BrowserPeerIdentity } from '@/lib/browserWebRTC'
 import {
@@ -2387,8 +2387,6 @@ export function BrowserLiveView({
     }
   }, [canDispatchInput, dispatchInput, textComposition])
 
-  const driveChip = resolveDriveChip({ visualState, visualDriveMode, agentDisplayName, statusState })
-
   // ADR-040 D2/D6 — "Take over" affordance's aria-label/title (reviewer
   // finding: this exact ternary was duplicated across both attributes — the
   // F5 anti-pattern reintroduced). One computation, used by both.
@@ -2449,20 +2447,25 @@ export function BrowserLiveView({
 
   return (
     <div data-input-mode="dedicated" data-input-blocked-by={inputGateBlockedBy() || undefined} data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
-      {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
+      {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
         <span>{inputError}</span>{' '}
-        <button type="button" tabIndex={0} disabled={inputState === 'paused' && !inputCanResume} onClick={() => {
-          if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
-          else if (viewportHandoffRef.current) {
-            if (!retryViewportRef.current()) setConnectionAttempt((attempt) => attempt + 1)
-          }
-          else if (inputState === 'paused') inputRef.current?.resume()
-          else inputRef.current?.start()
-        }}>{inputState === 'paused' ? 'Resume input' : 'Retry input'}</button>
+        <Button
+          variant="ghost"
+          disabled={inputState === 'paused' && !inputCanResume}
+          onClick={() => {
+            if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
+            else if (viewportHandoffRef.current) {
+              if (!retryViewportRef.current()) setConnectionAttempt((attempt) => attempt + 1)
+            }
+            else if (inputState === 'paused') inputRef.current?.resume()
+            else inputRef.current?.start()
+          }}
+          className="h-auto w-auto p-0 text-[length:inherit] font-[var(--font-weight-regular)] disabled:opacity-100"
+        >{inputState === 'paused' ? 'Resume input' : 'Retry input'}</Button>
       </div>}
       {viewportHandoffState !== 'idle' && (inputState === 'ready' || inputState === 'paused') && !inputError && !displayError && (
-        <div role={viewportHandoffState === 'failed' ? 'alert' : 'status'} className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
-          {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <button type="button" tabIndex={0} onClick={() => setConnectionAttempt(attempt => attempt + 1)}>Retry browser</button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
+        <div role={viewportHandoffState === 'failed' ? 'alert' : 'status'} className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
+          {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <Button variant="ghost" onClick={() => setConnectionAttempt(attempt => attempt + 1)} className="h-auto w-auto p-0 text-[length:inherit] font-[var(--font-weight-regular)]">Retry browser</Button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
         </div>
       )}
       <BrowserLiveTabStrip
@@ -2487,7 +2490,9 @@ export function BrowserLiveView({
         addressBarRef={addressBarRef}
         resolvedAgent={resolvedAgent}
         agentDisplayName={agentDisplayName}
-        driveChip={driveChip}
+        visualState={visualState}
+        visualDriveMode={visualDriveMode}
+        statusState={statusState}
         canAnnotate={canAnnotate}
         onToggleAnnotate={handleToggleAnnotate}
         showMute={!!mediaStream && hasAudio}
@@ -2497,7 +2502,7 @@ export function BrowserLiveView({
 
 
       {/* Body */}
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2">
+      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[var(--color-primary)] p-[var(--space-2)]">
         {/* State overlay — kept for the data-visual-state attribute (tests +
             future use) but the visible border/frame is REMOVED per operator
             direction. The header chip is the sole driving-state signal now. */}
@@ -2523,15 +2528,15 @@ export function BrowserLiveView({
           data-testid="browser-live-handback-hint"
           aria-hidden={visualState !== 'you-driving'}
           className={cn(
-            'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-3 py-1.5 text-center text-[11px] text-[var(--color-secondary)]',
-            'bg-black/60 backdrop-blur-sm',
-            visualState !== 'you-driving' && 'invisible',
+            'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-[var(--space-2-5)] py-[var(--space-1)] text-center text-[length:var(--type-caption-size)] text-[var(--color-secondary)]',
+            'bg-[color-mix(in_srgb,var(--color-primary)_60%,transparent)] backdrop-blur-sm',
+            visualState !== 'you-driving' ? 'invisible' : undefined,
           )}
         >
           Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving
         </p>
         {!attached && (
-          <div className="flex min-w-0 max-w-full flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
+          <div className="flex min-w-0 max-w-full flex-col items-center gap-[var(--space-2)] p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             <BrowserLiveRetryStatus
               displayError={displayError}
               idleMessage={connected ? 'Starting live video…' : 'Connecting to the live browser…'}
@@ -2640,14 +2645,14 @@ export function BrowserLiveView({
             {!videoReady && (
               <div
                 data-testid="browser-live-waiting-overlay"
-                className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/70 p-6 text-center text-sm text-[var(--color-muted)]"
+                className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-[var(--space-2)] bg-[color-mix(in_srgb,var(--color-primary)_70%,transparent)] p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
               >
                 <BrowserLiveRetryStatus
                   displayError={displayError}
                   idleMessage="Waiting for the first frame…"
                   onRetry={retryWebRTC}
                   retryTestId="browser-live-retry-overlay"
-                  retryButtonClassName="pointer-events-auto mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                  retryButtonPointerEventsAuto
                 />
               </div>
             )}
@@ -2678,8 +2683,8 @@ export function BrowserLiveView({
             connection; this button only requests the control status change. */}
         {visualState === 'agent-working' && (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
-            <button tabIndex={0}
-              type="button"
+            <Button
+              variant="outline"
               onClick={takeWheelIfNeeded}
               // No longer disabled by controlledByOther (2026-08-03): another
               // attached viewer must never make this button dead, since taking
@@ -2687,11 +2692,11 @@ export function BrowserLiveView({
               disabled={!connected}
               aria-label={takeOverLabel}
               title={takeOverLabel}
-              className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-3 py-1.5 text-xs font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="h-auto pointer-events-auto gap-[var(--space-1)] rounded-full border-[var(--color-info)]/50 bg-[var(--color-surface-1)]/90 px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] shadow-lg backdrop-blur hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <HandGrabbing size={13} />
               Take over
-            </button>
+            </Button>
           </div>
         )}
 
@@ -2728,7 +2733,7 @@ export function BrowserLiveView({
           clears `mediaStream`, which flips `attached` false and routes the
           user to the top-level empty-state error instead. */}
       {attached && videoReady && !displayError && (frameGateState.status !== 'ready' || !frameGeometryReady) && (
-        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-black/80 px-4 py-2 text-xs text-[var(--color-text-secondary)]">
+        <div role="status" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 [overflow-wrap:anywhere] bg-[color-mix(in_srgb,var(--color-primary)_80%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-secondary)]">
           {frameCallbacksUnavailable || (frameGateState.status === 'locked' && frameGateState.reason === 'presentation-time-unavailable')
             ? 'Browser input is unavailable because this browser cannot confirm displayed video frames.'
             : frameGateState.status === 'ready' && !frameGeometryReady
@@ -2739,7 +2744,7 @@ export function BrowserLiveView({
         </div>
       )}
       {attached && videoReady && displayError && (
-        <div role="alert" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 min-w-0 [overflow-wrap:anywhere] bg-black/80 px-4 py-2 text-xs text-[var(--color-error)]">
+        <div role="alert" className="pointer-events-none absolute inset-x-0 bottom-0 z-40 min-w-0 [overflow-wrap:anywhere] bg-[color-mix(in_srgb,var(--color-primary)_80%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
           {displayError}
         </div>
       )}

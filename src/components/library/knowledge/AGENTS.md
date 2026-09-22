@@ -7,6 +7,12 @@ nested under Library. The names do not match across the tree today; module-map
 decision D2 (promote to `src/components/knowledge/`) is unratified — do not
 move or rename unilaterally.
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## `preview/knowledgeMarkdown.tsx` — leave whole, one job
 
 It is 2,410 lines on purpose: a deliberate THIRD COMPOSITION layered by object

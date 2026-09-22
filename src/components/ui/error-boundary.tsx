@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
 
 interface Props {
   children: ReactNode
@@ -36,25 +37,27 @@ export class ErrorBoundary extends Component<Props, State> {
         )
 
       return this.props.fallback ?? (
-        <div className="flex flex-col items-center justify-center p-8 gap-3 text-sm" style={{ color: 'var(--color-muted)' }}>
+        <div className="flex flex-col items-center justify-center p-[var(--space-5)] gap-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           <p style={{ color: 'var(--color-error)' }}>Something went wrong</p>
-          <p className="text-xs">{error?.message}</p>
+          <p className="text-[length:var(--type-utility-xs-size)]">{error?.message}</p>
           {isChunkLoadError ? (
-            <button tabIndex={0}
+            <Button
+              variant="outline"
               onClick={() => window.location.reload()}
-              className="px-3 py-1.5 rounded-md text-xs border transition-colors"
+              className="h-auto px-[var(--space-2-5)] py-[var(--space-1)] rounded-md font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] hover:bg-transparent"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
             >
               Reload
-            </button>
+            </Button>
           ) : (
-            <button tabIndex={0}
+            <Button
+              variant="outline"
               onClick={() => this.setState({ hasError: false, error: null })}
-              className="px-3 py-1.5 rounded-md text-xs border transition-colors"
+              className="h-auto px-[var(--space-2-5)] py-[var(--space-1)] rounded-md font-[var(--font-weight-regular)] text-[length:var(--type-utility-xs-size)] hover:bg-transparent"
               style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
             >
               Try again
-            </button>
+            </Button>
           )}
         </div>
       )

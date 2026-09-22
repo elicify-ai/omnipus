@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "component": "SegmentedControl",
+  "exports": [
+    "SegmentedControl",
+    "SegmentedControlItem"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/segmented-control.tsx",
+  "documentation": "docs/internal/design/components/segmented-control.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default",
+    "selected",
+    "disabled"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/segmented-control.stories.tsx",
+      "exports": [
+        "Default",
+        "Disabled",
+        "Selection",
+        "NarrowViewport"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "segmented-control-unit",
+      "kind": "unit",
+      "file": "src/components/ui/segmented-control.test.tsx",
+      "test": "SegmentedControl — base contract renders a labelled role=\"group\" with each item independently tabbable (no roving tabindex)",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/segmented-control.stories.tsx",
+      "test": "Selection",
+      "story": "Selection",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "segmented-control-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "SegmentedControl [check:segmented-control-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    }
+  ]
+}

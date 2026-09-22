@@ -16,6 +16,8 @@ import {
 } from '@/lib/api'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 import { useActiveWorkspace } from './WorkspaceTabContainer'
@@ -465,17 +467,17 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
 
   if (delegationError && !editState) {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-8 text-center">
-        <p className="text-sm text-[var(--color-error)]">
+      <div className="absolute inset-0 flex flex-col items-center justify-center gap-[var(--space-2-5)] p-[var(--space-5)] text-center">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
           Failed to load this workspace's delegation graph.
         </p>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           onClick={() => void refetchDelegation()}
-          className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-utility-xs-size)]"
         >
           Retry
-        </button>
+        </Button>
       </div>
     )
   }
@@ -483,14 +485,14 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
       {/* Header: title + the one cue, the add-agent action, and save status. */}
-      <div className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-2.5">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="flex items-center gap-[var(--space-2-5)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-2)]">
+        <div className="flex min-w-0 flex-1 items-center gap-[var(--space-2)]">
           <UsersThree size={18} weight="duotone" className="shrink-0 text-[var(--color-accent)]" />
           <div className="min-w-0">
-            <h2 className="font-headline text-sm font-bold text-[var(--color-secondary)]">
+            <h2 className="font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
               Team &amp; delegation
             </h2>
-            <p className="hidden truncate text-[11px] text-[var(--color-muted)] sm:block">
+            <p className="hidden truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)] sm:block">
               Add an agent to drop a node · drag the gold dot to delegate · click an edge to tune
               modes &amp; depth
             </p>
@@ -504,7 +506,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
       </div>
 
       {agentsError && (
-        <div className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]">
+        <div className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
           <Info size={12} weight="fill" />
           Agent details failed to load — node names may show as ids.
         </div>
@@ -514,7 +516,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         <div
           role="status"
           data-testid="team-unsaved-members"
-          className="flex items-center gap-1.5 bg-[var(--color-warning)]/10 px-4 py-1.5 text-[11px] text-[var(--color-warning)]"
+          className="flex items-center gap-[var(--space-1)] bg-[var(--color-warning)]/10 px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
         >
           <Info size={12} weight="fill" className="shrink-0" />
           <span>
@@ -526,15 +528,15 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         </div>
       )}
 
-      <div className="relative flex-1 min-h-0 p-3">
+      <div className="relative flex-1 min-h-0 p-[var(--space-2-5)]">
         {graph.nodes.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-0)] p-8 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-[var(--space-2-5)] rounded-xl border border-dashed border-[var(--color-border)] bg-[var(--color-surface-0)] p-[var(--space-5)] text-center">
             <UsersThree size={32} weight="duotone" className="text-[var(--color-muted)]" />
             <div>
-              <p className="font-headline text-sm font-bold text-[var(--color-secondary)]">
+              <p className="font-headline text-[length:var(--type-body-compact-size)] font-bold text-[var(--color-secondary)]">
                 No agents on this team yet
               </p>
-              <p className="mt-1 text-xs text-[var(--color-muted)]">
+              <p className="mt-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Add an agent to drop the first node, then draw delegation edges between them.
               </p>
             </div>
@@ -570,21 +572,22 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
 function TeamGraphSkeleton() {
   return (
     <div className="absolute inset-0 flex flex-col">
-      <div className="flex items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-2.5">
+      <div className="flex items-center gap-[var(--space-2-5)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-3)] py-[var(--space-2)]">
         <div className="h-5 w-40 rounded bg-[var(--color-surface-2)] animate-pulse" />
         <div className="ml-auto h-8 w-24 rounded bg-[var(--color-surface-2)] animate-pulse" />
       </div>
-      <div className="flex-1 p-3">
+      <div className="flex-1 p-[var(--space-2-5)]">
         <div className="relative h-full overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-0)]">
-          <div className="flex h-full flex-col items-center justify-center gap-10">
-            <div className="flex gap-16">
-              <div className="h-[72px] w-[200px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse" />
+          <div className="flex h-full flex-col items-center justify-center gap-[var(--space-6)]">
+            <div className="flex gap-[var(--space-8)]">
+              <Card variant="default" className="h-[72px] w-[200px] rounded-xl animate-pulse" />
             </div>
-            <div className="flex gap-16">
+            <div className="flex gap-[var(--space-8)]">
               {[0, 1, 2].map((i) => (
-                <div
+                <Card
                   key={i}
-                  className="h-[72px] w-[200px] rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+                  variant="default"
+                  className="h-[72px] w-[200px] rounded-xl animate-pulse"
                 />
               ))}
             </div>

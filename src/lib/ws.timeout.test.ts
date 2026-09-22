@@ -12,11 +12,9 @@
  * Fix: use 4000 (a valid application-defined code in the 3000-4999 range).
  *
  * This test drives the heartbeat to the force-close point using a fake
- * WebSocket whose close() mirrors real browser behavior — it throws
- * InvalidAccessError for reserved codes and succeeds (invoking onclose, like
- * a real socket would) for valid ones. That makes the test RED for 1006
- * (close() throws, no onclose, no reconnect scheduled) and GREEN for 4000
- * (close() succeeds, onclose fires, reconnect is scheduled).
+ * WebSocket whose close() mirrors real browser code validation. Tests also
+ * model a valid close stuck in CLOSING, proving reconnect does not depend on
+ * the peer completing the close handshake.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -134,22 +132,32 @@ describe('WsConnection — heartbeat liveness self-heal (ping timeout force-clos
     vi.useRealTimers()
   })
 
-  it('onclose fires and a reconnect is scheduled after the ping-timeout force-close', () => {
+  it('disconnects and schedules reconnect when ping-timeout close remains stuck in CLOSING', () => {
     vi.useFakeTimers()
     const cbs = makeCallbacks()
     const conn = new WsConnection(cbs)
     conn.connect()
     lastWsInstance.onopen?.()
 
+    const dyingWs = lastWsInstance
     const wsCallsBeforeTimeout = MockWebSocket.mock.calls.length
+    dyingWs.close.mockImplementation(() => {
+      dyingWs.readyState = 2 // CLOSING; peer never completes the handshake
+    })
 
     // Advance through 2 missed-ping ticks (60s) to hit the force-close.
     vi.advanceTimersByTime(60_000)
 
-    // onDisconnected must have been invoked — proof onclose actually fired
-    // (with the 1006 bug, close() threw, was swallowed, and onclose never ran,
-    // so onDisconnected would never be called here).
-    expect(cbs.onDisconnected).toHaveBeenCalled()
+    expect(cbs.onDisconnected).toHaveBeenCalledTimes(1)
+    expect(cbs.onReconnectStateChange).toHaveBeenCalledWith('reconnecting', 1)
+    expect(dyingWs.onopen).toBeNull()
+    expect(dyingWs.onmessage).toBeNull()
+    expect(dyingWs.onerror).toBeNull()
+    expect(dyingWs.onclose).toBeNull()
+
+    // A late real close after the synthetic close cannot run the path twice.
+    dyingWs.onclose?.({ code: 4000, reason: 'late ping-timeout close' })
+    expect(cbs.onDisconnected).toHaveBeenCalledTimes(1)
 
     // A reconnect must be scheduled: advancing the fast-retry timer creates a
     // new WebSocket instance.

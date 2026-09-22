@@ -25,7 +25,9 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Copy, ArrowsClockwise, CheckCircle, CaretDown, CaretRight, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { SmartSelect } from '@/components/ui/smart-select'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
@@ -67,17 +69,17 @@ function UnauthenticatedBanner({ devModeBypass }: UnauthBannerProps) {
     <div
       role="alert"
       data-testid="unauth-banner"
-      className="flex items-start gap-3 rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-4 py-3"
+      className="flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/60 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]"
     >
-      <Warning size={18} weight="fill" className="shrink-0 mt-0.5 text-[var(--color-error)]" />
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-[var(--color-error)]">
+      <Warning size={18} weight="fill" className="shrink-0 mt-[var(--space-0-5)] text-[var(--color-error)]" />
+      <div className="space-y-[var(--space-1)]">
+        <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">
           Unauthenticated access is enabled
         </p>
-        <p className="text-xs text-[var(--color-error)]/80">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/80">
           Anyone who can reach this server has admin access (dev_mode_bypass is enabled in
           config.json). To fix this, set
-          <code className="mx-1 font-mono text-[10px] bg-[var(--color-error)]/10 px-1 rounded">
+          <code className="mx-[var(--space-1)] font-mono text-[length:var(--type-caption-size)] bg-[var(--color-error)]/10 px-[var(--space-1)] rounded">
             gateway.dev_mode_bypass: false
           </code>
           in config.json, then restart the gateway.
@@ -267,19 +269,19 @@ export function GatewaySection() {
     }
   }
 
-  if (isLoading) return <div className="text-sm text-[var(--color-muted)]">Loading...</div>
+  if (isLoading) return <div className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Loading...</div>
 
   if (isConfigError) {
     return (
-      <div className="rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-surface-1)] p-4 space-y-3">
-        <p className="text-sm text-[var(--color-error)]">Failed to load gateway configuration.</p>
-        <p className="text-xs text-[var(--color-muted)]">
+      <Card className="border-[var(--color-error)]/40 p-[var(--space-3)] space-y-[var(--space-2-5)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load gateway configuration.</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Save is disabled until the configuration is loaded successfully to prevent overwriting real settings with defaults.
         </p>
         <Button size="sm" variant="outline" onClick={() => refetchConfig()}>
           Retry
         </Button>
-      </div>
+      </Card>
     )
   }
 
@@ -291,7 +293,7 @@ export function GatewaySection() {
   const devModeBypass = config?.gateway.dev_mode_bypass === true
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
       {/* O14: persistent god-mode-active banner (shown whenever god-mode is on). */}
       <GodModeActiveBanner />
 
@@ -301,19 +303,19 @@ export function GatewaySection() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Gateway</h2>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Configure how the gateway listens. Restart required for port changes.
           </p>
         </div>
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
         {/* Bind address — risky when 0.0.0.0 (US-B2) */}
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">Bind address</p>
-            <p className="text-xs text-[var(--color-muted)]">Which network interfaces the gateway listens on</p>
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Bind address</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Which network interfaces the gateway listens on</p>
           </div>
           <RiskySettingControl
             options={[
@@ -332,7 +334,7 @@ export function GatewaySection() {
         {/* Port */}
         <div className="flex items-center justify-between">
           <div>
-            <label htmlFor="gateway-port" className="text-sm text-[var(--color-secondary)]">Port</label>
+            <Label htmlFor="gateway-port">Port</Label>
           </div>
           <Input
             id="gateway-port"
@@ -341,19 +343,19 @@ export function GatewaySection() {
             max="65535"
             value={port}
             onChange={(e) => { markDirty(); setPort(e.target.value) }}
-            className="w-24 h-8 text-xs font-mono"
+            className="w-24 h-8 text-[length:var(--type-utility-xs-size)] font-mono"
           />
         </div>
 
         {/* Token management */}
-        <div className="pt-2 border-t border-[var(--color-border)] space-y-2">
+        <div className="pt-[var(--space-2)] border-t border-[var(--color-border)] space-y-[var(--space-2)]">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-[var(--color-secondary)]">Gateway token</p>
-            <div className="flex gap-2">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Gateway token</p>
+            <div className="flex gap-[var(--space-2)]">
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 px-2 gap-1 text-xs"
+                className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
                 onClick={copyToken}
                 disabled={!config?.gateway.token}
               >
@@ -363,7 +365,7 @@ export function GatewaySection() {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 px-2 gap-1 text-xs"
+                className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
                 onClick={() => doRotate()}
                 disabled={isRotating}
               >
@@ -373,17 +375,17 @@ export function GatewaySection() {
             </div>
           </div>
           {config?.gateway.token && (
-            <p className="font-mono text-[10px] text-[var(--color-muted)] truncate">
+            <p className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)] truncate">
               {config.gateway.token.slice(0, 20)}...
             </p>
           )}
         </div>
 
         {/* Preview toggle (US-4 / FR-008, ADR-044) */}
-        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-2">
+        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-[var(--space-2)]">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">Preview server</p>
-            <p className="text-xs text-[var(--color-muted)]">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Preview server</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               Serve agent-built dev previews at <span className="font-mono">/preview/</span>. Takes
               effect immediately — no restart needed.
             </p>
@@ -398,10 +400,10 @@ export function GatewaySection() {
         </div>
 
         {/* Log level */}
-        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-2">
+        <div className="flex items-center justify-between border-t border-[var(--color-border)] pt-[var(--space-2)]">
           <div>
-            <p className="text-sm text-[var(--color-secondary)]">Log level</p>
-            <p className="text-xs text-[var(--color-muted)]">Verbosity of gateway logs</p>
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Log level</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Verbosity of gateway logs</p>
           </div>
           <SmartSelect
             value={logLevel}
@@ -416,18 +418,18 @@ export function GatewaySection() {
             ]}
           />
         </div>
-      </div>
+      </Card>
 
       {/* O4 honest status — show the *running* value (applied_value from pending
           entries) vs the *saved* value separately when a restart is pending. */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2 text-xs text-[var(--color-muted)]">
+      <div className="space-y-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           {isOnline ? (
-            <Badge variant="success" className="gap-1 text-[10px]">
+            <Badge variant="success" className="gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
               <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-success)]" /> Online
             </Badge>
           ) : (
-            <Badge variant="error" className="gap-1 text-[10px]">
+            <Badge variant="error" className="gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
               <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)]" /> Offline
             </Badge>
           )}
@@ -460,7 +462,7 @@ export function GatewaySection() {
             so operators can trigger a graceful restart at any time. Also shows a
             notice + changed keys when a restart is pending. */}
         <div
-          className={`rounded-lg border px-4 py-3 space-y-2 ${
+          className={`rounded-lg border px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)] ${
             pendingEntries.length > 0 ? '' : 'border-[var(--color-border)] bg-[var(--color-surface-1)]'
           }`}
           style={
@@ -472,18 +474,18 @@ export function GatewaySection() {
               : undefined
           }
         >
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-[var(--space-2-5)]">
             <div className="min-w-0">
               {pendingEntries.length > 0 ? (
                 <>
-                  <p className="text-sm font-semibold" style={{ color: 'var(--color-warning)' }}>
+                  <p className="text-[length:var(--type-body-compact-size)] font-semibold" style={{ color: 'var(--color-warning)' }}>
                     {pendingEntries.length} change{pendingEntries.length !== 1 ? 's' : ''} pending — restart to apply
                   </p>
-                  <div className="mt-1 space-y-0.5">
+                  <div className="mt-[var(--space-1)] space-y-[var(--space-0-5)]">
                     {pendingEntries.map((e) => (
                       <p
                         key={e.key}
-                        className="text-[11px] font-mono"
+                        className="text-[length:var(--type-caption-size)] font-mono"
                         style={{ color: 'color-mix(in srgb, var(--color-warning) 70%, transparent)' }}
                       >
                         {e.key}: {String(e.applied_value)} → {String(e.persisted_value)}
@@ -492,9 +494,9 @@ export function GatewaySection() {
                   </div>
                 </>
               ) : (
-                <p className="text-sm text-[var(--color-secondary)]">Restart gateway</p>
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Restart gateway</p>
               )}
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                 {pendingEntries.length > 0
                   ? 'A graceful restart will drain in-flight requests before applying saved settings.'
                   : 'Trigger a graceful restart for maintenance or to apply saved settings.'}
@@ -506,7 +508,7 @@ export function GatewaySection() {
               onClick={handleManualRestart}
               className="shrink-0"
             >
-              <ArrowsClockwise size={13} className="mr-1.5" />
+              <ArrowsClockwise size={13} className="mr-[var(--space-1)]" />
               Restart
             </Button>
           </div>
@@ -522,8 +524,9 @@ export function GatewaySection() {
 
       {/* Remote Access */}
       <section>
-        <button tabIndex={0}
-          className="flex items-center gap-2 w-full text-left py-1"
+        <Button
+          variant="ghost"
+          className="h-auto w-full justify-start gap-[var(--space-2)] rounded-none p-0 py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-transparent"
           onClick={() => setRemoteAccessOpen((v) => !v)}
           type="button"
           aria-expanded={remoteAccessOpen}
@@ -534,38 +537,38 @@ export function GatewaySection() {
           ) : (
             <CaretRight size={12} className="text-[var(--color-muted)]" />
           )}
-          <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Remote Access</h3>
-        </button>
+          <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Remote Access</h3>
+        </Button>
 
         {remoteAccessOpen && (
-          <div id="remote-access-panel" className="mt-3 space-y-4">
+          <div id="remote-access-panel" className="mt-[var(--space-2-5)] space-y-[var(--space-3)]">
             {/* Tailscale */}
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
-              <p className="text-sm font-semibold text-[var(--color-secondary)]">Tailscale</p>
-              <p className="text-xs text-[var(--color-muted)]">
+            <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
+              <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tailscale</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Install Tailscale on this machine and your client device. Once connected, access Omnipus via your Tailscale IP:
               </p>
-              <code className="block text-xs font-mono bg-[var(--color-primary)] border border-[var(--color-border)] rounded px-3 py-2 text-[var(--color-accent)]">
+              <code className="block text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-primary)] border border-[var(--color-border)] rounded px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-accent)]">
                 http://&lt;tailscale-ip&gt;:{port}
               </code>
-              <p className="text-[10px] text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 Ensure the gateway bind address is set to <span className="font-mono">0.0.0.0</span> or your Tailscale IP to accept remote connections.
               </p>
-            </div>
+            </Card>
 
             {/* SSH tunnel */}
-            <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-2">
-              <p className="text-sm font-semibold text-[var(--color-secondary)]">SSH Tunnel</p>
-              <p className="text-xs text-[var(--color-muted)]">
+            <Card className="p-[var(--space-3)] space-y-[var(--space-2)]">
+              <p className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">SSH Tunnel</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Forward the gateway port to your local machine over SSH:
               </p>
-              <code className="block text-xs font-mono bg-[var(--color-primary)] border border-[var(--color-border)] rounded px-3 py-2 text-[var(--color-accent)] break-all">
+              <code className="block text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-primary)] border border-[var(--color-border)] rounded px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-accent)] break-all">
                 ssh -L {port}:localhost:{port} user@your-server
               </code>
-              <p className="text-[10px] text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                 Then open <span className="font-mono">http://localhost:{port}</span> in your browser.
               </p>
-            </div>
+            </Card>
           </div>
         )}
       </section>

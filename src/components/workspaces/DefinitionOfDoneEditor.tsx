@@ -26,8 +26,8 @@ interface DefinitionOfDoneEditorProps {
  */
 export function DefinitionOfDoneEditor({ dod, onChange, currentAuthor }: DefinitionOfDoneEditorProps) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <Label className="text-[var(--color-secondary)]">
+    <div className="flex flex-col gap-[var(--space-2)]">
+      <Label>
         Definition of Done <span className="text-[var(--color-error)]">*</span>
       </Label>
       <AcceptanceCriteriaEditor
@@ -36,7 +36,7 @@ export function DefinitionOfDoneEditor({ dod, onChange, currentAuthor }: Definit
         currentAuthor={currentAuthor}
         inputAriaLabel="Definition of Done item"
       />
-      <p className="text-xs text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         Standing gates, judged on every attempt. Add at least one.
       </p>
     </div>

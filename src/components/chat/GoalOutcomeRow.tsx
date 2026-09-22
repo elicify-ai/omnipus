@@ -37,17 +37,17 @@ export function GoalOutcomeRow({ outcome }: GoalOutcomeRowProps): ReactNode {
       data-testid="goal-outcome-line"
       data-goal-ending={outcome.ending}
       data-goal-tone={copy.tone}
-      className="group w-full max-w-2xl rounded-lg bg-[var(--color-surface-2)] px-3 py-1.5 text-xs"
+      className="group w-full max-w-2xl rounded-lg bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
     >
       <summary
         tabIndex={0}
-        className="flex cursor-pointer list-none items-start gap-2 [&::-webkit-details-marker]:hidden"
+        className="flex cursor-pointer list-none items-start gap-[var(--space-2)] [&::-webkit-details-marker]:hidden"
         title="Show the full text"
       >
         <Icon
           size={14}
           weight="fill"
-          className={cn('mt-px shrink-0', TONE_ICON_CLASS[copy.tone])}
+          className={cn('mt-[var(--border-width-hairline)] shrink-0', TONE_ICON_CLASS[copy.tone])}
           aria-hidden="true"
         />
         <span className="min-w-0 flex-1">
@@ -69,14 +69,14 @@ export function GoalOutcomeRow({ outcome }: GoalOutcomeRowProps): ReactNode {
         </span>
         <CaretDown
           size={10}
-          className="mt-1 shrink-0 text-[var(--color-muted)] transition-transform group-open:rotate-180"
+          className="mt-[var(--space-1)] shrink-0 text-[var(--color-muted)] transition-transform group-open:rotate-180"
           aria-hidden="true"
         />
       </summary>
       {copy.detail && (
         <p
           data-testid="goal-outcome-detail"
-          className="ml-[22px] mt-1 whitespace-pre-wrap break-words text-[var(--color-secondary)]"
+          className="ml-[var(--space-4)] mt-[var(--space-1)] whitespace-pre-wrap break-words text-[var(--color-secondary)]"
         >
           {copy.detail}
         </p>

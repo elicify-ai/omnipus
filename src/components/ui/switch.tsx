@@ -7,13 +7,14 @@ const Switch = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof SwitchPrimitives.Root>
 >(({ className, ...props }, ref) => (
   <SwitchPrimitives.Root
+    data-ds-action=""
     // WebKit tabbability (repo convention): Radix renders the switch button,
     // so the explicit tabIndex stamp lives here; {...props} may override.
     tabIndex={0}
     className={cn(
-      'peer inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-      'data-[state=unchecked]:bg-[var(--color-surface-3)]',
-      'data-[state=checked]:bg-[var(--color-accent)]',
+      'peer relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors motion-reduce:transition-none forced-colors:border-[CanvasText] forced-colors:[forced-color-adjust:none] disabled:cursor-not-allowed disabled:opacity-50',
+      'data-[state=unchecked]:bg-[var(--color-surface-3)] forced-colors:data-[state=unchecked]:bg-[Canvas]',
+      'data-[state=checked]:bg-[var(--color-accent)] forced-colors:data-[state=checked]:bg-[Highlight]',
       className
     )}
     {...props}
@@ -21,8 +22,9 @@ const Switch = React.forwardRef<
   >
     <SwitchPrimitives.Thumb
       className={cn(
-        'pointer-events-none block h-4 w-4 rounded-full bg-[var(--color-secondary)] shadow-lg ring-0 transition-transform',
-        'data-[state=unchecked]:translate-x-0 data-[state=checked]:translate-x-4'
+        'pointer-events-none block h-4 w-4 rounded-full bg-[var(--color-secondary)] shadow-lg ring-0 transition-transform motion-reduce:transition-none',
+        'data-[state=unchecked]:translate-x-0 forced-colors:data-[state=unchecked]:bg-[CanvasText]',
+        'data-[state=checked]:translate-x-4 forced-colors:data-[state=checked]:bg-[HighlightText]'
       )}
     />
   </SwitchPrimitives.Root>

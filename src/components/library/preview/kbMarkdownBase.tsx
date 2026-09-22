@@ -220,7 +220,7 @@ function KbMarkdownLink({ href, children }: ComponentPropsWithoutRef<'a'>) {
  *  per-caller; this caller reuses an existing header instead of authoring one. */
 function KbBlockCode({ code, language }: { code: string; language: string | undefined }) {
   return (
-    <div className="my-2 rounded overflow-hidden">
+    <div className="my-[var(--space-2)] rounded overflow-hidden">
       <CopyCodeHeader language={language} code={code} />
       <ShikiCodeBlock language={language} code={code} />
     </div>

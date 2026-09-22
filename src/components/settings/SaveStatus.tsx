@@ -19,7 +19,7 @@ export function SaveStatus({
   if (state === 'saving') {
     return (
       <span
-        className="inline-flex items-center gap-1 text-xs text-[var(--color-muted)]"
+        className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         aria-live="polite"
       >
         <CircleNotch size={12} className="animate-spin" />
@@ -31,7 +31,7 @@ export function SaveStatus({
   if (state === 'saved') {
     return (
       <span
-        className="inline-flex items-center gap-1 text-xs"
+        className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
         style={{ color: 'var(--color-success)' }}
         aria-live="polite"
       >
@@ -43,7 +43,7 @@ export function SaveStatus({
 
   return (
     <span
-      className="inline-flex items-center gap-1 text-xs"
+      className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
       style={{ color: 'var(--color-error)' }}
       role="alert"
       title={errorMessage}

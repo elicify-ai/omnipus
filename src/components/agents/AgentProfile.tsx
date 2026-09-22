@@ -3,7 +3,6 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import {
   X,
   CaretDown,
-  CaretUp,
   Sparkle,
   Star,
   Lightning,
@@ -20,7 +19,12 @@ import { useFocusRestore } from '@/hooks/useFocusRestore'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { IconButton } from '@/components/ui/icon-button'
+import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { ModelSelector } from '@/components/ui/model-selector'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
@@ -33,16 +37,7 @@ import {
   AccordionTrigger,
   AccordionContent,
 } from '@/components/ui/accordion'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ToolsAndPermissions } from './ToolsAndPermissions'
 import { ShellDenyPatternsEditor } from './ShellDenyPatternsEditor'
 import { ExecutorSelector } from './ExecutorSelector'
@@ -353,7 +348,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [fallbackModels, setFallbackModels] = useState<FallbackEntry[]>([])
   const [temperature, setTemperature] = useState(1.0)
   const [maxTokens, setMaxTokens] = useState(4096)
-  const [advancedOpen, setAdvancedOpen] = useState(false)
   const [soul, setSoul] = useState('')
   // ADR-052 FR-039: per-agent memory-injection gate. Defaults to true (the
   // wire default for ordinary agents); the seeded Judge (and any future
@@ -395,7 +389,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // US-E6: per-agent skill assignment (opt-in, default none).
   const [agentSkills, setAgentSkills] = useState<string[]>([])
   const [shellDenyPatterns, setShellDenyPatterns] = useState<string[]>([])
-  const [shellAdvancedOpen, setShellAdvancedOpen] = useState(false)
   // Spec-4 FR-4.1: sub-agent executor (native default / external-cli / remote-a2a).
   const [executor, setExecutor] = useState<ExecutorConfig | undefined>(undefined)
 
@@ -1288,7 +1281,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         onOpenAutoFocus={handleOpenAutoFocus}
         contentRef={sheetContentRef}
       >
-        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-sm">
+        <div className="flex flex-1 items-center justify-center text-[var(--color-muted)] text-[length:var(--type-body-compact-size)]">
           Loading agent...
         </div>
       </ProfileSheet>
@@ -1317,10 +1310,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         onOpenAutoFocus={handleOpenAutoFocus}
         contentRef={sheetContentRef}
       >
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
-          <p className="text-sm font-medium text-[var(--color-secondary)]">{title}</p>
-          <p className="text-xs text-[var(--color-muted)] max-w-sm">{detail}</p>
-          <div className="flex gap-2">
+        <div className="flex flex-1 flex-col items-center justify-center gap-[var(--space-2-5)] px-[var(--space-5)] text-center">
+          <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">{title}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] max-w-sm">{detail}</p>
+          <div className="flex gap-[var(--space-2)]">
             {!isNotFound && (
               <Button variant="outline" size="sm" onClick={() => refetchAgent()}>
                 Retry
@@ -1372,13 +1365,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Section panels shared by desktop Tabs and mobile Accordion.
   // basics panel
   const basicsPanel = (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
 
           {/* Identity — always rendered; read-only for locked (core) agents */}
-          <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Identity</p>
-            <div className="space-y-3">
-              <div className="space-y-2">
+          <section className="space-y-[var(--space-2-5)]">
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Identity</p>
+            <div className="space-y-[var(--space-2-5)]">
+              <div className="space-y-[var(--space-2)]">
                 <Input
                   data-testid="agent-name-input"
                   value={name}
@@ -1386,7 +1379,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   readOnly={!isFieldEditable('name')}
                   onChange={!isFieldEditable('name') ? undefined : (e) => { markDirty(); setName(e.target.value) }}
                   placeholder="Agent name"
-                  className="text-sm"
+                  className="text-[length:var(--type-body-compact-size)]"
                 />
                 {/* Operator decision 2026-07-03: description becomes visible
                     READ-ONLY for locked core agents (previously hidden
@@ -1400,7 +1393,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   onChange={!isFieldEditable('description') ? undefined : (e) => { markDirty(); setDescription(e.target.value) }}
                   placeholder="Short description of this agent's purpose"
                   rows={2}
-                  className="text-sm resize-none"
+                  className="text-[length:var(--type-body-compact-size)] resize-none"
                 />
               </div>
               {/* W6-B4 / G3: Default agent toggle. Locked core agents keep
@@ -1413,9 +1406,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               {!isWorkerAgent && !isSystemAgent && (
                 <div
                   data-testid="default-toggle-row"
-                  className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+                  className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)]"
                 >
-                  <div className="flex items-center gap-2 min-w-0">
+                  <div className="flex items-center gap-[var(--space-2)] min-w-0">
                     <Star
                       size={14}
                       weight={isDefault ? 'fill' : 'regular'}
@@ -1423,8 +1416,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       aria-hidden="true"
                     />
                     <div className="min-w-0">
-                      <p className="text-sm text-[var(--color-secondary)]">Default agent</p>
-                      <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Default agent</p>
+                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                         Handles inbound messages with no more-specific routing rule. Only one agent is default at a time.
                       </p>
                     </div>
@@ -1449,16 +1442,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   READ-ONLY for locked core agents (previously hidden
                   entirely) — a static swatch/icon+label, not the
                   interactive picker (which has no readOnly mode). */}
-              <div className="space-y-1.5">
-                <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
+              <div className="space-y-[var(--space-1)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar color</p>
                 {!isFieldEditable('color') ? (
-                  <div className="flex items-center gap-2" data-testid="avatar-color-readonly">
+                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-color-readonly">
                     <span
                       className="w-7 h-7 rounded-full shrink-0 border border-[var(--color-border)]"
                       style={{ backgroundColor: selectedColor || 'var(--color-surface-3)' }}
                       aria-hidden="true"
                     />
-                    <span className="text-xs text-[var(--color-secondary)]">
+                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
                       {avatarColorName(selectedColor)}
                     </span>
                   </div>
@@ -1470,15 +1463,15 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   />
                 )}
               </div>
-              <div className="space-y-1.5">
-                <p className="text-xs text-[var(--color-muted)]">Avatar icon</p>
+              <div className="space-y-[var(--space-1)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Avatar icon</p>
                 {!isFieldEditable('icon') ? (
-                  <div className="flex items-center gap-2" data-testid="avatar-icon-readonly">
+                  <div className="flex items-center gap-[var(--space-2)]" data-testid="avatar-icon-readonly">
                     {(() => {
                       const ReadOnlyIcon = getIconComponent(selectedIcon)
                       return <ReadOnlyIcon size={18} className="text-[var(--color-secondary)]" aria-hidden="true" />
                     })()}
-                    <span className="text-xs text-[var(--color-secondary)]">{selectedIcon}</span>
+                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">{selectedIcon}</span>
                   </div>
                 ) : (
                   <IconPicker
@@ -1494,10 +1487,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <Separator />
 
           {/* Model Configuration — picker, unresolved-slug indicator, fallback editor */}
-          <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Model</p>
+          <section className="space-y-[var(--space-2-5)]">
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Model</p>
             {providersError && !isExternalAgent && (
-              <p className="text-xs text-[var(--color-warning)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">
                 Could not load providers. You can still enter a model slug manually.
               </p>
             )}
@@ -1507,16 +1500,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                  (ADR-032) and resolved by the CLI's OWN provider and auth —
                  the Omnipus provider catalogue is the wrong universe for it
                  (operator finding, 2026-07-03). */
-              <div className="space-y-1.5">
+              <div className="space-y-[var(--space-1)]">
                 <Input
                   data-testid="external-model-input"
                   value={model}
                   disabled={!isFieldEditable('model')}
                   onChange={(e) => { markDirty(); setModel(e.target.value) }}
                   placeholder="claude-sonnet-4-6"
-                  className="text-sm font-mono"
+                  className="text-[length:var(--type-body-compact-size)] font-mono"
                 />
-                <p className="text-xs text-[var(--color-muted)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   Passed to the external CLI as its model flag. The runner uses its
                   own provider and authentication — enter any model slug the CLI
                   supports, independent of the providers connected here.
@@ -1557,43 +1550,32 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 "save" sampling params that silently reverted on refetch
                 (live bug, 2026-07-03). */}
             {!isExternalAgent && (
-            <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-              <button tabIndex={0}
-                type="button"
-                onClick={() => setAdvancedOpen((o) => !o)}
-                className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                aria-expanded={advancedOpen}
-              >
-                <span>Sampling parameters</span>
-                {advancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-              </button>
-              {advancedOpen && (
-                <div className="px-3 pb-3 space-y-4 border-t border-[var(--color-border)]">
-                  <RangeField
-                    label="Temperature"
-                    caption="Higher = more creative / less predictable (0–2, default 1)"
-                    value={temperature}
-                    min={0}
-                    max={2}
-                    step={0.05}
-                    onChange={(v) => { markDirty(); setTemperature(v) }}
-                    format={(v) => v.toFixed(2)}
-                    disabled={!isFieldEditable('model_params')}
-                  />
-                  <RangeField
-                    label="Max tokens"
-                    caption="Maximum length of each reply"
-                    value={maxTokens}
-                    min={256}
-                    max={32768}
-                    step={256}
-                    onChange={(v) => { markDirty(); setMaxTokens(v) }}
-                    format={(v) => v.toLocaleString()}
-                    disabled={!isFieldEditable('model_params')}
-                  />
-                </div>
-              )}
-            </div>
+            <AdvancedDisclosure title="Sampling parameters">
+              <div className="space-y-[var(--space-3)]">
+                <RangeField
+                  label="Temperature"
+                  caption="Higher = more creative / less predictable (0–2, default 1)"
+                  value={temperature}
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  onChange={(v) => { markDirty(); setTemperature(v) }}
+                  format={(v) => v.toFixed(2)}
+                  disabled={!isFieldEditable('model_params')}
+                />
+                <RangeField
+                  label="Max tokens"
+                  caption="Maximum length of each reply"
+                  value={maxTokens}
+                  min={256}
+                  max={32768}
+                  step={256}
+                  onChange={(v) => { markDirty(); setMaxTokens(v) }}
+                  format={(v) => v.toLocaleString()}
+                  disabled={!isFieldEditable('model_params')}
+                />
+              </div>
+            </AdvancedDisclosure>
             )}
           </section>
 
@@ -1606,33 +1588,33 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               CONSOLIDATED into this single copy — testids keep the
               `-basics` suffix since this is now the only surface. */}
           {!isExternalAgent && (
-          <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
-            <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
+          <section className="space-y-[var(--space-2-5)]">
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Fallback models</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
             {!isFieldEditable('fallback_models') ? (
               <div
                 data-testid="fallback-summary-locked-basics"
-                className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                className="space-y-[var(--space-2)] p-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
-                <div className="flex items-center gap-2 text-[var(--color-muted)]">
+                <div className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
                   <Lock size={12} weight="fill" aria-hidden="true" />
-                  <p className="text-[11px]">
+                  <p className="text-[length:var(--type-caption-size)]">
                     Locked: fallback models are inherited from the locked core config.
                   </p>
                 </div>
                 {fallbackModels.length === 0 ? (
-                  <p className="text-xs text-[var(--color-muted)]">No fallback chain configured.</p>
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No fallback chain configured.</p>
                 ) : (
-                  <ol className="space-y-1" data-testid="fallback-summary-locked-basics-list">
+                  <ol className="space-y-[var(--space-1)]" data-testid="fallback-summary-locked-basics-list">
                     {fallbackModels.map((entry, idx) => (
                       <li
                         key={entry.model}
-                        className="flex items-center gap-2 text-xs font-mono text-[var(--color-secondary)]"
+                        className="flex items-center gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]"
                       >
                         <span className="text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
                         <span
                           data-testid={`fallback-summary-provider-${entry.model}`}
-                          className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold"
+                          className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold"
                           style={{
                             backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                             color: 'var(--color-accent)',
@@ -1648,7 +1630,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 )}
               </div>
             ) : (
-              <div className="flex flex-wrap gap-1.5 p-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
+              <div className="flex flex-wrap gap-[var(--space-1)] p-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] min-h-[36px]">
                 {fallbackModels.map((entry, idx) => {
                   const providerMissing = entry.provider === ''
                   const providerLabel = providerMissing
@@ -1660,11 +1642,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     <span
                       key={entry.model}
                       data-testid={`fallback-chip-model-${entry.model}`}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
+                      className="inline-flex items-center gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-mono bg-[var(--color-surface-2)] text-[var(--color-secondary)] border border-[var(--color-border)]"
                     >
                       <span
                         data-testid={`fallback-chip-provider-${entry.model}`}
-                        className="inline-flex items-center px-1 rounded text-[9px] font-semibold"
+                        className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold"
                         style={{
                           backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                           color: 'var(--color-accent)',
@@ -1680,7 +1662,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           value={entry.provider}
                           disabled={!isFieldEditable('fallback_models')}
                           onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
-                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
+                          className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-[var(--space-1)] pr-[var(--space-2-5)] py-0 text-[length:var(--type-caption-size)] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
                         >
                           <option value="" data-testid={`fallback-provider-option-empty-${entry.model}`}>—</option>
                           {connectedProviders.map((p) => (
@@ -1700,43 +1682,46 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         />
                       </span>
                       <span>{entry.model}</span>
-                      <button tabIndex={0}
-                        type="button"
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
                         data-testid={`fallback-chip-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={!isFieldEditable('fallback_models') || idx === 0}
                         onClick={() => { markDirty(); moveFallback(entry.model, -1) }}
-                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowUp size={10} />
-                      </button>
-                      <button tabIndex={0}
-                        type="button"
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
                         data-testid={`fallback-chip-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={!isFieldEditable('fallback_models') || idx === fallbackModels.length - 1}
                         onClick={() => { markDirty(); moveFallback(entry.model, 1) }}
-                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <ArrowDown size={10} />
-                      </button>
-                      <button tabIndex={0}
-                        type="button"
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
+                        size="sm"
                         data-testid={`fallback-chip-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
                         disabled={!isFieldEditable('fallback_models')}
                         onClick={() => { markDirty(); removeFallback(entry.model) }}
-                        className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                        className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
                         <X size={10} />
-                      </button>
+                      </IconButton>
                       {providerMissing && (
                         <span
                           data-testid={`fallback-chip-warning-${entry.model}`}
                           role="img"
                           aria-label="Provider not connected — fallback will not be used at runtime"
                           title="Provider not connected — fallback will not be used at runtime"
-                          className="inline-flex items-center text-amber-400"
+                          className="inline-flex items-center text-[var(--color-warning)]"
                         >
                           <Warning size={11} weight="fill" />
                         </span>
@@ -1770,7 +1755,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // personality panel
   const personalityPanel = (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
 
           {/* ADR-052 FR-039: per-agent memory-injection gate. Live/editable
               for every agent — memory_enabled is "allowed on all agents"
@@ -1785,9 +1770,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               durable. */}
           <div
             data-testid="memory-toggle-row"
-            className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+            className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)]"
           >
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-[var(--space-2)] min-w-0">
               <Brain
                 size={14}
                 weight={memoryEnabled ? 'fill' : 'regular'}
@@ -1795,8 +1780,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 aria-hidden="true"
               />
               <div className="min-w-0">
-                <p className="text-sm text-[var(--color-secondary)]">Memory</p>
-                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Memory</p>
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                   {isSystemAgent
                     ? 'Verifier agents always run with memory off — the same evidence must always yield the same verdict.'
                     : "Lets this agent recall its workspace's shared memory across sessions. Off starts every turn from a clean slate."}
@@ -1844,21 +1829,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // tools panel — item 2 reorg: Tools & Permissions ONLY (Skills is now its
   // own tab; the Fallback models editor moved to Basics — item 1).
   const toolsPanel = (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
 
           {/* Tools & Permissions — hidden for subagent_3p (the external
               runner has its own tools; per-tool CLI flags govern instead
               per the field matrix). Native workers (and every other kind)
               get the LIVE editor — no more read-only collapse. */}
           {!isExternalAgent && (
-            <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Tools &amp; Permissions</p>
+            <section className="space-y-[var(--space-2-5)]">
+              <div className="flex items-center gap-[var(--space-2)]">
+                <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Tools &amp; Permissions</p>
                 {(() => {
                   const overrideCount = Object.keys(toolsCfg.builtin?.policies ?? {}).length
                   if (overrideCount === 0) return null
                   return (
-                    <span className="text-xs text-[var(--color-muted)] font-normal">
+                    <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] font-[var(--font-weight-regular)]">
                       {overrideCount} overrides
                     </span>
                   )
@@ -1890,7 +1875,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // skills panel — item 2 reorg: split out of the former combined Tools tab
   // into its own tab. Same gating and content as before, just relocated.
   const skillsPanel = (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
 
           {/* Skills — Main/core/Subagent (native worker). Per the field
               matrix a native Subagent may optionally be granted skills (or
@@ -1899,80 +1884,79 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               mapping was a lie (P3 bug, 2026-07-03; the old !isWorkerAgent
               gate over-corrected and hid this for native Subagents too). */}
           {!isExternalAgent && (
-            <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Skills</p>
+            <section className="space-y-[var(--space-2-5)]">
+              <div className="flex items-center gap-[var(--space-2)]">
+                <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Skills</p>
                 {agentSkills.length > 0 && (
-                  <span className="text-xs text-[var(--color-muted)] font-normal">
+                  <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] font-[var(--font-weight-regular)]">
                     {agentSkills.length} granted
                   </span>
                 )}
               </div>
-              <div className="space-y-3">
+              <div className="space-y-[var(--space-2-5)]">
                 {!isFieldEditable('skills') ? (
-                  <p className="text-xs text-[var(--color-muted)]">
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                     {(agent.editable_fields ?? []).find((field) => field.name === 'skills')?.reason
                       ?? 'Skill assignment is not editable for this agent.'}
                   </p>
                 ) : (
-                  <p className="text-xs text-[var(--color-muted)]">
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                     Grant specific installed skills to this agent. Only skills listed here
                     are available during this agent's runs. Empty means no skills.
                   </p>
                 )}
                 {availableSkills.length === 0 ? (
-                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-4 text-center">
-                    <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-1.5" />
-                    <p className="text-xs text-[var(--color-muted)]">No skills installed.</p>
-                    <p className="text-xs text-[var(--color-muted)]/70 mt-0.5">
+                  <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-3)] text-center">
+                    <Sparkle size={16} className="text-[var(--color-muted)] mx-auto mb-[var(--space-1)]" />
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No skills installed.</p>
+                    <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/70 mt-[var(--space-0-5)]">
                       Install skills from the Skills &amp; Tools screen.
                     </p>
                   </div>
                 ) : (
-                  <div className="space-y-1.5">
+                  <div className="space-y-[var(--space-1)]">
                     {availableSkills.map((skill) => {
                       const granted = agentSkills.includes(skill.id)
                       return (
-                        <label
+                        <Label
                           key={skill.id}
-                          className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${!isFieldEditable('skills') ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-3)]'}`}
+                          className={`flex items-start gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] transition-colors ${!isFieldEditable('skills') ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-3)]'}`}
                         >
-                          <input tabIndex={0}
-                            type="checkbox"
+                          <Checkbox
                             checked={granted}
                             disabled={!isFieldEditable('skills')}
-                            onChange={!isFieldEditable('skills') ? undefined : (e) => {
+                            onCheckedChange={!isFieldEditable('skills') ? undefined : (checked) => {
                               markDirty()
-                              if (e.target.checked) {
+                              if (checked === true) {
                                 setAgentSkills((prev) => [...prev, skill.id])
                               } else {
                                 setAgentSkills((prev) => prev.filter((s) => s !== skill.id))
                               }
                             }}
-                            className="mt-0.5 shrink-0 accent-[var(--color-accent)] disabled:opacity-50"
+                            className="mt-[var(--space-0-5)] shrink-0"
                             data-testid={`skill-checkbox-${skill.id}`}
                           />
                           <div className="min-w-0">
-                            <p className="text-sm font-medium text-[var(--color-secondary)] leading-tight">
+                            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-tight">
                               {skill.name}
                             </p>
                             {skill.description && (
-                              <p className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-snug">
+                              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-snug">
                                 {skill.description}
                               </p>
                             )}
-                            <div className="flex items-center gap-2 mt-1">
-                              <span className="text-[10px] font-mono text-[var(--color-muted)]/70">
+                            <div className="flex items-center gap-[var(--space-2)] mt-[var(--space-1)]">
+                              <span className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]/70">
                                 {skill.id}
                               </span>
                               {skill.verified && (
-                                <span className="text-[9px] px-1 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                <span className="text-[length:var(--type-caption-size)] px-[var(--space-1)] rounded bg-[var(--color-success)]/20 text-[var(--color-success)] border border-[var(--color-success)]/30">
                                   verified
                                 </span>
                               )}
                             </div>
                           </div>
-                        </label>
+                        </Label>
                       )
                     })}
                   </div>
@@ -1986,30 +1970,30 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // runtime panel
   const runtimePanel = (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
 
-            <section className="space-y-3">
-              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Runtime</p>
+            <section className="space-y-[var(--space-2-5)]">
+              <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Runtime</p>
               {/* CLI — read-only badge. The kind+cli tuple is the agent's
                   defining property; the operator can change which CLI is
                   used by recreating the agent (post v0.3 the wizard will
                   surface this, per the spec matrix). */}
               <div
                 data-testid="profile-cli-locked"
-                className="flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
               >
-                <span className="text-[10px] uppercase tracking-wider text-[var(--color-muted)]">CLI</span>
-                <span className="font-mono text-xs text-[var(--color-secondary)]">
+                <span className="text-[length:var(--type-caption-size)] uppercase tracking-wider text-[var(--color-muted)]">CLI</span>
+                <span className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]">
                   {executor?.cli ?? 'claude-code'}
                 </span>
-                <span className="text-[10px] text-[var(--color-muted)]">(locked)</span>
+                <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">(locked)</span>
               </div>
               <div
                 data-testid="profile-cli-path"
-                className="space-y-1.5"
+                className="space-y-[var(--space-1)]"
               >
-                <div className="flex items-center gap-3">
-                  <label htmlFor="profile-cli-path-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">CLI path</label>
+                <div className="flex items-center gap-[var(--space-2-5)]">
+                  <Label htmlFor="profile-cli-path-input" className="text-[var(--color-muted)] w-44 shrink-0">CLI path</Label>
                   <Input
                     id="profile-cli-path-input"
                     value={executor?.cli_path ?? offeredCliPath ?? ''}
@@ -2037,7 +2021,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       cliValidation.validate(cli, e.target.value)
                     }}
                     placeholder="/usr/local/bin/claude"
-                    className="text-xs h-8 font-mono"
+                    className="text-[length:var(--type-utility-xs-size)] h-8 font-mono"
                     disabled={!isFieldEditable('executor')}
                   />
                 </div>
@@ -2047,9 +2031,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   testId="profile-cli-path-status"
                 />
               </div>
-              <div data-testid="profile-env-overrides" className="space-y-2">
-                <label className="text-xs text-[var(--color-muted)]">Environment overrides</label>
-                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+              <div data-testid="profile-env-overrides" className="space-y-[var(--space-2)]">
+                <Label>Environment overrides</Label>
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                   KEY=value pairs passed to the CLI process. Empty means no overrides.
                 </p>
                 <EnvironmentOverridesEditor
@@ -2064,9 +2048,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   disabled={!isFieldEditable('executor')}
                 />
               </div>
-              <div data-testid="profile-cli-args" className="space-y-1.5">
-                <div className="flex items-center gap-3">
-                  <label htmlFor="profile-cli-args-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</label>
+              <div data-testid="profile-cli-args" className="space-y-[var(--space-1)]">
+                <div className="flex items-center gap-[var(--space-2-5)]">
+                  <Label htmlFor="profile-cli-args-input" className="text-[var(--color-muted)] w-44 shrink-0">Additional CLI arguments</Label>
                   <Input
                     id="profile-cli-args-input"
                     value={executor?.cli_args ?? ''}
@@ -2075,11 +2059,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       setExecutor((prev) => ({ ...(prev ?? { kind: 'external-cli', cli: executor?.cli ?? 'claude-code' }), cli_args: e.target.value }))
                     }}
                     placeholder="e.g. --add-dir /extra/path"
-                    className="text-xs h-8 font-mono"
+                    className="text-[length:var(--type-utility-xs-size)] h-8 font-mono"
                     disabled={!isFieldEditable('executor')}
                   />
                 </div>
-                <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
                   In addition to the flags Omnipus applies automatically when this agent runs — see the live command preview below. Any argument that would be silently ignored is called out there before you save.
                 </p>
               </div>
@@ -2091,26 +2075,31 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
   // advanced panel
   const advancedPanel = (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
 
-          {/* Execution tuning supported by the backend field descriptors. */}
-          <section className="space-y-3">
-              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Execution</p>
-              <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
+          {/* Execution tuning supported by the backend field descriptors.
+              Rate limits and turn timeout are not part of
+              AgentUpdateRequest (contracts/components/schemas/AgentUpdateRequest.yaml,
+              additionalProperties: false) — the backend field-descriptor
+              rework dropped both as editable/settable here; neither section
+              is rendered. */}
+          <section className="space-y-[var(--space-2-5)]">
+              <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Execution</p>
+              <Card variant="default" className="space-y-[var(--space-2-5)] p-[var(--space-3)]">
                 {/* Max tool calls per turn — excluded for subagent_3p
                     (agent-types-field-matrix.md, Decisions #1 (resolved
                     2026-07-03): excluded): the external CLI runs its own
                     tool loop, and the backend now rejects the field for
                     this type. */}
                 {!isExternalAgent && (
-                  <div className="flex items-center gap-3">
-                    <label htmlFor="agent-max-tool-calls-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                  <div className="flex items-center gap-[var(--space-2-5)]">
+                    <Label htmlFor="agent-max-tool-calls-input" className="text-[var(--color-muted)] w-44 shrink-0">
                       Max tool calls per turn
-                      <span className="block text-[10px] text-[var(--color-muted)]/70">
+                      <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                         Per single turn (one message, task, or heartbeat run) — the
                         turn pauses at the limit and can be continued. Default: 200.
                       </span>
-                    </label>
+                    </Label>
                     <Input
                       id="agent-max-tool-calls-input"
                       type="number"
@@ -2119,9 +2108,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       value={maxToolIterationsDraft}
                       onChange={(e) => {
                         const raw = e.target.value
-                        // Item 5 (draft-field dirty gap): mark dirty on every
-                        // keystroke — see the turn-timeout input's onChange
-                        // above for why this must not be gated on validity.
+                        // Item 5 (draft-field dirty gap): mark dirty on EVERY
+                        // keystroke, not only once the draft commits to a
+                        // valid value — an external hydration mid-edit could
+                        // otherwise silently reset the field the operator is
+                        // still typing into.
                         markDirty()
                         setMaxToolIterationsDraft(raw)
                         const parsed = Number(raw)
@@ -2132,7 +2123,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         }
                       }}
                       onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
-                      className="text-xs h-8"
+                      className="text-[length:var(--type-utility-xs-size)] h-8"
                       disabled={!isFieldEditable('max_tool_iterations')}
                     />
                   </div>
@@ -2145,14 +2136,14 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     Hidden for subagent_3p: the external CLI owns its own
                     window (exempt row, effective 0). */}
                 {!isExternalAgent && (
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-3">
-                      <label htmlFor="agent-context-window-override-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
+                  <div className="space-y-[var(--space-1)]">
+                    <div className="flex items-center gap-[var(--space-2-5)]">
+                      <Label htmlFor="agent-context-window-override-input" className="text-[var(--color-muted)] w-44 shrink-0">
                         Context window override
-                        <span className="block text-[10px] text-[var(--color-muted)]/70">
+                        <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
                           Tokens. Lower-only — never above the model's own limit. Empty = use the model's window.
                         </span>
-                      </label>
+                      </Label>
                       <Input
                         id="agent-context-window-override-input"
                         type="number"
@@ -2180,37 +2171,49 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         onBlur={() => setContextWindowOverrideDraft(
                           contextWindowOverride != null ? String(contextWindowOverride) : '',
                         )}
-                        className="text-xs h-8"
+                        className="text-[length:var(--type-utility-xs-size)] h-8"
                         disabled={!isFieldEditable('context_window_override')}
                       />
                     </div>
                     {agent?.context_window_effective !== undefined && (
-                      <p
-                        data-testid="agent-context-window-effective"
-                        className="pl-[11.75rem] text-[11px] text-[var(--color-muted)]"
-                      >
-                        Effective window: {formatWindowTokens(agent.context_window_effective)} tokens
-                        {agent.context_window_source
-                          ? ` · Source: ${CONTEXT_WINDOW_SOURCE_LABEL[agent.context_window_source]}`
-                          : ''}
-                      </p>
+                      <div className="flex items-start gap-[var(--space-2-5)]">
+                        {/* Spacer matches the row's Label column (w-44 shrink-0 +
+                            gap-2.5) so this description sits under the Input
+                            column without a magic pl-[...] offset. */}
+                        <span className="w-44 shrink-0" aria-hidden="true" />
+                        <p
+                          data-testid="agent-context-window-effective"
+                          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                        >
+                          Effective window: {formatWindowTokens(agent.context_window_effective)} tokens
+                          {agent.context_window_source
+                            ? ` · Source: ${CONTEXT_WINDOW_SOURCE_LABEL[agent.context_window_source]}`
+                            : ''}
+                        </p>
+                      </div>
                     )}
                     {agent?.context_window_clamped && (
-                      <p
-                        data-testid="agent-context-window-clamped"
-                        role="status"
-                        className="pl-[11.75rem] text-[11px] text-[var(--color-warning,#D4AF37)]"
-                      >
-                        Override clamped to the model's limit
-                        {agent.context_window_effective !== undefined
-                          ? ` (${formatWindowTokens(agent.context_window_effective)} tokens)`
-                          : ''}
-                        {' '}— the value above is higher than this model supports.
-                      </p>
+                      <div className="flex items-start gap-[var(--space-2-5)]">
+                        {/* Spacer matches the row's Label column (w-44 shrink-0 +
+                            gap-2.5) so this description sits under the Input
+                            column without a magic pl-[...] offset. */}
+                        <span className="w-44 shrink-0" aria-hidden="true" />
+                        <p
+                          data-testid="agent-context-window-clamped"
+                          role="status"
+                          className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+                        >
+                          Override clamped to the model's limit
+                          {agent.context_window_effective !== undefined
+                            ? ` (${formatWindowTokens(agent.context_window_effective)} tokens)`
+                            : ''}
+                          {' '}— the value above is higher than this model supports.
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}
-              </div>
+              </Card>
             </section>
 
           {/* Shell deny patterns — item 3 reorg: relocated from Basics into
@@ -2221,27 +2224,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               (external-cli) — the external runner manages its own
               isolation. */}
           {!isExternalAgent && (
-            <section className="space-y-3">
-              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
-                <button tabIndex={0}
-                  type="button"
-                  onClick={() => setShellAdvancedOpen((o) => !o)}
-                  className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
-                  aria-expanded={shellAdvancedOpen}
-                >
-                  <span className="font-headline font-semibold text-[14px]">Shell deny patterns</span>
-                  {shellAdvancedOpen ? <CaretUp size={13} /> : <CaretDown size={13} />}
-                </button>
-                {shellAdvancedOpen && (
-                  <div className="px-3 pb-3 border-t border-[var(--color-border)]">
-                    <ShellDenyPatternsEditor
-                      value={shellDenyPatterns}
-                      onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
-                      disabled={!isFieldEditable('shell_policy')}
-                    />
-                  </div>
-                )}
-              </div>
+            <section className="space-y-[var(--space-2-5)]">
+              <AdvancedDisclosure
+                title="Shell deny patterns"
+                titleClassName="font-headline font-semibold text-[length:var(--type-body-size)]"
+              >
+                <ShellDenyPatternsEditor
+                  value={shellDenyPatterns}
+                  onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
+                  disabled={!isFieldEditable('shell_policy')}
+                />
+              </AdvancedDisclosure>
             </section>
           )}
 
@@ -2253,18 +2246,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               already explains why the editable Tools / Skills
               accordions are collapsed to a summary. */}
           {isNativeWorkerAgent && (
-            <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Executor</p>
+            <section className="space-y-[var(--space-2-5)]">
+              <div className="flex items-center gap-[var(--space-2)]">
+                <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Executor</p>
                 {(executor?.kind === 'external-cli' || executor?.kind === 'remote-a2a') && (
-                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
+                  <span className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]">
                     {executor.kind === 'external-cli' ? (executor.cli ?? 'external') : 'A2A'}
                   </span>
                 )}
                 {(!executor || executor.kind === 'native') && (
                   <span
                     data-testid="executor-native-badge"
-                    className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]"
+                    className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-[var(--color-surface-3)] text-[var(--color-muted)] border border-[var(--color-border)]"
                   >
                     Native (in-process)
                   </span>
@@ -2280,10 +2273,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           )}
 
           {/* Activity */}
-          <section className="space-y-3">
-            <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Activity</p>
+          <section className="space-y-[var(--space-2-5)]">
+            <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">Activity</p>
             {agent.stats && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-[var(--space-2-5)]">
                 <StatCard label="Sessions" value={agent.stats.total_sessions.toString()} />
                 <StatCard
                   label="Total tokens"
@@ -2307,21 +2300,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               // indistinguishable from "no activity ever happened".
               <div
                 data-testid="activity-warning-banner"
-                className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-3 py-2 flex items-start gap-2"
+                className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)] flex items-start gap-[var(--space-2)]"
                 role="alert"
               >
-                <Warning size={14} weight="fill" className="text-[var(--color-warning)] shrink-0 mt-0.5" aria-hidden="true" />
-                <p className="text-xs text-[var(--color-warning)]">
+                <Warning size={14} weight="fill" className="text-[var(--color-warning)] shrink-0 mt-[var(--space-0-5)]" aria-hidden="true" />
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">
                   Showing partial activity — {allActivityResp.warning}
                 </p>
               </div>
             )}
             {activityError ? (
-              <p className="text-sm text-[var(--color-error)]">Failed to load activity</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load activity</p>
             ) : recentActivity.length === 0 ? (
-              <p className="text-xs text-[var(--color-muted)]">No recent activity for this agent.</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No recent activity for this agent.</p>
             ) : (
-              <div className="space-y-1">
+              <div className="space-y-[var(--space-1)]">
                 {recentActivity.map((event) => (
                   <ActivityRow key={event.id} event={event} />
                 ))}
@@ -2341,31 +2334,31 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const workspaceUnavailable = !!editAgentWorkspaceId && (isWorkspaceLoading || isWorkspaceError || workspaceData === undefined)
 
   const heartbeatPanel = showHeartbeatTab ? (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
       {workspaceUnavailable && (
         <div
           data-testid="heartbeat-workspace-error"
-          className="rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
+          className="rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)] flex items-start gap-[var(--space-2-5)]"
           role="alert"
         >
-          <WarningCircle size={16} weight="fill" className="text-[var(--color-error)] shrink-0 mt-0.5" aria-hidden="true" />
+          <WarningCircle size={16} weight="fill" className="text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]" aria-hidden="true" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium text-[var(--color-error)]">
+            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-error)]">
               {isWorkspaceLoading ? 'Loading workspace…' : 'Failed to load workspace'}
             </p>
             {isWorkspaceError && (
-              <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                 Heartbeat settings cannot be saved until the workspace reloads. Check your connection and retry.
               </p>
             )}
           </div>
         </div>
       )}
-      <section className="space-y-3">
-        <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">
+      <section className="space-y-[var(--space-2-5)]">
+        <p className="font-headline font-semibold text-[length:var(--type-body-size)] text-[var(--color-secondary)]">
           Heartbeat for this workspace
         </p>
-        <p className="text-xs text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Configure a recurring heartbeat prompt for this agent in this workspace.
           The heartbeat runs on the schedule you set and uses the body below as its
           prompt — independent of any other workspace this agent belongs to.
@@ -2374,11 +2367,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         {/* Enable toggle */}
         <div
           data-testid="heartbeat-enabled-row"
-          className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5"
+          className="flex items-center justify-between gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
           <div className="min-w-0">
-            <p className="text-sm text-[var(--color-secondary)]">Enable heartbeat</p>
-            <p className="text-[11px] text-[var(--color-muted)] leading-snug">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Enable heartbeat</p>
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug">
               Runs the agent on the interval below using the body as its prompt.
             </p>
           </div>
@@ -2391,16 +2384,16 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </div>
 
         {/* Interval */}
-        <div className="flex items-center gap-3">
-          <label
+        <div className="flex items-center gap-[var(--space-2-5)]">
+          <Label
             htmlFor="heartbeat-interval"
-            className="text-xs text-[var(--color-muted)] w-44 shrink-0"
+            className="text-[var(--color-muted)] w-44 shrink-0"
           >
             Interval (minutes)
-            <span className="block text-[10px] text-[var(--color-muted)]/70">
+            <span className="block text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70">
               Minimum 5 minutes
             </span>
-          </label>
+          </Label>
           <Input
             id="heartbeat-interval"
             data-testid="heartbeat-interval-input"
@@ -2422,22 +2415,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               }
             }}
             onBlur={() => setHbIntervalDraft(String(hbIntervalMinutes))}
-            className="text-xs h-8"
+            className="text-[length:var(--type-utility-xs-size)] h-8"
           />
         </div>
 
         {/* Body */}
-        <div className="space-y-1.5">
+        <div className="space-y-[var(--space-2)]">
           <div className="flex items-center justify-between">
-            <label
-              htmlFor="heartbeat-body"
-              className="text-xs text-[var(--color-muted)]"
-            >
+            <Label htmlFor="heartbeat-body">
               Heartbeat body
               {hbEnabled && (
-                <span className="text-[var(--color-error)] ml-1" aria-label="required">*</span>
+                <span className="text-[var(--color-error)] ml-[var(--space-1)]" aria-label="required">*</span>
               )}
-            </label>
+            </Label>
             <UploadMdButton
               onUpload={(content: string) => { markHbDirty(); setHbBody(content) }}
             />
@@ -2449,7 +2439,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             onChange={(e) => { markHbDirty(); setHbBody(e.target.value) }}
             rows={6}
             placeholder="Periodic instruction prompt — e.g. 'Summarise overnight CI results and update the project board.'"
-            className="text-sm resize-none"
+            className="text-[length:var(--type-body-compact-size)] resize-none"
             aria-required={hbEnabled}
             aria-describedby={hbEnabled && hbBody.trim() === '' ? 'heartbeat-body-required-hint' : undefined}
             maxLength={16384}
@@ -2458,7 +2448,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <p
               id="heartbeat-body-required-hint"
               data-testid="heartbeat-body-required-hint"
-              className="text-xs text-[var(--color-error)]"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
             >
               Body is required when heartbeat is enabled.
             </p>
@@ -2468,7 +2458,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
       {/* Save button — explicit (not autosave) per A2/F-09 */}
       {/* fix-1 (DATA-LOSS guard): disabled when workspace data is unavailable */}
-      <div className="flex justify-end pt-2">
+      <div className="flex justify-end pt-[var(--space-2)]">
         <Button
           data-testid="heartbeat-save-button"
           onClick={() => {
@@ -2483,7 +2473,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             saveHeartbeatMutation.mutate()
           }}
           disabled={saveHeartbeatMutation.isPending || workspaceUnavailable}
-          className="px-4"
+          className="px-[var(--space-3)]"
         >
           {saveHeartbeatMutation.isPending ? 'Saving…' : 'Save heartbeat'}
         </Button>
@@ -2501,18 +2491,18 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     >
       {/* Title row locked to 44px chrome; badges/description sit below so the
           open panel aligns with the workspace top bar (flat shell chrome). */}
-      <SheetHeader className="px-6 sm:px-8 pr-14">
-        <div className="flex items-center gap-2.5 min-w-0">
+      <SheetHeader className="px-[var(--space-4)] sm:px-[var(--space-5)] pr-[var(--space-7)]">
+        <div className="flex items-center gap-[var(--space-2)] min-w-0">
           <AvatarHeader
             color={selectedColor}
             className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 [&>svg]:!w-3.5 [&>svg]:!h-3.5"
           />
-          <h1 className="font-headline text-sm font-semibold text-[var(--color-secondary)] truncate">
+          <h1 className="font-headline text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)] truncate">
             {agent.name}
           </h1>
         </div>
       </SheetHeader>
-      <div className="px-6 sm:px-8 pb-3 flex items-center gap-2 min-w-0 flex-wrap">
+      <div className="px-[var(--space-4)] sm:px-[var(--space-5)] pb-[var(--space-2-5)] flex items-center gap-[var(--space-2)] min-w-0 flex-wrap">
         <Badge variant={agent.type === 'core' ? 'secondary' : 'outline'}>
           {agent.type}
         </Badge>
@@ -2522,7 +2512,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           </Badge>
         )}
         {agent.description && (
-          <span className="text-xs text-[var(--color-muted)] truncate">{agent.description}</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] truncate">{agent.description}</span>
         )}
       </div>
 
@@ -2538,12 +2528,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <div
           role="alert"
           data-testid="locked-banner"
-          className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
+          className="mx-[var(--space-5)] mt-[var(--space-3)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)] flex items-start gap-[var(--space-2-5)]"
         >
-          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
-          <div className="text-sm">
+          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]" weight="fill" aria-hidden="true" />
+          <div className="text-[length:var(--type-body-compact-size)]">
             <div className="font-semibold text-[var(--color-error)]">This is a built-in core agent</div>
-            <div className="text-[var(--color-muted)] mt-1">
+            <div className="text-[var(--color-muted)] mt-[var(--space-1)]">
               Identity and base instructions are protected. You can change the model, tool permissions, connectors and assigned skills.
             </div>
           </div>
@@ -2553,12 +2543,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         <div
           role="alert"
           data-testid="locked-banner"
-          className="mx-8 mt-4 rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 flex items-start gap-3"
+          className="mx-[var(--space-5)] mt-[var(--space-3)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)] flex items-start gap-[var(--space-2-5)]"
         >
-          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-0.5" weight="fill" aria-hidden="true" />
-          <div className="text-sm">
+          <WarningCircle className="h-5 w-5 text-[var(--color-error)] shrink-0 mt-[var(--space-0-5)]" weight="fill" aria-hidden="true" />
+          <div className="text-[length:var(--type-body-compact-size)]">
             <div className="font-semibold text-[var(--color-error)]">System agent</div>
-            <div className="text-[var(--color-muted)] mt-1">
+            <div className="text-[var(--color-muted)] mt-[var(--space-1)]">
               Identity and capabilities are fixed. Edit the instructions in Personality to change how this agent plans or reviews work.
             </div>
           </div>
@@ -2567,7 +2557,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
 
       {/* Scrollable body. Inner padding/width mirrors CreateAgentModal etc. */}
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-8 py-6 space-y-4">
+        <div className="max-w-2xl mx-auto px-[var(--space-5)] py-[var(--space-4)] space-y-[var(--space-3)]">
       {/* W6-B1 / I1: cap the visible-on-open section count at Miller's 7±2.
           Base agents open Identity + Shell deny patterns + Model Configuration
           + Behavior (4 accordions — the Identity strip header is also
@@ -2592,19 +2582,19 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           data-testid="native-worker-delegation-callout"
           role="note"
           aria-label="Delegation-only worker"
-          className="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 px-4 py-3 flex items-start gap-3"
+          className="rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/10 px-[var(--space-3)] py-[var(--space-2-5)] flex items-start gap-[var(--space-2-5)]"
         >
           <Lightning
             size={16}
             weight="fill"
-            className="text-[var(--color-accent)] mt-0.5 shrink-0"
+            className="text-[var(--color-accent)] mt-[var(--space-0-5)] shrink-0"
             aria-hidden="true"
           />
           <div className="min-w-0">
-            <p className="text-sm font-medium text-[var(--color-secondary)]">
+            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
               This is a delegation-only worker
             </p>
-            <p className="text-[12px] text-[var(--color-muted)] leading-snug mt-0.5">
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug mt-[var(--space-0-5)]">
               Never a chat target — this agent only runs when another agent
               delegates a task to it. Tools and Skills below may be
               set explicitly or left to inherit from the delegating caller at
@@ -2646,7 +2636,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             tab below; for native workers (no external-cli selected) the
             whole thing is inherited from the caller so it is shown as a
             read-only summary in Advanced. */}
-        <TabsContent value="basics" className="space-y-6">{basicsPanel}</TabsContent>
+        <TabsContent value="basics" className="space-y-[var(--space-4)]">{basicsPanel}</TabsContent>
 
         {/* ── PERSONALITY TAB ────────────────────────────────────────────
             BehaviorFields (SOUL.md / Task prompt + Voice), and the
@@ -2654,7 +2644,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             delegation-only labour agents and never run on a schedule).
             The Execution params (timeout / max_iter) live in
             the Advanced tab per the spec matrix. */}
-        <TabsContent value="personality" className="space-y-5">{personalityPanel}</TabsContent>
+        <TabsContent value="personality" className="space-y-[var(--space-3)]">{personalityPanel}</TabsContent>
 
         {/* ── TOOLS TAB (hidden for subagent_3p) ────────────────────────
             Tool policy editor only (item 2: Skills split into its own tab
@@ -2662,7 +2652,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             runner brings its own tools), so this panel is out of scope
             for them and the whole tab is omitted. */}
         {!isExternalAgent && (
-          <TabsContent value="tools" className="space-y-6">{toolsPanel}</TabsContent>
+          <TabsContent value="tools" className="space-y-[var(--space-4)]">{toolsPanel}</TabsContent>
         )}
 
         {/* ── RUNTIME TAB (subagent_3p only) ─────────────────────────────
@@ -2673,7 +2663,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             v0.1.0), while cli_path / env_overrides / cli_args are the
             operator-tunable inputs (F-14). */}
         {isExternalAgent && (
-          <TabsContent value="runtime" className="space-y-5">{runtimePanel}</TabsContent>
+          <TabsContent value="runtime" className="space-y-[var(--space-3)]">{runtimePanel}</TabsContent>
         )}
 
         {/* ── SKILLS TAB (hidden for subagent_3p) ──────────────────────────
@@ -2682,7 +2672,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             its own tab so Tools & Permissions and Skills are each a single
             clear surface. */}
         {!isExternalAgent && (
-          <TabsContent value="skills" className="space-y-6">{skillsPanel}</TabsContent>
+          <TabsContent value="skills" className="space-y-[var(--space-4)]">{skillsPanel}</TabsContent>
         )}
 
         {/* ── HEARTBEAT TAB ─────────────────────────────────────────────
@@ -2691,7 +2681,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             set) and the agent is not a worker (FR-025). The tab saves to
             the workspace (separate mutation, A2/F-09). */}
         {showHeartbeatTab && (
-          <TabsContent value="heartbeat" className="space-y-5">{heartbeatPanel}</TabsContent>
+          <TabsContent value="heartbeat" className="space-y-[var(--space-3)]">{heartbeatPanel}</TabsContent>
         )}
 
         {/* ── ADVANCED TAB ──────────────────────────────────────────────
@@ -2700,7 +2690,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             (workers only; subagent_3p gets the full editor in the Runtime
             tab), Activity. The Executor here is a compact summary for
             native workers; subagent_3p's editor is in Runtime. */}
-        <TabsContent value="advanced" className="space-y-6">{advancedPanel}</TabsContent>
+        <TabsContent value="advanced" className="space-y-[var(--space-4)]">{advancedPanel}</TabsContent>
       </Tabs>
       <Accordion type="single" collapsible defaultValue="basics" className="block sm:hidden">
         <AccordionItem value="basics">
@@ -2749,8 +2739,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           Per spec there is NO Apply button (autosave-only) and no separate
           Close button — the Radix X in the top-right corner is the dismiss
           affordance, and SheetContent's onOpenChange wires it back here. */}
-      <div className="px-8 py-4 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-3">
-        <div className="flex flex-col gap-0.5 min-w-0">
+      <div className="px-[var(--space-5)] py-[var(--space-3)] border-t border-[var(--color-border)] bg-[var(--color-surface-1)] shrink-0 flex items-center justify-between gap-[var(--space-2-5)]">
+        <div className="flex flex-col gap-[var(--space-0-5)] min-w-0">
           <div data-testid="last-saved-indicator">
             <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={saveLastSavedAt} />
           </div>
@@ -2758,7 +2748,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               take effect in every chat / workspace / delegation it is used in. */}
           <p
             data-testid="autosave-scope-cue"
-            className="text-[11px] text-[var(--color-muted)] leading-snug"
+            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-snug"
           >
             Changes save automatically and apply everywhere this agent is used.
           </p>
@@ -2770,37 +2760,29 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             onClick={() => setDeleteOpen(true)}
             className="ml-auto"
           >
-            <Trash size={13} className="mr-1.5" />
+            <Trash size={13} className="mr-[var(--space-1)]" />
             Delete agent
           </Button>
         )}
       </div>
 
-      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog
-          (`AlertDialog` + `AlertDialogAction`) so the
-          destructive-confirm flow is identical across the app. The confirm
-          fires the deleteAgentMutation; on success the slide-over closes
-          and the agent is removed from the list cache. */}
-      <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete {formData.name || agent.name}?</AlertDialogTitle>
-            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteAgentMutation.isPending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={deleteAgentMutation.isPending}
-              onClick={() => {
-                if (agentId) deleteAgentMutation.mutate(agentId)
-              }}
-            >
-              {deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Wave 5 / spec §6.1 BDD #15: Delete confirmation dialog (catalogued
+          `ConfirmDialog`) so the destructive-confirm flow is identical
+          across the app. The confirm fires the deleteAgentMutation; on
+          success the slide-over closes and the agent is removed from the
+          list cache. */}
+      <ConfirmDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={`Delete ${formData.name || agent.name}?`}
+        description="This cannot be undone."
+        confirmLabel={deleteAgentMutation.isPending ? 'Deleting…' : 'Delete'}
+        destructive
+        pending={deleteAgentMutation.isPending}
+        onConfirm={() => {
+          if (agentId) deleteAgentMutation.mutate(agentId)
+        }}
+      />
 
     </ProfileSheet>
   )
@@ -2862,10 +2844,10 @@ function ProfileSheet({
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 text-center">
+    <Card variant="default" className="p-[var(--space-2-5)] text-center">
       <div className="font-headline font-bold text-base text-[var(--color-secondary)]">{value}</div>
-      <div className="text-xs text-[var(--color-muted)] mt-0.5">{label}</div>
-    </div>
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">{label}</div>
+    </Card>
   )
 }
 
@@ -2884,15 +2866,15 @@ interface RangeFieldProps {
 
 function RangeField({ label, caption, value, min, max, step, onChange, format, disabled }: RangeFieldProps) {
   return (
-    <div className="space-y-1 pt-3">
+    <div className="space-y-[var(--space-1)] pt-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
         <div>
-          <span className="text-xs text-[var(--color-muted)]">{label}</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</span>
           {caption && (
-            <p className="text-[10px] text-[var(--color-muted)]/70 leading-snug mt-0.5">{caption}</p>
+            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]/70 leading-snug mt-[var(--space-0-5)]">{caption}</p>
           )}
         </div>
-        <span className="text-xs font-mono text-[var(--color-secondary)]">{format(value)}</span>
+        <span className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)]">{format(value)}</span>
       </div>
       <input tabIndex={0}
         type="range"
@@ -2915,11 +2897,11 @@ function RangeField({ label, caption, value, min, max, step, onChange, format, d
 function ActivityRow({ event }: { event: ActivityEvent }) {
   const date = new Date(event.timestamp)
   return (
-    <div className="flex items-start gap-3 px-3 py-2 rounded-md hover:bg-[var(--color-surface-1)] transition-colors">
-      <span className="text-xs text-[var(--color-secondary)] flex-1 min-w-0 truncate">
+    <div className="flex items-start gap-[var(--space-2-5)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-md hover:bg-[var(--color-surface-1)] transition-colors">
+      <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] flex-1 min-w-0 truncate">
         {event.summary}
       </span>
-      <span className="text-[10px] text-[var(--color-muted)] shrink-0 mt-0.5">
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]">
         {date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
       </span>
     </div>
@@ -3038,21 +3020,21 @@ function EnvironmentOverridesEditor({
   }
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-[var(--space-1)]">
       {rows.length === 0 ? (
-        <p className="text-[11px] text-[var(--color-muted)] italic">No overrides configured.</p>
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No overrides configured.</p>
       ) : (
         rows.map((row, idx) => {
           const isDuplicate = row.key !== '' && duplicateKeys.has(row.key)
           return (
-            <div key={row.id} className="space-y-1" data-testid={`profile-env-row-${idx}`}>
-              <div className="flex items-center gap-2">
+            <div key={row.id} className="space-y-[var(--space-1)]" data-testid={`profile-env-row-${idx}`}>
+              <div className="flex items-center gap-[var(--space-2)]">
                 <Input
                   value={row.key}
                   onChange={(e) => updateKeyDraft(row.id, e.target.value)}
                   onBlur={commitKey}
                   placeholder="KEY"
-                  className="text-xs h-8 font-mono flex-1"
+                  className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable name"
                   aria-invalid={isDuplicate || undefined}
                   disabled={disabled}
@@ -3062,23 +3044,24 @@ function EnvironmentOverridesEditor({
                   value={row.value}
                   onChange={(e) => updateValue(row.id, e.target.value)}
                   placeholder="value"
-                  className="text-xs h-8 font-mono flex-1"
+                  className="text-[length:var(--type-utility-xs-size)] h-8 font-mono flex-1"
                   aria-label="Environment variable value"
                   disabled={disabled}
                 />
-                <button tabIndex={0}
-                  type="button"
+                <IconButton
+                  variant="ghost"
+                  size="sm"
                   onClick={() => removeRow(row.id)}
-                  className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors disabled:opacity-50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                  className="h-auto w-auto text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] disabled:opacity-50 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                   aria-label={`Remove env override ${row.key || 'entry'}`}
                   disabled={disabled}
                 >
                   <X size={12} />
-                </button>
+                </IconButton>
               </div>
               {isDuplicate && (
                 <p
-                  className="text-[10px] text-[var(--color-error)]"
+                  className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
                   data-testid={`profile-env-duplicate-${idx}`}
                 >
                   Duplicate key "{row.key}" — rename it before this change is saved.
@@ -3089,14 +3072,14 @@ function EnvironmentOverridesEditor({
         })
       )}
       {!disabled && (
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           data-testid="profile-env-add"
           onClick={addRow}
-          className="text-[10px] text-[var(--color-accent)] hover:underline"
+          className="text-[length:var(--type-caption-size)]"
         >
           + Add override
-        </button>
+        </Button>
       )}
     </div>
   )

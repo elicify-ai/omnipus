@@ -152,7 +152,7 @@ describe('TaskRunsList — populated', () => {
 
   // Backend overlap-guard run outcome (`skipped`) — a scheduled fire the
   // server never ran because the previous occurrence was still in_progress.
-  // Must render its own "Skipped" badge with the orange (--color-cancelled)
+  // Must render its own "Skipped" badge with the cancelled status colour (--status-cancelled-foreground)
   // classes, not silently fall back to the "Inbox" badge/label.
   it('renders a "Skipped" badge with the orange skipped classes for a skipped run', async () => {
     vi.mocked(fetchTaskRuns).mockResolvedValue([makeRun({ status: 'skipped', result: undefined, ended_at: null })])
@@ -161,7 +161,7 @@ describe('TaskRunsList — populated', () => {
     await waitFor(() => expect(screen.getAllByTestId('task-run-row')).toHaveLength(1))
     const badge = screen.getByText('Skipped')
     expect(badge).toBeInTheDocument()
-    expect(badge.className).toContain('--color-cancelled')
+    expect(badge.className).toContain('--status-cancelled-foreground')
     expect(screen.queryByText('Inbox')).not.toBeInTheDocument()
   })
 })

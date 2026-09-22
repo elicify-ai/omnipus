@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
 import { Folder, File, CaretDown, CaretUp } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
@@ -94,14 +95,17 @@ function FileTreeBlock({
     // slot is the status dot/spinner only, like the other rows); each tree
     // entry below keeps its own Folder/File icon and indentation — that's
     // the file tree's identity, preserved per the flat-redesign spec.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header */}
-      <button tabIndex={0}
-        type="button"
+      <Button variant="ghost" tabIndex={0}
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
-          'flex w-full items-center gap-2 py-1 transition-colors text-left',
-          !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
+          // rounded-none: Button's base variant adds rounded-md, but this
+          // header is a flat text-line row (no card frame) — see the
+          // module doc comment above. tailwind-merge (cn) drops the base
+          // rounded-md in favor of this, since className is merged last.
+          'h-auto flex w-full items-center justify-start whitespace-normal px-0 gap-[var(--space-2)] py-[var(--space-1)] transition-colors text-left rounded-none',
+          !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
           isRunning && 'cursor-default'
         )}
         aria-expanded={!isRunning ? expanded : undefined}
@@ -109,24 +113,27 @@ function FileTreeBlock({
       >
         {statusConfig.indicator}
         <span className="font-mono text-[var(--color-secondary)] truncate flex-1 min-w-0">{path}</span>
-        <span className="flex items-center gap-1.5 text-[var(--color-muted)] shrink-0">
-          <span className={cn(statusConfig.textClass)}>{countOrStatusLabel}</span>
+        <span className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] shrink-0">
+          <span className={cn()}>{countOrStatusLabel}</span>
           {!isRunning && (
-            <span className="ml-1">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
+            <span className="ml-[var(--space-1)]">{expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}</span>
           )}
         </span>
-      </button>
+      </Button>
 
       {/* Tree panel — left-accent block, no bordered card. Entries keep their
           Folder/File icons and paddingLeft-based indentation unchanged. */}
       {expanded && !isRunning && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-1 pl-3 space-y-0.5">
+        <div
+          data-testid="file-tree-panel"
+          className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] max-h-64 overflow-auto py-[var(--space-1)] pl-[var(--space-2-5)] space-y-[var(--space-0-5)]"
+        >
           {entries.length > 0 ? (
             entries.map((entry, i) => (
               <div
                 key={i}
-                className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--color-secondary)]"
-                style={{ paddingLeft: `${entry.indent * 12}px` }}
+                className="flex items-center gap-[var(--space-1)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
+                style={{ paddingLeft: `calc(var(--space-2-5) * ${entry.indent})` }}
               >
                 {entry.isDir
                   ? <Folder size={11} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
@@ -136,7 +143,7 @@ function FileTreeBlock({
               </div>
             ))
           ) : (
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all">
+            <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all">
               {content}
             </pre>
           )}

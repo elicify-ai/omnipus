@@ -105,6 +105,7 @@ import { KbAudioEmbedMount } from './KbAudioEmbedMount'
 import { KbVideoEmbedMount } from './KbVideoEmbedMount'
 import { KbPdfPageEmbedMount } from './KbPdfPageEmbedMount'
 import { KbQueryFenceEmbed } from './KbQueryFenceEmbed'
+import { Button } from '@/components/ui/button'
 
 type RemarkPlugins = ComponentProps<typeof ReactMarkdown>['remarkPlugins']
 
@@ -1300,15 +1301,14 @@ function CollectionLink({
   }
 
   return (
-    <button
-      type="button"
-      tabIndex={0}
+    <Button
+      variant="link"
       {...shared}
-      className={`inline text-left align-baseline ${className}`}
+      className={`inline h-auto rounded-none p-0 align-baseline text-[length:inherit] font-[var(--font-weight-regular)] text-left ${verified ? '' : 'hover:no-underline'} ${className}`}
       onClick={() => ctx.onNavigate?.(path, heading)}
     >
       {body}
-    </button>
+    </Button>
   )
 }
 
@@ -1318,7 +1318,7 @@ function CollectionLink({
 function EmbedBadge({ reason }: { reason?: string }) {
   return (
     <>
-      <span className="ml-1 text-[10px] uppercase tracking-wide text-[var(--color-muted)]">
+      <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]">
         embed shown as a link
       </span>
       {reason ? (
@@ -1328,7 +1328,7 @@ function EmbedBadge({ reason }: { reason?: string }) {
         <span
           data-testid="kb-embed-link-reason"
           title={reason}
-          className="ml-1 text-[10px] tracking-wide text-[var(--color-muted)]"
+          className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] tracking-wide text-[var(--color-muted)]"
         >
           ({reason})
         </span>
@@ -1582,9 +1582,9 @@ function EmbedFallback({
 // LazyEmbedMount's own tests, not re-implemented per kind here.
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Matches INLINE_PREVIEW_BOX_CLASS's 28rem (libraryPreviewVariant.ts) — the
-// height BasePreview's own inline box settles to, so mounting causes no
-// reflow at all, not merely "one accepted reflow" (EMB-066).
+// Matches the `h-[28rem]` BasePreview.tsx's own inline box settles to, so
+// mounting causes no reflow at all, not merely "one accepted reflow"
+// (EMB-066).
 const BASE_EMBED_RESERVED_HEIGHT_PX = 448
 // EMB-066's own words: "a transclusion's reserved height is a fixed three
 // lines" — three lines at this reader's body line-height.
@@ -1640,7 +1640,7 @@ function KbBaseEmbedMount({
   // actual work lives in KbBaseEmbedContent, mounted only as LazyEmbedMount's
   // children; this outer component's only job is deciding WHEN.
   return (
-    <LazyEmbedMount reservedHeight={BASE_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+    <LazyEmbedMount reservedHeight={BASE_EMBED_RESERVED_HEIGHT_PX} className="my-[var(--space-2-5)] block">
       <KbBaseEmbedContent workspaceId={workspaceId} workspacePath={workspacePath} viewFragment={viewFragment} />
     </LazyEmbedMount>
   )
@@ -1713,14 +1713,14 @@ function KbBaseEmbedContent({
       return (
         <div
           data-testid="kb-base-embed-unloadable-views"
-          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           {count === 1
             ? `The one view imported from ${entry.name} could not be loaded, so this embed cannot be checked against it.`
             : `All ${count} views imported from ${entry.name} could not be loaded, so this embed cannot be checked against them.`}
           {/* UAT D-70: the reason, not only the count. */}
           {(viewsQuery.data.unloadable ?? []).map((u, i) => (
-            <span key={`${u.code}-${i}`} className="block pl-2" data-testid="kb-base-embed-unloadable-entry">
+            <span key={`${u.code}-${i}`} className="block pl-[var(--space-2)]" data-testid="kb-base-embed-unloadable-entry">
               {u.name ?? u.paths.join(', ')} — {u.reason}
             </span>
           ))}
@@ -1738,7 +1738,7 @@ function KbBaseEmbedContent({
       return (
         <div
           data-testid="kb-base-embed-view-load-failed"
-          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+          className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           "{unloadableMatch.name ?? viewFragment}" is declared in {entry.name} but could not be loaded:{' '}
           {unloadableMatch.reason}
@@ -1750,7 +1750,7 @@ function KbBaseEmbedContent({
     return (
       <div
         data-testid="kb-base-embed-missing-view"
-        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
         {viewFragment ? `No view named "${viewFragment}" in ${entry.name}.` : `${entry.name} declares no views.`}
         {labels.length > 0 && <> Views that do exist: {labels.join(', ')}.</>}
@@ -1762,7 +1762,7 @@ function KbBaseEmbedContent({
     return (
       <div
         data-testid="kb-base-embed-ambiguous-view"
-        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-3 text-xs text-[var(--color-warning)]"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
         The view label "{match.label}" matches more than one view in {entry.name} — rename one to make this
         embed unambiguous. Matches: {match.matches.map((v) => v.name).join(', ')}.
@@ -1818,7 +1818,7 @@ function KbImageEmbedMount({
   // EMB-065: as with every other embed, no fetch starts until this is near
   // the viewport.
   return (
-    <LazyEmbedMount reservedHeight={IMAGE_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+    <LazyEmbedMount reservedHeight={IMAGE_EMBED_RESERVED_HEIGHT_PX} className="my-[var(--space-2-5)] block">
       <KbImageEmbedContent workspaceId={workspaceId} workspacePath={workspacePath} width={width} />
     </LazyEmbedMount>
   )
@@ -1882,7 +1882,7 @@ function KbTransclusionMount({
   // EMB-065: the content fetch itself does not start until the embed is near
   // the viewport — see KbBaseEmbedMount's identical note above.
   return (
-    <LazyEmbedMount reservedHeight={TRANSCLUSION_RESERVED_HEIGHT_PX} className="my-3 block">
+    <LazyEmbedMount reservedHeight={TRANSCLUSION_RESERVED_HEIGHT_PX} className="my-[var(--space-2-5)] block">
       <KbTransclusionContent
         workspaceId={workspaceId}
         workspacePath={workspacePath}
@@ -1932,7 +1932,7 @@ function KbTransclusionContent({
     return (
       <div
         data-testid="kb-transclusion-empty"
-        className="rounded-md border border-dashed border-[var(--color-border)] px-3 py-4 text-xs text-[var(--color-muted)]"
+        className="rounded-md border border-dashed border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-3)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       >
         This note is empty.
       </div>
@@ -1943,7 +1943,7 @@ function KbTransclusionContent({
     return (
       <div
         data-testid="kb-transclusion-not-found"
-        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-4 text-xs text-[var(--color-warning)]"
+        className="rounded-md border border-dashed border-[var(--color-warning)]/50 px-[var(--space-2-5)] py-[var(--space-3)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
       >
         {block
           ? `No block anchored "${block}" was found in this note.`
@@ -1955,7 +1955,7 @@ function KbTransclusionContent({
   return (
     <div
       data-testid="kb-transclusion"
-      className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]/40 px-4 py-3"
+      className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]/40 px-[var(--space-3)] py-[var(--space-2-5)]"
     >
       <KnowledgeBaseMarkdown
         content={sliced.text}
@@ -2201,7 +2201,7 @@ function KnowledgeMarkdownLink(
     // the plain link the author wrote instead of a refused-video box.
     if (isVideoEmbedDestination(raw)) {
       return (
-        <LazyEmbedMount reservedHeight={360} className="my-3 block">
+        <LazyEmbedMount reservedHeight={360} className="my-[var(--space-2-5)] block">
           <VideoEmbed
             url={raw}
             title={codeText(children) || undefined}
@@ -2282,7 +2282,7 @@ function KnowledgeMarkdownCode(props: { children?: ReactNode; className?: string
         <InheritedCode {...props} />
         <p
           data-testid="kb-query-fence-inert-reason"
-          className="mt-1 text-[11px] text-[var(--color-muted)]"
+          className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
         >
           {ctx.nestedTransclusion === true
             ? 'This query is shown as text — a query inside a transcluded note is not run. Open the note itself to see its results.'

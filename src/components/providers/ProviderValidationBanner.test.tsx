@@ -36,7 +36,7 @@ describe('ProviderValidationBanner', () => {
 
   // ── Banner presence ───────────────────────────────────────────────────────
 
-  it('renders an amber banner for no_credit', () => {
+  it('renders a warning banner for no_credit', () => {
     const v: ProviderValidation = {
       outcome: 'no_credit',
       message: 'Your key works, but the account has no credit.',
@@ -45,13 +45,13 @@ describe('ProviderValidationBanner', () => {
     const banner = screen.getByTestId('provider-validation-banner')
     expect(banner).toBeInTheDocument()
     expect(banner).toHaveAttribute('data-outcome', 'no_credit')
-    // Amber styling check — border and bg applied
-    expect(banner.className).toContain('amber')
+    // Warning styling check — border and bg applied
+    expect(banner.className).toContain('warning')
     // Message from server is shown
     expect(screen.getByText('Your key works, but the account has no credit.')).toBeInTheDocument()
   })
 
-  it('renders an amber banner for unreachable', () => {
+  it('renders a warning banner for unreachable', () => {
     const v: ProviderValidation = {
       outcome: 'unreachable',
       message: "Couldn't reach OpenRouter to check the key.",
@@ -62,7 +62,7 @@ describe('ProviderValidationBanner', () => {
     expect(screen.getByText("Couldn't reach OpenRouter to check the key.")).toBeInTheDocument()
   })
 
-  it('renders an amber banner for restricted', () => {
+  it('renders a warning banner for restricted', () => {
     const v: ProviderValidation = {
       outcome: 'restricted',
       message: 'The request was blocked in your region.',

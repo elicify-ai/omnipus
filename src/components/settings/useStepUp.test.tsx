@@ -15,8 +15,9 @@
 
 import { useState } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { Button } from '@/components/ui/button'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -54,7 +55,7 @@ function Harness({ run }: { run: (token?: string) => Promise<string> }) {
       <div data-testid="mode">{stepUp.mode}</div>
       {result && <div data-testid="result">{result}</div>}
       {errored && <div data-testid="errored">errored</div>}
-      <button
+      <Button
         type="button"
         data-testid="trigger"
         onClick={() => {
@@ -65,7 +66,7 @@ function Harness({ run }: { run: (token?: string) => Promise<string> }) {
         }}
       >
         Trigger
-      </button>
+      </Button>
       {stepUp.dialogs}
     </div>
   )
@@ -153,11 +154,11 @@ describe('useStepUp', () => {
 
     fireEvent.click(screen.getByTestId('trigger'))
 
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Change the thing?')
     expect(run).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByTestId('confirm-accept'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Change it' }))
 
     await waitFor(() => {
       expect(run).toHaveBeenCalledTimes(1)

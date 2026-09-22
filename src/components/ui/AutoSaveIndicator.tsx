@@ -1,5 +1,6 @@
 import { Check, CircleNotch, Warning, ArrowsClockwise } from '@phosphor-icons/react'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
+import { clsx } from 'clsx'
 
 interface AutoSaveIndicatorProps {
   status: AutoSaveStatus
@@ -45,9 +46,7 @@ export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }
 
   return (
     <span
-      className={`inline-flex items-center gap-1 text-[10px] transition-opacity duration-300 ${
-        status === 'saved' ? 'opacity-60' : status === 'idle' ? 'opacity-0' : 'opacity-100'
-      } ${className}`}
+      className={clsx("inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] transition-opacity duration-300", status === 'saved' ? 'opacity-60' : status === 'idle' ? 'opacity-0' : 'opacity-100', className)}
       aria-live={isError || isConflict ? undefined : 'polite'}
       role={isError || isConflict ? 'alert' : undefined}
     >
@@ -59,8 +58,8 @@ export function AutoSaveIndicator({ status, error, className = '', lastSavedAt }
       )}
       {status === 'saved' && (
         <>
-          <Check size={11} weight="bold" className="text-emerald-400" />
-          <span className="text-emerald-400">
+          <Check size={11} weight="bold" className="text-[var(--color-success)]" />
+          <span className="text-[var(--color-success)]">
             {lastSavedAt ? formatSavedAt(lastSavedAt) : 'Saved'}
           </span>
         </>

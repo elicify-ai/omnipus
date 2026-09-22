@@ -79,6 +79,7 @@ import {
 } from './KnowledgeBacklinks'
 import { WIKILINK_RE, type EmbedResolution, type KbLinkResolution } from '../preview/knowledgeMarkdown'
 import { libraryEntryExt } from '../preview/libraryPreviewKind'
+import { Button } from '@/components/ui/button'
 
 /**
  * The note's ancestor folders, DEEPEST FIRST, ending with the work-tree root
@@ -701,17 +702,16 @@ export function KnowledgeNoteView({
       {graphAnswerIssue ? (
         <div
           data-testid="knowledge-graph-unavailable"
-          className="mb-3 flex items-center justify-between gap-3 rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2 text-xs leading-snug text-[var(--color-warning)]"
+          className="mb-[var(--space-2-5)] flex items-center justify-between gap-[var(--space-2-5)] rounded border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
         >
           <span>{graphAnswerIssue.message}</span>
-          <button
-            tabIndex={0}
-            type="button"
+          <Button
+            variant="outline"
             onClick={() => void linksQuery.refetch()}
-            className="shrink-0 rounded border border-current px-2 py-1 text-[10px] uppercase tracking-wide hover:opacity-80"
+            className="h-auto shrink-0 rounded border-current px-[var(--space-2)] py-[var(--space-1)] text-[color:inherit] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] uppercase tracking-wide hover:bg-transparent hover:opacity-80"
           >
             Retry
-          </button>
+          </Button>
         </div>
       ) : null}
       {/* EMB-071. ADR-083's N3 dropped print support, and this notice is the
@@ -757,7 +757,7 @@ export function KnowledgeNoteView({
               // rendering.
               <p
                 data-testid="knowledge-backlinks-unavailable"
-                className="px-3 py-2 text-xs leading-snug text-[var(--color-warning)]"
+                className="px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]"
               >
                 Linked mentions are unavailable for this note: Omnipus could not identify which
                 folder this collection starts at, so it cannot ask which notes link here.

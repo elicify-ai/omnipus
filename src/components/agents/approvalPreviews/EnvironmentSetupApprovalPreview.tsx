@@ -216,11 +216,11 @@ export function EnvironmentSetupApprovalPreview({ args, sessionId }: ToolApprova
   // on a poll/read/kill call just as on an install.
   const fidelityBlock = fullySummarized ? null : (
     <div>
-      <p className="text-xs text-[var(--color-warning)] mb-1 flex items-center gap-1">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] mb-[var(--space-1)] flex items-center gap-[var(--space-1)]">
         <WarningCircle size={13} weight="bold" aria-hidden="true" />
         Some details of this request are not summarized above
       </p>
-      <pre className="text-xs font-mono bg-[var(--color-surface-2)] rounded-lg px-3 py-2 overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
+      <pre className="text-[length:var(--type-utility-xs-size)] font-mono bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] overflow-auto max-h-40 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
         {argsJson}
       </pre>
     </div>
@@ -229,17 +229,17 @@ export function EnvironmentSetupApprovalPreview({ args, sessionId }: ToolApprova
   // ── poll/read/kill: session management, not a new install ────────────────
   if (isSessionAction(rawAction) && knownAction) {
     return (
-      <div className="px-5 py-4 space-y-4">
+      <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-3)]">
         <div>
-          <p className="text-xs text-[var(--color-muted)] mb-1">Action</p>
-          <p className="text-sm text-[var(--color-secondary)]">{sessionActionDescription(rawAction)}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Action</p>
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{sessionActionDescription(rawAction)}</p>
         </div>
         <div>
-          <p className="text-xs text-[var(--color-muted)] mb-1">Session</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Session</p>
           {sessionIdArg !== '' ? (
-            <p className="font-mono text-sm text-[var(--color-secondary)] break-all">{sessionIdArg}</p>
+            <p className="font-mono text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] break-all">{sessionIdArg}</p>
           ) : (
-            <p className="text-sm text-[var(--color-error)]">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
               No session was included with this request.
             </p>
           )}
@@ -260,16 +260,16 @@ export function EnvironmentSetupApprovalPreview({ args, sessionId }: ToolApprova
   const workspaceLabel = resolveWorkspaceLabel(args, sessionId)
 
   return (
-    <div className="px-5 py-4 space-y-4">
+    <div className="px-[var(--space-3)] py-[var(--space-3)] space-y-[var(--space-3)]">
       <div>
-        <p className="text-xs text-[var(--color-muted)] mb-1 flex items-center gap-1">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)] flex items-center gap-[var(--space-1)]">
           <Terminal size={13} aria-hidden="true" />
           Command
         </p>
         {command !== '' ? (
           <pre
             data-testid="environment-setup-command"
-            className="font-mono text-xs bg-[var(--color-surface-2)] rounded-lg px-3 py-2 whitespace-pre-wrap break-all text-[var(--color-secondary)]"
+            className="font-mono text-[length:var(--type-utility-xs-size)] bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] whitespace-pre-wrap break-all text-[var(--color-secondary)]"
           >
             {preview.envPrefix && (
               <span className="text-[var(--color-muted)]">{preview.envPrefix} </span>
@@ -278,42 +278,42 @@ export function EnvironmentSetupApprovalPreview({ args, sessionId }: ToolApprova
             <span>{preview.args}</span>
           </pre>
         ) : (
-          <p className="text-sm text-[var(--color-error)]">
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
             No installation command was included with this request.
           </p>
         )}
       </div>
 
       <div>
-        <p className="text-xs text-[var(--color-muted)] mb-1">Why</p>
-        <p className="text-sm text-[var(--color-secondary)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Why</p>
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           {purpose !== '' ? purpose : 'No reason was given.'}
         </p>
       </div>
 
       <div>
-        <p className="text-xs text-[var(--color-muted)] mb-1">Workspace</p>
-        <p className="font-mono text-sm font-medium text-[var(--color-secondary)] break-all">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Workspace</p>
+        <p className="font-mono text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] break-all">
           {workspaceLabel}
         </p>
       </div>
 
       <div>
-        <p className="text-xs text-[var(--color-muted)] mb-1">Scope</p>
-        <p className="text-sm text-[var(--color-secondary)]">{scope === 'shared' ? 'Shared' : 'This workspace'}</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Scope</p>
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{scope === 'shared' ? 'Shared' : 'This workspace'}</p>
       </div>
 
       {timeoutSeconds !== null && (
         <div>
-          <p className="text-xs text-[var(--color-muted)] mb-1">Timeout</p>
-          <p className="text-sm font-mono text-[var(--color-secondary)]">{formatTimeout(timeoutSeconds)}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Timeout</p>
+          <p className="text-[length:var(--type-body-compact-size)] font-mono text-[var(--color-secondary)]">{formatTimeout(timeoutSeconds)}</p>
         </div>
       )}
 
       {fidelityBlock}
 
       {scope === 'shared' && (
-        <p className="text-xs text-[var(--color-warning)] pt-3 border-t border-[var(--color-border)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] pt-[var(--space-2-5)] border-t border-[var(--color-border)]">
           Shared components are installed once by Omnipus, kept outside the workspace, and stay
           available to every agent.
         </p>

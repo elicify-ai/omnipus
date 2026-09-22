@@ -1,5 +1,5 @@
 import { browserInputProtocol, encodeBrowserInput } from './browserInputCodec'
-import { iceServersWithDefaults } from './browserWebRTC'
+import { DEFAULT_ICE_GATHERING_TIMEOUT_MS, iceServersWithDefaults, waitForIceGatheringComplete } from './browserWebRTC'
 import type { BrowserInputFrame, BrowserInputOfferFrame, BrowserInputAnswerFrame, BrowserInputStateFrame, BrowserInputControlAckFrame } from '@/lib/api/generated/asyncapi-types'
 
 type Input = Omit<BrowserInputFrame, 'type'>
@@ -14,6 +14,16 @@ interface Options { // not-wire-format: local dependency injection and lifecycle
   onFailure?: () => boolean
   automaticRecoveryIdentity?: (ack?: BrowserInputControlAckFrame) => string | null
   onAutomaticRecovery?: () => void
+  /** ms to wait for `RTCPeerConnection.iceGatheringState` to reach 'complete'
+   * before sending the offer with whatever candidates have gathered so far.
+   * Defaults to the same bound as the media path
+   * (`DEFAULT_ICE_GATHERING_TIMEOUT_MS` in browserWebRTC.ts). Bounded because
+   * ICE gathering can stall indefinitely (e.g. STUN/mDNS candidate loss),
+   * which would otherwise leave `offer()` waiting forever and no
+   * `browser_input_offer` frame ever sent, well inside the outer 30s
+   * `armTimeout` that would otherwise be the only thing to fail the
+   * attempt. */
+  iceGatheringTimeoutMs?: number
 }
 
 /** Data-only peer owned by one socket attachment. Failed actions are never replayed. */
@@ -112,13 +122,10 @@ export class BrowserInputWebRTCSession {
       if (this.pc !== pc || this.epoch !== epoch) return
       await pc.setLocalDescription(offer)
       if (this.pc !== pc || this.epoch !== epoch) return
-      if (pc.iceGatheringState !== 'complete') await new Promise<void>((resolve) => {
-        const done = () => { pc.removeEventListener('icegatheringstatechange', changed); this.cancelGather = null; resolve() }
-        const changed = () => { if (pc.iceGatheringState === 'complete') done() }
-        this.cancelGather = done
-        pc.addEventListener('icegatheringstatechange', changed)
-        changed()
-      })
+      const gathering = waitForIceGatheringComplete(pc, this.options.iceGatheringTimeoutMs ?? DEFAULT_ICE_GATHERING_TIMEOUT_MS)
+      this.cancelGather = gathering.cancel
+      await gathering.promise
+      this.cancelGather = null
       if (this.pc !== pc || this.epoch !== epoch) return
       if (!pc.localDescription?.sdp || !this.options.sendOffer({ sdp: pc.localDescription.sdp, offer_id: epoch, input_epoch: epoch, control_epoch: this.offeredControl })) {
         this.fail('Input offer was not sent. Retry input.')
@@ -291,6 +298,7 @@ export class BrowserInputWebRTCSession {
     const pc = this.pc
     this.pc = null
     this.cancelGather?.()
+    this.cancelGather = null
     this.clearTimer()
     this.reliable?.close(); this.hover?.close(); pc?.close()
     this.reliable = this.hover = null

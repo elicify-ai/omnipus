@@ -98,6 +98,11 @@ export function LibrarySignaturePad({
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
     ctx.lineWidth = STROKE_WIDTH_CSS_PX
+    // No fitting design-system colour token: `--color-primary` (Deep Space
+    // Black, #0A0A0B) is the nearest by meaning but is not byte-identical to
+    // this ink colour, and a canvas `strokeStyle` needs a real CSS <color>
+    // value it can parse, not a `var(--token)` reference. Reported to the
+    // token lane — see LibraryPdfPreview.tsx's identical ink colour.
     ctx.strokeStyle = '#111111'
   }
 
@@ -177,7 +182,7 @@ export function LibrarySignaturePad({
             if (node) configureCanvas(node)
           }}
           style={{ width: SIGNATURE_PAD_WIDTH, height: SIGNATURE_PAD_HEIGHT, touchAction: 'none' }}
-          className="mx-auto cursor-crosshair rounded-md border border-[var(--color-border)] bg-white"
+          className="mx-auto cursor-crosshair rounded-md border border-[var(--color-border)] bg-[var(--color-surface-paper)]"
           data-testid="library-pdf-signature-canvas"
           role="img"
           aria-label="Signature drawing area"
@@ -187,8 +192,8 @@ export function LibrarySignaturePad({
           onPointerCancel={endStroke}
         />
 
-        <div className="flex items-center gap-3">
-          <Label htmlFor="library-pdf-signature-page" className="shrink-0 text-xs">
+        <div className="flex items-center gap-[var(--space-2-5)]">
+          <Label htmlFor="library-pdf-signature-page" className="shrink-0">
             Place on page
           </Label>
           <Input
@@ -201,7 +206,7 @@ export function LibrarySignaturePad({
             onChange={(e) => handlePageNumberChange(e.target.value)}
             className="h-8 w-20"
           />
-          <span className="text-xs text-[var(--color-muted)]">of {clampedPageCount}</span>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">of {clampedPageCount}</span>
         </div>
 
         <DialogFooter>

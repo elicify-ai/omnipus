@@ -60,6 +60,8 @@ import {
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   Dialog,
   DialogContent,
@@ -180,13 +182,15 @@ export interface LibrarySearchBarProps {
    *  addresses a container, so opening it as a file would select a directory
    *  in the preview pane instead of browsing it.
    *
-   *  Returns whether navigation actually happened. Finding S1: the caller
-   *  (LibraryExplorer) gates real navigation behind
+   *  Returns whether navigation actually happened — synchronously, or as a
+   *  Promise (confirmDiscardLibraryEdits() is async: the discard-unsaved-
+   *  edits dialog it opens can't return an answer synchronously). Finding
+   *  S1: the caller (LibraryExplorer) gates real navigation behind
    *  confirmDiscardLibraryEdits(), which the user can decline (an unsaved-
    *  edits "Cancel"). A caller that declined must report `false` so this bar
    *  knows NOT to clear the query and its results — a user who cancelled to
    *  avoid losing unsaved work must not lose their search instead. */
-  onOpenFolder?: (workspacePath: string) => boolean
+  onOpenFolder?: (workspacePath: string) => boolean | Promise<boolean>
   /** The file list to show while no query is active. Replaced entirely by
    *  grouped results while one is (library-b-c-design-2026-09-07 §C1). */
   children: ReactNode
@@ -209,7 +213,7 @@ function countBadge(n: number, more = false) {
   return (
     <Badge
       variant="secondary"
-      className="ml-1.5 px-1.5 py-0 text-[10px] leading-4"
+      className="ml-[var(--space-1)] px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4"
     >
       {n}
       {more ? '+' : ''}
@@ -254,13 +258,13 @@ function CoverageChips({ coverage }: { coverage: { term: string; found: boolean 
   if (coverage.length === 0) return null
   const foundCount = coverage.filter((c) => c.found).length
   return (
-    <span data-testid="vault-search-coverage" className="flex flex-wrap items-center gap-1">
+    <span data-testid="vault-search-coverage" className="flex flex-wrap items-center gap-[var(--space-1)]">
       {coverage.map((c) => (
         <span
           key={c.term}
           data-testid={c.found ? 'vault-search-coverage-hit' : 'vault-search-coverage-miss'}
           className={cn(
-            'rounded-sm px-1 py-0 text-[10px] leading-4',
+            'rounded-sm px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4',
             c.found
               ? 'bg-[var(--color-accent)]/15 text-[var(--color-accent)]'
               : 'text-[var(--color-muted)] line-through opacity-60',
@@ -269,7 +273,7 @@ function CoverageChips({ coverage }: { coverage: { term: string; found: boolean 
           {c.term}
         </span>
       ))}
-      <span className="text-[10px] text-[var(--color-muted)]">
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
         {foundCount} of {coverage.length}
       </span>
     </span>
@@ -280,18 +284,17 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
   const coverage = vaultCoverage(query, hit)
   return (
     <li>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-note-hit"
-        className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center gap-1.5 text-sm text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <FileText size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {highlightQuery(hit.title || hit.path, query)}
         </span>
-        <span className="text-[11px] text-[var(--color-muted)]">{hit.path}</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.path}</span>
         <CoverageChips coverage={coverage} />
         {/* US-1 AS-4 (honesty port): a hit whose excerpt cannot be produced is
             still rendered — title and path, plus an explicit marker — never
@@ -300,18 +303,18 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
             (MV-9, recorded R2-MIN-010): the find path cannot attribute the old
             re-read reasons, so this says only what it knows. */}
         {hit.snippet !== undefined ? (
-          <span className="text-xs leading-snug text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
             {highlightQuery(stripWikilinkNotation(hit.snippet), query)}
           </span>
         ) : hit.excerpt_unavailable === true ? (
           <span
             data-testid="vault-search-excerpt-unavailable"
-            className="text-xs italic leading-snug text-[var(--color-muted)]"
+            className="text-[length:var(--type-utility-xs-size)] italic leading-snug text-[var(--color-muted)]"
           >
             No excerpt available for this note.
           </span>
         ) : null}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -319,22 +322,21 @@ function NoteRow({ hit, query, onOpen }: { hit: VaultSearchNoteHit; query: strin
 function AttachmentRow({ hit, onOpen }: { hit: VaultSearchAttachmentHit; onOpen: () => void }) {
   return (
     <li>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-attachment-hit"
-        className="flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center gap-1.5 text-sm text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <Paperclip size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {hit.name}
         </span>
-        <span className="text-[11px] text-[var(--color-muted)]">{hit.path}</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.path}</span>
         {/* FR-039a: an attachment's contents are never read, by design — the
             match is on its filename alone, so there is never an excerpt to
             show and never a "could not be read" implication either. */}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -379,28 +381,27 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
   const withheldCount = hit.cells.length - shownCells.length
   return (
     <li className="flex flex-col">
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-record-hit"
-        className="flex w-full flex-col items-start gap-1 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full flex-col items-start gap-[var(--space-1)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
-        <span className="flex items-center gap-1.5 text-sm text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           <IdentificationCard size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           {hit.title || hit.path}
           {hit.record_type !== undefined && (
-            <Badge variant="outline" className="px-1.5 py-0 text-[10px] leading-4">
+            <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
               {hit.record_type}
             </Badge>
           )}
           {hit.id !== undefined && (
-            <span className="font-mono text-[10px] text-[var(--color-muted)]">{hit.id}</span>
+            <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.id}</span>
           )}
         </span>
-        <span className="text-[11px] text-[var(--color-muted)]">{hit.path}</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{hit.path}</span>
         {hit.cells.length > 0 && (
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs leading-snug text-[var(--color-muted)]">
+          <span className="flex flex-wrap items-center gap-x-[var(--space-2-5)] gap-y-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
             {shownCells.map((cell) => (
               <span key={cell.property}>
                 <span className="text-[var(--color-muted)]/70">{cell.property}:</span>{' '}
@@ -409,18 +410,17 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
             ))}
           </span>
         )}
-      </button>
+      </Button>
       {(withheldCount > 0 || expanded) && (
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="ghost"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
           data-testid="vault-search-record-cells-more"
-          className="self-start rounded px-2 pb-1 text-[10px] leading-4 text-[var(--color-muted)] underline-offset-2 hover:underline"
+          className="h-auto self-start rounded px-[var(--space-2)] pb-[var(--space-1)] pt-0 text-[length:var(--type-caption-size)] leading-4 font-[var(--font-weight-regular)] text-[var(--color-muted)] underline-offset-2 hover:bg-transparent hover:underline"
         >
           {expanded ? 'Show fewer properties' : `+${withheldCount} more ${withheldCount === 1 ? 'property' : 'properties'}`}
-        </button>
+        </Button>
       )}
     </li>
   )
@@ -429,26 +429,25 @@ function RecordRow({ hit, query, onOpen }: { hit: VaultSearchRecordHit; query: s
 function ViewRow({ hit, onOpen }: { hit: VaultSearchViewHit; onOpen: () => void }) {
   return (
     <li>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         onClick={onOpen}
         data-testid="vault-search-view-hit"
-        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+        className="h-auto w-full items-center gap-[var(--space-1)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
       >
         <SquaresFour size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
-        <span className="flex-1 text-sm text-[var(--color-secondary)]">{hit.label}</span>
+        <span className="flex-1 text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{hit.label}</span>
         {hit.type !== undefined && (
-          <Badge variant="outline" className="px-1.5 py-0 text-[10px] leading-4">
+          <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
             {hit.type}
           </Badge>
         )}
         {hit.kind !== undefined && (
-          <Badge variant="muted" className="px-1.5 py-0 text-[10px] leading-4">
+          <Badge variant="muted" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
             {hit.kind}
           </Badge>
         )}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -517,19 +516,19 @@ function FileHitRow({
   const matchCount = hit.match_count
   return (
     <li>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
         tabIndex={interactive ? 0 : -1}
         onClick={interactive ? onOpen : undefined}
         disabled={!interactive}
         aria-disabled={!interactive || undefined}
         data-testid={isContent ? 'file-search-content-hit' : 'file-search-name-hit'}
         className={cn(
-          'flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors',
-          interactive ? 'hover:bg-[var(--color-surface-2)]' : 'cursor-default opacity-70',
+          'h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] disabled:opacity-70',
+          interactive ? 'hover:bg-[var(--color-surface-2)]' : 'cursor-default hover:bg-transparent',
         )}
       >
-        <span className="flex items-center gap-1.5 text-sm text-[var(--color-secondary)]">
+        <span className="flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
           {isDir ? (
             <FolderSimple size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
           ) : isContent ? (
@@ -539,20 +538,20 @@ function FileHitRow({
           )}
           {highlightQuery(hit.path, query)}
           {isContent && hit.line !== undefined && (
-            <span className="font-mono text-[10px] text-[var(--color-muted)]">:{hit.line}</span>
+            <span className="font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">:{hit.line}</span>
           )}
           {matchCount !== undefined && matchCount > 1 && (
             <Badge
               variant="secondary"
               data-testid="file-search-match-count"
-              className="px-1.5 py-0 text-[10px] leading-4"
+              className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4"
             >
               {matchCount} matches
             </Badge>
           )}
         </span>
         {isContent && (
-          <div className="w-full font-mono text-xs leading-snug text-[var(--color-muted)]">
+          <div className="w-full font-mono text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
             {hit.context_before?.map((line, i) => (
               <p key={`before-${i}`} className="truncate opacity-60">
                 {highlightQuery(line, query)}
@@ -568,7 +567,7 @@ function FileHitRow({
             ))}
           </div>
         )}
-      </button>
+      </Button>
     </li>
   )
 }
@@ -607,7 +606,7 @@ function FileSearchStatsFooter({ stats }: { stats: FileSearchResponse['stats'] }
   }
   if (parts.length === 0) return null
   return (
-    <p data-testid="library-search-files-stats" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+    <p data-testid="library-search-files-stats" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
       {parts.join(' · ')}.
     </p>
   )
@@ -780,13 +779,18 @@ export function LibrarySearchBar({
   // useFileSearch simply re-ran the SAME query scoped to the new
   // folderPath — a click on a folder produced ANOTHER result list, never
   // the folder itself.
-  function openFolder(path: string) {
+  async function openFolder(path: string) {
     // Finding S1: clearing unconditionally (before we know whether the
     // caller actually navigated) wiped the query even when the caller
     // declined — e.g. LibraryExplorer's onOpenFolder gates on
     // confirmDiscardLibraryEdits() and the user hit "Cancel" on that prompt.
     // Only clear once onOpenFolder itself reports navigation happened.
-    const navigated = onOpenFolder?.(path) ?? false
+    //
+    // `await` here is load-bearing, not decorative: onOpenFolder can return
+    // a Promise (LibraryExplorer's does), and a raw, un-awaited Promise
+    // object is itself truthy — `if (onOpenFolder?.(path))` would clear the
+    // query immediately regardless of what the user actually answers.
+    const navigated = await (onOpenFolder?.(path) ?? false)
     if (navigated) setText('')
   }
 
@@ -840,7 +844,7 @@ export function LibrarySearchBar({
   const hasCompleteStatement = response?.complete === true && response.statement !== undefined
 
   return (
-    <div data-testid="library-search-bar" className={cn('flex flex-col gap-2', className)}>
+    <div data-testid="library-search-bar" className={cn('flex flex-col gap-[var(--space-2)]', className)}>
       <div className="relative">
         <MagnifyingGlass
           size={14}
@@ -859,24 +863,22 @@ export function LibrarySearchBar({
           placeholder={placeholder}
           aria-label={ariaLabel}
           data-testid="library-search-input"
-          className="pl-8 pr-8"
+          className="pl-[var(--space-5)] pr-[var(--space-5)]"
         />
         {text !== '' && (
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             onClick={() => setText('')}
             aria-label="Clear search"
             data-testid="library-search-clear"
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:text-[var(--color-secondary)]"
+            className="absolute right-2 top-1/2 h-auto w-auto -translate-y-1/2 rounded p-[var(--space-0-5)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             <X size={14} aria-hidden="true" />
-          </button>
+          </IconButton>
         )}
       </div>
 
       {queryTooLong && (
-        <p role="alert" data-testid="library-search-query-too-long" className="text-xs leading-snug text-[var(--color-error)]">
+        <p role="alert" data-testid="library-search-query-too-long" className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-error)]">
           Search text is limited to {VAULT_SEARCH_QUERY_MAX_CHARS.toLocaleString('en-US')} characters — yours is{' '}
           {queryLength.toLocaleString('en-US')}. Shorten it to search.
         </p>
@@ -885,7 +887,7 @@ export function LibrarySearchBar({
       {(!isActive || disabled) && children}
 
       {isActive && !disabled && (
-        <div data-testid="library-search-active" className="flex flex-col gap-2">
+        <div data-testid="library-search-active" className="flex flex-col gap-[var(--space-2)]">
           {error && (
             <LibraryErrorBanner message={error.message || 'Search failed.'} testId="library-search-error" />
           )}
@@ -896,7 +898,7 @@ export function LibrarySearchBar({
               outside one it matches file and folder names, not note
               contents, and says which folder. */}
           {!error && (isVaultMode || isFilesMode) && (
-            <p data-testid="library-search-mode" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-mode" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
               {isVaultMode
                 ? isInsideCollection
                   ? `Searching the whole knowledge base${collectionDisplayName ? ` “${collectionDisplayName}”` : ''} — this folder is inside it.`
@@ -914,7 +916,7 @@ export function LibrarySearchBar({
               stated beside the counts so the note count is never read as
               covering them. */}
           {!error && isVaultMode && response && counts.all > 0 && (
-            <p data-testid="library-search-results-summary" className="px-2 text-[11px] leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-results-summary" className="px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]">
               {(() => {
                 const kinds = (['notes', 'records', 'views', 'attachments'] as const).filter((k) => counts[k] > 0)
                 const phrases = kinds.map((k) =>
@@ -953,9 +955,9 @@ export function LibrarySearchBar({
             </Tabs>
           )}
 
-          <div role="status" aria-live="polite" className="flex flex-col gap-1 empty:hidden">
+          <div role="status" aria-live="polite" className="flex flex-col gap-[var(--space-1)] empty:hidden">
             {isBusy && (
-              <p data-testid="library-search-busy" className="text-xs text-[var(--color-muted)]">
+              <p data-testid="library-search-busy" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Searching…
               </p>
             )}
@@ -965,10 +967,10 @@ export function LibrarySearchBar({
             <div
               role="status"
               data-testid="library-search-not-ready"
-              className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
             >
-              <Warning size={14} weight="fill" aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
-              <div className="flex-1 text-xs leading-snug text-[var(--color-warning)]">
+              <Warning size={14} weight="fill" aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]" />
+              <div className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
                 <p data-testid="library-search-statement">{bannerStatement}</p>
                 {/* US-1 AS-2 honesty port (FR-036): a ratio is stated only
                     when BOTH a searched count and a known total are in hand;
@@ -1001,7 +1003,7 @@ export function LibrarySearchBar({
               partial). Mirrors the retired KnowledgeSearch's
               knowledge-search-complete-statement (US-1, honesty port). */}
           {!error && isVaultMode && hasCompleteStatement && response && (
-            <p data-testid="library-search-complete-statement" className="text-xs leading-snug text-[var(--color-muted)]">
+            <p data-testid="library-search-complete-statement" className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
               {response.statement}
             </p>
           )}
@@ -1010,10 +1012,10 @@ export function LibrarySearchBar({
             <div
               role="status"
               data-testid="library-search-clamped"
-              className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
             >
-              <Warning size={14} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-muted)]" />
-              <p className="flex-1 text-xs leading-snug text-[var(--color-muted)]">
+              <Warning size={14} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-muted)]" />
+              <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
                 {clamp.requested === undefined
                   ? 'Result count clamped to the server’s maximum.'
                   : `Result count clamped to the server’s maximum — you asked for ${clamp.requested.toLocaleString('en-US')}.`}
@@ -1026,21 +1028,21 @@ export function LibrarySearchBar({
               library-search-complete-statement while complete — so this line
               never needs to repeat it. */}
           {!error && isVaultMode && response && counts.all === 0 && (
-            <p role="status" data-testid="library-search-empty" className="text-xs leading-snug text-[var(--color-muted)]">
+            <p role="status" data-testid="library-search-empty" className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
               No results for “{text.trim()}”.
             </p>
           )}
 
           {!error && isVaultMode && response && counts.all > 0 && (
-            <div data-testid="library-search-results" className="flex flex-col gap-3 overflow-y-auto">
+            <div data-testid="library-search-results" className="flex flex-col gap-[var(--space-2-5)] overflow-y-auto">
               {(filter === 'all' || filter === 'notes') && response.notes.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Notes
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {response.notes.map((hit) => (
                       <NoteRow key={hit.path} hit={hit} query={text.trim()} onOpen={() => openNote(hit.path)} />
                     ))}
@@ -1051,11 +1053,11 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'records') && response.records.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Records
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {response.records.map((hit) => (
                       <RecordRow key={hit.path} hit={hit} query={text.trim()} onOpen={() => openNote(hit.path)} />
                     ))}
@@ -1066,11 +1068,11 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'views') && response.views.length > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Views
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {response.views.map((hit) => (
                       <ViewRow
                         key={hit.view}
@@ -1085,11 +1087,11 @@ export function LibrarySearchBar({
               {(filter === 'all' || filter === 'attachments') && (response.attachments?.length ?? 0) > 0 && (
                 <div>
                   {filter === 'all' && (
-                    <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+                    <p className="px-[var(--space-2)] pb-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
                       Attachments
                     </p>
                   )}
-                  <ul className="flex flex-col gap-1">
+                  <ul className="flex flex-col gap-[var(--space-1)]">
                     {(response.attachments ?? []).map((hit) => (
                       <AttachmentRow key={hit.path} hit={hit} onOpen={() => openNote(hit.path)} />
                     ))}
@@ -1101,7 +1103,7 @@ export function LibrarySearchBar({
                   other kinds still have hits (counts.all > 0) — say so rather
                   than rendering a silently empty panel. */}
               {filter !== 'all' && counts[filter] === 0 && (
-                <p data-testid="library-search-filter-empty" className="px-2 text-xs text-[var(--color-muted)]">
+                <p data-testid="library-search-filter-empty" className="px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                   No {filter} match “{text.trim()}”.
                 </p>
               )}
@@ -1120,15 +1122,15 @@ export function LibrarySearchBar({
                 <div
                   role="status"
                   data-testid="library-search-truncated"
-                  className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-3 py-2"
+                  className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
                 >
                   <Warning
                     size={14}
                     weight="fill"
                     aria-hidden="true"
-                    className="mt-0.5 shrink-0 text-[var(--color-warning)]"
+                    className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]"
                   />
-                  <p className="flex-1 text-xs leading-snug text-[var(--color-warning)]">
+                  <p className="flex-1 text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-warning)]">
                     {/* Finding F-J: the schema states truncated_reason
                         "present exactly when truncated is true" but does
                         not enforce it on the wire (no `required`, no
@@ -1172,7 +1174,7 @@ export function LibrarySearchBar({
               )}
 
               {filesResponse.hits.length === 0 && (
-                <div className="flex flex-col gap-1">
+                <div className="flex flex-col gap-[var(--space-1)]">
                   {/* Finding S4: `text` is the LIVE keystroke value; during
                       the debounce window it can already name a query that
                       has not run yet, while `filesResponse` (and this empty
@@ -1182,7 +1184,7 @@ export function LibrarySearchBar({
                       itself is load-bearing for the 429 grace path
                       (useFileSearch.ts) and must stay; only the label
                       changes. */}
-                  <p role="status" data-testid="library-search-empty" className="text-xs leading-snug text-[var(--color-muted)]">
+                  <p role="status" data-testid="library-search-empty" className="text-[length:var(--type-utility-xs-size)] leading-snug text-[var(--color-muted)]">
                     No results for “{filesDebouncedQuery}”.
                   </p>
                   {/* Finding F-K, sharpest case: a file can be visible in
@@ -1197,7 +1199,7 @@ export function LibrarySearchBar({
 
               {filesResponse.hits.length > 0 && (
                 <>
-                  <ul data-testid="library-search-results" className="flex flex-col gap-1 overflow-y-auto">
+                  <ul data-testid="library-search-results" className="flex flex-col gap-[var(--space-1)] overflow-y-auto">
                     {filesResponse.hits.map((hit, i) => (
                       <FileHitRow
                         key={`${hit.path}:${hit.line ?? 0}:${i}`}
@@ -1244,9 +1246,8 @@ export function LibrarySearchBar({
               {viewResultQuery.data?.source !== undefined ? (
                 <span data-testid="library-search-view-source">
                   Saved view from{' '}
-                  <button
-                    type="button"
-                    tabIndex={0}
+                  <Button
+                    variant="link"
                     data-testid="library-search-view-source-open"
                     onClick={() => {
                       const src = viewResultQuery.data?.source
@@ -1255,10 +1256,10 @@ export function LibrarySearchBar({
                         setOpenView(null)
                       }
                     }}
-                    className="underline underline-offset-2 hover:text-[var(--color-secondary)]"
+                    className="text-[color:inherit] text-[length:inherit] font-[var(--font-weight-regular)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
                   >
                     {viewResultQuery.data.source}
-                  </button>
+                  </Button>
                 </span>
               ) : (
                 'Saved view'
@@ -1266,7 +1267,7 @@ export function LibrarySearchBar({
             </DialogDescription>
           </DialogHeader>
           {viewResultQuery.isPending && (
-            <div role="status" className="flex items-center gap-2 py-6 text-sm text-[var(--color-muted)]">
+            <div role="status" className="flex items-center gap-[var(--space-2)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
               <CircleNotch size={16} aria-hidden="true" className="animate-spin" />
               Loading view…
             </div>

@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "component": "IconButton",
+  "exports": [
+    "IconButton"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/icon-button.tsx",
+  "documentation": "docs/internal/design/components/icon-button.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "default",
+    "destructive",
+    "outline",
+    "secondary",
+    "ghost"
+  ],
+  "sizes": [
+    "sm",
+    "default",
+    "lg"
+  ],
+  "states": [
+    "idle",
+    "pending",
+    "success",
+    "error",
+    "disabled",
+    "focus-visible"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/icon-button.stories.tsx",
+      "exports": [
+        "Default",
+        "Small",
+        "Large",
+        "Disabled",
+        "Pending",
+        "Dense",
+        "NarrowViewport",
+        "Destructive",
+        "Outline",
+        "Secondary",
+        "Ghost",
+        "Success",
+        "Error",
+        "InvokesAction",
+        "FocusVisible",
+        "AdjacentTargets"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "icon-button-unit",
+      "kind": "unit",
+      "file": "src/components/ui/icon-button.test.tsx",
+      "test": "IconButton accessible action contract uses its required label as the accessible name and defaults to type=button",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-pointer] pointer",
+      "story": "AdjacentTargets",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "IconButton [check:icon-button-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "icon-button-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/icon-button.stories.tsx",
+      "test": "Invokes Action",
+      "story": "InvokesAction",
+      "applicable": true
+    }
+  ]
+}

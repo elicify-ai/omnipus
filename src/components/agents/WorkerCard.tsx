@@ -1,7 +1,8 @@
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { CheckCircle, Circle, Lightning, Spinner, WarningCircle, XCircle } from '@phosphor-icons/react'
+import { CheckCircle, Circle, Lightning, WarningCircle, XCircle } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { IconRenderer } from '@/components/shared/IconRenderer'
 import { testAgentRunner, isApiError } from '@/lib/api'
 import type { Agent, ExecutorConfig, RunnerTestResponse } from '@/lib/api'
@@ -49,21 +50,22 @@ export function WorkerCard({ agent }: WorkerCardProps) {
 
   return (
     <div className="relative group/card">
-      <button tabIndex={0}
+      <Button
         type="button"
+        variant="ghost"
         data-testid={`worker-card-${agent.id}`}
         onClick={() => navigate({ to: '/agents/$agentId', params: { agentId: agent.id } })}
         className={cn(
-          'w-full text-left rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4',
+          'block h-auto w-full whitespace-normal rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left',
           'hover:border-[var(--color-accent)]/40 hover:bg-[var(--color-surface-2)] transition-all duration-150',
           'focus-visible:border-[var(--color-accent)]'
         )}
         aria-label={`View worker ${agent.name}`}
       >
-        <div className="flex items-start gap-3">
+        <div className="flex items-start gap-[var(--space-2-5)]">
           {/* Avatar */}
           <div
-            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-sm font-bold"
+            className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[length:var(--type-body-compact-size)] font-bold"
             style={{ backgroundColor: agent.color ?? 'var(--color-surface-3)' }}
           >
             {agent.icon ? (
@@ -75,27 +77,27 @@ export function WorkerCard({ agent }: WorkerCardProps) {
 
           {/* Info */}
           <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-              <span className="font-headline font-bold text-sm text-[var(--color-secondary)] truncate">
+            <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-0-5)] flex-wrap">
+              <span className="font-headline font-bold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {agent.name}
               </span>
               {/* Live turn status, separate from the workspace heartbeat feature. */}
               {agent.status === 'active' && (
-                <span className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-success)]">
+                <span className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-success)]">
                   <Circle size={7} weight="fill" aria-hidden="true" />
                   Running
                 </span>
               )}
               {/* NB: no heartbeat indicator and no default-★ — workers never have them. */}
             </div>
-            <p className="text-sm text-[var(--color-muted)] line-clamp-2 mb-2">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-[var(--space-2)]">
               {agent.description || 'No description'}
             </p>
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-[var(--space-2)] flex-wrap">
               <Badge variant="secondary">Worker</Badge>
               <Badge
                 variant="outline"
-                className="gap-1"
+                className="gap-[var(--space-1)]"
                 title={
                   isExternalCli
                     ? `External CLI runner: ${executorLabel(agent.executor)}`
@@ -110,7 +112,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
                 // "Test run" affordance. min-w-0 + shrink lets it give way in
                 // the flex row, and the max-width cap truncates the remainder.
                 <span
-                  className="text-xs font-mono text-[var(--color-muted)] truncate min-w-0 shrink max-w-[140px]"
+                  className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)] truncate min-w-0 shrink max-w-[140px]"
                   title={agent.model}
                 >
                   {agent.model.includes('/') ? agent.model.split('/').slice(1).join('/') : agent.model}
@@ -119,7 +121,7 @@ export function WorkerCard({ agent }: WorkerCardProps) {
             </div>
           </div>
         </div>
-      </button>
+      </Button>
 
       {/* Test run — sits outside the card button to avoid nested-button HTML. */}
       <WorkerTestRun agentId={agent.id} agentName={agent.name} isExternalCli={isExternalCli} />
@@ -139,38 +141,40 @@ function WorkerTestRun({ agentId, agentName, isExternalCli }: { agentId: string;
 
   if (!isExternalCli) {
     return (
-      <button tabIndex={0}
+      <Button
         type="button"
+        variant="ghost"
         disabled
         data-testid={`worker-test-run-${agentId}`}
         title="Native runners have no external connection to test."
-        className="absolute bottom-3 right-4 flex items-center gap-1 text-xs text-[var(--color-muted)]/50 cursor-not-allowed"
+        className="absolute bottom-3 right-4 h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]/50 hover:bg-transparent disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-100"
         aria-label={`Test run for ${agentName} (unavailable for native runtime)`}
       >
         <Lightning size={12} />
         Test run
-      </button>
+      </Button>
     )
   }
 
   return (
-    <div className="absolute bottom-3 right-4 flex flex-col items-end gap-1">
-      <button tabIndex={0}
+    <div className="absolute bottom-3 right-4 flex flex-col items-end gap-[var(--space-1)]">
+      <Button
         type="button"
-        disabled={isPending}
+        variant="ghost"
+        actionState={isPending ? 'pending' : 'idle'}
         data-testid={`worker-test-run-${agentId}`}
         onClick={() => {
           reset()
           mutate()
         }}
-        className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-accent)] transition-colors disabled:opacity-60"
+        className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-accent)] disabled:opacity-60"
         aria-label={`Test run for ${agentName}`}
       >
-        {isPending ? <Spinner size={12} className="animate-spin" /> : <Lightning size={12} />}
+        {!isPending && <Lightning size={12} />}
         {isPending ? 'Testing…' : 'Test run'}
-      </button>
+      </Button>
       {error && (
-        <span className="text-xs text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
+        <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] max-w-[180px] truncate" title={isApiError(error) ? error.userMessage : error.message}>
           Test failed
         </span>
       )}
@@ -193,7 +197,7 @@ function WorkerTestResultPill({ result }: { result: RunnerTestResponse }) {
       : 'text-[var(--color-error)]'
   return (
     <span
-      className={`flex items-center gap-1 text-xs ${tone} max-w-[200px]`}
+      className={`flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] ${tone} max-w-[200px]`}
       data-testid={`worker-test-result-${result.cli || 'cli'}`}
       data-reason={result.reason || 'ok'}
       title={result.message}

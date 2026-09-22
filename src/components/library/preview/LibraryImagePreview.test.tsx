@@ -11,11 +11,14 @@
 // the prop was read at all; without it this file would pass unchanged if
 // every reference to `variant` were deleted from the component.
 
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { useState, type ReactNode } from 'react'
+import { render, screen, fireEvent } from '@testing-library/react'
 import { LibraryImagePreview } from './LibraryImagePreview'
+import { PreviewHeaderSlotProvider } from './previewHeaderSlot'
 import { libraryDownloadUrl } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
+import { useUiStore } from '@/store/ui'
 
 const ENTRY: LibraryEntry = {
   name: 'diagram.png',
@@ -117,5 +120,72 @@ describe('LibraryImagePreview — D-107 a picture that fails to load says so', (
     await screen.findByTestId('library-image-unavailable')
     view.rerender(<LibraryImagePreview workspaceId="ws-1" entry={{ ...ENTRY, path: 'assets/other.png', name: 'other.png' }} />)
     expect(screen.getByRole('img')).toHaveAttribute('alt', 'other.png')
+  })
+})
+
+// ── Full-screen action (D18 scope extension) ────────────────────────────────
+// The pane variant gets a full-screen button that opens the SAME zoomable
+// media viewer chat images already use — reusing MediaLightbox via the real
+// `openMediaLightbox` store action, never a second viewer. It portals into
+// the Library preview pane's single header row (previewHeaderSlot); this
+// harness reproduces just that slot, matching the pattern established by
+// LibraryPdfPreview.test.tsx's HeaderSlotHarness.
+function HeaderSlotHarness({ children }: { children: ReactNode }) {
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null)
+  return (
+    <div>
+      <div ref={setSlot} data-testid="header-slot" />
+      <PreviewHeaderSlotProvider slot={slot}>{children}</PreviewHeaderSlotProvider>
+    </div>
+  )
+}
+
+describe('LibraryImagePreview — full-screen action (D18 scope extension)', () => {
+  beforeEach(() => {
+    useUiStore.getState().closeMediaLightbox()
+  })
+
+  it('pane variant, inside the header slot: renders "Open full screen" and opens the shared media viewer', () => {
+    render(
+      <HeaderSlotHarness>
+        <LibraryImagePreview workspaceId="ws-1" entry={ENTRY} />
+      </HeaderSlotHarness>,
+    )
+
+    expect(useUiStore.getState().mediaLightbox).toBeNull()
+    const btn = screen.getByRole('button', { name: 'Open full screen' })
+    // Portalled into the header slot, not rendered inline in the preview body.
+    expect(screen.getByTestId('header-slot')).toContainElement(btn)
+
+    btn.click()
+
+    const lb = useUiStore.getState().mediaLightbox
+    expect(lb?.kind).toBe('image')
+    expect(lb?.kind === 'image' && lb.src).toBe(libraryDownloadUrl('ws-1', ENTRY.path))
+    expect(lb?.kind === 'image' && lb.alt).toBe(ENTRY.name)
+  })
+
+  it('pane variant with no header slot provided: renders nothing extra (PreviewHeaderPortal no-ops)', () => {
+    render(<LibraryImagePreview workspaceId="ws-1" entry={ENTRY} />)
+    expect(screen.queryByRole('button', { name: 'Open full screen' })).not.toBeInTheDocument()
+  })
+
+  it('inline variant: never renders the full-screen button, even inside a header slot', () => {
+    render(
+      <HeaderSlotHarness>
+        <LibraryImagePreview workspaceId="ws-1" entry={ENTRY} variant="inline" />
+      </HeaderSlotHarness>,
+    )
+    expect(screen.queryByRole('button', { name: 'Open full screen' })).not.toBeInTheDocument()
+  })
+
+  it('a failed image offers no full-screen action', () => {
+    render(
+      <HeaderSlotHarness>
+        <LibraryImagePreview workspaceId="ws-1" entry={ENTRY} />
+      </HeaderSlotHarness>,
+    )
+    fireEvent.error(screen.getByRole('img'))
+    expect(screen.queryByRole('button', { name: 'Open full screen' })).not.toBeInTheDocument()
   })
 })

@@ -14,13 +14,18 @@
 //
 // Palette (Sovereign Deep):
 //   inbox       — neutral grey   (captured, untriaged)
-//   next        — info blue      (triaged, ready)
+//   next        — info blue      (triaged, ready — refs the lighter
+//                                 `primitive.color.blue-label` (#60A5FA,
+//                                 >=7:1 against near-black chip text);
+//                                 `primitive.color.blue` (#3B82F6) only
+//                                 clears ~5.4:1)
 //   in_progress — Forge Gold     (live work — the marquee accent #D4AF37)
 //   blocked     — warning orange (unmet dependency)
 //   done        — success green  (terminal, quiet)
 //   failed      — error red      (terminal, loud)
 
 import type { Task } from '@/lib/api'
+import { statusContract } from '@/design-system/status'
 
 export type TaskStatus = Task['status']
 
@@ -36,12 +41,12 @@ export const STATUS_ORDER: readonly TaskStatus[] = [
 
 /** Per-status accent hex. The single source of truth for status colour. */
 export const STATUS_COLORS: Record<TaskStatus, string> = {
-  inbox: '#9ca3af', // neutral grey
-  next: '#3B82F6', // info blue
-  in_progress: '#D4AF37', // Forge Gold — the marquee "live work" accent
-  blocked: '#F97316', // warning orange
-  done: '#10b981', // success green
-  failed: '#ef4444', // error red
+  inbox: statusContract.inbox.resolvedColor, // neutral grey
+  next: statusContract.next.resolvedColor, // info blue (lighter label)
+  in_progress: statusContract.inProgress.resolvedColor, // Forge Gold — the marquee "live work" accent
+  blocked: statusContract.blocked.resolvedColor, // warning orange
+  done: statusContract.done.resolvedColor, // success green
+  failed: statusContract.failed.resolvedColor, // error red
 }
 
 /** Per-status human-readable label. */
@@ -109,7 +114,7 @@ export function statusLabel(status: TaskStatus | string | undefined): string {
  * literal-hex `STATUS_COLORS.failed`. A literal 6-digit hex keeps the concat
  * producing a valid 8-digit `#RRGGBBAA`.
  */
-export const TASK_CANCELLED_COLOR = '#EAB308'
+export const TASK_CANCELLED_COLOR = statusContract.cancelled.resolvedColor
 
 /** True when this task is `failed` specifically because the user Stopped it (not a genuine failure). */
 export function isTaskCancelled(task: Pick<Task, 'status' | 'cancel_reason'>): boolean {

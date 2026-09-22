@@ -37,8 +37,13 @@ import type {
   CalendarViewName,
   CalendarEventExtProps,
 } from './types'
-import { CHIP_TEXT_COLOR } from './types'
 import { statusLabel } from '@/lib/statusColors'
+
+// Near-black chip text — clears WCAG AAA (>=7:1) on every chip background
+// (SC-006b). Same value as `CHIP_TEXT_COLOR` in `./types`, declared locally
+// so it is literal at each JSX className/color site below. Keep both in sync
+// if this ever changes.
+const CHIP_TEXT_COLOR = 'var(--color-primary)'
 
 // ---------------------------------------------------------------------------
 // Icon map: StatusIconKey → Phosphor component (WCAG 1.4.1 non-colour cue)
@@ -180,9 +185,9 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
         color: CHIP_TEXT_COLOR,
         display: 'flex',
         alignItems: 'center',
-        gap: '3px',
+        gap: 'var(--space-1)',
         width: '100%',
-        padding: '1px 4px',
+        padding: 'var(--border-width-hairline) var(--space-1)',
         borderRadius: '4px',
         overflow: 'hidden',
         cursor: 'pointer',
@@ -192,8 +197,8 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
       {timeText && (
         <span
           style={{
-            fontSize: '0.65rem',
-            fontWeight: 500,
+            fontSize: 'var(--type-caption-size)',
+            fontWeight: 'var(--font-weight-medium)',
             flexShrink: 0,
             color: CHIP_TEXT_COLOR,
           }}
@@ -203,8 +208,8 @@ export function EventChip({ arg }: { arg: EventContentArg }) {
       )}
       <span
         style={{
-          fontSize: '0.7rem',
-          fontWeight: 600,
+          fontSize: 'var(--type-caption-size)',
+          fontWeight: 'var(--font-weight-semibold)',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
@@ -261,7 +266,7 @@ function LoadingOverlay() {
         pointerEvents: 'none',
         zIndex: 10,
         background:
-          'linear-gradient(90deg, transparent 0%, rgba(212,175,55,0.06) 50%, transparent 100%)',
+          'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-accent) 6%, transparent) 50%, transparent 100%)',
         backgroundSize: '200% 100%',
         animation: 'fc-sovereign-shimmer 1.8s ease-in-out infinite',
       }}
@@ -290,8 +295,8 @@ function EmptyHint() {
       <p
         style={{
           color: 'var(--color-muted)',
-          fontSize: '0.875rem',
-          fontFamily: 'var(--font-body)',
+          fontSize: 'var(--type-body-compact-size)',
+          fontFamily: 'var(--font-family-body)',
           background: 'var(--color-surface-1)',
           padding: '8px 16px',
           borderRadius: '6px',
@@ -402,7 +407,7 @@ export function FullCalendarView({
         datesSet={handleDatesSet}
         // List-view empty text — themed via CSS (v6 uses noEventsContent, not noEventsText)
         noEventsContent={() => (
-          <span style={{ color: 'var(--color-muted)', fontSize: '0.875rem' }}>
+          <span style={{ color: 'var(--color-muted)', fontSize: 'var(--type-body-compact-size)' }}>
             No scheduled items
           </span>
         )}

@@ -8,22 +8,12 @@
 // P2 — delegate-card restyle): no bordered/filled card, no status pill — an
 // 8px status dot (or the spinning icon while running) + muted status text,
 // via the shared getSpanStatusDot helper (src/lib/toolStatusConfig.tsx).
-//
-// ADR-091 D7/FR-E-004/FR-E-009: each agent row now carries its own status
-// line (the last `subagent_message.text` reduced onto the span, or "last
-// update N s ago" before one arrives — see SubagentSpanBase.statusLine's
-// doc comment) and an open control that navigates to the child's own
-// session (`/sessions/$sessionId`, the same standalone attach route a task
-// session opens through today). A `queued` lifecycle state overrides the
-// dot's label; a pending tool approval for the child's session id
-// (`src/store/toolApproval.ts`) overrides the status LINE with "awaiting
-// approval: <tool>" until it resolves. The nested per-step detail
-// (SubagentBlock's steps, ToolCallBadge surface="panel") is gone — a
-// child's own tool calls carry the child's own session_id (I-4) and never
-// arrive in this bucket any more; a delegation's steps are visible only in
-// the child's own session, reached via the open control. Final result and
-// interrupt reason (subagent_end's own fields, untouched by that deletion)
-// stay expandable.
+// Two things intentionally differ here vs SubagentBlock, expressed as
+// options rather than a separate reimplementation: icon size 12 (vs 13), and
+// the "running" label reads "running" here vs "working" there, since a row
+// can be a bash call as well as an agent span. Expanded native-agent rows
+// use the same indented border-l-2 accent line as SubagentBlock/ToolCallBadge
+// instead of the old bordered/backgrounded panel.
 //
 // ── ADR-057: the ADR-053 FE-5 "live session list" enrichment (lifecycle
 // badge + peek/reply/steer/stop affordances riding a pair of mid-span child
@@ -33,21 +23,21 @@
 // for the frame type names) — the dedicated store that fed this block was
 // therefore permanently empty in production, making the entire block
 // (badge, peek, and all three reply/steer/stop buttons) unreachable dead
-// code. ADR-091 D7 replaces it for real: the status line and open control
-// above are the wired-up version of the same idea.
+// code. It is not being replaced; a real implementation would need a real
+// wire mechanism first.
 
 import { useState } from 'react'
-import { CaretDown, CaretUp, Check, X, ArrowSquareOut } from '@phosphor-icons/react'
-import { useNavigate } from '@tanstack/react-router'
+import { Check, X } from '@phosphor-icons/react'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Badge } from '@/components/ui/badge'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { ActivityAvatar } from './ActivityAvatar'
+import { ToolCallBadge } from './ToolCallBadge'
 import type { ActivityItem } from '@/hooks/useRunningActivity'
-import { useToolApprovalStore } from '@/store/toolApproval'
 import { cn } from '@/lib/utils'
 import { formatDuration } from '@/lib/formatDuration'
 import { getSpanStatusDot, statusDot } from '@/lib/toolStatusConfig'
-import { formatInterruptReason, formatLastUpdateAge, getLifecycleStatusDot } from '@/lib/subagentStatus'
+import { formatInterruptReason } from '@/lib/subagentStatus'
 
 export interface ActivityPanelProps {
   open: boolean
@@ -61,96 +51,64 @@ function ActivityRow({
 }: {
   item: ActivityItem
 }) {
-  const navigate = useNavigate()
   const [expanded, setExpanded] = useState(false)
+  const config = getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
   // JudgeActivityItem carries no durationMs (no wire-level "judge started"
   // moment to measure elapsed time from — see its doc comment).
   const duration = item.kind === 'judge' ? '' : formatDuration(item.durationMs)
   const label = item.kind === 'bash' ? item.command : item.kind === 'judge' ? `Judge · ${item.scope} round ${item.round}` : item.taskLabel
+  // Narrowed inline (not via a stored boolean) so `steps` stays typed without a cast.
+  const steps = item.kind === 'agent' && item.agentType !== '3p' ? item.steps : null
   const show3pNotice = item.kind === 'agent' && item.agentType === '3p'
   // Fix 2 (2026-07-16): the panel is now the durable surface for the final
-  // result / interrupt reason SubagentBlock's (now-deleted) card used to
-  // carry — see useRunningActivity.ts's AgentActivityItem.
+  // result / interrupt reason SubagentBlock's (now thread-hidden-by-default)
+  // card used to carry — see useRunningActivity.ts's AgentActivityItem.
   const finalResult = item.kind === 'agent' ? item.finalResult : undefined
   const interruptReason = item.kind === 'agent' ? item.interruptReason : undefined
-  const childSessionId = item.kind === 'agent' ? item.childSessionId : undefined
-  const lifecycleState = item.kind === 'agent' ? item.lifecycleState : undefined
-  // ADR-091 D7/FR-E-004 (cross-family review finding 21): lifecycleState
-  // (the ADR-053 eight-state domain reduced from subagent_state) drives the
-  // row's dot AND label whenever it is present — a span's own `status` (the
-  // parent's "still open" flag, set at subagent_start/cleared at
-  // subagent_end) is a different axis and is only a legacy fallback for a
-  // span with no lifecycleState yet. Previously only the LABEL was
-  // overridden, and only for 'queued' — needs_input/paused/completed/
-  // failed/cancelled/timed_out all kept showing the running spinner.
-  const config = lifecycleState
-    ? getLifecycleStatusDot(lifecycleState, { size: 12, runningLabel: 'running' })
-    : getSpanStatusDot(item.status, { size: 12, runningLabel: 'running' })
-
-  // FR-E-009: a pending approval for the child's session overrides the
-  // status LINE (not the dot label above) with "awaiting approval: <tool>"
-  // until it resolves — read live from the browser's approval queue, no
-  // new frame.
-  const approvalQueue = useToolApprovalStore((s) => s.queue)
-  const pendingApproval = childSessionId
-    ? approvalQueue.find((a) => a.sessionId === childSessionId)
-    : undefined
-
-  const rawStatusLine = item.kind === 'agent' ? item.statusLine : undefined
-  const lastUpdateAt = item.kind === 'agent' ? item.lastUpdateAt : undefined
-  const fallbackStatusLine = lastUpdateAt
-    ? `last update ${formatLastUpdateAge(Date.now() - Date.parse(lastUpdateAt))}`
-    : undefined
-  const statusLine = pendingApproval
-    ? `awaiting approval: ${pendingApproval.toolName}`
-    : (rawStatusLine ?? fallbackStatusLine)
-
-  // ADR-049 D2/D4/US-13: a judge row is ALWAYS expandable — it has no step
-  // detail at all (there is no live "judge started" frame, only the
+  // ADR-049 D2/D4/US-13: a judge row is ALWAYS expandable — it has no
+  // `steps` at all (there is no live "judge started" frame, only the
   // completed verdict push), but the per-criterion list is exactly the
   // "zero steps but a final result" case the BDD edge case calls out
   // ("Judge span with zero steps but a verdict — must stay expandable").
   const canExpandJudge = item.kind === 'judge'
 
-  // ADR-091 D10: a span carries no step detail any more (D7 table) — the
-  // only expandable content left for an agent row is its final result.
-  const canExpand = canExpandJudge || !!finalResult
+  // A span with zero steps but a final result (e.g. a very short delegation)
+  // must still be expandable, or the result would never be reachable.
+  const canExpand =
+    canExpandJudge ||
+    (steps != null && (steps.length > 0 || !!finalResult))
 
   return (
     <div
       data-testid="activity-row"
       data-status={item.status}
-      className="text-xs"
+      className="text-[length:var(--type-utility-xs-size)]"
     >
       {/* Mirrors GenericToolCall.tsx's `disabled={!hasDetail}` gate: a
-          non-expandable row (bash calls, 3p-agent rows, or an agent row
-          with no final result) has nothing to expand — disable it
-          natively so it drops out of the tab order and Enter/Space can't
-          no-op on it, rather than leaving a focusable dead button whose
-          aria-expanded is already (correctly) omitted below. */}
-      <button tabIndex={0}
-        type="button"
-        onClick={() => canExpand && setExpanded((e) => !e)}
-        disabled={!canExpand}
-        aria-expanded={canExpand ? expanded : undefined}
-        className={cn(
-          'flex w-full items-center gap-2 py-1.5 text-left transition-colors',
-          canExpand ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : 'cursor-default',
-        )}
+          non-expandable row (bash calls, 3p-agent rows, or a native row with
+          zero steps) has nothing to expand — disable it natively so it
+          drops out of the tab order and Enter/Space can't no-op on it,
+          rather than leaving a focusable dead button whose aria-expanded is
+          already (correctly) omitted below. */}
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        expandable={canExpand}
+        caretSize={11}
+        data-testid="activity-row-toggle"
       >
         <ActivityAvatar item={item} size="sm" />
         <span className="flex-1 min-w-0 truncate text-[var(--color-secondary)] font-medium font-mono">
           {label}
         </span>
         {config.indicator}
-        <span className={cn('text-[var(--color-muted)] shrink-0', config.textClass)}>
+        <span className={cn('text-[var(--color-muted)] shrink-0')}>
           {config.label}
           {/* W1-9, carried via Fix 2: interrupt reason appended to the
-              status text, matching the deleted thread card's own inline
-              treatment. */}
+              status text, matching SubagentBlock's own inline treatment. */}
           {item.status === 'interrupted' && interruptReason && (
             <span
-              className="font-sans"
+              className="font-body"
               title={`Interrupted: ${formatInterruptReason(interruptReason)}`}
             >
               {' '}({formatInterruptReason(interruptReason)})
@@ -158,97 +116,79 @@ function ActivityRow({
           )}
         </span>
         {duration && <span className="text-[var(--color-muted)] shrink-0 tabular-nums">{duration}</span>}
-        {canExpand && (
-          <span className="text-[var(--color-muted)] shrink-0">
-            {expanded ? <CaretUp size={11} aria-hidden="true" /> : <CaretDown size={11} aria-hidden="true" />}
-          </span>
-        )}
-      </button>
-
-      {/* ADR-091 D7/FR-E-004: the row's one status line. `queued` renders
-          without one (E-1's "queued" state already reads that on the dot
-          above — no fabricated line for a child that has not yet started).
-          Absent (edge case E-5's un-upgraded transcript / no message or
-          state has ever arrived) renders nothing. */}
-      {statusLine && lifecycleState !== 'queued' && (
-        <p
-          data-testid="activity-row-status-line"
-          className="pl-[26px] pb-1 -mt-0.5 text-[10px] text-[var(--color-muted)] font-sans truncate"
-        >
-          {statusLine}
-        </p>
-      )}
-
-      {/* ADR-091 D7/FR-E-004: the open control — targets the child's own
-          session, when the transcript carries one (a pre-delivery
-          `subagent_start` without `child_session_id` renders without it,
-          per the edge case). Reuses the existing standalone session route,
-          the same one a task session opens through today. */}
-      {childSessionId && (
-        <button tabIndex={0}
-          type="button"
-          data-testid="activity-row-open"
-          onClick={() => void navigate({ to: '/sessions/$sessionId', params: { sessionId: childSessionId } })}
-          className="ml-[26px] mb-1 -mt-0.5 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline"
-        >
-          <ArrowSquareOut size={11} aria-hidden="true" />
-          Open
-        </button>
-      )}
+      </DisclosureRow>
 
       {canExpand && expanded && item.kind === 'judge' && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2" data-testid="judge-verdict-detail">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]" data-testid="judge-verdict-detail">
           {/* Per-criterion verdict list (ADR-049 D2/D4/US-13/SD-C11). `text`
               is the raw criterion_id — this global feed has no title lookup
               (see JudgeActivityItem's doc comment). */}
-          <ul className="space-y-1">
+          <ul className="space-y-[var(--space-1)]">
             {item.criterionVerdicts.map((cv, idx) => (
-              <li key={idx} className="flex items-start gap-1.5 text-[10px]">
+              <li key={idx} className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
                 {cv.met ? (
-                  <Check size={11} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-success)]" aria-hidden="true" />
+                  <Check size={11} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[color:var(--color-success)]" aria-hidden="true" />
                 ) : (
-                  <X size={11} weight="bold" className="shrink-0 mt-0.5 text-[color:var(--color-error)]" aria-hidden="true" />
+                  <X size={11} weight="bold" className="shrink-0 mt-[var(--space-0-5)] text-[color:var(--color-error)]" aria-hidden="true" />
                 )}
                 <div className="min-w-0">
                   <p className="font-mono text-[var(--color-secondary)] truncate">{cv.text}</p>
-                  {cv.reason && <p className="text-[var(--color-muted)] whitespace-pre-wrap mt-0.5">{cv.reason}</p>}
+                  {cv.reason && <p className="text-[var(--color-muted)] whitespace-pre-wrap mt-[var(--space-0-5)]">{cv.reason}</p>}
                 </div>
               </li>
             ))}
             {item.criterionVerdicts.length === 0 && (
-              <li className="text-[10px] text-[var(--color-muted)] italic">No per-criterion detail recorded.</li>
+              <li className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No per-criterion detail recorded.</li>
             )}
           </ul>
           {/* Model + agent + spend footer — NFR-5 transparency. Spend is
               deliberately omitted: JudgeVerdictFrame carries no tokens/cost
               field on the wire today (contract gap flagged in this wave's
               report; only the persisted Message twin carries tokens/cost). */}
-          <p className="text-[10px] text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {item.model} · judged by {item.judgeAgentId}
           </p>
         </div>
       )}
 
-      {canExpand && expanded && item.kind !== 'judge' && finalResult && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-1">
+      {canExpand && expanded && item.kind !== 'judge' && steps && (
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-1)]">
+          {/* surface="panel" (Fix 2, user-approved 2026-07-16): this panel is
+              the designated home for the background/noisy step detail the
+              thread hides by default — its policy INVERTS to show
+              everything except ToolSearch (shouldRenderToolCallInPanel in
+              toolVisibility.ts), instead of ToolCallBadge's normal
+              thread-scoped shouldRenderToolCall gate. */}
+          {steps.map((step, idx) =>
+            step.kind === 'tool' ? (
+              <ToolCallBadge key={step.tool.call_id} toolCall={step.tool} surface="panel" />
+            ) : (
+              <p key={idx} className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] font-body py-[var(--space-0-5)]">
+                {step.text}
+              </p>
+            ),
+          )}
+
           {/* Final result — flat text block, no box/fill: a small success
-              dot + muted "Final result" label, matching the deleted thread
-              card's own treatment. */}
-          <div className="mt-1">
-            <div className="flex items-center gap-1.5 text-[var(--color-muted)] mb-1 text-[10px] uppercase tracking-wide font-sans">
-              {statusDot('bg-[var(--color-success)]')}
-              Final result
+              dot + muted "Final result" label, matching SubagentBlock's own
+              treatment (the thread card this replaces at idle/default). */}
+          {finalResult && (
+            <div className="mt-[var(--space-1)]">
+              <div className="flex items-center gap-[var(--space-1)] text-[var(--color-muted)] mb-[var(--space-1)] text-[length:var(--type-caption-size)] uppercase tracking-wide font-body">
+                {statusDot('bg-[var(--color-success)]')}
+                Final result
+              </div>
+              <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">
+                {finalResult}
+              </pre>
             </div>
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all font-mono">
-              {finalResult}
-            </pre>
-          </div>
+          )}
         </div>
       )}
 
       {show3pNotice && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1">
-          <p className="text-[10px] text-[var(--color-muted)] italic">No live step detail yet</p>
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic">No live step detail yet</p>
         </div>
       )}
     </div>
@@ -271,17 +211,17 @@ export function ActivityPanel({
           <Badge variant={running.length > 0 ? 'default' : 'muted'}>{running.length} running</Badge>
         </SheetHeader>
 
-        <div className="flex-1 overflow-y-auto px-3 py-3 space-y-4">
+        <div className="flex-1 overflow-y-auto px-[var(--space-2-5)] py-[var(--space-2-5)] space-y-[var(--space-3)]">
           {isEmpty && (
-            <p className="text-xs text-[var(--color-muted)] text-center py-6">No background activity yet.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] text-center py-[var(--space-4)]">No background activity yet.</p>
           )}
 
           {running.length > 0 && (
-            <div className="space-y-2">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
+            <div className="space-y-[var(--space-2)]">
+              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-[var(--space-1)]">
                 Running now
               </h3>
-              <div className="space-y-1">
+              <div className="space-y-[var(--space-1)]">
                 {running.map((item) => (
                   <ActivityRow key={item.key} item={item} />
                 ))}
@@ -290,11 +230,11 @@ export function ActivityPanel({
           )}
 
           {recentlyFinished.length > 0 && (
-            <div className="space-y-2">
-              <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-1">
+            <div className="space-y-[var(--space-2)]">
+              <h3 className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)] px-[var(--space-1)]">
                 Recently finished
               </h3>
-              <div className="space-y-1">
+              <div className="space-y-[var(--space-1)]">
                 {recentlyFinished.map((item) => (
                   <ActivityRow key={item.key} item={item} />
                 ))}

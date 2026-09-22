@@ -16,17 +16,11 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { Card } from '@/components/ui/card'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Progress } from '@/components/ui/progress'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { PlanActionButton } from './PlanActionButton'
 import type { Agent, Plan, Task } from '@/lib/api'
 import {
@@ -126,7 +120,7 @@ export function PlansFilterBand({
     <div
       role="group"
       aria-label="Plans filter"
-      className="flex items-stretch gap-3 overflow-x-auto px-6 py-4 bg-[var(--color-surface-0)] flex-shrink-0"
+      className="flex items-stretch gap-[var(--space-2-5)] overflow-x-auto px-[var(--space-4)] py-[var(--space-3)] bg-[var(--color-surface-0)] flex-shrink-0"
     >
       <AllTasksTile
         selected={selectedPlanId === null}
@@ -160,18 +154,18 @@ export function PlansFilterBand({
       })}
 
       {showNewPlanTile && (
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="outline"
           onClick={onNewPlan}
           aria-label="New plan"
           className={cn(
             TILE_SIZE,
-            'flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-[var(--color-border)] p-3 text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
+            'h-auto flex-col gap-[var(--space-1)] rounded-lg border-dashed border-[var(--color-border)] bg-transparent p-[var(--space-2-5)] text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)] pointer-coarse:min-h-[44px]',
           )}
         >
           <Plus size={16} />
-          <span className="text-xs font-medium">New plan</span>
-        </button>
+          <span className="text-[length:var(--type-utility-xs-size)] font-medium">New plan</span>
+        </Button>
       )}
     </div>
   )
@@ -187,39 +181,40 @@ function AllTasksTile({
   totalTasks: number
 }) {
   return (
-    <div
+    <Card
+      variant="default"
       role="group"
       aria-label="All tasks"
       data-testid="all-tasks-tile"
       className={cn(
         TILE_SIZE,
-        'rounded-lg border bg-[var(--color-surface-1)] p-3 transition-colors',
+        'p-[var(--space-2-5)] transition-colors',
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
-          : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
+          : 'hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
       )}
     >
-      <button tabIndex={0}
-        type="button"
+      <Button
+        variant="ghost"
         aria-pressed={selected}
         aria-label="All tasks"
         onClick={onSelect}
-        className="flex h-full w-full flex-col items-start gap-2 text-left"
+        className="h-full w-full flex-col items-start justify-start gap-[var(--space-2)] rounded-none p-0 text-left hover:bg-transparent"
       >
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 text-sm font-medium',
+            'inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] font-medium',
             selected ? 'text-[var(--color-accent)]' : 'text-[var(--color-secondary)]',
           )}
         >
           <ListChecks size={14} weight={selected ? 'fill' : 'regular'} />
           All tasks
         </span>
-        <span className="text-[10px] text-[var(--color-muted)]">
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           {totalTasks} task{totalTasks === 1 ? '' : 's'}
         </span>
-      </button>
-    </div>
+      </Button>
+    </Card>
   )
 }
 
@@ -270,14 +265,17 @@ function PlanFilterTile({
   const failureReason = plan.state === 'failed' && !cancelled ? planSecondaryChipLabel(plan) : null
 
   return (
-    <div
+    <Card
+      variant="default"
       role="group"
       aria-label={plan.title}
       data-testid={`plan-filter-tile-${plan.id}`}
       title={plan.title}
       className={cn(
         TILE_SIZE,
-        'group relative rounded-lg border border-l-2 border-l-[var(--color-accent)]/40 bg-[var(--color-surface-1)] p-3 transition-colors',
+        'group relative p-[var(--space-2-5)] transition-colors',
+        // Selection is carried by the gold border + ring alone: gold marks the
+        // active tile, so no tile carries a decorative accent in its resting state.
         selected
           ? 'border-[var(--color-accent)] ring-1 ring-[var(--color-accent)]'
           : 'border-[var(--color-border)] hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
@@ -287,17 +285,18 @@ function PlanFilterTile({
           never nested inside it, so they can never trigger onSelect. Hover-
           revealed on pointer-fine devices, always visible on touch. */}
       <div
-        className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
+        className="absolute right-1.5 top-1.5 z-10 flex items-center gap-[var(--space-0-5)] opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100"
         onClick={(e) => e.stopPropagation()}
       >
-        <button tabIndex={0}
-          type="button"
+        <IconButton
           aria-label={`Edit plan ${plan.title}`}
           onClick={onEdit}
-          className="inline-flex items-center justify-center rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          variant="ghost"
+          size="sm"
+          className="rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
         >
           <PencilSimple size={13} />
-        </button>
+        </IconButton>
 
         {/* ADR-052 §6.8 button matrix — draft → Execute, running/cap-queued
             approved → Stop, cancelled → Play. Renders nothing for done/a
@@ -307,19 +306,20 @@ function PlanFilterTile({
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
               aria-label={`Plan actions for ${plan.title}`}
-              className="inline-flex items-center justify-center rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+              variant="ghost"
+              size="sm"
+              className="rounded text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
             >
               <DotsThreeVertical size={14} weight="bold" />
-            </button>
+            </IconButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
             <DropdownMenuItem
               onClick={() => setConfirmClear(true)}
               disabled={isClearing || plan.state === 'running'}
-              className={cn('flex items-center gap-2', 'text-[color:var(--color-error)]')}
+              className={cn('flex items-center gap-[var(--space-2)]', 'text-[color:var(--color-error)]')}
             >
               <Broom size={13} />
               {isClearing ? 'Clearing…' : 'Clear'}
@@ -330,16 +330,16 @@ function PlanFilterTile({
 
       {/* Select control — the tile's TITLE/body is the filter toggle (Von
           Restorff: `aria-pressed` + gold ring communicate the active tile). */}
-      <button tabIndex={0}
-        type="button"
+      <Button
+        variant="ghost"
         aria-pressed={selected}
         aria-label={plan.title}
         onClick={onSelect}
-        className="flex h-full w-full flex-col items-start gap-2 pr-10 text-left"
+        className="h-full w-full flex-col items-start justify-start gap-[var(--space-2)] rounded-none p-0 pr-[var(--space-6)] text-left hover:bg-transparent"
       >
-        <span className="flex flex-wrap items-center gap-1">
+        <span className="flex flex-wrap items-center gap-[var(--space-1)]">
           <span
-            className="inline-flex flex-shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight"
+            className="inline-flex flex-shrink-0 items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight"
             style={{ color: displayColor, backgroundColor: `${displayColor}1a` }}
           >
             <PlanStateGlyph state={plan.state} cancelled={cancelled} />
@@ -354,7 +354,7 @@ function PlanFilterTile({
             <span
               data-testid={`plan-phase-chip-${plan.id}`}
               className={cn(
-                'flex-shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold leading-none',
+                'flex-shrink-0 rounded border px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold leading-none',
                 phaseChip.tone === 'warning'
                   ? 'border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                   : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)]',
@@ -374,7 +374,7 @@ function PlanFilterTile({
         {phaseExplanation && (
           <span
             data-testid={`plan-phase-explanation-${plan.id}`}
-            className="text-[10px] leading-snug text-[color:var(--color-warning)]"
+            className="text-[length:var(--type-caption-size)] leading-snug text-[color:var(--color-warning)]"
           >
             {phaseExplanation}
           </span>
@@ -391,7 +391,7 @@ function PlanFilterTile({
             the wrapping mode the spec requires browsers to factor into
             min-content sizing itself, so line-clamp-2 can actually clip
             within the tile instead of overflowing it. */}
-        <span className="line-clamp-2 min-w-0 wrap-anywhere text-sm font-medium leading-snug text-[var(--color-secondary)]">
+        <span className="line-clamp-2 min-w-0 wrap-anywhere text-[length:var(--type-body-compact-size)] font-medium leading-snug text-[var(--color-secondary)]">
           {plan.title}
         </span>
 
@@ -401,15 +401,15 @@ function PlanFilterTile({
         {failureReason && (
           <span
             data-testid={`plan-failed-reason-${plan.id}`}
-            className="text-[10px] leading-snug text-[var(--color-muted)]"
+            className="text-[length:var(--type-caption-size)] leading-snug text-[var(--color-muted)]"
           >
             Why: {failureReason}
           </span>
         )}
 
-        <span className="flex flex-wrap items-center gap-1.5">
+        <span className="flex flex-wrap items-center gap-[var(--space-1)]">
           <span
-            className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+            className="inline-flex items-center gap-[var(--space-1)] rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             role="img"
             aria-label={`Progress: ${memberDone} of ${memberTotal} tasks done`}
           >
@@ -421,35 +421,29 @@ function PlanFilterTile({
           {owner && (
             <span
               title={owner.name}
-              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]"
+              className="max-w-[100px] truncate rounded-full border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
             >
               {owner.name.split('—')[0].trim()}
             </span>
           )}
         </span>
-      </button>
+      </Button>
 
-      <AlertDialog open={confirmClear} onOpenChange={setConfirmClear}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Clear this plan?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes “{plan.title}”. Member tasks are not deleted — any that
-              haven’t finished return to the Inbox for triage, and none of them start running.
-              This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => { setConfirmClear(false); onClear() }}
-              className="bg-[var(--color-error)] text-white hover:bg-[var(--color-error)]/90"
-            >
-              Clear
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </div>
+      <ConfirmDialog
+        open={confirmClear}
+        onOpenChange={setConfirmClear}
+        title="Clear this plan?"
+        description={
+          <>
+            This permanently deletes &ldquo;{plan.title}&rdquo;. Member tasks are not deleted — any that
+            haven&rsquo;t finished return to the Inbox for triage, and none of them start running.
+            This cannot be undone.
+          </>
+        }
+        confirmLabel="Clear"
+        destructive
+        onConfirm={() => { setConfirmClear(false); onClear() }}
+      />
+    </Card>
   )
 }

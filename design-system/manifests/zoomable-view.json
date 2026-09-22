@@ -1,0 +1,184 @@
+{
+  "version": 1,
+  "component": "ZoomPill",
+  "exports": [
+    "ZoomPill",
+    "ZoomableMediaSurface",
+    "clampZoomScale",
+    "effectiveMinScale",
+    "computeFittedScale",
+    "computeOpeningScale",
+    "resolveSvgIntrinsicSize",
+    "useZoomableViewKeyboard",
+    "useZoomableMedia",
+    "ZOOMABLE_VIEW_MIN_SCALE",
+    "ZOOMABLE_VIEW_MAX_SCALE",
+    "ZOOMABLE_VIEW_LABEL_FLOOR_PX"
+  ],
+  "category": "composite",
+  "source": "src/components/ui/zoomable-view.tsx",
+  "documentation": "docs/internal/design/components/zoomable-view.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "canvas",
+    "media-viewer"
+  ],
+  "sizes": [
+    "default"
+  ],
+  "states": [
+    "default",
+    "min",
+    "max",
+    "menu-open",
+    "disabled"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "exports": [
+        "Default",
+        "AccessibleNames",
+        "ZoomInOut",
+        "OpenMenu",
+        "SelectFit",
+        "ZoomToSelection",
+        "KeyboardShortcuts",
+        "NarrowViewport",
+        "TallContentFitsFrame"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "zoomable-view-unit",
+      "kind": "unit",
+      "file": "src/components/ui/zoomable-view.test.tsx",
+      "test": "clampZoomScale / computeFittedScale / computeOpeningScale / resolveSvgIntrinsicSize / useZoomableViewKeyboard / ZoomableMediaSurface wheel contract / ZoomPill range-clamped disabling",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "test": "KeyboardShortcuts",
+      "story": "KeyboardShortcuts",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-menu-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "test": "OpenMenu",
+      "story": "OpenMenu",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-fit-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "test": "SelectFit",
+      "story": "SelectFit",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-zoom-to-selection-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "test": "ZoomToSelection",
+      "story": "ZoomToSelection",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-accessible-names-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "test": "AccessibleNames",
+      "story": "AccessibleNames",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-tall-content-fits-frame-interaction",
+      "kind": "interaction",
+      "file": "src/components/ui/zoomable-view.stories.tsx",
+      "test": "TallContentFitsFrame",
+      "story": "TallContentFitsFrame",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-keyboard",
+      "kind": "keyboard",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-keyboard] keyboard",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-pointer",
+      "kind": "pointer",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-pointer] pointer",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-reduced-motion",
+      "kind": "reduced-motion",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-reduced-motion] reduced-motion",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "zoomable-view-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "ZoomableView [check:zoomable-view-reflow] reflow",
+      "story": "NarrowViewport",
+      "applicable": true
+    }
+  ]
+}

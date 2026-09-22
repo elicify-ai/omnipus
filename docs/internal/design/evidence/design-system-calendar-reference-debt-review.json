@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "status": "approved-temporary-fragment-not-integrated-audit-baseline",
+  "source": "src/styles/fullcalendar-theme.css",
+  "sourceHash": "cad132c767ab2b11e5e77af830046ffb6387e74fe93519d7093a1a19c09f259a",
+  "occurrences": 5,
+  "fingerprints": 4,
+  "expiryCheckpoint": "C1",
+  "permanentExceptions": 0,
+  "rationale": "Application reads can use governed tokens directly. Third-party variable declarations remain independently scanned; raw tint definitions are not exempted.",
+  "fragments": [
+    "design-system/enforcement/approved-fragments/calendar-token-references.baseline.json",
+    "design-system/enforcement/approved-fragments/calendar-token-references.ledger.json"
+  ],
+  "schemaValidation": "passed",
+  "remaining": "Merge only into the paused final Stage B baseline after reconciling exact current findings."
+}

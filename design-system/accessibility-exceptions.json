@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "exceptions": [
+    {
+      "id": "radix-dropdown-menu-modal-trigger",
+      "owner": "design-system",
+      "component": "DropdownMenu",
+      "story": "MenuContract",
+      "check": "dropdown-menu-axe",
+      "rule": "aria-hidden-focus",
+      "node": "#storybook-root",
+      "trigger": "[data-ds-trigger][aria-haspopup=\"menu\"][aria-expanded=\"true\"]",
+      "focusScope": "[role=\"menu\"]",
+      "requiredAutomatedProofs": [
+        "single-reviewed-axe-node",
+        "open-menu-full-axe",
+        "single-hidden-root-focusable",
+        "initial-focus-in-menu",
+        "tab-contained",
+        "shift-tab-contained",
+        "programmatic-focus-contained",
+        "escape-restores-trigger",
+        "restored-document-full-axe"
+      ],
+      "manualEvidence": "outstanding-screen-reader",
+      "reference": "https://github.com/radix-ui/primitives/discussions/3994",
+      "rationale": "Radix modal DropdownMenu hides the application root while its trigger retains DOM tabIndex=0. While open, the complete axe ruleset must pass for the menu subtree and the separate reviewed aria-hidden-focus scan must match exactly one known host-root node. FocusScope keeps sequential and programmatic focus in the menu until Escape restores the trigger, after which the complete document must pass the full axe ruleset. This reviewed axe limitation applies only while every required proof passes."
+    }
+  ]
+}

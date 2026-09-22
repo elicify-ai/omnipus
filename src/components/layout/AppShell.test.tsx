@@ -5,7 +5,7 @@ import React from 'react'
 // useQuery and derives `devModeBypass` from it. Because `dev_mode_bypass` is a
 // security-relevant flag, a transport failure on that fetch must NOT collapse
 // to the same falsy state as a genuinely successful "bypass is off" response.
-// The component renders a dedicated amber banner
+// The component renders a dedicated warning banner
 // (data-testid="app-state-fetch-error-banner") whenever `isError` is true, so
 // the failure is visible instead of silently looking identical to "confirmed
 // off".

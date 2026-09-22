@@ -146,12 +146,12 @@ describe('IntegrationsSection', () => {
     fireEvent.click(screen.getByTestId('save-brave'))
 
     // The confirmation must appear; the PUT must NOT have fired yet.
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Update this integration?')
-    expect(screen.getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(screen.getByTestId('confirm-accept')).toHaveTextContent('Update integration')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(screen.getByRole('button', { name: 'Update integration' })).toHaveTextContent('Update integration')
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(screen.getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(screen.getByRole('button', { name: 'Update integration' }).className).not.toMatch(/color-error/)
     expect(api.configureIntegrationProvider).not.toHaveBeenCalled()
   })
 
@@ -165,7 +165,7 @@ describe('IntegrationsSection', () => {
     fireEvent.change(screen.getByTestId('key-input-brave'), { target: { value: 'BSA-secret' } })
     fireEvent.click(screen.getByTestId('save-brave'))
 
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Update integration' }))
 
     await waitFor(() => {
       // Confirm mode (platform edition) calls with no consent token — the
@@ -187,10 +187,10 @@ describe('IntegrationsSection', () => {
     fireEvent.change(screen.getByTestId('key-input-brave'), { target: { value: 'BSA-secret' } })
     fireEvent.click(screen.getByTestId('save-brave'))
 
-    fireEvent.click(await screen.findByTestId('confirm-cancel'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
     expect(api.configureIntegrationProvider).not.toHaveBeenCalled()
   })

@@ -29,6 +29,8 @@
 import { CaretLeft, CaretRight, CalendarBlank, Plus } from '@phosphor-icons/react'
 import type { CalendarApi } from '@fullcalendar/core'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import {
   Select,
   SelectContent,
@@ -154,17 +156,6 @@ export function CalendarToolbar({
   // ── Shared touch-target class (WCAG 2.5.8 / I-4) ────────────────────────
   const touchTarget = 'pointer-coarse:min-h-[44px]'
 
-  // ── Shared icon-button class (prev / next / today) ───────────────────────
-  const navBtnClass = cn(
-    'flex items-center justify-center shrink-0',
-    'h-8 w-8 rounded-md text-[var(--color-muted)]',
-    'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
-    'transition-colors',
-    touchTarget,
-    // On coarse pointer, ensure square-ish target width too
-    'pointer-coarse:w-11',
-  )
-
   return (
     /*
      * Outer wrapper: `@container` consumers upstream provide the container.
@@ -174,8 +165,8 @@ export function CalendarToolbar({
     <div
       data-testid="calendar-toolbar"
       className={cn(
-        'flex flex-wrap items-center gap-x-2 gap-y-1.5',
-        'px-3 py-2',
+        'flex flex-wrap items-center gap-x-[var(--space-2)] gap-y-[var(--space-1)]',
+        'px-[var(--space-2-5)] py-[var(--space-2)]',
         'border-b border-[var(--color-border)]',
         'bg-[var(--color-surface-1)]',
         'select-none',
@@ -187,7 +178,7 @@ export function CalendarToolbar({
           takes the full width so it sits alone on row 1.                   */}
       <div
         className={cn(
-          'flex items-center gap-1 order-1',
+          'flex items-center gap-[var(--space-1)] order-1',
           // Narrow: own full-width row. NOTE: no unconditional `flex-1` — its
           // flex-basis:0% overrides `w-full`, so both groups would stay on one
           // line and the view tabs/New-task overflowed off-screen (FR-007/I-9).
@@ -197,53 +188,70 @@ export function CalendarToolbar({
         )}
       >
         {/* prev */}
-        <button tabIndex={0}
+        <IconButton
           type="button"
           data-testid="calendar-prev"
           aria-label="Go to previous period"
           onClick={handlePrev}
-          className={navBtnClass}
+          className={cn(
+            'flex items-center justify-center shrink-0',
+            'h-8 w-8 rounded-md text-[var(--color-muted)]',
+            'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+            'transition-colors',
+            touchTarget,
+            // On coarse pointer, ensure square-ish target width too
+            'pointer-coarse:w-11',
+          )}
         >
           <CaretLeft size={15} weight="bold" />
-        </button>
+        </IconButton>
 
         {/* today */}
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           data-testid="calendar-today"
           aria-label="Go to today"
           onClick={handleToday}
           className={cn(
-            'flex items-center gap-1.5 shrink-0',
-            'h-8 px-2.5 rounded-md',
-            'text-xs font-medium text-[var(--color-muted)]',
+            'flex items-center gap-[var(--space-1)] shrink-0',
+            'h-8 px-[var(--space-2)] rounded-md',
+            'text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]',
             'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
             'transition-colors',
             touchTarget,
-            'pointer-coarse:px-3',
+            'pointer-coarse:px-[var(--space-2-5)]',
           )}
         >
           <CalendarBlank size={14} aria-hidden="true" />
           <span>Today</span>
-        </button>
+        </Button>
 
         {/* next */}
-        <button tabIndex={0}
+        <IconButton
           type="button"
           data-testid="calendar-next"
           aria-label="Go to next period"
           onClick={handleNext}
-          className={navBtnClass}
+          className={cn(
+            'flex items-center justify-center shrink-0',
+            'h-8 w-8 rounded-md text-[var(--color-muted)]',
+            'hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+            'transition-colors',
+            touchTarget,
+            // On coarse pointer, ensure square-ish target width too
+            'pointer-coarse:w-11',
+          )}
         >
           <CaretRight size={15} weight="bold" />
-        </button>
+        </IconButton>
 
         {/* Period title — grows to consume remaining space in row 1 */}
         <h2
           data-testid="calendar-title"
           className={cn(
-            'ml-1 flex-1 min-w-0',
-            'text-sm font-headline font-semibold',
+            'ml-[var(--space-1)] flex-1 min-w-0',
+            'text-[length:var(--type-body-compact-size)] font-headline font-semibold',
             'text-[var(--color-secondary)] truncate',
           )}
         >
@@ -257,7 +265,7 @@ export function CalendarToolbar({
           as the nav group (which has flex-1, so this group sits at the end). */}
       <div
         className={cn(
-          'flex items-center gap-1.5 order-3',
+          'flex items-center gap-[var(--space-1)] order-3',
           'w-full @2xl:w-auto',
           'justify-between @2xl:justify-end',
         )}
@@ -267,40 +275,29 @@ export function CalendarToolbar({
             wired here, so `role="tablist"`/`role="tab"`/`aria-selected` would
             promise the ARIA tab pattern (Left/Right to move focus, one stop in
             the Tab order) without implementing it — a11y audit fix option (b).
-            `role="group"` + `aria-pressed` per button correctly describes four
-            independently-tabbable toggle buttons instead. */}
-        <div
-          role="group"
+            `SegmentedControl` (`role="group"` + per-item `aria-pressed`, no
+            roving tabindex) correctly describes four independently-tabbable
+            toggle buttons instead — this is one of its audited real call
+            sites (see segmented-control.tsx's own doc comment). */}
+        <SegmentedControl
+          value={currentView}
+          onValueChange={(next) => handleViewChange(next as CalendarViewName)}
           aria-label="Calendar view"
-          className="flex items-center gap-0.5 rounded-md bg-[var(--color-surface-2)] p-0.5"
+          className="border-0"
         >
           {CALENDAR_VIEWS.map((view) => {
             const isActive = view === currentView
             return (
-              <button tabIndex={0}
+              <SegmentedControlItem
                 key={view}
-                type="button"
-                aria-pressed={isActive}
+                value={view}
                 aria-label={CALENDAR_VIEW_LABELS[view]}
                 data-testid={`calendar-view-${view}`}
-                onClick={() => handleViewChange(view)}
                 className={cn(
-                  'flex items-center gap-1 px-2.5 h-7 rounded text-xs font-medium whitespace-nowrap',
-                  'transition-colors',
+                  'gap-[var(--space-1)] whitespace-nowrap transition-colors',
                   touchTarget,
-                  'pointer-coarse:h-9 pointer-coarse:px-3',
-                  isActive
-                    ? [
-                        'bg-[var(--color-surface-3)]',
-                        'text-[var(--color-accent)]',
-                        'font-semibold',
-                        'shadow-sm',
-                      ]
-                    : [
-                        'text-[var(--color-muted)]',
-                        'hover:text-[var(--color-secondary)]',
-                        'hover:bg-[var(--color-surface-2)]/60',
-                      ],
+                  'pointer-coarse:h-9 pointer-coarse:px-[var(--space-2-5)]',
+                  isActive && 'font-semibold',
                 )}
               >
                 {/* On narrow screens show the icon alongside the label for density */}
@@ -308,17 +305,17 @@ export function CalendarToolbar({
                   <CalendarBlank size={15} weight="regular" aria-hidden="true" />
                 </span>
                 <span>{CALENDAR_VIEW_LABELS[view]}</span>
-              </button>
+              </SegmentedControlItem>
             )
           })}
-        </div>
+        </SegmentedControl>
 
         {/* Agent filter (FR-015 / US-4) — client-side, no refetch (SC-004).
             Rendered only when the host wires `onAgentFilterChange` (real
             usage: CalendarScreen); every other/legacy caller renders exactly
             as before. */}
         {onAgentFilterChange && (
-          <div className="flex flex-col gap-0.5 shrink-0">
+          <div className="flex flex-col gap-[var(--space-0-5)] shrink-0">
             <Select
               value={agentFilter ?? AGENT_FILTER_ALL}
               onValueChange={onAgentFilterChange}
@@ -327,7 +324,7 @@ export function CalendarToolbar({
                 data-testid="calendar-agent-filter"
                 aria-label="Filter by agent"
                 className={cn(
-                  'h-8 text-xs bg-[var(--color-surface-2)] border-[var(--color-border)]',
+                  'h-8 text-[length:var(--type-utility-xs-size)] bg-[var(--color-surface-2)] border-[var(--color-border)]',
                   'text-[var(--color-secondary)] w-auto min-w-[8rem]',
                   touchTarget,
                 )}
@@ -335,14 +332,14 @@ export function CalendarToolbar({
                 <SelectValue placeholder="All agents" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={AGENT_FILTER_ALL} className="text-xs">
+                <SelectItem value={AGENT_FILTER_ALL} className="text-[length:var(--type-utility-xs-size)]">
                   All agents
                 </SelectItem>
-                <SelectItem value={AGENT_FILTER_UNASSIGNED} className="text-xs">
+                <SelectItem value={AGENT_FILTER_UNASSIGNED} className="text-[length:var(--type-utility-xs-size)]">
                   Unassigned
                 </SelectItem>
                 {(agentOptions ?? []).map((a) => (
-                  <SelectItem key={a.value} value={a.value} className="text-xs">
+                  <SelectItem key={a.value} value={a.value} className="text-[length:var(--type-utility-xs-size)]">
                     {a.label}
                   </SelectItem>
                 ))}
@@ -352,7 +349,7 @@ export function CalendarToolbar({
                 CreateTaskSlideOver/TaskDetailPanel's team-roster fallback so
                 the same failure reads identically everywhere in the app. */}
             {agentRosterError && (
-              <p className="text-[10px] text-[var(--color-muted)] whitespace-nowrap">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] whitespace-nowrap">
                 Team list unavailable — showing all agents
               </p>
             )}
@@ -368,10 +365,10 @@ export function CalendarToolbar({
           variant="default"
           size="sm"
           className={cn(
-            'flex items-center gap-1.5 shrink-0',
-            'h-8 px-3',
+            'flex items-center gap-[var(--space-1)] shrink-0',
+            'h-8 px-[var(--space-2-5)]',
             touchTarget,
-            'pointer-coarse:h-11 pointer-coarse:px-4',
+            'pointer-coarse:h-11 pointer-coarse:px-[var(--space-3)]',
           )}
         >
           <Plus size={14} weight="bold" aria-hidden="true" />

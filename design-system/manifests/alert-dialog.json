@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "component": "AlertDialog",
+  "exports": [
+    "AlertDialog",
+    "AlertDialogPortal",
+    "AlertDialogOverlay",
+    "AlertDialogTrigger",
+    "AlertDialogContent",
+    "AlertDialogHeader",
+    "AlertDialogFooter",
+    "AlertDialogTitle",
+    "AlertDialogDescription",
+    "AlertDialogCancel",
+    "AlertDialogAction"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/alert-dialog.tsx",
+  "documentation": "docs/internal/design/components/alert-dialog.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "ConfirmationContract",
+        "ConfirmationKeyboard"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "alert-dialog-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/alert-dialog.test.tsx",
+      "test": "AlertDialog does NOT close on overlay/outside click"
+    },
+    {
+      "id": "alert-dialog-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Confirmation Contract",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-axe] axe",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-keyboard] keyboard",
+      "story": "ConfirmationKeyboard"
+    },
+    {
+      "id": "alert-dialog-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-browser] browser",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-pointer] pointer",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-reduced-motion] reduced-motion",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-forced-colors] forced-colors",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-root-size] root-size",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-zoom] zoom",
+      "story": "ConfirmationContract"
+    },
+    {
+      "id": "alert-dialog-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "AlertDialog [check:alert-dialog-reflow] reflow",
+      "story": "ConfirmationContract"
+    }
+  ]
+}

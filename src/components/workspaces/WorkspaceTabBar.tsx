@@ -16,6 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 // The workspace container surface: 4 view tabs (+ the workspace-name →
@@ -133,13 +134,13 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
       <div
         role="tablist"
         aria-label="Workspace views"
-        className="hidden @6xl:flex items-stretch gap-1 min-w-0 flex-1"
+        className="hidden @6xl:flex items-stretch gap-[var(--space-1)] min-w-0 flex-1"
       >
         {/* First tablist item: the workspace name → settings. Inside the
             tablist (not a stray sibling button) so it IS part of the menu
             component — same styling, same underline, same tab semantics. */}
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           role="tab"
           onClick={() =>
             navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
@@ -149,8 +150,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
           aria-selected={settingsActive}
           data-testid="workspace-name-button"
           className={cn(
-            'relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 text-sm font-headline whitespace-nowrap outline-none transition-colors',
-            ' rounded-t-sm',
+            'relative h-chrome-header min-h-chrome-header max-w-[24ch] flex-shrink-0 justify-start gap-[var(--space-1)] rounded-t-sm rounded-b-none px-[var(--space-2-5)] py-0 font-headline whitespace-nowrap outline-none hover:bg-transparent',
             settingsActive
               ? 'text-[var(--color-accent)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
@@ -165,7 +165,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               transition={{ type: 'spring', stiffness: 500, damping: 32 }}
             />
           )}
-        </button>
+        </Button>
 
         {WORKSPACE_TABS.map(({ segment, label, Icon }) => {
           const isActive = segment === activeSegment
@@ -187,7 +187,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 // root to 14px), leaving the underline ~5px high. NOT h-full either:
                 // the parent header uses items-center, so height:100% resolves to
                 // auto (no-op) and the underline would float mid-header.
-                'group relative flex items-center gap-1.5 px-3 h-chrome-header min-h-chrome-header text-sm font-headline whitespace-nowrap outline-none transition-colors',
+                'group relative flex items-center gap-[var(--space-1)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header text-[length:var(--type-body-compact-size)] font-headline whitespace-nowrap outline-none transition-colors',
                 ' rounded-t-sm',
                 isActive
                   ? 'text-[var(--color-accent)]'
@@ -209,17 +209,17 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
       </div>
 
       {/* ── View-switcher dropdown: shown when container < 1152px (72rem) ── */}
-      <div className="flex @6xl:hidden items-center px-2">
+      <div className="flex @6xl:hidden items-center px-[var(--space-2)]">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button tabIndex={0}
-              type="button"
+            <Button
+              variant="ghost"
               data-testid="workspace-view-switcher"
               aria-label={`Switch view, currently ${SEGMENT_LABELS[activeSegment]}`}
               className={cn(
-                'flex items-center gap-1.5 px-3 h-11 text-sm font-headline whitespace-nowrap rounded-md',
-                'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors',
-                ' outline-none',
+                'h-11 gap-[var(--space-1)] px-[var(--space-2-5)] font-headline whitespace-nowrap',
+                'text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+                'outline-none',
                 'pointer-coarse:min-h-[44px]',
               )}
             >
@@ -230,7 +230,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               )}
               <span className="text-[var(--color-accent)]">{SEGMENT_LABELS[activeSegment]}</span>
               <CaretDown size={13} className="opacity-60" />
-            </button>
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-44">
             {/* Settings entry — narrow viewports have no other settings entry
@@ -244,14 +244,14 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                 void navigate({ to: '/workspaces/$workspaceId/settings', params: { workspaceId } })
               }}
               className={cn(
-                'flex items-center gap-2',
-                settingsActive && 'text-[var(--color-accent)]',
+                'flex items-center gap-[var(--space-2)]',
+                settingsActive ? 'text-[var(--color-accent)]' : undefined,
               )}
             >
               <Buildings size={15} weight={settingsActive ? 'fill' : 'regular'} />
               <span>{SEGMENT_LABELS.settings}</span>
               {settingsActive && (
-                <span className="ml-auto text-[10px] text-[var(--color-accent)]" aria-hidden="true">
+                <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">
                   ●
                 </span>
               )}
@@ -269,14 +269,14 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                     })
                   }}
                   className={cn(
-                    'flex items-center gap-2',
-                    isActive && 'text-[var(--color-accent)]',
+                    'flex items-center gap-[var(--space-2)]',
+                    isActive ? 'text-[var(--color-accent)]' : undefined,
                   )}
                 >
                   <Icon size={15} weight={isActive ? 'fill' : 'regular'} />
                   <span>{label}</span>
                   {isActive && (
-                    <span className="ml-auto text-[10px] text-[var(--color-accent)]" aria-hidden="true">
+                    <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-accent)]" aria-hidden="true">
                       ●
                     </span>
                   )}

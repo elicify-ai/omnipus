@@ -8,9 +8,12 @@
  * consume. Selecting Admin is an explicit user choice (`selectAgent`) — it
  * must not write workspace membership.
  *
- * The Radix DropdownMenu is stubbed inline (pointer/portal internals don't
- * drive in jsdom — same convention as ListView.filters.test.tsx) so a click
- * on a candidate actually reaches `handleAgentSelect`.
+ * The dropdown is the REAL, catalogued `DropdownMenu` (not stubbed) — same
+ * pattern as AgentPicker.agent-selector-open.test.tsx's `pickJim()`: since
+ * `<DropdownMenu open={agentSelectorOpen}>` is controlled by the ui store,
+ * setting that flag renders the Radix portal content straight into
+ * `document.body`, where `screen` queries reach it without simulating
+ * pointer capture.
  *
  * Covers:
  *   - Admin is listed in the open dropdown even when the active workspace
@@ -44,25 +47,17 @@ vi.mock('@/components/shared/IconRenderer', () => ({
   IconRenderer: () => null,
 }))
 
-vi.mock('@/components/ui/dropdown-menu', () => ({
-  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuTrigger: ({ children, asChild }: { children: React.ReactNode; asChild?: boolean }) =>
-    asChild ? <>{children}</> : <div>{children}</div>,
-  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  DropdownMenuItem: ({
-    children,
-    onClick,
-    className,
-  }: {
-    children: React.ReactNode
-    onClick?: () => void
-    className?: string
-  }) => (
-    <button type="button" role="menuitem" onClick={onClick} className={className}>
-      {children}
-    </button>
-  ),
-}))
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof globalThis.ResizeObserver === 'undefined') {
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+}
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function () {}
+}
 
 import { AgentPicker } from './AgentPicker'
 
@@ -120,12 +115,24 @@ beforeEach(() => {
   })
 })
 
+/** Opens the real, controlled Radix DropdownMenu by flipping the ui store's
+ * flag — the same mechanism the `/agents` slash command uses — and waits for
+ * the agent list to be loaded first so the menu isn't opened empty. */
+async function openMenu() {
+  await vi.waitFor(() => expect(vi.mocked(api.fetchAgents)).toHaveBeenCalled())
+  await act(async () => {
+    useUiStore.getState().setAgentSelectorOpen(true)
+  })
+}
+
 describe('AgentPicker — Admin standalone-operator chat reachability (ADR-090 FR-001)', () => {
   it('lists Admin in the dropdown while Jim (off-team ordinary core) stays scoped out', async () => {
     renderPicker()
+    await openMenu()
 
-    // Team query applied: Jim is gone. Stubbed menu items are always in the
-    // tree, so this is the dropdown list, not just the trigger label.
+    // Team query applied: Jim is gone. Real menu items only exist once the
+    // portal content has rendered, so this is the dropdown list, not just
+    // the trigger label.
     await vi.waitFor(() => {
       expect(screen.queryByRole('menuitem', { name: /jim/i })).not.toBeInTheDocument()
       expect(screen.getByRole('menuitem', { name: /admin/i })).toBeInTheDocument()
@@ -135,6 +142,7 @@ describe('AgentPicker — Admin standalone-operator chat reachability (ADR-090 F
 
   it('clicking Admin records an explicit user selection and does not write workspace membership', async () => {
     renderPicker()
+    await openMenu()
 
     const adminItem = await vi.waitFor(() => screen.getByRole('menuitem', { name: /admin/i }))
     fireEvent.click(adminItem)
@@ -165,6 +173,7 @@ describe('AgentPicker — Admin standalone-operator chat reachability (ADR-090 F
       makeAgent({ id: 'admin', name: 'Admin', type: 'core', locked: true, status: 'draft' }),
     ])
     renderPicker()
+    await openMenu()
 
     await vi.waitFor(() => {
       expect(screen.queryByRole('menuitem', { name: /jim/i })).not.toBeInTheDocument()

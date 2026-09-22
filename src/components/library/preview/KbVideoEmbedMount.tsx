@@ -38,7 +38,7 @@ export interface KbVideoEmbedMountProps {
 
 export function KbVideoEmbedMount({ workspaceId, workspacePath }: KbVideoEmbedMountProps) {
   return (
-    <LazyEmbedMount reservedHeight={VIDEO_EMBED_RESERVED_HEIGHT_PX} className="my-3 block">
+    <LazyEmbedMount reservedHeight={VIDEO_EMBED_RESERVED_HEIGHT_PX} className="my-[var(--space-2-5)] block">
       <KbVideoEmbedContent workspaceId={workspaceId} workspacePath={workspacePath} />
     </LazyEmbedMount>
   )

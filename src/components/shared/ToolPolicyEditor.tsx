@@ -44,10 +44,14 @@
  */
 
 import { useMemo, useState } from 'react'
-import { CaretDown, CaretUp, Database, LockSimple, ShieldWarning, Warning } from '@phosphor-icons/react'
+import { Database, LockSimple, ShieldWarning, Warning } from '@phosphor-icons/react'
 import type { RegistryTool } from '@/lib/api'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { PolicyBadge } from '@/components/shared/PolicyBadge'
+import { Button } from '@/components/ui/button'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { cn } from '@/lib/utils'
 import { CATEGORY_LABELS, groupByCategory, resolvePolicy } from '@/lib/toolCategories'
 import {
   POLICY_PRESETS,
@@ -55,16 +59,7 @@ import {
   type RolePreset,
   type ToolPolicyValue,
 } from '@/lib/toolPolicyPresets'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -326,14 +321,14 @@ function CategoryToolRow({
       : undefined
   const isDiscovery = tool.name === DISCOVERY_TOOL_NAME
   return (
-    <div className="flex items-center justify-between py-1 gap-2" data-testid={`tool-row-${tool.name}`}>
-      <span className="text-[11px] text-[var(--color-muted)] font-mono truncate flex-1 flex items-center gap-1.5" title={tool.name}>
+    <div className="flex items-center justify-between py-[var(--space-1)] gap-[var(--space-2)]" data-testid={`tool-row-${tool.name}`}>
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono truncate flex-1 flex items-center gap-[var(--space-1)]" title={tool.name}>
         <span className="truncate">{tool.name}</span>
         {effective === undefined && !isDiscovery && (
           <span
             title="This tool has no explicit policy entry — needs attention."
             data-testid={`tool-unconfigured-${tool.name}`}
-            className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold border border-[var(--color-border)] text-[var(--color-warning)]"
+            className="inline-flex items-center gap-[var(--space-0-5)] shrink-0 px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-warning)]"
           >
             <Warning size={9} weight="bold" />
             Unset
@@ -347,18 +342,18 @@ function CategoryToolRow({
             href="/#/settings"
             title={lockTitle}
             data-testid={`global-override-${tool.name}`}
-            className="inline-flex items-center gap-0.5 shrink-0 px-1 py-0.5 rounded text-[9px] font-semibold border border-[var(--color-border)] text-[var(--color-warning)] hover:bg-[var(--color-surface-2)]"
+            className="inline-flex items-center gap-[var(--space-0-5)] shrink-0 px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border border-[var(--color-border)] text-[var(--color-warning)] hover:bg-[var(--color-surface-2)]"
           >
             {isUnconfigured ? <Warning size={9} weight="bold" /> : <LockSimple size={9} weight="bold" />}
             Global: {floorLabel}
           </a>
         )}
       </span>
-      <div className="flex gap-1 shrink-0 items-center">
+      <div className="flex gap-[var(--space-1)] shrink-0 items-center">
         {isDiscovery ? (
           <span
             data-testid="toolsearch-always-available"
-            className="text-[10px] text-[var(--color-muted)] max-w-[220px] text-right leading-snug"
+            className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] max-w-[220px] text-right leading-snug"
           >
             Always available for discovery. Target tool permissions still apply.
           </span>
@@ -378,16 +373,17 @@ function CategoryToolRow({
               )
             })}
             {onInherit && isOverridden && (
-              <button
+              <Button
                 type="button"
-                tabIndex={0}
+                variant="outline"
+                size="sm"
                 disabled={disabled}
                 data-testid={`inherit-${tool.name}`}
                 onClick={() => onInherit(tool.name)}
-                className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] disabled:opacity-50"
+                className="h-auto px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
               >
                 Inherit
-              </button>
+              </Button>
             )}
           </>
         )}
@@ -427,10 +423,10 @@ function CategorySection({
   const summary = categorySummaryPolicy(tools, policies)
 
   const PILL_CLASS: Record<PolicySummary, string> = {
-    mixed:        'bg-violet-500/20 text-violet-300 border-violet-500/40',
-    allow:        'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
-    ask:          'bg-amber-500/20 text-amber-400 border-amber-500/40',
-    deny:         'bg-red-500/20 text-red-400 border-red-500/40',
+    mixed:        'bg-[color-mix(in_srgb,var(--color-tertiary)_20%,transparent)] text-[var(--color-text-tertiary)] border-[color-mix(in_srgb,var(--color-tertiary)_40%,transparent)]',
+    allow:        'bg-[var(--color-status-done)]/20 text-[var(--color-status-done)] border-[var(--color-status-done)]/40',
+    ask:          'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/40',
+    deny:         'bg-[var(--color-status-failed)]/20 text-[var(--color-status-failed)] border-[var(--color-status-failed)]/40',
     unconfigured: 'bg-[var(--color-surface-2)] text-[var(--color-warning)] border-[var(--color-border)]',
   }
   const pillClass = PILL_CLASS[summary]
@@ -448,29 +444,29 @@ function CategorySection({
       className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
     >
       {/* Trigger — always visible; pill is IN the trigger row */}
-      <button tabIndex={0}
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+      <DisclosureRow
+        expanded={open}
+        onExpandedChange={setOpen}
+        expandable
+        caretSize={13}
+        className="w-full rounded-none px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
       >
-        <span className="flex items-center gap-2">
+        <span className="flex items-center gap-[var(--space-2)]">
           <span>{label}</span>
           {/* Summary pill — always visible in the header */}
           <span
-            className={`px-1.5 py-0.5 rounded text-[9px] font-semibold border ${pillClass}`}
+            className={`px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold border ${pillClass}`}
             data-testid={`category-pill-${categoryKey}`}
           >
             {PILL_LABEL[summary]}
           </span>
         </span>
-        {open ? <CaretUp size={13} /> : <CaretDown size={13} />}
-      </button>
+      </DisclosureRow>
 
       {/* Expanded content */}
       {open && (
-        <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3">
-          <div className="space-y-0.5">
+        <div className="px-[var(--space-2-5)] pb-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]">
+          <div className="space-y-[var(--space-0-5)]">
             {tools.map((tool) => (
               <CategoryToolRow
                 key={tool.name}
@@ -542,9 +538,9 @@ function McpServerSection({
 
   const BULK_BUTTON_CLASS = (active: boolean, policy: ToolPolicy) => {
     const baseInactive = 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-    const activeAllow = 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40'
-    const activeAsk   = 'bg-amber-500/20 text-amber-400 border-amber-500/40'
-    const activeDeny  = 'bg-red-500/20 text-red-400 border-red-500/40'
+    const activeAllow = 'bg-[var(--color-status-done)]/20 text-[var(--color-status-done)] border-[var(--color-status-done)]/40'
+    const activeAsk   = 'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/40'
+    const activeDeny  = 'bg-[var(--color-status-failed)]/20 text-[var(--color-status-failed)] border-[var(--color-status-failed)]/40'
     if (!active) return baseInactive
     if (policy === 'allow') return activeAllow
     if (policy === 'ask')   return activeAsk
@@ -554,66 +550,67 @@ function McpServerSection({
   return (
     <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden">
       {/* Header row: toggle + server name + bulk controls */}
-      <div className="flex items-center justify-between px-3 py-2">
-        <button tabIndex={0}
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((o) => !o)}
-          className="flex items-center gap-2 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors min-w-0 flex-1 text-left"
+      <div className="flex items-center justify-between px-[var(--space-2-5)] py-[var(--space-2)]">
+        <DisclosureRow
+          expanded={open}
+          onExpandedChange={setOpen}
+          expandable
+          caretSize={13}
           data-testid="advanced-disclosure-trigger"
+          className="min-w-0 flex-1 gap-[var(--space-2)] rounded-none text-left text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
         >
           <span className="truncate">{server}</span>
-          <span className="text-[11px] font-normal text-[var(--color-muted)] shrink-0">
+          <span className="text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)] shrink-0">
             {serverTools.length} tool{serverTools.length !== 1 ? 's' : ''}
           </span>
-          {open ? <CaretUp size={13} className="shrink-0" /> : <CaretDown size={13} className="shrink-0" />}
-        </button>
+        </DisclosureRow>
 
         {/* Per-server bulk allow/ask/deny — only shown when a wildcard key is derivable */}
         {wildcardKey != null && (
-          <div
-            className="flex gap-1 shrink-0 ml-3"
+          <SegmentedControl
+            aria-label={`Bulk policy for ${server}`}
+            value={currentWildcard ?? ''}
+            onValueChange={(p) => onWildcardPolicy(wildcardKey, p as ToolPolicy)}
+            disabled={disabled}
+            className="shrink-0 ml-[var(--space-2-5)] gap-[var(--space-1)] border-transparent bg-transparent p-0"
             data-testid={`mcp-server-bulk-${server}`}
           >
             {ALL_POLICIES.map((p) => {
               const isActive = currentWildcard === p
               return (
-                <button tabIndex={0}
+                <SegmentedControlItem
                   key={p}
-                  type="button"
-                  disabled={disabled}
-                  aria-pressed={isActive}
+                  value={p}
                   data-testid={`mcp-server-bulk-${server}-${p}`}
                   title={`Set all ${server} tools to ${p}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onWildcardPolicy(wildcardKey, p)
-                  }}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors capitalize disabled:opacity-40 disabled:cursor-not-allowed ${BULK_BUTTON_CLASS(isActive, p)}`}
+                  className={cn(
+                    'h-auto min-w-0 rounded px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium capitalize shadow-none',
+                    BULK_BUTTON_CLASS(isActive, p),
+                  )}
                 >
                   {p.charAt(0).toUpperCase() + p.slice(1)}
-                </button>
+                </SegmentedControlItem>
               )
             })}
-          </div>
+          </SegmentedControl>
         )}
       </div>
 
       {/* Expanded content */}
       {open && (
-        <div className="px-3 pb-3 border-t border-[var(--color-border)] pt-3" data-testid="advanced-disclosure-content">
+        <div className="px-[var(--space-2-5)] pb-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]" data-testid="advanced-disclosure-content">
           {/* Source badge */}
-          <div className="flex items-center gap-1.5 mb-2">
+          <div className="flex items-center gap-[var(--space-1)] mb-[var(--space-2)]">
             <Database size={11} className="text-[var(--color-muted)]" />
             <span
-              className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/40"
+              className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-[color-mix(in_srgb,var(--color-tertiary)_20%,transparent)] text-[var(--color-text-tertiary)] border border-[color-mix(in_srgb,var(--color-tertiary)_40%,transparent)]"
               data-testid={`mcp-source-badge-${server}`}
             >
               MCP
             </span>
-            <span className="text-[10px] text-[var(--color-muted)]">{server}</span>
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{server}</span>
           </div>
-          <div className="space-y-0.5" data-testid={`mcp-server-${server}`}>
+          <div className="space-y-[var(--space-0-5)]" data-testid={`mcp-server-${server}`}>
             {serverTools.map((tool) => (
               <CategoryToolRow
                 key={tool.name}
@@ -758,32 +755,38 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-4" data-testid="tool-policy-editor">
+    <div className="space-y-[var(--space-3)]" data-testid="tool-policy-editor">
       {/* 1. Role preset selector */}
-      <div className="space-y-2">
-        <p className="text-xs font-medium text-[var(--color-muted)]">Role preset</p>
-        <div className="flex gap-2 flex-wrap">
+      <div className="space-y-[var(--space-2)]">
+        <p id="tool-policy-role-preset-label" className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">Role preset</p>
+        <SegmentedControl
+          aria-labelledby="tool-policy-role-preset-label"
+          value={activePreset ?? ''}
+          onValueChange={(role) => handlePresetClick(role as RolePreset)}
+          disabled={disabled}
+          className="flex-wrap gap-[var(--space-2)] border-transparent bg-transparent p-0"
+        >
           {(Object.entries(POLICY_PRESETS) as [RolePreset, typeof POLICY_PRESETS[RolePreset]][]).map(([role, preset]) => (
-            <button tabIndex={0}
+            <SegmentedControlItem
               key={role}
-              type="button"
+              value={role}
               disabled={disabled || presetsDisabled}
-              onClick={() => handlePresetClick(role)}
               data-testid={`preset-${role}`}
               title={presetsDisabled ? 'Waiting for the global permission ceiling.' : preset.description}
-              className={`px-3 py-1.5 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              className={cn(
+                'h-auto min-w-0 rounded-md px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] font-medium shadow-none',
                 activePreset === role
-                  ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
-                  : 'border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]'
-              }`}
+                  ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/20 hover:text-[var(--color-accent)]'
+                  : 'border-[var(--color-border)] bg-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]',
+              )}
             >
               {preset.label}
-            </button>
+            </SegmentedControlItem>
           ))}
-        </div>
+        </SegmentedControl>
         {/* Preset description */}
         {activePreset && (
-          <p className="text-[11px] text-[var(--color-muted)]">{POLICY_PRESETS[activePreset].description}</p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{POLICY_PRESETS[activePreset].description}</p>
         )}
       </div>
 
@@ -791,9 +794,9 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
               system.* tools appear here under "System"; general builtins under
               "General" (core category). No tool appears twice. */}
       {Object.keys(groupedBuiltin).length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-medium text-[var(--color-muted)]">Tool categories</p>
-          <div className="space-y-1.5" data-testid="category-grid">
+        <div className="space-y-[var(--space-2)]">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">Tool categories</p>
+          <div className="space-y-[var(--space-1)]" data-testid="category-grid">
             {Object.entries(groupedBuiltin).map(([cat, catTools]) => (
               <CategorySection
                 key={cat}
@@ -813,9 +816,9 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
 
       {/* 3. MCP tools grouped per-server */}
       {mcpTools.length > 0 && (
-        <div className="space-y-2" data-testid="mcp-tools-section">
-          <p className="text-xs font-medium text-[var(--color-muted)]">MCP server tools</p>
-          <div className="space-y-1.5">
+        <div className="space-y-[var(--space-2)]" data-testid="mcp-tools-section">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-muted)]">MCP server tools</p>
+          <div className="space-y-[var(--space-1)]">
             {Object.entries(groupedMcp).map(([server, serverTools]) => (
               <McpServerSection
                 key={server}
@@ -837,33 +840,31 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
       {/* ADR-052 FR-021/F6 — security affordance for an execute_plan "allow"
           grant. A concrete, testable confirm gate (modal presence), not
           styling: the edit is held in `pendingGrant` and only committed via
-          the Action button. Escape/overlay-dismiss (AlertDialog's
+          the Confirm button. Escape/overlay-dismiss (ConfirmDialog's
           onOpenChange(false)) discards the pending edit exactly like Cancel. */}
-      <AlertDialog open={pendingGrant != null} onOpenChange={(open) => { if (!open) setPendingGrant(null) }}>
-        <AlertDialogContent data-testid="execute-plan-grant-dialog">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <ShieldWarning size={18} weight="bold" className="text-[var(--color-warning)]" />
-              Confirm autonomous plan execution
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {pendingGrant?.kind === 'preset'
-                ? `The "${POLICY_PRESETS[pendingGrant.role].label}" preset sets execute_plan to Allow. `
-                : ''}
-              Setting execute_plan to Allow enables autonomous multi-task execution without an approval prompt
-              {'  '}— once this resolves to Allow, the agent can author and run a full task plan end-to-end
-              with no human interlock. Guardrails (concurrency cap, per-task attempt limit, idle expiry,
-              required acceptance criteria) still apply, but no operator approval prompt will be raised.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel data-testid="execute-plan-grant-cancel">Cancel</AlertDialogCancel>
-            <AlertDialogAction data-testid="execute-plan-grant-confirm" onClick={confirmPendingGrant}>
-              Allow autonomous execution
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={pendingGrant != null}
+        onOpenChange={(open) => { if (!open) setPendingGrant(null) }}
+        title={
+          <span className="flex items-center gap-[var(--space-2)]">
+            <ShieldWarning size={18} weight="bold" className="text-[var(--color-warning)]" />
+            Confirm autonomous plan execution
+          </span>
+        }
+        description={
+          <>
+            {pendingGrant?.kind === 'preset'
+              ? `The "${POLICY_PRESETS[pendingGrant.role].label}" preset sets execute_plan to Allow. `
+              : ''}
+            Setting execute_plan to Allow enables autonomous multi-task execution without an approval prompt
+            {'  '}— once this resolves to Allow, the agent can author and run a full task plan end-to-end
+            with no human interlock. Guardrails (concurrency cap, per-task attempt limit, idle expiry,
+            required acceptance criteria) still apply, but no operator approval prompt will be raised.
+          </>
+        }
+        confirmLabel="Allow autonomous execution"
+        onConfirm={confirmPendingGrant}
+      />
     </div>
   )
 }

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "status": "focused-repair-verified-independent-review-pending",
+  "scope": [
+    "literal whitespace-joined class arrays",
+    "runtime-indexed class expressions fail closed",
+    "unsupported class grammar fallback"
+  ],
+  "files": {
+    "scripts/design-system-locks/spacing.mjs": "9b5aebbbb7c2411142779f2b060caa64fb0ab9d63c6b959fd742a0fee679cfc2",
+    "tests/design-system-locks/spacing.test.mjs": "79c5914e1514598aa4820865baa3d6cc965209c4274224f0245d3eef85c4a1f5",
+    "tests/design-system-locks/spacing-adversarial.test.mjs": "51cfefa23c34480feb5763c60d4d4986f6b904d2ebfefb5d135f443679ad9dd6"
+  },
+  "tests": {
+    "passed": 86,
+    "exit": 0,
+    "log": "dist/design-system-baseline/cli-lanes/b-spacing-combined-final.log"
+  },
+  "lintExit": 0,
+  "mutationEvidence": [
+    "dist/design-system-baseline/cli-lanes/b-spacing-join-mutation-results.json",
+    "dist/design-system-baseline/cli-lanes/b-spacing-fallback-mutation.log"
+  ],
+  "mutationsKilled": 4,
+  "remaining": [
+    "independent review",
+    "current full-source scan",
+    "unsupported closure",
+    "registry/ledger/CI integration"
+  ],
+  "checkpoint": "Pause after B before C1"
+}

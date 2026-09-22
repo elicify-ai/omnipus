@@ -19,7 +19,26 @@
 //	}
 //
 // Key derivation: Argon2id(time=3, memory=64MB, parallelism=4, keyLen=32).
-// Encryption: AES-256-GCM.
+// Encryption: AES-256-GCM, with the credential name bound as additional
+// authenticated data (AAD). Every envelope is sealed and opened with
+//
+//	"omnipus-credential-v1:" + name
+//
+// as its AAD, so a ciphertext moved to a different name fails authentication
+// instead of decrypting under the name it was moved to. The version tag lives
+// in the AAD rather than in the file: it domain-separates this sealing context
+// from any other use of the master key, and it keeps the AAD non-empty even
+// for an empty name — crypto/cipher cannot tell a nil AAD from a zero-length
+// one, so binding the bare name would leave an empty-named entry unbound.
+// Ciphertexts sealed under one tag cannot be opened under another, which is
+// what makes a future AAD change a deliberate, self-enforcing break rather
+// than something a stale read path could paper over.
+//
+// Breaking change, greenfield with no migration and no fallback read: entries
+// written before the name binding was introduced carry a nil AAD and no longer
+// decrypt. An existing install must re-enter its credentials. There is
+// deliberately no "open with the name, else try no AAD" path — it would
+// restore the vulnerability for every pre-existing entry.
 package credentials
 
 import (
@@ -54,6 +73,13 @@ const (
 	argonTime    = 3
 	argonMemory  = 64 * 1024 // 64 MB
 	argonThreads = 4
+
+	// credentialAADPrefix is the domain-separation tag prefixed to every
+	// credential name before it is used as AES-GCM additional authenticated
+	// data. Bump it whenever the AAD construction changes: ciphertexts sealed
+	// under one tag cannot be opened under another, so the bump is what makes
+	// an accidental back-compat read impossible rather than merely discouraged.
+	credentialAADPrefix = "omnipus-credential-v1:"
 )
 
 // ErrStoreLocked is returned when the credential store is not unlocked.
@@ -62,7 +88,35 @@ var ErrStoreLocked = errors.New(
 )
 
 // ErrWrongKey is returned when AES-GCM authentication fails (wrong key).
+// A *EntryAuthError unwraps to it, so a caller that only knows this sentinel
+// still classifies every tag failure the way it always did.
 var ErrWrongKey = errors.New("credentials: decryption failed — wrong master key?")
+
+// EntryAuthError reports that one stored entry failed AES-GCM authentication.
+//
+// The cause is not cryptographically separable: a failed tag means the key,
+// the AAD (here, the entry name) or the ciphertext bytes did not match what
+// was sealed, and the tag carries one bit for all three. The message therefore
+// names the entry and every cause it could be instead of asserting a wrong
+// passphrase, which would be a guess. What does separate them is scope — a
+// wrong master key fails EVERY entry, while a swapped or edited entry fails
+// only the name it was moved to — so a caller that can observe more than one
+// entry holds the evidence this error cannot carry.
+type EntryAuthError struct{ Name string }
+
+func (e *EntryAuthError) Error() string {
+	return fmt.Sprintf(
+		"credentials: entry %q failed authentication — the stored value was not sealed under this name: it was edited in place, moved here from another entry, or the whole store was written under a different master key (re-enter this credential)",
+		e.Name,
+	)
+}
+
+// Unwrap classifies any entry authentication failure as a decryption failure.
+// errors.Is(err, ErrWrongKey) therefore stays true, and every caller that
+// treats ErrWrongKey as store-wide-and-fatal — gateway boot's
+// reportInjectionErrors, rest.go's describeCredentialResolutionError — keeps
+// that behaviour without having to know this type exists.
+func (e *EntryAuthError) Unwrap() error { return ErrWrongKey }
 
 // NotFoundError is returned when a credential name is not in the store.
 type NotFoundError struct{ Name string }
@@ -116,8 +170,37 @@ func (s *Store) IsLocked() bool {
 	return s.key == nil
 }
 
+// Close overwrites the store's key material and locks the store. Every owner of
+// a Store calls it once it is done with it — the gateway at shutdown, each CLI
+// command on completion — so that the key does not outlive the work that needed
+// it.
+//
+// # The guarantee, stated honestly
+//
+// The overwrite is best-effort, not cryptographic. Close zeroes the one array
+// this Store owns exclusively — every unlock path allocates it and copies into
+// it, so a caller's slice is never affected — and then drops the reference.
+// Copies it cannot reach stay readable: subkeys handed out by DeriveSubkey,
+// plaintext credential values returned by Get, the passphrase string itself
+// (Go strings are immutable and cannot be overwritten at all), and anything the
+// runtime copied. See wipe for why Go cannot offer more than this.
+//
+// Close is idempotent, and it is safe on a store that was never unlocked. The
+// store is left locked rather than unusable: Unlock (or UnlockWithKey) can
+// unlock it again, and every operation called in between returns ErrStoreLocked
+// rather than attempting a decrypt with a zeroed key.
+func (s *Store) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wipe(s.key)
+	s.key = nil
+}
+
 // UnlockWithKey sets the 32-byte AES-256 key directly.
 // Used when the key was provisioned via OMNIPUS_MASTER_KEY or key-file.
+//
+// The key is COPIED, never aliased: the store owns the array Close overwrites,
+// and the caller keeps ownership of the slice it passed in.
 func (s *Store) UnlockWithKey(key []byte) error {
 	if len(key) != keyLen {
 		return fmt.Errorf("credentials: key must be exactly %d bytes, got %d", keyLen, len(key))
@@ -141,11 +224,18 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 		return err
 	}
 
-	key := argon2.IDKey([]byte(passphrase), salt, argonTime, argonMemory, argonThreads, keyLen)
+	derived := argon2.IDKey([]byte(passphrase), salt, argonTime, argonMemory, argonThreads, keyLen)
+	// The store copies the key rather than aliasing this buffer, so the Argon2id
+	// output can be overwritten the moment it has been handed over. Argon2id's
+	// own internal working memory (64 MB at these parameters) lives inside
+	// golang.org/x/crypto and is not reachable from here — any copy surviving
+	// there is one this wipe cannot touch.
+	defer wipe(derived)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.key = key
+	s.key = make([]byte, keyLen)
+	copy(s.key, derived)
 	return nil
 }
 
@@ -206,7 +296,7 @@ func (s *Store) Set(name, value string) error {
 		return err
 	}
 
-	entry, err := encrypt(s.key, []byte(value))
+	entry, err := encrypt(s.key, name, []byte(value))
 	if err != nil {
 		return fmt.Errorf("credentials: encrypt %q: %w", name, err)
 	}
@@ -216,7 +306,11 @@ func (s *Store) Set(name, value string) error {
 }
 
 // Get decrypts and returns the credential named name.
-// Returns NotFoundError if the name is not present, ErrWrongKey on auth failure.
+// Returns NotFoundError if the name is not present, and a *EntryAuthError
+// naming the entry when the stored bytes do not authenticate under this name
+// — edited, moved here from another entry, or sealed under a different master
+// key. That error unwraps to ErrWrongKey, so an errors.Is check against the
+// sentinel still holds.
 // Implements US-3 AC2, US-3 AC3.
 func (s *Store) Get(name string) (string, error) {
 	s.mu.RLock()
@@ -235,7 +329,7 @@ func (s *Store) Get(name string) (string, error) {
 		return "", &NotFoundError{Name: name}
 	}
 
-	plain, err := decrypt(s.key, entry)
+	plain, err := decrypt(s.key, name, entry)
 	if err != nil {
 		return "", err
 	}
@@ -286,6 +380,10 @@ func (s *Store) Delete(name string) error {
 // Rotate re-encrypts all credentials with newKey.
 // The old key must already be loaded (store must be unlocked).
 // A fresh random salt is generated and persisted alongside the new ciphertext.
+//
+// The store takes a COPY of newKey and never overwrites the caller's slice:
+// Close wipes the store's own array only, so what the caller does with the
+// buffer it passed in is the caller's to decide.
 // Implements US-12 AC4.
 func (s *Store) Rotate(newKey []byte) error {
 	if len(newKey) != keyLen {
@@ -311,6 +409,9 @@ func (s *Store) RotateWithPassphrase(newPassphrase string) error {
 		return fmt.Errorf("credentials: generate salt: %w", err)
 	}
 	newKey := argon2.IDKey([]byte(newPassphrase), newSalt, argonTime, argonMemory, argonThreads, keyLen)
+	// rotateFull copies newKey into the store before it returns, so this
+	// derivation buffer can be overwritten on the way out.
+	defer wipe(newKey)
 	return s.rotateFull(newKey, newSalt)
 }
 
@@ -323,6 +424,9 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 	if s.key == nil {
 		return ErrStoreLocked
 	}
+	// Hold the replaced key explicitly so it is still reachable, and still
+	// wipeable, after s.key has been repointed at the new one.
+	oldKey := s.key
 
 	sf, err := s.loadFileInternal()
 	if err != nil {
@@ -332,11 +436,12 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 	// Decrypt all with old key, re-encrypt with new key.
 	newCredentials := make(map[string]encEntry, len(sf.Credentials))
 	for name, entry := range sf.Credentials {
-		plain, err := decrypt(s.key, entry)
+		plain, err := decrypt(oldKey, name, entry)
 		if err != nil {
-			return fmt.Errorf("credentials: rotate decrypt %q: %w", name, err)
+			// The name is already in the error decrypt returns.
+			return fmt.Errorf("credentials: rotate: %w", err)
 		}
-		newEntry, err := encrypt(newKey, []byte(plain))
+		newEntry, err := encrypt(newKey, name, []byte(plain))
 		if err != nil {
 			return fmt.Errorf("credentials: rotate encrypt %q: %w", name, err)
 		}
@@ -345,11 +450,19 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 
 	sf.Salt = base64.StdEncoding.EncodeToString(newSalt)
 	sf.Credentials = newCredentials
+	// A failed save leaves the rotation without effect, so the old key stays
+	// live and is deliberately NOT wiped on this path.
 	if err := s.saveFileNoLock(sf); err != nil {
 		return err
 	}
 
-	s.key = newKey
+	s.key = make([]byte, keyLen)
+	copy(s.key, newKey)
+
+	// From here the replaced key is unreachable from the store, and nothing
+	// else holds a reference that would ever clear it. Overwrite it now.
+	wipe(oldKey)
+
 	slog.Info("credentials: rotation complete")
 	return nil
 }
@@ -457,8 +570,16 @@ func (s *Store) loadOrCreateSalt() ([]byte, error) {
 	return salt, nil
 }
 
-// encrypt seals plaintext with AES-256-GCM using key.
-func encrypt(key, plaintext []byte) (encEntry, error) {
+// aadFor returns the additional authenticated data that binds a ciphertext to
+// the name it is stored under. See the package doc for why the version tag is
+// part of the AAD.
+func aadFor(name string) []byte {
+	return []byte(credentialAADPrefix + name)
+}
+
+// encrypt seals plaintext with AES-256-GCM using key, binding the envelope to
+// name via the AAD so the ciphertext only opens under that same name.
+func encrypt(key []byte, name string, plaintext []byte) (encEntry, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return encEntry{}, fmt.Errorf("credentials: cipher init: %w", err)
@@ -471,22 +592,26 @@ func encrypt(key, plaintext []byte) (encEntry, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return encEntry{}, fmt.Errorf("credentials: generate nonce: %w", err)
 	}
-	ct := gcm.Seal(nil, nonce, plaintext, nil)
+	ct := gcm.Seal(nil, nonce, plaintext, aadFor(name))
 	return encEntry{
 		Nonce:      base64.StdEncoding.EncodeToString(nonce),
 		Ciphertext: base64.StdEncoding.EncodeToString(ct),
 	}, nil
 }
 
-// decrypt opens an AES-256-GCM ciphertext. Returns ErrWrongKey on auth failure.
-func decrypt(key []byte, entry encEntry) (string, error) {
+// decrypt opens an AES-256-GCM ciphertext, requiring the AAD that binds it to
+// name. A ciphertext sealed under a different name, edited in place, or sealed
+// under a different master key fails authentication and yields a
+// *EntryAuthError naming the entry; malformed base64 yields an error naming it
+// too. The entry name is in every error this function returns.
+func decrypt(key []byte, name string, entry encEntry) (string, error) {
 	nonce, err := base64.StdEncoding.DecodeString(entry.Nonce)
 	if err != nil {
-		return "", fmt.Errorf("credentials: decode nonce: %w", err)
+		return "", fmt.Errorf("credentials: entry %q is malformed: nonce is not valid base64: %w", name, err)
 	}
 	ct, err := base64.StdEncoding.DecodeString(entry.Ciphertext)
 	if err != nil {
-		return "", fmt.Errorf("credentials: decode ciphertext: %w", err)
+		return "", fmt.Errorf("credentials: entry %q is malformed: ciphertext is not valid base64: %w", name, err)
 	}
 
 	block, err := aes.NewCipher(key)
@@ -497,9 +622,9 @@ func decrypt(key []byte, entry encEntry) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("credentials: gcm init: %w", err)
 	}
-	plain, err := gcm.Open(nil, nonce, ct, nil)
+	plain, err := gcm.Open(nil, nonce, ct, aadFor(name))
 	if err != nil {
-		return "", ErrWrongKey
+		return "", &EntryAuthError{Name: name}
 	}
 	return string(plain), nil
 }

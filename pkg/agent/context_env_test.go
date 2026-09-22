@@ -395,7 +395,8 @@ func TestContextBuilder_Rule4_PreservesOtherRules(t *testing.T) {
 // ---------------------------------------------------------------------------
 // #20 — TestContextBuilder_GetMemoryContext_BothSections
 // Traces to: env-awareness-and-memory-spec.md FR-019
-// Pre-seed LAST_SESSION.md + MEMORY.md; both markers appear in BuildSystemPrompt.
+// Pre-seed the last-session summary and a per-memory entry; both markers
+// appear in BuildSystemPrompt.
 // ---------------------------------------------------------------------------
 
 func TestContextBuilder_GetMemoryContext_BothSections(t *testing.T) {

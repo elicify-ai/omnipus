@@ -720,13 +720,23 @@ type MediaPart struct {
 // MessageFrame — Client → server user chat message. Omit session_id to start a new session; include to continue an existing one. content must always be present as a key, but MAY be an empty string when media is also present and non-empty — an attachment-only send legitimately has no caption (UAT Issue 5). The anyOf below enforces the actual invariant: content has at least 1 character, OR media has at least 1 entry — a message with neither is still rejected.
 type MessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
-	Content string  `json:"content"`
+	// Client-generated correlation id echoed by MessageStatusFrame. Optional for compatibility with older clients.
+	ClientMessageId *string `json:"client_message_id,omitempty"`
+	Content         string  `json:"content"`
 	// Optional media:// refs for files the user attached to this message (e.g. images uploaded via POST /api/v1/upload). The server threads each ref into the LLM content array as a multimodal content block so the agent can see the attachment. Empty or omitted for text-only messages.
 	Media []string `json:"media,omitempty"`
 	// Optional per-message metadata. Typed keys today: `model_name` (Phase 1, FR-010) — when the user picks a model in the chat composer, the picker value is sent as `metadata.model_name` so the server routes this turn to the chosen model, falling back to the agent's `model` config when absent; `workspace_id` — the active workspace this chat belongs to; and `workspace_setup_kickoff` (boolean) — a one-time marker that this message is the workspace setup kickoff for `metadata.workspace_id`.
 	Metadata  map[string]any `json:"metadata,omitempty"`
 	SessionId *string        `json:"session_id,omitempty"`
 	Type      string         `json:"type"`
+}
+
+// MessageStatusFrame — Server → client delivery status for one user message. Session-scoped. received follows durable transcript persistence; working follows successful turn admission; failed means processing stopped before admission. Emitted only when the client supplied client_message_id.
+type MessageStatusFrame struct {
+	ClientMessageId string `json:"client_message_id"`
+	SessionId       string `json:"session_id"`
+	State           string `json:"state"`
+	Type            string `json:"type"`
 }
 
 // NotificationFrame — Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered only to that user's connections; the SPA adds it to the header notification center (#264).
@@ -1139,6 +1149,7 @@ const (
 	WsFrameTypeDevicePairingResponse    WsFrameType = "device_pairing_response"
 	WsFrameTypeSessionClose             WsFrameType = "session_close"
 	WsFrameTypeSessionStarted           WsFrameType = "session_started"
+	WsFrameTypeMessageStatus            WsFrameType = "message_status"
 	WsFrameTypeToken                    WsFrameType = "token"
 	WsFrameTypeDone                     WsFrameType = "done"
 	WsFrameTypeError                    WsFrameType = "error"

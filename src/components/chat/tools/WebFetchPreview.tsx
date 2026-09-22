@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { CaretDown, CaretUp, ArrowSquareOut } from '@phosphor-icons/react'
+import { ArrowSquareOut } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, isCancelledStatus } from '@/lib/toolStatusConfig'
@@ -88,29 +89,24 @@ function WebFetchBlock({
     // is the status dot/spinner only. The "open fetched URL" action link is a
     // separate sibling control (mirrors GenericToolCall's "Watch live"), not
     // nested inside the toggle button, so it stays independently clickable.
-    <div className="mt-2 text-xs font-mono">
-      <div className="flex w-full items-center gap-2">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
+      <div className="flex w-full items-center gap-[var(--space-2)]">
         {/* Header */}
-        <button tabIndex={0}
-          type="button"
-          onClick={() => hasDetail && setExpanded((e) => !e)}
-          className={cn(
-            'flex min-w-0 flex-1 items-center gap-2 py-1 transition-colors text-left',
-            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            !hasDetail && 'cursor-default'
-          )}
-          aria-expanded={hasDetail ? expanded : undefined}
-          disabled={!hasDetail}
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={hasDetail}
+          data-testid="web-fetch-toggle"
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">web_fetch</span>
-          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[length:var(--type-caption-size)]">
             {displayUrl(url)}
           </span>
-          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
-        </button>
+        </DisclosureRow>
         {linkable && (
           <a tabIndex={0}
             href={url}
@@ -118,15 +114,10 @@ function WebFetchBlock({
             rel="noopener noreferrer"
             aria-label="Open fetched URL"
             title="Open in new tab"
-            className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
+            className="shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-accent)] hover:underline transition-colors"
           >
             <ArrowSquareOut size={12} />
           </a>
-        )}
-        {hasDetail && (
-          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-          </span>
         )}
       </div>
 
@@ -134,9 +125,9 @@ function WebFetchBlock({
           preview keeps its identity (plain text preview), just without a
           bordered/backgrounded breadcrumb row. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] py-1 pl-3">
-          <div className="text-[10px] text-[var(--color-muted)] font-mono break-all mb-1">{url}</div>
-          <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
+          <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] font-mono break-all mb-[var(--space-1)]">{url}</div>
+          <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-64 overflow-auto">
             {preview}
             {truncated && (
               <span className="text-[var(--color-muted)] italic">{'\n'}... (content truncated)</span>

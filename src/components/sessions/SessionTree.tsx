@@ -40,6 +40,7 @@ import { useCallback, useMemo, useState, type ReactNode, type RefObject } from '
 import { useQueries } from '@tanstack/react-query'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { CaretRight, CaretDown, CircleNotch } from '@phosphor-icons/react'
+import { IconButton } from '@/components/ui/icon-button'
 import { buildSessionTree, attachSessionChildren, fetchSessionPage, type Session, type SessionTreeNode } from '@/lib/api'
 
 // ── Flattening ───────────────────────────────────────────────────────────────
@@ -282,9 +283,8 @@ export function SessionExpandToggle({
   collapseLabel: string
 }) {
   return (
-    <button
+    <IconButton
       tabIndex={0}
-      type="button"
       onClick={(e) => {
         e.stopPropagation()
         onToggle()
@@ -292,7 +292,7 @@ export function SessionExpandToggle({
       aria-expanded={expanded}
       aria-label={expanded ? collapseLabel : expandLabel}
       title={error ? 'Could not load — click to retry' : expanded ? collapseLabel : expandLabel}
-      className="flex shrink-0 items-center justify-center rounded p-1 -m-1 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+      className="h-auto w-auto flex shrink-0 items-center justify-center rounded p-[var(--space-1)] -m-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
     >
       {loading ? (
         <CircleNotch size={11} className="animate-spin" />
@@ -301,7 +301,7 @@ export function SessionExpandToggle({
       ) : (
         <CaretRight size={11} className={error ? 'text-[var(--color-error)]' : undefined} />
       )}
-    </button>
+    </IconButton>
   )
 }
 

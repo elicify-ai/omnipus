@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "status": "verified-scoped-integration-not-stage-acceptance",
+  "applicationStyle": {
+    "sourceHash": "a60c7c4e59b1eca746cdf19002a04555cab60669d2b3e498d792711b42b2e40e",
+    "testHash": "4e506f0477f625054597410cac105f018e9e813d8a232988b63bc2658417e998",
+    "browsers": [
+      "chromium",
+      "firefox",
+      "webkit"
+    ],
+    "pass": 3,
+    "exit": 0,
+    "mutations": "a-app-token-style-mutations.json",
+    "constraints": [
+      "New component token references resolve",
+      "Pre-C1 legacy cancelled alias and default padding/root typography preserved"
+    ],
+    "remaining": "Full production build/budget and component browser verification after pending A action/footer repairs"
+  },
+  "policy": {
+    "sourceHash": "3336f3312b5eeaccd028dc99ba4cbd43965d5ab87487b38e91497d209828f48f",
+    "canonicalOutput": "dist/design-system-baseline/cli-lanes/b-token-policy-canonical.json",
+    "tokens": 294,
+    "fields": [
+      "tokenCssNames",
+      "resolvedTokens",
+      "resolvedCssTokens"
+    ],
+    "mutations": "b-policy-mutations.json"
+  },
+  "auditContext": {
+    "sourceHash": "0943ca9b587c50e5159f2efc03af4754c9c74923b094610eb132957fd063f89e",
+    "testHash": "611708cf2ed60212db3c4a427debe57ff98c142a291b00e4fa55f5ae14fe4519",
+    "focusedTests": 52,
+    "exit": 0,
+    "lintExit": 0,
+    "mutations": "b-audit-modules-mutations.json",
+    "contract": "Complete frozen source map scoped to each audit root; no external filesystem resolution in scanners"
+  },
+  "checkpoint": "Founder pause after B; C1 not authorized"
+}

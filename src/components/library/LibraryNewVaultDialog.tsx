@@ -121,7 +121,7 @@ export function LibraryNewVaultDialog({
             A knowledge base is notes, records, and saved views the agent can search.
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-[var(--space-2)]">
           <Label htmlFor="library-new-vault-name">Name</Label>
           <Input
             id="library-new-vault-name"
@@ -134,17 +134,17 @@ export function LibraryNewVaultDialog({
             }}
           />
           {hasSlash && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-slash">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-vault-name-slash">
               A knowledge base name can't contain "/" or "\".
             </p>
           )}
           {!hasSlash && isDotName && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-vault-name-dot">
               "{trimmedName}" isn't a valid knowledge base name.
             </p>
           )}
           {!hasSlash && isHiddenName && (
-            <p className="text-xs text-[var(--color-error)]" data-testid="library-new-vault-name-hidden">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" data-testid="library-new-vault-name-hidden">
               A name starting with "." would make this a hidden folder — it wouldn't show in the
               list unless "Show hidden" is on. Choose a name without the leading dot.
             </p>

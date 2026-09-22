@@ -37,18 +37,12 @@ import {
   SheetDescription,
   SheetFooter,
 } from '@/components/ui/sheet'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { AdvancedDisclosure } from '@/components/shared/AdvancedDisclosure'
 import { addMcpServer, updateMcpServer, isApiError, type McpServer, type McpServerUpdate } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
@@ -417,10 +411,10 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
           className="w-full sm:max-w-md flex flex-col overflow-y-auto p-0"
           data-testid="mcp-sheet"
         >
-          <SheetHeader className="px-6 pr-14">
+          <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
             <SheetTitle>{editMode ? 'Edit MCP server' : 'Add MCP Server'}</SheetTitle>
           </SheetHeader>
-          <SheetDescription className="px-6 pt-3">
+          <SheetDescription className="px-[var(--space-4)] pt-[var(--space-2-5)]">
             {editMode
               ? 'Update the configuration for this MCP server.'
               : <>Connect a Model Context Protocol server to extend agent capabilities.{' '}
@@ -435,64 +429,55 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             }
           </SheetDescription>
 
-          <div className="flex-1 px-6 py-4 space-y-4">
+          <div className="flex-1 px-[var(--space-4)] py-[var(--space-3)] space-y-[var(--space-3)]">
             {/* Server name */}
-            <div className="space-y-1">
-              <label htmlFor="mcp-name" className="text-xs text-[var(--color-muted)]">Name</label>
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="mcp-name">Name</Label>
               {editMode ? (
-                <p className="text-sm text-[var(--color-secondary)] px-1 py-2">{name}</p>
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] px-[var(--space-1)] py-[var(--space-2)]">{name}</p>
               ) : (
                 <Input
                   id="mcp-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="my-mcp-server"
-                  className="text-sm"
+                  className="text-[length:var(--type-body-compact-size)]"
                   autoFocus
                 />
               )}
             </div>
 
             {/* Connect mode */}
-            <div className="space-y-2" role="group" aria-labelledby="mcp-connect-mode-label">
-              <span id="mcp-connect-mode-label" className="block text-xs text-[var(--color-muted)]">Connect via</span>
-              <div className="flex gap-2">
-                <button tabIndex={0}
-                  type="button"
+            <div className="space-y-[var(--space-2)]">
+              <span id="mcp-connect-mode-label" className="block text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Connect via</span>
+              <SegmentedControl
+                aria-labelledby="mcp-connect-mode-label"
+                value={mode}
+                onValueChange={(v) => handleModeSelect(v as ConnectMode)}
+                className="flex w-full"
+              >
+                <SegmentedControlItem
+                  value="network"
                   data-testid="mode-network"
-                  aria-pressed={mode === 'network'}
-                  onClick={() => handleModeSelect('network')}
-                  className={[
-                    'flex items-center gap-1.5 px-3 py-2 rounded-md border text-xs font-medium flex-1 justify-center transition-colors',
-                    mode === 'network'
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-                  ].join(' ')}
+                  className="flex-1 justify-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
                 >
                   <Globe size={13} />
                   A network address
-                </button>
-                <button tabIndex={0}
-                  type="button"
+                </SegmentedControlItem>
+                <SegmentedControlItem
+                  value="local"
                   data-testid="mode-local"
-                  aria-pressed={mode === 'local'}
-                  onClick={() => handleModeSelect('local')}
-                  className={[
-                    'flex items-center gap-1.5 px-3 py-2 rounded-md border text-xs font-medium flex-1 justify-center transition-colors',
-                    mode === 'local'
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-                  ].join(' ')}
+                  className="flex-1 justify-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
                 >
                   <Terminal size={13} />
                   A local program
-                </button>
-              </div>
+                </SegmentedControlItem>
+              </SegmentedControl>
 
               {/* Standing badge: shown while local-program mode is active */}
               {mode === 'local' && confirmedLocal && (
                 <div
-                  className="flex items-center gap-1.5 text-[11px] text-amber-400"
+                  className="flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                   data-testid="stdio-standing-badge"
                   role="status"
                 >
@@ -505,30 +490,30 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             {/* Network mode: URL field + Headers (G9) */}
             {mode === 'network' && (
               <>
-                <div className="space-y-1">
-                  <label htmlFor="mcp-url" className="text-xs text-[var(--color-muted)]">
+                <div className="space-y-[var(--space-2)]">
+                  <Label htmlFor="mcp-url">
                     Server URL
-                  </label>
+                  </Label>
                   <Input
                     id="mcp-url"
                     data-testid="network-url"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     placeholder="https://mcp.example.com/sse"
-                    className="text-sm font-mono"
+                    className="text-[length:var(--type-body-compact-size)] font-mono"
                   />
                   {networkUrlBadScheme && (
-                    <p className="text-[11px] text-[var(--color-error)]">
+                    <p className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">
                       Use https:// (or http:// for localhost only).
                     </p>
                   )}
                   {networkUrlIsInternal && networkUrlValid && (
                     <div
-                      className="flex items-start gap-1.5 text-[11px] text-amber-400"
+                      className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                       data-testid="ssrf-caution"
                       role="status"
                     >
-                      <Warning size={13} weight="fill" className="mt-0.5 shrink-0" />
+                      <Warning size={13} weight="fill" className="mt-[var(--space-0-5)] shrink-0" />
                       <span>
                         This URL points to an internal or private address. Connecting to
                         internal services may expose sensitive data (SSRF risk). The
@@ -544,55 +529,58 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                   summary="headers"
                   defaultOpen={(initialServer?.header_names?.length ?? 0) > 0}
                 >
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <span className="text-xs text-[var(--color-muted)]">HTTP headers (optional)</span>
+                  <div className="space-y-[var(--space-2-5)]">
+                    <div className="space-y-[var(--space-1)]">
+                      <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">HTTP headers (optional)</span>
                       {(initialServer?.header_names?.length ?? 0) > 0 && (
                         <p
-                          className="text-[11px] text-[var(--color-muted)]"
+                          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                           data-testid="header-names-set"
                         >
                           Currently set (values hidden — re-enter to replace):{' '}
                           {initialServer!.header_names!.join(', ')}
                         </p>
                       )}
-                      <div className="space-y-1.5">
+                      <div className="space-y-[var(--space-1)]">
                         {headerRows.map((row, idx) => (
-                          <div key={idx} className="flex gap-1.5 items-center">
+                          <div key={idx} className="flex gap-[var(--space-1)] items-center">
                             <Input
                               value={row.key}
                               onChange={(e) => handleHeaderRowChange(idx, 'key', e.target.value)}
                               placeholder="Header-Name"
-                              className="text-xs font-mono flex-1"
+                              className="text-[length:var(--type-utility-xs-size)] font-mono flex-1"
                               data-testid={`header-key-${idx}`}
                             />
                             <Input
                               value={row.value}
                               onChange={(e) => handleHeaderRowChange(idx, 'value', e.target.value)}
                               placeholder="value"
-                              className="text-xs font-mono flex-1"
+                              className="text-[length:var(--type-utility-xs-size)] font-mono flex-1"
                               data-testid={`header-value-${idx}`}
                             />
                             {headerRows.length > 1 && (
-                              <button tabIndex={0}
+                              <IconButton
                                 type="button"
+                                size="sm"
+                                variant="ghost"
                                 onClick={() => handleRemoveHeaderRow(idx)}
-                                className="text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 rounded shrink-0"
+                                className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] shrink-0"
                                 aria-label={`Remove header ${row.key.trim() || `row ${idx + 1}`}`}
                               >
                                 <Trash size={13} />
-                              </button>
+                              </IconButton>
                             )}
                           </div>
                         ))}
-                        <button tabIndex={0}
+                        <Button
                           type="button"
+                          variant="link"
                           onClick={handleAddHeaderRow}
-                          className="flex items-center gap-1 text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                          className="gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
                           data-testid="add-header-row"
                         >
                           <Plus size={11} /> Add header
-                        </button>
+                        </Button>
                       </div>
                     </div>
 
@@ -608,41 +596,41 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                 summary="command, args, env variables"
                 defaultOpen
               >
-                <div className="space-y-3">
-                  <div className="space-y-1">
-                    <label htmlFor="mcp-command" className="text-xs text-[var(--color-muted)]">
+                <div className="space-y-[var(--space-2-5)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-command">
                       Command
-                    </label>
+                    </Label>
                     <Input
                       id="mcp-command"
                       data-testid="local-command"
                       value={command}
                       onChange={(e) => setCommand(e.target.value)}
                       placeholder="npx @example/mcp-server"
-                      className="text-sm font-mono"
+                      className="text-[length:var(--type-body-compact-size)] font-mono"
                     />
                   </div>
 
-                  <div className="space-y-1">
-                    <label htmlFor="mcp-args" className="text-xs text-[var(--color-muted)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-args">
                       Args (comma-separated, optional)
-                    </label>
+                    </Label>
                     <Input
                       id="mcp-args"
                       value={args}
                       onChange={(e) => setArgs(e.target.value)}
                       placeholder="--port, 3000, --verbose"
-                      className="text-sm font-mono"
+                      className="text-[length:var(--type-body-compact-size)] font-mono"
                     />
                   </div>
 
-                  <div className="space-y-1">
-                    <label htmlFor="mcp-env" className="text-xs text-[var(--color-muted)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-env">
                       Environment variables (KEY=value, one per line, optional)
-                    </label>
+                    </Label>
                     {(initialServer?.env_keys?.length ?? 0) > 0 && (
                       <p
-                        className="text-[11px] text-[var(--color-muted)]"
+                        className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                         data-testid="env-keys-set"
                       >
                         Currently set (values hidden — re-enter to replace):{' '}
@@ -655,22 +643,22 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
                       onChange={(e) => setEnv(e.target.value)}
                       placeholder={"API_KEY=abc123\nDEBUG=true"}
                       rows={3}
-                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2 text-xs font-mono text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none resize-none"
+                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none resize-none"
                     />
                   </div>
 
                   {/* G9: Env file (stdio only) */}
-                  <div className="space-y-1">
-                    <label htmlFor="mcp-env-file" className="text-xs text-[var(--color-muted)]">
+                  <div className="space-y-[var(--space-2)]">
+                    <Label htmlFor="mcp-env-file">
                       Env file path (optional)
-                    </label>
+                    </Label>
                     <Input
                       id="mcp-env-file"
                       data-testid="env-file"
                       value={envFile}
                       onChange={(e) => setEnvFile(e.target.value)}
                       placeholder="/etc/omnipus/mcp-server.env"
-                      className="text-xs font-mono"
+                      className="text-[length:var(--type-utility-xs-size)] font-mono"
                     />
                   </div>
 
@@ -679,7 +667,7 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
             )}
           </div>
 
-          <SheetFooter className="pt-4 border-t border-[var(--color-border)]">
+          <SheetFooter className="pt-[var(--space-3)] border-t border-[var(--color-border)]">
             <Button
               variant="outline"
               size="sm"
@@ -703,36 +691,22 @@ export function McpServerModal({ open, onOpenChange, initialServer }: McpServerM
         </SheetContent>
       </Sheet>
 
-      {/* Stdio safety confirmation dialog */}
-      <AlertDialog
+      {/* Stdio safety confirmation dialog — follows the RiskySettingControl
+          pattern (see file header): `emphasis="cancel"` favors the safe
+          "network address" path as the primary action, de-emphasizing the
+          "run a local program" confirm. */}
+      <ConfirmDialog
         open={pendingLocal}
         onOpenChange={(o) => {
           if (!o) handleCancelStdio()
         }}
-      >
-        <AlertDialogContent data-testid="stdio-confirm-dialog">
-          <AlertDialogHeader>
-            <AlertDialogTitle>This runs a program on your server</AlertDialogTitle>
-            <AlertDialogDescription>
-              A local-program MCP server launches an executable directly on the
-              machine running the Omnipus gateway. Only connect servers you trust.
-              The program will have access to the gateway process environment.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleCancelStdio}>
-              Use a network address instead
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleConfirmStdio}
-              className="bg-amber-600/20 text-amber-400 border border-amber-500/40 hover:bg-amber-600/30"
-              data-testid="stdio-confirm-accept"
-            >
-              I understand, continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="This runs a program on your server"
+        description="A local-program MCP server launches an executable directly on the machine running the Omnipus gateway. Only connect servers you trust. The program will have access to the gateway process environment."
+        cancelLabel="Use a network address instead"
+        confirmLabel="I understand, continue"
+        emphasis="cancel"
+        onConfirm={handleConfirmStdio}
+      />
     </>
   )
 }

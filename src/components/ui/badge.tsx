@@ -3,12 +3,12 @@ import { cva, type VariantProps } from 'class-variance-authority'
 import { cn } from '@/lib/utils'
 
 const badgeVariants = cva(
-  'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium transition-colors',
+  'inline-flex items-center gap-[var(--space-1)] rounded-full border px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] font-medium transition-colors motion-reduce:transition-none',
   {
     variants: {
       variant: {
         default:
-          'border-transparent bg-[var(--color-accent)] text-[var(--color-primary)]',
+          'border-transparent bg-[var(--color-accent)] text-[var(--color-primary)] forced-colors:border-[CanvasText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText]',
         secondary:
           'border-transparent bg-[var(--color-surface-2)] text-[var(--color-secondary)]',
         outline:
@@ -16,9 +16,9 @@ const badgeVariants = cva(
         success:
           'border-transparent bg-[var(--color-success)]/20 text-[var(--color-success)]',
         error:
-          'border-transparent bg-[var(--color-error)]/20 text-[var(--color-error)]',
+          'border-transparent bg-[var(--color-error)]/20 text-[color:var(--badge-error-foreground)]',
         destructive:
-          'border-transparent bg-[var(--color-error)]/20 text-[var(--color-error)]',
+          'border-transparent bg-[var(--color-error)]/20 text-[color:var(--badge-error-foreground)]',
         warning:
           'border-transparent bg-[var(--color-warning)]/20 text-[var(--color-warning)]',
         muted:

@@ -1,6 +1,7 @@
 // Annotate comment popover (ADR-039 D-B1/B2) — appears once a drag/click
 // selection finalizes into a cropped pendingAnnotation.
 
+import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 
 export function BrowserLiveAnnotatePopover({
@@ -23,9 +24,9 @@ export function BrowserLiveAnnotatePopover({
   return (
     <div
       data-testid="annotate-popover"
-      className="absolute inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 shadow-lg"
+      className="absolute inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] shadow-lg"
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-[var(--space-2-5)]">
         <img
           src={previewUrl}
           alt="Selected region"
@@ -56,32 +57,31 @@ export function BrowserLiveAnnotatePopover({
             }}
             placeholder="What would you like to discuss about this?"
             aria-label="Annotation comment"
-            className="min-h-[60px] text-xs"
+            className="min-h-[60px] text-[length:var(--type-utility-xs-size)]"
             disabled={submitting}
             autoFocus
           />
           {error && (
-            <p role="alert" className="mt-1 text-[11px] text-[var(--color-error)]">
+            <p role="alert" className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-error)]">
               {error}
             </p>
           )}
-          <div className="mt-2 flex justify-end gap-2">
-            <button tabIndex={0}
-              type="button"
+          <div className="mt-[var(--space-2)] flex justify-end gap-[var(--space-2)]">
+            <Button
+              variant="ghost"
               onClick={onCancel}
               disabled={submitting}
-              className="rounded px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="h-auto rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               Cancel
-            </button>
-            <button tabIndex={0}
-              type="button"
+            </Button>
+            <Button
               onClick={onSend}
               disabled={submitting || comment.trim().length === 0}
-              className="rounded bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              className="h-auto rounded bg-[var(--color-accent)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-primary)] hover:bg-[var(--color-accent)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               {submitting ? 'Sending…' : 'Send'}
-            </button>
+            </Button>
           </div>
         </div>
       </div>

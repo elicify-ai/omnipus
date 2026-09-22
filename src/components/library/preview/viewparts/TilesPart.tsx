@@ -12,6 +12,7 @@
 import type { VaultFindRow, ViewResultPart } from '@/lib/api/generated/openapi-types'
 import { cellValue, rowExcludedFromTotals } from './viewResultData'
 import { ExcludedRowMark, TotalsFooter } from './PartChrome'
+import { Button } from '@/components/ui/button'
 
 export function TilesPart({
   part,
@@ -31,7 +32,7 @@ export function TilesPart({
   const imageProperty = part.source.image
   return (
     <div className="flex min-h-0 flex-col" data-testid="viewpart-tiles">
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-2 p-3">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] gap-[var(--space-2)] p-[var(--space-2-5)]">
         {rows.map((row) => {
           const imagePath = imageProperty === undefined ? '' : cellValue(row, imageProperty)
           const url = imagePath === '' ? undefined : resolveImageUrl?.(imagePath)
@@ -41,34 +42,33 @@ export function TilesPart({
                 <img src={url} alt="" className="h-20 w-full rounded object-cover" loading="lazy" />
               ) : (
                 <div
-                  className="flex h-20 w-full items-center justify-center rounded bg-[var(--color-surface-3)] px-2 text-center text-[10px] text-[var(--color-muted)]"
+                  className="flex h-20 w-full items-center justify-center rounded bg-[var(--color-surface-3)] px-[var(--space-2)] text-center text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
                   data-testid="viewpart-tile-placeholder"
                 >
                   {imagePath === '' ? 'No image' : imagePath.split('/').pop()}
                 </div>
               )}
-              <span className="flex items-baseline truncate text-[12px] text-[var(--color-secondary)]">
+              <span className="flex items-baseline truncate text-[length:var(--type-caption-size)] text-[var(--color-secondary)]">
                 {row.title}
                 {rowExcludedFromTotals(row, part) && <ExcludedRowMark />}
               </span>
             </>
           )
           return onOpenPath ? (
-            <button
+            <Button
               key={row.path}
-              type="button"
-              tabIndex={0}
+              variant="ghost"
               onClick={() => onOpenPath(row.path)}
               aria-label={`Open ${row.title}`}
               data-testid="viewpart-tile"
-              className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2 text-left transition-colors hover:bg-[var(--color-surface-2)]"
+              className="h-auto w-full flex-col items-stretch justify-start gap-[var(--space-1)] whitespace-normal rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
             >
               {content}
-            </button>
+            </Button>
           ) : (
             <div
               key={row.path}
-              className="flex flex-col gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2"
+              className="flex flex-col gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)]"
               data-testid="viewpart-tile"
             >
               {content}

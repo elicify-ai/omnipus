@@ -1,0 +1,17 @@
+{
+  "version": 1, "component": "EmptyState", "exports": ["EmptyState", "EmptyStateProps"], "category": "composite", "source": "src/components/ui/empty-state.tsx", "documentation": "docs/internal/design/components/empty-state.md", "owner": "design-system", "themes": ["dark"], "variants": ["message", "action"], "sizes": ["default"], "states": ["informational", "actionable"],
+  "stories": [{ "file": "src/components/ui/empty-state.stories.tsx", "exports": ["Default", "WithAction"] }],
+  "checks": [
+    { "id": "empty-state-unit", "kind": "unit", "file": "src/components/ui/empty-state.test.tsx", "test": "EmptyState — presentation contract renders decorative icon, message, and optional action", "applicable": true },
+    { "id": "empty-state-interaction", "kind": "interaction", "file": "src/components/ui/empty-state.stories.tsx", "test": "With Action", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-axe] axe", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-keyboard] keyboard", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-browser] browser", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-pointer] pointer", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-reduced-motion", "kind": "reduced-motion", "applicable": false, "reason": "EmptyState adds no motion; its Button has a separate motion contract." },
+    { "id": "empty-state-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-forced-colors] forced-colors", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-root-size", "kind": "root-size", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-root-size] root-size", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-zoom", "kind": "zoom", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-zoom] zoom", "story": "WithAction", "applicable": true },
+    { "id": "empty-state-reflow", "kind": "reflow", "file": "tests/design-system/browser.spec.ts", "test": "EmptyState [check:empty-state-reflow] reflow", "story": "WithAction", "applicable": true }
+  ]
+}

@@ -9,6 +9,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { reAuth, getErrorMessage } from '@/lib/api'
@@ -79,15 +80,15 @@ export function ReAuthDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="flex items-center gap-[var(--space-2)]">
             <ShieldCheck size={18} weight="duotone" className="text-[var(--color-accent)]" />
             {title}
           </DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-2">
-          <Label htmlFor="reauth-password" className="text-xs text-[var(--color-muted)]">
+        <div className="space-y-[var(--space-2)]">
+          <Label htmlFor="reauth-password" className="text-[var(--color-muted)]">
             Password
           </Label>
           <div className="relative">
@@ -108,25 +109,26 @@ export function ReAuthDialog({
               placeholder="Your password"
               autoComplete="current-password"
               autoFocus
-              className="pr-10"
+              className="pr-[var(--space-6)]"
               data-testid="reauth-password-input"
             />
-            <button tabIndex={0}
+            <IconButton
+              variant="ghost"
               type="button"
               onClick={() => setShowPassword((v) => !v)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+              className="absolute right-2 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeSlash size={15} /> : <Eye size={15} />}
-            </button>
+            </IconButton>
           </div>
           {error && (
             <div
               role="alert"
               data-testid="reauth-error"
-              className="flex items-start gap-1.5 text-xs text-[var(--color-error)]"
+              className="flex items-start gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]"
             >
-              <XCircle size={13} weight="fill" className="shrink-0 mt-0.5" />
+              <XCircle size={13} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
               <span>{error}</span>
             </div>
           )}

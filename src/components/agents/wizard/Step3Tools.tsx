@@ -16,6 +16,7 @@
 
 import type { RegistryTool } from '@/lib/api'
 import { resolveToolsCfg } from '@/lib/toolPolicyPresets'
+import { Label } from '@/components/ui/label'
 import { ToolPolicyEditor, type ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import { InheritToggle } from './InheritToggle'
 import type { StepProps } from './types'
@@ -57,9 +58,9 @@ export function Step3Tools({
         />
       )}
       {!isExternal && !inheritTools && (
-        <div className="space-y-2" data-testid="wizard-tools-cfg">
-          <label className="text-sm font-medium">Tools policy</label>
-          <p className="text-xs text-[var(--color-muted)]">
+        <div className="space-y-[var(--space-2)]" data-testid="wizard-tools-cfg">
+          <Label>Tools policy</Label>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             Starts from the Balanced preset. Per-tool allow / ask / deny editor —
             every tool has an explicit policy, no hidden default.
           </p>
@@ -90,21 +91,21 @@ export function Step3Tools({
           skills, so the mapping was meaningless for 3p agents (P3 bug,
           2026-07-03 — the gate below was missing !isExternal). */}
       {!isExternal && !inheritSkills && (
-      <div className="space-y-2" data-testid="wizard-skills">
-        <label className="text-sm font-medium">Skills</label>
-        <p className="text-xs text-[var(--color-muted)]">
+      <div className="space-y-[var(--space-2)]" data-testid="wizard-skills">
+        <Label>Skills</Label>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           Multi-select chips of installed skills. Empty = no skills granted.
         </p>
         {skills.length === 0 ? (
-          <p className="text-xs text-[var(--color-muted)]">No skills installed.</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No skills installed.</p>
         ) : (
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             {skills.map((skill) => {
               const granted = (payload.skills ?? []).includes(skill.id)
               return (
-                <label
+                <Label
                   key={skill.id}
-                  className="flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 cursor-pointer hover:bg-[var(--color-surface-3)] transition-colors"
+                  className="flex items-start gap-[var(--space-2-5)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-2)] cursor-pointer hover:bg-[var(--color-surface-3)] transition-colors"
                 >
                   <input tabIndex={0}
                     type="checkbox"
@@ -118,23 +119,23 @@ export function Step3Tools({
                           : current.filter((s) => s !== skill.id),
                       )
                     }}
-                    className="mt-0.5 shrink-0 accent-[var(--color-accent)]"
+                    className="mt-[var(--space-0-5)] shrink-0 accent-[var(--color-accent)]"
                     data-testid={`skill-checkbox-${skill.id}`}
                   />
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-[var(--color-secondary)] leading-tight">
+                    <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-tight">
                       {skill.name}
                     </p>
                     {skill.description && (
-                      <p className="text-[11px] text-[var(--color-muted)] mt-0.5 leading-snug">
+                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-snug">
                         {skill.description}
                       </p>
                     )}
-                    <span className="text-[10px] font-mono text-[var(--color-muted)]/70">
+                    <span className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]/70">
                       {skill.id}
                     </span>
                   </div>
-                </label>
+                </Label>
               )
             })}
           </div>

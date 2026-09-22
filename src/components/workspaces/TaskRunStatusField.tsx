@@ -32,23 +32,22 @@
 // SmartSelect — TaskDetailPanel keeps its own richer editable dropdown (any
 // status transition, Retry, done-terminal guard) inline; this component is
 // the simpler read-only view appropriate for the calendar's recurring-task
-// context. Both share the same STATUS_OPTIONS/STATUS_BADGE source of truth
-// (taskStatusConfig.ts) and the same status-transition guard
-// (canDropTransition) so the two surfaces never disagree about labels,
+// context. Both share `StatusBadge` for colors, `taskStatusConfig.ts`'s
+// `STATUS_OPTIONS`/`statusLabel` for labels, and the same status-transition
+// guard (canDropTransition) so the two surfaces never disagree about labels,
 // colors, or which transitions are legal.
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { runTaskNow, isApiError, tasksQueryKeys } from '@/lib/api'
 import type { Task } from '@/lib/api'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useUiStore } from '@/store/ui'
 import { canDropTransition } from '@/components/workspaces/BoardView'
-import { STATUS_BADGE, statusLabel } from '@/components/workspaces/taskStatusConfig'
+import { StatusBadge } from '@/components/workspaces/StatusBadge'
+import { statusLabel } from '@/components/workspaces/taskStatusConfig'
 import { formatDateTime } from '@/lib/dateFormat'
 import type { TaskRunOccurrenceContext } from '@/lib/taskRuns'
 import { Play } from '@phosphor-icons/react'
-import { cn } from '@/lib/utils'
 
 export interface TaskRunStatusFieldProps {
   task: Task
@@ -102,7 +101,6 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
   })
 
   const badgeStatus = run ? run.status : task.status
-  const badgeClass = STATUS_BADGE[badgeStatus] ?? STATUS_BADGE.inbox
   const lastUpdatedIso = run ? (run.ended_at ?? run.started_at) : task.updated_at
 
   // A repeating series (every/recurring) is never truly "done" — a per-run
@@ -132,26 +130,27 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
     : taskLevelCanRunNow
 
   return (
-    <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Run status</p>
+    <div className="space-y-[var(--space-1)]">
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Run status</p>
       {showBadge ? (
-        <div className="flex items-center gap-2">
-          <Badge
+        <div className="flex items-center gap-[var(--space-2)]">
+          <StatusBadge
+            status={badgeStatus}
             data-testid="task-run-status-badge"
-            className={cn('h-7 text-xs border-transparent rounded-md px-2 inline-flex items-center', badgeClass)}
+            className="h-7 text-[length:var(--type-utility-xs-size)] border-transparent rounded-md px-[var(--space-2)] inline-flex items-center"
           >
             {statusLabel(badgeStatus)}
-          </Badge>
-          <span className="text-xs text-[var(--color-muted)]">Last updated {formatDateTime(lastUpdatedIso)}</span>
+          </StatusBadge>
+          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Last updated {formatDateTime(lastUpdatedIso)}</span>
         </div>
       ) : isFutureOccurrence ? (
         // D1: a future occurrence with no run shows its scheduled status —
         // never "Not yet run" (which implied Run-now was on offer).
-        <p className="text-xs text-[var(--color-muted)]" data-testid="occurrence-scheduled">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="occurrence-scheduled">
           Scheduled.
         </p>
       ) : (
-        <p className="text-xs text-[var(--color-muted)]" data-testid="occurrence-run-now-only">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="occurrence-run-now-only">
           Not yet run.
         </p>
       )}
@@ -159,7 +158,7 @@ export function TaskRunStatusField({ task, occurrence, now = Date.now() }: TaskR
         <Button
           type="button"
           size="sm"
-          className="gap-2 text-xs h-8"
+          className="gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)] h-8"
           onClick={() => doRunNow()}
           disabled={isStarting}
         >

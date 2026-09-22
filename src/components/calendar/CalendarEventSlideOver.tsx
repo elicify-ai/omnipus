@@ -494,14 +494,14 @@ export function CalendarEventSlideOver({
   return (
     <Sheet open={open} onOpenChange={(next) => { if (!next) onOpenChange(false) }}>
       <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>{isEdit ? 'Edit event' : 'New event'}</SheetTitle>
         </SheetHeader>
 
-        <div className="flex flex-col flex-1 gap-5 px-6 py-4 overflow-y-auto">
+        <div className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)] overflow-y-auto">
           {/* Title */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ces-title" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ces-title">
               Title <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
@@ -518,8 +518,8 @@ export function CalendarEventSlideOver({
           </div>
 
           {/* Agent — required: a scheduled task's only executor. */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Agent <span className="text-[var(--color-error)]">*</span>
             </Label>
             <SmartSelect
@@ -560,7 +560,7 @@ export function CalendarEventSlideOver({
               }
             />
             {teamError && (
-              <p className="text-xs text-[var(--color-muted)]">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 Team list unavailable — showing all agents
               </p>
             )}
@@ -574,8 +574,8 @@ export function CalendarEventSlideOver({
               instruction each time this task fires (Task.Prompt,
               pkg/agent/task_executor.go:462). Empty prompt → the agent gets
               only "# Task: <title>" and nothing to actually do. */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ces-prompt" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ces-prompt">
               Instruction <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Textarea
@@ -585,7 +585,7 @@ export function CalendarEventSlideOver({
               placeholder="Describe what the agent should do each time this runs…"
               rows={4}
               maxLength={10000}
-              className="text-xs font-mono resize-none"
+              className="text-[length:var(--type-utility-xs-size)] font-mono resize-none"
               aria-invalid={promptEmpty}
               aria-describedby={promptEmpty ? 'ces-prompt-error' : undefined}
             />
@@ -598,8 +598,8 @@ export function CalendarEventSlideOver({
           {/* Acceptance criteria (GOAL-FR-047/FR-053, D-C/R-26) — the same
               mandatory editor CreateTaskSlideOver has, on both this
               surface's create AND edit paths. */}
-          <div className="flex flex-col gap-1.5">
-            <Label className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label>
               Acceptance criteria <span className="text-[var(--color-error)]">*</span>
             </Label>
             <AcceptanceCriteriaEditor
@@ -607,9 +607,9 @@ export function CalendarEventSlideOver({
               onChange={(next) => { setCriteria(next); setCriteriaError('') }}
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
             />
-            <p className="text-xs text-[var(--color-muted)]">Add at least one.</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Add at least one.</p>
             {criteriaError && (
-              <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{criteriaError}</p>
             )}
           </div>
 
@@ -617,20 +617,20 @@ export function CalendarEventSlideOver({
               same mandatory second list, same rule, on this surface too.
               `DefinitionOfDoneEditor` (U1) supplies its own label/asterisk/
               helper text. */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <DefinitionOfDoneEditor
               dod={dod}
               onChange={(next) => { setDod(next); setDodError('') }}
               currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
             />
             {dodError && (
-              <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{dodError}</p>
             )}
           </div>
 
           {/* Date & time (the recurrence anchor) */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="ces-anchor" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="ces-anchor">
               Date &amp; time
             </Label>
             <DateTimePicker
@@ -645,7 +645,7 @@ export function CalendarEventSlideOver({
           {isLegacy && (
             <div
               data-testid="legacy-trigger-note"
-              className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 p-3 text-xs text-[var(--color-secondary)] space-y-1"
+              className="rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/5 p-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] space-y-[var(--space-1)]"
             >
               <p className="font-medium">This task uses an old schedule format.</p>
               <p>
@@ -662,7 +662,7 @@ export function CalendarEventSlideOver({
           )}
 
           {/* Repeat section */}
-          <div className="flex flex-col gap-1.5">
+          <div className="flex flex-col gap-[var(--space-1)]">
             <RecurrenceEditor
               value={recurrence}
               onChange={handleRecurrenceChange}
@@ -672,7 +672,7 @@ export function CalendarEventSlideOver({
               onValidityChange={setRecurrenceValid}
             />
             {isEditingExistingRrule && scheduleTouched && (
-              <p data-testid="reanchor-notice" className="text-xs text-[color:var(--color-warning)]">
+              <p data-testid="reanchor-notice" className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-warning)]">
                 Changing the schedule restarts the occurrence count, starting from now.
               </p>
             )}
@@ -681,16 +681,16 @@ export function CalendarEventSlideOver({
 
           {/* FR-020: upcoming fires preview, server-sourced (edit mode, active RRULE only) */}
           {isEditingExistingRrule && previewError && (
-            <p className="text-xs text-[var(--color-muted)]" data-testid="upcoming-preview-error">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="upcoming-preview-error">
               Couldn't load upcoming run times.
             </p>
           )}
           {isEditingExistingRrule && !previewError && upcomingPreview.length > 0 && (
-            <div className="flex flex-col gap-1" data-testid="upcoming-occurrences-preview">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+            <div className="flex flex-col gap-[var(--space-1)]" data-testid="upcoming-occurrences-preview">
+              <span className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
                 Upcoming
               </span>
-              <ul className="text-xs text-[var(--color-secondary)] space-y-0.5">
+              <ul className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] space-y-[var(--space-0-5)]">
                 {upcomingPreview.map((ms) => (
                   <li key={ms}>{formatDateTime(ms)}</li>
                 ))}
@@ -708,7 +708,7 @@ export function CalendarEventSlideOver({
               link require an executed task, so they are EDIT-only; the
               checklist is offered in CREATE too (buffered, persisted on Save). */}
           {isEdit && task ? (
-            <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">
+            <div className="flex flex-col gap-[var(--space-3)] pt-[var(--space-3)] border-t border-[var(--color-border)]">
               {hasBucketContext ? (
                 <>
                   {/* H2 fix — a bucket click shows THAT DAY's runs, never the
@@ -727,7 +727,7 @@ export function CalendarEventSlideOver({
                 <>
                   {hasOccurrenceContext && runsForOccurrenceQuery.isError && (
                     <p
-                      className="text-xs text-[color:var(--color-error)]"
+                      className="text-[length:var(--type-utility-xs-size)] text-[color:var(--color-error)]"
                       data-testid="occurrence-run-resolve-error"
                     >
                       Couldn't load this occurrence's run status.
@@ -748,13 +748,13 @@ export function CalendarEventSlideOver({
               )}
             </div>
           ) : (
-            <div className="flex flex-col gap-5 pt-4 border-t border-[var(--color-border)]">
+            <div className="flex flex-col gap-[var(--space-3)] pt-[var(--space-3)] border-t border-[var(--color-border)]">
               <TaskChecklistField value={draftTodos} onChange={setDraftTodos} />
             </div>
           )}
         </div>
 
-        <SheetFooter className="flex-row gap-2 px-6 py-4 flex-shrink-0">
+        <SheetFooter className="flex-row gap-[var(--space-2)] px-[var(--space-4)] py-[var(--space-3)] flex-shrink-0">
           <Button
             type="button"
             variant="ghost"

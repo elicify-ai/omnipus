@@ -2,6 +2,8 @@ import { Scroll, Microphone, UploadSimple } from '@phosphor-icons/react'
 import { Textarea } from '@/components/ui/textarea'
 import { Separator } from '@/components/ui/separator'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { VoiceProviderSub } from './voice-provider-sub'
 import { useUiStore } from '@/store/ui'
 import { AVATAR_COLORS, AVATAR_COLORS_BY_NAME } from '@/lib/constants'
@@ -91,8 +93,9 @@ export function UploadMdButton({
 }) {
   const addToast = useUiStore((s) => s.addToast)
   return (
-    <button tabIndex={0}
+    <Button
       type="button"
+      variant="outline"
       data-testid={testId}
       onClick={() => {
         const input = document.createElement('input')
@@ -122,11 +125,11 @@ export function UploadMdButton({
         }
         input.click()
       }}
-      className="h-7 px-2 text-xs rounded border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors flex items-center gap-1"
+      className="h-7 gap-[var(--space-1)] rounded px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
     >
       <UploadSimple size={12} />
       Upload .md
-    </button>
+    </Button>
   )
 }
 
@@ -155,37 +158,37 @@ export function BehaviorFields({
   const handleVoice = onVoiceChange ?? setVoice
   const required = (soulRequired ?? isWorker) && !soulReadOnly
   return (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
       {/* SOUL.md / Task prompt — relabelled for workers.
           Workers: now a required task prompt (per the worker form spec).
           Base: empty at create time is also valid (the agent starts in "draft"). */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-2">
+      <div className="space-y-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)]">
           <Scroll size={13} className="text-[var(--color-accent)]" />
-          <p className="text-xs font-medium text-[var(--color-secondary)]">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
             {isWorker ? 'Task prompt' : 'Personality & instructions'}
             {required && (
-              <span className="text-[var(--color-error)] ml-0.5" aria-label="required">*</span>
+              <span className="text-[var(--color-error)] ml-[var(--space-0-5)]" aria-label="required">*</span>
             )}
           </p>
         </div>
-        <p className="text-xs text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
           {isWorker ? (
             <>
               System prompt for the worker&apos;s runner. Composed with any
               caller-supplied task prompt at run time. Stored as{' '}
-              <span className="font-mono text-[11px]">SOUL.md</span>.
+              <span className="font-mono text-[length:var(--type-caption-size)]">SOUL.md</span>.
             </>
           ) : (
             <>
               Defines this agent&apos;s character, expertise, and behavioural
-              guidelines. Stored as <span className="font-mono text-[11px]">SOUL.md</span>{' '}
+              guidelines. Stored as <span className="font-mono text-[length:var(--type-caption-size)]">SOUL.md</span>{' '}
               in the agent workspace.
             </>
           )}
         </p>
         {required && (
-          <p className="text-[11px] text-[var(--color-muted)]" data-testid="soul-minlength-hint">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]" data-testid="soul-minlength-hint">
             Required — minimum 1 character; whitespace-only is rejected.
           </p>
         )}
@@ -201,7 +204,7 @@ export function BehaviorFields({
               : "# Soul\n\nDefine this agent's personality, expertise, and behavioural guidelines..."
           }
           rows={6}
-          className="text-xs font-mono resize-none"
+          className="text-[length:var(--type-utility-xs-size)] font-mono resize-none"
           required={required}
           aria-required={required ? 'true' : 'false'}
         />
@@ -218,15 +221,15 @@ export function BehaviorFields({
       {!isWorker && (
         <>
           <Separator />
-          <div className="space-y-2" data-testid={voiceWrapperTestId}>
-            <div className="flex items-center gap-2">
+          <div className="space-y-[var(--space-2)]" data-testid={voiceWrapperTestId}>
+            <div className="flex items-center gap-[var(--space-2)]">
               <Microphone size={13} className="text-[var(--color-accent)]" />
-              <p className="text-xs font-medium text-[var(--color-secondary)]">
-                Voice <span className="text-[var(--color-muted)] font-normal">(optional)</span>
+              <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">
+                Voice <span className="text-[var(--color-muted)] font-[var(--font-weight-regular)]">(optional)</span>
               </p>
             </div>
-            <p className="text-xs text-[var(--color-muted)]">
-              Per-agent persona voice identifier (e.g. <span className="font-mono text-[11px]">alloy</span>).
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
+              Per-agent persona voice identifier (e.g. <span className="font-mono text-[length:var(--type-caption-size)]">alloy</span>).
               Saved now, but voice playback is inactive in this release (planned for v0.2.0).
               Leave empty for the engine default.
             </p>
@@ -269,17 +272,18 @@ export function AvatarColorPicker({
   className,
 }: AvatarColorPickerProps) {
   return (
-    <div className={className ?? 'flex gap-2'}>
+    <div className={className ?? 'flex gap-[var(--space-2)]'}>
       {AVATAR_COLORS.map((color) => {
         const name = AVATAR_COLORS_BY_NAME[color] ?? color
         const isSelected = value === color
         return (
-          <button tabIndex={0}
+          <IconButton
             key={color}
-            type="button"
+            variant="ghost"
+            size="sm"
             data-testid={`${testIdPrefix}-${name}`}
             onClick={() => onChange(color)}
-            className="w-7 h-7 rounded-full transition-transform hover:scale-110"
+            className="h-7 w-7 rounded-full p-0 transition-transform hover:scale-110 hover:bg-transparent"
             style={{
               backgroundColor: color,
               boxShadow: isSelected ? `0 0 0 2px var(--color-primary), 0 0 0 4px ${color}` : undefined,

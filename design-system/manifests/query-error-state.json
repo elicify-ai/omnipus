@@ -1,0 +1,17 @@
+{
+  "version": 1, "component": "QueryErrorState", "exports": ["QueryErrorState", "QueryErrorStateProps"], "category": "composite", "source": "src/components/ui/query-error-state.tsx", "documentation": "docs/internal/design/components/query-error-state.md", "owner": "design-system", "themes": ["dark"], "variants": ["absolute", "fill"], "sizes": ["container-defined"], "states": ["message", "retryable"],
+  "stories": [{ "file": "src/components/ui/query-error-state.stories.tsx", "exports": ["Fill", "Absolute", "Retry"] }],
+  "checks": [
+    { "id": "query-error-state-unit", "kind": "unit", "file": "src/components/ui/query-error-state.test.tsx", "test": "QueryErrorState — pure query error presentation preserves layout, test id, and retry behavior without application state", "applicable": true },
+    { "id": "query-error-state-interaction", "kind": "interaction", "file": "src/components/ui/query-error-state.stories.tsx", "test": "Retry", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-axe] axe", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-keyboard", "kind": "keyboard", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-keyboard] keyboard", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-browser] browser", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-pointer", "kind": "pointer", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-pointer] pointer", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-reduced-motion", "kind": "reduced-motion", "applicable": false, "reason": "QueryErrorState adds no motion; its Button has a separate motion contract." },
+    { "id": "query-error-state-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-forced-colors] forced-colors", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-root-size", "kind": "root-size", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-root-size] root-size", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-zoom", "kind": "zoom", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-zoom] zoom", "story": "Retry", "applicable": true },
+    { "id": "query-error-state-reflow", "kind": "reflow", "file": "tests/design-system/browser.spec.ts", "test": "QueryErrorState [check:query-error-state-reflow] reflow", "story": "Retry", "applicable": true }
+  ]
+}

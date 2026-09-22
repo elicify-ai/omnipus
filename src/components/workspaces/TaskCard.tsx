@@ -6,6 +6,7 @@ import { RollupBadge } from './RollupBadge'
 import { TaskChildren } from './TaskChildren'
 import { TaskActionButton } from './TaskActionButton'
 import { TaskActivityChip } from './TaskActivityChip'
+import { PriorityBadge } from './PriorityBadge'
 import { taskDisplayColor, taskDisplayLabel } from '@/lib/statusColors'
 import type { BoardAltitude } from '@/store/workspacesStore'
 import type { DraggableAttributes, DraggableSyntheticListeners } from '@dnd-kit/core'
@@ -74,15 +75,11 @@ export function goalLoopStatusLabel(
   return `${parts.join(' · ')}${paused ? ' · paused' : ''}`
 }
 
-// Priority badge config: P1 red, P2 orange, P3 yellow, P4 blue, P5 muted
-// Flat priority pills — tint fill + colour, no outline (minimalist flat design).
-export const PRIORITY_BADGE: Record<number, { label: string; className: string }> = {
-  1: { label: 'P1', className: 'bg-red-500/20 text-red-400' },
-  2: { label: 'P2', className: 'bg-orange-500/20 text-orange-400' },
-  3: { label: 'P3', className: 'bg-yellow-500/20 text-yellow-400' },
-  4: { label: 'P4', className: 'bg-blue-500/20 text-blue-400' },
-  5: { label: 'P5', className: 'bg-[var(--color-muted)]/20 text-[var(--color-muted)]' },
-}
+// Priority badge (P1 red, P2 orange, P3 yellow, P4 blue, P5 muted) is
+// `PriorityBadge` (./PriorityBadge.tsx) — a component with a literal,
+// per-priority `className` the design-system static scanners can read,
+// instead of a `className` string built from data. `PRIORITY_BADGE` (the
+// label-only lookup) lives there too now.
 
 /**
  * dnd-kit drag wiring for a single card — all three fields come from one
@@ -156,7 +153,6 @@ export function TaskCard({
   showActions = true,
 }: TaskCardProps) {
   const priority = task.priority ?? 3
-  const badge = PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]
   const tags = task.tags ?? []
   const visibleTags = tags.slice(0, 3)
   const overflowTagCount = tags.length - visibleTags.length
@@ -229,9 +225,9 @@ export function TaskCard({
         }
       }}
       className={cn(
-        'group relative rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer',
+        'group relative rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2-5)] cursor-pointer',
         'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
-        hasRollup && 'border-[var(--color-accent)]/30',
+        hasRollup ? 'border-[var(--color-accent)]/30' : undefined,
       )}
     >
       {isDraggable && (
@@ -252,15 +248,11 @@ export function TaskCard({
       )}
 
       {/* Top row: priority badge + title */}
-      <div className="flex items-start gap-2">
-        <span
-          className={cn(
-            'flex-shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold leading-tight mt-0.5',
-            badge.className,
-          )}
-        >
-          {badge.label}
-        </span>
+      <div className="flex items-start gap-[var(--space-2)]">
+        <PriorityBadge
+          priority={priority}
+          className="flex-shrink-0 rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-bold leading-tight mt-[var(--space-0-5)]"
+        />
         {/* UAT Finding 2 fix: a long UNBROKEN title (no spaces — e.g. the
             200-char maxLength case) used to blow out this flex chain. `<p>`
             is a flex item (`flex-1`) whose default `min-width: auto`
@@ -280,7 +272,7 @@ export function TaskCard({
             tooltip below carrying the full text) — wrap-anywhere just makes
             sure that clamp actually happens within the card's own width. */}
         <p
-          className="min-w-0 flex-1 text-sm font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-6"
+          className="min-w-0 flex-1 text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] leading-snug line-clamp-2 wrap-anywhere pr-[var(--space-4)]"
           title={task.title}
         >
           {task.title}
@@ -292,9 +284,9 @@ export function TaskCard({
           task reads as distinct from a genuine failure (red "Failed") within
           the same Failed board column. */}
       {task.status === 'failed' && (
-        <div className="mt-2 flex items-center gap-1.5">
+        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]">
           <span
-            className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+            className="rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-semibold"
             style={{ color: taskDisplayColor(task), backgroundColor: `${taskDisplayColor(task)}1a` }}
           >
             {taskDisplayLabel(task)}
@@ -304,7 +296,7 @@ export function TaskCard({
 
       {/* Todos checklist progress */}
       {todos.length > 0 && (
-        <div className="mt-2 flex items-center gap-1.5 text-[10px] text-[var(--color-muted)]">
+        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <CheckSquare size={11} />
           <span>{doneTodos}/{todos.length}</span>
         </div>
@@ -317,8 +309,8 @@ export function TaskCard({
 
       {/* Bottom row: agent badge */}
       {(task.agent_name || task.agent_id) && (
-        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
-          <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-[10px] text-[var(--color-muted)]">
+        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] flex-wrap">
+          <span className="rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {task.agent_name ?? task.agent_id}
           </span>
         </div>
@@ -330,9 +322,9 @@ export function TaskCard({
       {task.assignee_warning && (
         <p
           data-testid="task-assignee-warning"
-          className="mt-2 flex items-start gap-1.5 text-[10px] leading-snug text-[color:var(--color-warning)]"
+          className="mt-[var(--space-2)] flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)] leading-snug text-[color:var(--color-warning)]"
         >
-          <WarningCircle size={11} weight="bold" className="mt-px flex-shrink-0" aria-hidden="true" />
+          <WarningCircle size={11} weight="bold" className="mt-[var(--border-width-hairline)] flex-shrink-0" aria-hidden="true" />
           <span>{task.assignee_warning.message}</span>
         </p>
       )}
@@ -340,18 +332,18 @@ export function TaskCard({
       {/* Tag chips (ADR-049 — replaces the milestone chip, SD-C14). Migrated
           `milestone:<name>` tags render as ordinary chips, verbatim. */}
       {tags.length > 0 && (
-        <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)] flex-wrap">
           {visibleTags.map((tag) => (
             <span
               key={tag}
               title={tag}
-              className="max-w-[100px] truncate rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 px-2 py-0.5 text-[10px] text-[var(--color-accent)]"
+              className="max-w-[100px] truncate rounded-full bg-[var(--color-accent)]/10 border border-[var(--color-accent)]/20 px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-accent)]"
             >
               {tag}
             </span>
           ))}
           {overflowTagCount > 0 && (
-            <span className="text-[10px] text-[var(--color-muted)]">+{overflowTagCount}</span>
+            <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">+{overflowTagCount}</span>
           )}
         </div>
       )}
@@ -359,10 +351,10 @@ export function TaskCard({
       {/* Goal-loop status affordance (FR-090) — "attempt N of M · try T of L"
           (+"· paused" when the owning plan reports paused_reason while running). */}
       {goalLoopLabel && (
-        <div className="mt-2 flex items-center gap-1.5">
+        <div className="mt-[var(--space-2)] flex items-center gap-[var(--space-1)]">
           <span
             className={cn(
-              'rounded-full px-2 py-0.5 text-[10px] font-medium',
+              'rounded-full px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium',
               planPaused
                 ? 'bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]'
                 : 'bg-[var(--color-surface-2)] text-[var(--color-muted)]',

@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "status": "resolved-and-verified",
+  "acceptance": true,
+  "reviewedFiles": [
+    "scripts/design-system-locks/css-colors.mjs",
+    "tests/design-system-locks/css-colors.test.mjs",
+    "tests/design-system-locks/foundations-adversarial.test.mjs",
+    "design-system/enforcement/contract.json"
+  ],
+  "sourceEvidence": {
+    "scannerSha256": "df4315724b6a1f54a570d39b18d26403b291471a1e2341ea5df5fdd49d391191",
+    "scannerLines": 539,
+    "ownerTestSha256": "461499e105e972a6a8980070e3effbf0e6b51905ab0744294970bc4022a966c7",
+    "ownerTestLines": 522
+  },
+  "confirmedRepairs": [
+    {
+      "requirement": "E1/D3 registered color variables",
+      "result": "verified",
+      "evidence": "Color-position var() references are compared with policy.tokenCssNames, including nested fallbacks and gradient stops. Registered references remain clean and unregistered references produce css-colors/unregistered-token."
+    },
+    {
+      "requirement": "E1 embedded SVG data-URI paint",
+      "result": "verified for well-formed decoded markup",
+      "evidence": "Percent-encoded and strict base64 SVG payloads are decoded; paint attributes and style paint declarations are scanned. Invalid encoding and binary image data produce css-colors/unsupported rather than empty success."
+    },
+    {
+      "requirement": "central exceptions and stable fingerprints",
+      "result": "verified",
+      "evidence": "The scanner contains no path, exception, ledger, or baseline filtering. Canonical syntax excludes position and source trivia; exception and fingerprint accounting remain in the audit orchestrator."
+    }
+  ],
+  "findings": [
+    {
+      "id": "malformed-decoded-svg-silently-clean",
+      "severity": "high",
+      "requirement": "The shared enforcement contract requires parser failures and unsupported governed syntax to produce a finding or error, never empty success.",
+      "location": "scripts/design-system-locks/css-colors.mjs:342",
+      "finding": "The hand-written embedded-SVG walker returns early for unterminated comments, tags, quotes, and attributes without reporting unsupported syntax. The data URI has already been recognized as governed SVG paint, so these early returns silently convert malformed or truncated SVG into a clean result.",
+      "reproductions": [
+        {
+          "source": "a{background:url(\"data:image/svg+xml,<svg><path fill='%23fff'\")}",
+          "actual": [],
+          "expected": "one css-colors/unsupported finding"
+        },
+        {
+          "source": "a{background:url(\"data:image/svg+xml,<svg><!-- <path fill='%23fff'/></svg>\")}",
+          "actual": [],
+          "expected": "one css-colors/unsupported finding"
+        },
+        {
+          "source": "a{background:url(\"data:image/svg+xml,<svg><path fill='%23fff></path></svg>\")}",
+          "actual": [],
+          "expected": "one css-colors/unsupported finding"
+        }
+      ],
+      "requiredRepair": "Make decoded SVG traversal return an explicit success/failure result and emit one stable css-colors/unsupported diagnostic when structural parsing is incomplete. Add owner tests for unterminated tag, comment, and quoted attribute while retaining the existing raw-paint and registered-token controls.",
+      "resolution": "Resolved: decoded SVG traversal now returns structural parse status and emits one canonical css-colors/unsupported finding for incomplete tags, comments, or quotes.",
+      "verification": {
+        "redFirst": "3/3 new cases failed against the original scanner with expected 0-versus-1 finding assertions",
+        "ownerSuite": "127/127 passed",
+        "independentCssSubset": "4/4 passed",
+        "mutations": [
+          {
+            "change": "unterminated comment branch returned success",
+            "result": "killed"
+          },
+          {
+            "change": "unterminated tag branch returned success",
+            "result": "killed"
+          },
+          {
+            "change": "canonical malformed-SVG syntax changed",
+            "result": "killed"
+          }
+        ],
+        "restored": true,
+        "logs": "dist/design-system-baseline/css-malformed-svg-mutations/"
+      }
+    }
+  ],
+  "summary": {
+    "confirmedMaterialFindings": 0,
+    "scope": "Final CSS-color scanner review and authorized malformed decoded-SVG repair; centralized policy, exceptions, baselines, and application sources were not modified."
+  }
+}

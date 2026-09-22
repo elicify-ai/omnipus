@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
@@ -126,12 +126,13 @@ describe('GodModeControl', () => {
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
 
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Enable god mode?')
-    expect(screen.getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(screen.getByTestId('confirm-accept')).toHaveTextContent('Enable god mode')
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    const acceptButton = within(dialog).getByRole('button', { name: 'Enable god mode' })
+    expect(acceptButton).toBeInTheDocument()
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(screen.getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(acceptButton.className).not.toMatch(/color-error/)
     expect(api.setGodMode).not.toHaveBeenCalled()
   })
 
@@ -143,7 +144,7 @@ describe('GodModeControl', () => {
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable god mode' }))
 
     await waitFor(() => {
       expect(api.setGodMode).toHaveBeenCalledWith(true)
@@ -189,7 +190,7 @@ describe('GodModeControl', () => {
     // always false while `available` is false, this click would have staged
     // `true` again (a re-arm), even though the switch visually reads as ON.
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
 
     await waitFor(() => {
       expect(api.setGodMode).toHaveBeenCalledWith(false)
@@ -204,7 +205,7 @@ describe('GodModeControl', () => {
     await waitFor(() => screen.getByTestId('god-mode-cancel-authorization'))
 
     fireEvent.click(screen.getByTestId('god-mode-cancel-authorization'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
 
     await waitFor(() => {
       expect(api.setGodMode).toHaveBeenCalledWith(false)
@@ -249,11 +250,11 @@ describe('GodModeControl', () => {
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
 
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
     expect(api.setGodMode).not.toHaveBeenCalled()
   })
@@ -266,7 +267,7 @@ describe('GodModeControl', () => {
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable god mode' }))
 
     await waitFor(() => {
       expect(api.setGodMode).toHaveBeenCalledWith(true)
@@ -284,7 +285,7 @@ describe('GodModeControl', () => {
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
 
     await waitFor(() => {
       expect(api.setGodMode).toHaveBeenCalledWith(false)

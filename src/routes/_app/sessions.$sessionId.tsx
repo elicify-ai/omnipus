@@ -15,15 +15,15 @@ import { useChatStore } from '@/store/chat'
 // fresh, empty chat instead of any indication the session was deleted.
 function SessionNotFound() {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
-      <p className="text-sm font-medium text-[var(--color-secondary)]">Session not found</p>
-      <p className="text-xs text-[var(--color-muted)] max-w-sm">
+    <div className="flex flex-col items-center justify-center h-full gap-[var(--space-2-5)] text-center px-[var(--space-3)]">
+      <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Session not found</p>
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] max-w-sm">
         This session may have been deleted.
       </p>
       <Link
         to="/"
         tabIndex={0}
-        className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+        className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline underline-offset-2"
       >
         Back to Chat
       </Link>

@@ -35,7 +35,7 @@
 // still owns in both modes is the BROWSED FOLDER, which is derived from the
 // address rather than carried in it (see `browsedDir`).
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Buildings,
@@ -46,6 +46,7 @@ import {
   FolderOpen,
 } from '@phosphor-icons/react'
 import { Switch } from '@/components/ui/switch'
+import { Label } from '@/components/ui/label'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -78,6 +79,9 @@ import {
   isApiError,
 } from '@/lib/api'
 import type { LibraryEntry, LibraryTransferRequest, LibraryWorkspaceNode, MountSkillsDisclosure } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { LibraryEntryRow } from './LibraryEntryRow'
 import { LibraryRenameDialog } from './LibraryRenameDialog'
 import { LibraryTransferDialog } from './LibraryTransferDialog'
@@ -92,7 +96,12 @@ import { LibraryErrorBanner } from './LibraryErrorBanner'
 import { KnowledgePanel } from './knowledge/KnowledgePanel'
 import { LibrarySearchBar } from './search/LibrarySearchBar'
 import { useLibraryCrossTabRefresh } from './useLibraryCrossTabRefresh'
-import { confirmDiscardLibraryEdits } from './preview/unsavedGuard'
+import {
+  confirmDiscardLibraryEdits,
+  getDiscardConfirmDialogOpen,
+  resolveDiscardConfirmDialog,
+  subscribeDiscardConfirmDialog,
+} from './preview/unsavedGuard'
 import { getLibraryErrorMessage } from './libraryErrorMessage'
 
 /**
@@ -246,6 +255,14 @@ export function LibraryExplorer({
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // The in-app "discard unsaved changes?" dialog (replaces window.confirm —
+  // see preview/unsavedGuard.ts's own doc comment for why the store lives
+  // there rather than here). Both Library entry points always keep a
+  // LibraryExplorer mounted whenever a navigation guard could fire, so
+  // hosting the dialog here (rendered below, alongside the other dialogs)
+  // covers the docked panel AND the /library pop-out route's useBlocker.
+  const discardDialogOpen = useSyncExternalStore(subscribeDiscardConfirmDialog, getDiscardConfirmDialogOpen)
 
   // Uncontrolled fallbacks — used only when the caller does NOT address the
   // Library by URL. In addressed mode these are never read or written, so
@@ -838,37 +855,37 @@ export function LibraryExplorer({
     setNewFolderOpen(true)
   }
 
-  function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleOpenWorkspaceNode(node: LibraryWorkspaceNode) {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir('')
     goTo(node.id, null)
   }
-  function handleGoRoot() {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleGoRoot() {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir('')
     goTo(null, null)
   }
-  function handleGoWorkspaceRoot() {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleGoWorkspaceRoot() {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir('')
     goTo(workspaceId, null)
   }
-  function handleOpenDirectory(entry: LibraryEntry) {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleOpenDirectory(entry: LibraryEntry) {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir(entry.path)
     goTo(workspaceId, null)
   }
-  function handleBreadcrumbSegment(index: number, segments: string[]) {
-    if (!confirmDiscardLibraryEdits()) return
+  async function handleBreadcrumbSegment(index: number, segments: string[]) {
+    if (!(await confirmDiscardLibraryEdits())) return
     setBrowsedDir(segments.slice(0, index + 1).join('/'))
     goTo(workspaceId, null)
   }
   // Selecting a file that's ALREADY selected is not navigation (no editor
   // would be discarded), so it skips the guard entirely rather than prompting
   // to confirm leaving the file the user is already looking at.
-  function handleSelectFile(entry: LibraryEntry) {
+  async function handleSelectFile(entry: LibraryEntry) {
     if (selectedPath === entry.path) return
-    if (!confirmDiscardLibraryEdits()) return
+    if (!(await confirmDiscardLibraryEdits())) return
     goTo(workspaceId, entry.path)
   }
   function handleDownload(entry: LibraryEntry) {
@@ -910,67 +927,64 @@ export function LibraryExplorer({
   return (
     <div className={cn('flex h-full flex-col', className)} data-testid="library-explorer">
       {/* Toolbar / breadcrumb row */}
-      <div className="flex items-center gap-2 px-3 h-chrome-header min-h-chrome-header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
-        <nav aria-label="Library breadcrumb" className="flex items-center gap-1 min-w-0 flex-1 text-sm overflow-hidden">
-          <button
-            type="button"
-            tabIndex={0}
+      <div className="flex items-center gap-[var(--space-2)] px-[var(--space-2-5)] h-chrome-header min-h-chrome-header shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-1)]">
+        <nav aria-label="Library breadcrumb" className="flex items-center gap-[var(--space-1)] min-w-0 flex-1 text-[length:var(--type-body-compact-size)] overflow-hidden">
+          <Button
+            variant="ghost"
             onClick={handleGoRoot}
             data-testid="library-crumb-root"
             className={cn(
-              'flex items-center gap-1.5 shrink-0 rounded px-1.5 py-1 transition-colors',
+              'h-auto shrink-0 gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]',
               workspaceId === null
-                ? 'text-[var(--color-accent)] font-medium'
-                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+                ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
+                : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
             )}
           >
             <Files size={14} />
             Library
-          </button>
+          </Button>
           {workspaceId !== null && (
             <>
               <CaretRight size={12} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
-              <button
-                type="button"
-                tabIndex={0}
+              <Button
+                variant="ghost"
                 onClick={handleGoWorkspaceRoot}
                 data-testid="library-crumb-workspace"
                 className={cn(
-                  'truncate rounded px-1.5 py-1 transition-colors min-w-0',
+                  'h-auto min-w-0 truncate rounded px-[var(--space-1)] py-[var(--space-1)] font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]',
                   pathSegments.length === 0
-                    ? 'text-[var(--color-accent)] font-medium'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+                    ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
                 )}
               >
                 {currentWorkspaceName}
-              </button>
+              </Button>
             </>
           )}
           {pathSegments.map((seg, i) => (
-            <span key={`${seg}-${i}`} className="flex items-center gap-1 min-w-0">
+            <span key={`${seg}-${i}`} className="flex items-center gap-[var(--space-1)] min-w-0">
               <CaretRight size={12} className="text-[var(--color-muted)] shrink-0" aria-hidden="true" />
-              <button
-                type="button"
-                tabIndex={0}
+              <Button
+                variant="ghost"
                 onClick={() => handleBreadcrumbSegment(i, pathSegments)}
                 className={cn(
-                  'truncate rounded px-1.5 py-1 transition-colors min-w-0',
+                  'h-auto min-w-0 truncate rounded px-[var(--space-1)] py-[var(--space-1)] font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]',
                   i === pathSegments.length - 1
-                    ? 'text-[var(--color-accent)] font-medium'
-                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]',
+                    ? 'text-[var(--color-accent)] font-medium hover:text-[var(--color-accent)]'
+                    : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
                 )}
               >
                 {seg}
-              </button>
+              </Button>
             </span>
           ))}
         </nav>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-[var(--space-1)] shrink-0">
           {workspaceId !== null && (
-            <label
+            <Label
               htmlFor="library-show-hidden"
-              className="flex items-center gap-1.5 text-xs text-[var(--color-muted)] mr-1 select-none cursor-pointer"
+              className="flex items-center gap-[var(--space-1)] mr-[var(--space-1)] select-none cursor-pointer"
             >
               <Switch
                 id="library-show-hidden"
@@ -979,7 +993,7 @@ export function LibraryExplorer({
                 onCheckedChange={setIncludeHidden}
               />
               Show hidden
-            </label>
+            </Label>
           )}
           {/* Status indicator only — the ACTION that used to live on this
               pill ("Manage mounted folders") moved into the unified "+"
@@ -991,7 +1005,7 @@ export function LibraryExplorer({
             <span
               title="Folders on your Mac mounted into this workspace"
               data-testid="library-mounts-count"
-              className="flex items-center gap-1.5 rounded px-1.5 py-1 text-xs text-[var(--color-muted)]"
+              className="flex items-center gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
             >
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
@@ -1032,34 +1046,30 @@ export function LibraryExplorer({
             }}
           />
           {onPopOut && (
-            <button
-              type="button"
-              tabIndex={0}
-              onClick={() => {
-                if (confirmDiscardLibraryEdits()) onPopOut()
+            <IconButton
+              onClick={async () => {
+                if (await confirmDiscardLibraryEdits()) onPopOut()
               }}
               aria-label="Open Library in a new tab"
               title="Open in new tab"
               data-testid="library-popout-button"
-              className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+              className="h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
             >
               <ArrowSquareOut size={16} />
-            </button>
+            </IconButton>
           )}
           {onClose && (
-            <button
-              type="button"
-              tabIndex={0}
-              onClick={() => {
-                if (confirmDiscardLibraryEdits()) onClose()
+            <IconButton
+              onClick={async () => {
+                if (await confirmDiscardLibraryEdits()) onClose()
               }}
               aria-label="Close Library"
               title="Close"
               data-testid="library-close-button"
-              className="rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] transition-colors"
+              className="h-auto w-auto rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
             >
               <X size={16} />
-            </button>
+            </IconButton>
           )}
         </div>
       </div>
@@ -1069,7 +1079,7 @@ export function LibraryExplorer({
           way Rename/Move do. A failed upload must never look identical to
           nothing happening. */}
       {uploadError && (
-        <div className="shrink-0 p-2 pb-0">
+        <div className="shrink-0 p-[var(--space-2)] pb-0">
           <LibraryErrorBanner
             message={uploadError}
             onDismiss={() => setUploadError(undefined)}
@@ -1083,7 +1093,7 @@ export function LibraryExplorer({
           it clears itself the moment that address changes — a dismiss button
           would only let it disagree with the URL. */}
       {deepLinkMessage && (
-        <div className="shrink-0 p-2 pb-0">
+        <div className="shrink-0 p-[var(--space-2)] pb-0">
           <LibraryErrorBanner message={deepLinkMessage} testId="library-deeplink-unresolved" />
         </div>
       )}
@@ -1108,7 +1118,7 @@ export function LibraryExplorer({
           reads the frame for its own collection_id from there. Do not add a
           poll — the frame is the contract's answer to progress (FR-080). */}
       {workspaceId !== null && (
-        <div className="shrink-0 p-2 pb-0">
+        <div className="shrink-0 p-[var(--space-2)] pb-0">
           {/* UAT #699 / D-115: the empty-collection state's "Write the first
               note" button is live only when a handler is wired; with none the
               panel used to say nothing at all about how a note gets made. */}
@@ -1128,7 +1138,7 @@ export function LibraryExplorer({
               <div
                 role="status"
                 data-testid="library-obsidian-not-imported"
-                className="mt-2 rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-3 py-2 text-xs leading-relaxed text-[var(--color-muted)]"
+                className="mt-[var(--space-2)] rounded-md border border-[var(--color-accent)]/30 bg-[var(--color-accent)]/5 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]"
               >
                 This is an Obsidian vault that has not been imported into Omnipus yet. Its notes are
                 indexed and searchable, but record types, records and views stay at zero until the
@@ -1149,7 +1159,7 @@ export function LibraryExplorer({
       {/* Body */}
       <div
         className={cn(
-          'min-h-0 min-w-0 overflow-y-auto p-2 relative',
+          'min-h-0 min-w-0 overflow-y-auto p-[var(--space-2)] relative',
           // Preview open: it takes the larger share (60% split / 55% stacked —
           // the stacked figure is the old even split plus the 10% the operator
           // asked for). Closed: the list has the whole box to itself.
@@ -1179,13 +1189,12 @@ export function LibraryExplorer({
             {!workspacesQuery.isLoading &&
               !workspacesQuery.isError &&
               sortedWorkspaces.map((node) => (
-                <button
+                <Button
                   key={node.id}
-                  type="button"
-                  tabIndex={0}
+                  variant="ghost"
                   onClick={() => handleOpenWorkspaceNode(node)}
                   data-testid={`library-workspace-node-${node.id}`}
-                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2 hover:bg-[var(--color-surface-2)] text-left transition-colors"
+                  className="h-auto w-full justify-start gap-[var(--space-2-5)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
                 >
                   {/* Icon-consistency pass (2026-09-07): every surface that
                       names a workspace uses the same Phosphor Buildings glyph
@@ -1194,11 +1203,11 @@ export function LibraryExplorer({
                       longer wears three different glyphs depending on where
                       it is shown. */}
                   <Buildings size={18} className="text-[var(--color-accent)] shrink-0" />
-                  <span className="flex-1 truncate text-sm text-[var(--color-secondary)]">{node.name}</span>
-                  <span className="text-xs text-[var(--color-muted)] shrink-0">
+                  <span className="flex-1 truncate text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{node.name}</span>
+                  <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] shrink-0">
                     {node.entry_count} item{node.entry_count === 1 ? '' : 's'}
                   </span>
-                </button>
+                </Button>
               ))}
           </LibrarySearchBar>
         ) : (
@@ -1210,18 +1219,18 @@ export function LibraryExplorer({
           <LibrarySearchBar
             workspaceId={workspaceId}
             folderPath={browsedDir}
-            onOpenNote={(workspacePath) => {
-              if (!confirmDiscardLibraryEdits()) return
+            onOpenNote={async (workspacePath) => {
+              if (!(await confirmDiscardLibraryEdits())) return
               goTo(workspaceId, workspacePath)
             }}
-            onOpenFolder={(workspacePath) => {
+            onOpenFolder={async (workspacePath) => {
               // Finding S1: report back whether navigation actually
               // happened. LibrarySearchBar only clears its query/results
               // once it KNOWS this returned true — a "Cancel" on the
               // discard-unsaved-edits prompt must leave the search exactly
               // as the user left it, not wipe it as a side effect of a
               // navigation that never occurred.
-              if (!confirmDiscardLibraryEdits()) return false
+              if (!(await confirmDiscardLibraryEdits())) return false
               setBrowsedDir(workspacePath)
               goTo(workspaceId, null)
               return true
@@ -1275,8 +1284,8 @@ export function LibraryExplorer({
           <LibraryPreviewPane
             workspaceId={workspaceId}
             entry={selectedEntry}
-            onClose={() => {
-              if (!confirmDiscardLibraryEdits()) return
+            onClose={async () => {
+              if (!(await confirmDiscardLibraryEdits())) return
               goTo(workspaceId, null)
             }}
             onDownload={handleDownload}
@@ -1284,8 +1293,8 @@ export function LibraryExplorer({
             // linked mention inside an open note swaps the pane to the target
             // AND updates the address, so the note the reader is looking at is
             // the note the URL names.
-            onOpenNote={(workspacePath) => {
-              if (!confirmDiscardLibraryEdits()) return
+            onOpenNote={async (workspacePath) => {
+              if (!(await confirmDiscardLibraryEdits())) return
               goTo(workspaceId, workspacePath)
             }}
           />
@@ -1412,7 +1421,7 @@ export function LibraryExplorer({
               &ldquo;{skillsDisclosure?.mountName}&rdquo; grants {skillsDisclosure?.count}{' '}
               skill{skillsDisclosure?.count === 1 ? '' : 's'}
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
+            <AlertDialogDescription className="space-y-[var(--space-2)]">
               <span className="block">{skillsDisclosure?.grantsMessage}</span>
               {skillsDisclosure?.thresholdWarning && (
                 <span
@@ -1526,13 +1535,31 @@ export function LibraryExplorer({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Discard-unsaved-edits guard (replaces window.confirm) ──────────
+          Hosted here rather than at each call site: confirmDiscardLibraryEdits()
+          (preview/unsavedGuard.ts) is called from plain navigation handlers,
+          not components, so it flips a module-level store and this is the ONE
+          dialog that answers every one of them — see that module's own doc
+          comment for why LibraryExplorer is the right (and only-needed) host. */}
+      <ConfirmDialog
+        open={discardDialogOpen}
+        onOpenChange={(next) => {
+          if (!next) resolveDiscardConfirmDialog(false)
+        }}
+        title="Discard unsaved changes?"
+        description="You have unsaved changes in the Library editor. Leaving now will discard them. Continue?"
+        confirmLabel="Discard"
+        destructive
+        onConfirm={() => resolveDiscardConfirmDialog(true)}
+      />
     </div>
   )
 }
 
 function ListSkeleton() {
   return (
-    <div className="flex flex-col gap-1.5 p-1" data-testid="library-loading-skeleton">
+    <div className="flex flex-col gap-[var(--space-1)] p-[var(--space-1)]" data-testid="library-loading-skeleton">
       {[1, 2, 3, 4].map((i) => (
         <div
           key={i}
@@ -1555,9 +1582,9 @@ function parentFolderName(path: string): string {
 
 function EmptyState({ icon, message }: { icon: React.ReactNode; message: string }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-8 text-center text-[var(--color-muted)]">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-[var(--space-2)] p-[var(--space-5)] text-center text-[var(--color-muted)]">
       {icon}
-      <p className="text-sm">{message}</p>
+      <p className="text-[length:var(--type-body-compact-size)]">{message}</p>
     </div>
   )
 }

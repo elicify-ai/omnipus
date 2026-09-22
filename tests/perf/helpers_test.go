@@ -186,6 +186,8 @@ func seedPerfCredentials(homeDir string) error {
 	if err := store.UnlockWithKey(masterKey); err != nil {
 		return fmt.Errorf("unlock store: %w", err)
 	}
+	// Seeding is this helper's whole job; overwrite the key it held for it.
+	defer store.Close()
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	if apiKey == "" {
 		apiKey = "test-stub-openrouter-key-not-for-real-calls"

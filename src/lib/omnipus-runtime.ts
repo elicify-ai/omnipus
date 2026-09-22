@@ -68,16 +68,14 @@ function pushHistoryParts(
   // ("Duplicate key toolCallId-…"). Edge cases that produce duplicates
   // (e.g. replay re-emitting an id already baked into the message, or
   // a turn rebake during reconnect) shouldn't crash the page.
-  {
-    const seen = new Set<string>();
-    historyToolCalls = historyToolCalls.filter((tc) => {
-      if (seen.has(tc.id)) return false;
-      seen.add(tc.id);
-      return true;
-    });
-  }
+  const seen = new Set<string>();
+  const dedupedToolCalls = historyToolCalls.filter((tc) => {
+    if (seen.has(tc.id)) return false;
+    seen.add(tc.id);
+    return true;
+  });
 
-  const ordered = [...historyToolCalls].sort((a, b) => {
+  const ordered = [...dedupedToolCalls].sort((a, b) => {
     const sa = textAtToolCallStart[a.id]?.length ?? Number.POSITIVE_INFINITY;
     const sb = textAtToolCallStart[b.id]?.length ?? Number.POSITIVE_INFINITY;
     return sa - sb;

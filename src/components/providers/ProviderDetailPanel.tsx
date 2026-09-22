@@ -52,6 +52,9 @@ import {
 import type { CatalogProvider } from '@/lib/api/generated/openapi-types'
 import type { PickerCompanyRow } from './provider-picker-model'
 import { inferRegionFromLocale, regionLabel } from './region-inference'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /**
  * FR-006's exact pair, in priority order, for a company's sign-in variants —
@@ -312,107 +315,91 @@ export function ProviderDetailPanel({
       data-testid={testId}
       aria-label={`Configure ${company.company}`}
       role="group"
-      className="flex flex-col gap-3 rounded-md border p-3"
+      className="flex flex-col gap-[var(--space-2-5)] rounded-md border p-[var(--space-2-5)]"
       style={{ borderColor: 'var(--color-border)' }}
     >
-      <h3 className="text-sm" style={{ color: 'var(--color-secondary)' }}>
+      <h3 className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
         {company.company}
       </h3>
 
       {/* ── Plan (FR-027) ──────────────────────────────────────────────── */}
       {planOptions.length > 1 && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <span
             id={planGroupLabelId}
-            className="text-xs uppercase"
+            className="text-[length:var(--type-utility-xs-size)] uppercase"
             style={{ color: 'var(--color-muted)' }}
           >
             Plan
           </span>
-          <div
-            role="group"
+          <SegmentedControl
             aria-labelledby={planGroupLabelId}
+            value={plan}
+            onValueChange={(value) => setPlan(value)}
             data-testid={`${testId}-plans`}
-            className="flex flex-wrap items-center gap-1"
+            className="flex w-full flex-wrap items-center gap-[var(--space-1)] border-transparent bg-transparent p-0"
           >
             {planOptions.map((value) => (
-              <button
+              <SegmentedControlItem
                 key={value || 'standard'}
-                type="button"
-                tabIndex={0}
+                value={value}
                 data-testid={`${testId}-plan-${value || 'standard'}`}
-                aria-pressed={plan === value}
-                onClick={() => setPlan(value)}
-                className="min-h-[32px] rounded border px-3 text-sm"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-secondary)',
-                  background: plan === value ? 'var(--color-surface-2)' : 'transparent',
-                }}
+                className="h-auto min-h-[32px] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
               >
                 {planLabel(value)}
-              </button>
+              </SegmentedControlItem>
             ))}
-          </div>
+          </SegmentedControl>
         </div>
       )}
 
       {/* ── Region, pre-selected from the locale (FR-027) ───────────────── */}
       {showSiblingRegionGroup && (
-        <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-[var(--space-1)]">
           <span
             id={regionGroupLabelId}
             data-testid={`${testId}-region-copy`}
-            className="text-xs"
+            className="text-[length:var(--type-utility-xs-size)]"
             style={{ color: 'var(--color-muted)' }}
           >
             {inference.copy}
           </span>
-          <div
-            role="group"
+          <SegmentedControl
             aria-labelledby={regionGroupLabelId}
+            value={region}
+            onValueChange={(value) => setRegion(value)}
             data-testid={`${testId}-regions`}
-            className="flex flex-wrap items-center gap-1"
+            className="flex w-full flex-wrap items-center gap-[var(--space-1)] border-transparent bg-transparent p-0"
           >
             {company.regions.map((value) => (
-              <button
+              <SegmentedControlItem
                 key={value}
-                type="button"
-                tabIndex={0}
+                value={value}
                 data-testid={`${testId}-region-${value}`}
-                aria-pressed={region === value}
-                onClick={() => setRegion(value)}
-                className="min-h-[32px] rounded border px-3 text-sm"
-                style={{
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-secondary)',
-                  background: region === value ? 'var(--color-surface-2)' : 'transparent',
-                }}
+                className="h-auto min-h-[32px] min-w-0 rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
               >
                 {regionLabel(value)}
-              </button>
+              </SegmentedControlItem>
             ))}
-          </div>
+          </SegmentedControl>
         </div>
       )}
 
       {/* ── AWS region (issue #800), beside the API key entry ───────────── */}
       {awsRegionOptions.length > 0 && (
-        <div className="flex flex-col gap-1">
-          <label
-            htmlFor={`${testId}-aws-region`}
-            className="text-xs uppercase"
-            style={{ color: 'var(--color-muted)' }}
-          >
-            AWS region
-          </label>
+        <Label
+          className="flex flex-col gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] uppercase"
+          htmlFor={`${testId}-aws-region`}
+          style={{ color: 'var(--color-muted)' }}
+        >
+          AWS region
           <select
             id={`${testId}-aws-region`}
             tabIndex={0}
             data-testid={`${testId}-aws-region`}
             value={awsRegion}
             onChange={(event) => setAwsRegion(event.target.value)}
-            className="min-h-[32px] rounded border px-2 text-sm"
+            className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)] normal-case"
             style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
           >
             {awsRegionOptions.map((r) => (
@@ -421,7 +408,7 @@ export function ProviderDetailPanel({
               </option>
             ))}
           </select>
-        </div>
+        </Label>
       )}
 
       {/* ── Auth method, in the same step (FR-028) ──────────────────────── */}
@@ -442,13 +429,13 @@ export function ProviderDetailPanel({
             // LOCAL_PROVIDER_CREDENTIAL stands in on `selection.apiKey`.
             <p
               data-testid={`${testId}-no-key-needed`}
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
               style={{ color: 'var(--color-muted)' }}
             >
               Runs on your machine — no API key needed.
             </p>
           ) : (
-            <label className="flex flex-col gap-1 text-xs" htmlFor={`${testId}-api-key-input`}>
+            <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-api-key-input`}>
               API key
               <input
                 id={`${testId}-api-key-input`}
@@ -457,35 +444,34 @@ export function ProviderDetailPanel({
                 data-testid={`${testId}-api-key-input`}
                 value={apiKey}
                 onChange={(event) => setApiKey(event.target.value)}
-                className="min-h-[32px] rounded border px-2 text-sm"
+                className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                 style={{ borderColor: 'var(--color-border)' }}
               />
-            </label>
+            </Label>
           ))
         }
       />
 
-      <div className="flex items-center gap-2">
-        <button
+      <div className="flex items-center gap-[var(--space-2)]">
+        <Button
           type="button"
-          tabIndex={0}
+          variant="default"
           data-testid={`${testId}-continue`}
           onClick={() => onConfirm?.(selection)}
-          className="min-h-[32px] rounded border px-3 text-sm"
-          style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+          className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
         >
           Continue
-        </button>
+        </Button>
         {onCancel && (
-          <button
+          <Button
             type="button"
-            tabIndex={0}
+            variant="ghost"
             data-testid={`${testId}-cancel`}
             onClick={onCancel}
-            className="min-h-[32px] rounded px-3 text-sm"
+            className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
-          </button>
+          </Button>
         )}
       </div>
     </div>

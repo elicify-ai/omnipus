@@ -39,6 +39,7 @@ import {
   type AgentToolsCfg,
 } from '@/lib/api'
 import { MCPServerPicker } from './MCPServerPicker'
+import { Button } from '@/components/ui/button'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { useReAuthGate, isReAuthCancelled } from '@/components/settings/useReAuthGate'
 import { useUiStore } from '@/store/ui'
@@ -431,7 +432,7 @@ export function ToolsAndPermissions({
 
   if (toolsLoading) {
     return (
-      <div className="space-y-2 py-4">
+      <div className="space-y-[var(--space-2)] py-[var(--space-3)]">
         {[1, 2, 3].map((i) => (
           <div key={i} className="h-9 rounded-md bg-[var(--color-surface-2)] animate-pulse" />
         ))}
@@ -441,7 +442,7 @@ export function ToolsAndPermissions({
 
   if (toolsError) {
     return (
-      <p className="text-xs text-[var(--color-error)] py-4">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] py-[var(--space-3)]">
         Failed to load tool list. Check that the backend is running.
       </p>
     )
@@ -449,32 +450,34 @@ export function ToolsAndPermissions({
 
   if (agentToolsError) {
     return (
-      <div className="space-y-2 py-4" data-testid="agent-tools-load-error">
-        <p className="text-xs text-[var(--color-error)]">
+      <div className="space-y-[var(--space-2)] py-[var(--space-3)]" data-testid="agent-tools-load-error">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
           Failed to load this agent&apos;s tool settings.
         </p>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="link"
+          size="sm"
           data-testid="agent-tools-retry"
           onClick={() => { void refetchAgentTools() }}
-          className="text-[11px] text-[var(--color-secondary)] underline underline-offset-2"
+          className="h-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
         >
           Retry
-        </button>
+        </Button>
       </div>
     )
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-[var(--space-3)]">
       {/* B-2 (US-D5 / #332): locked agent read-only notice */}
       {!toolsEditable && (
         <div
           data-testid="locked-agent-readonly-notice"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Lock size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          <Lock size={13} className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]" />
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             Tool policies are read-only for this agent: the backend marks this capability as fixed.
           </p>
         </div>
@@ -486,10 +489,10 @@ export function ToolsAndPermissions({
       {isExternal && !isLocked && (
         <div
           data-testid="external-cli-tools-notice"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Info size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          <Info size={13} className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]" />
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             Tool policies do not apply to agents running on an external CLI runner —
             the runner manages its own tool access. Configure per-tool flags on the
             runner instead.
@@ -502,10 +505,10 @@ export function ToolsAndPermissions({
         <div
           role="status"
           data-testid="shell-fs-conflict-banner"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+          className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
-          <Info size={13} className="text-[var(--color-secondary)] shrink-0 mt-0.5" />
-          <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+          <Info size={13} className="text-[var(--color-secondary)] shrink-0 mt-[var(--space-0-5)]" />
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
             <code className="font-mono text-[var(--color-secondary)]">bash</code>{' '}
             can perform filesystem operations directly. Denying{' '}
             <code className="font-mono text-[var(--color-secondary)]">write_file</code>/
@@ -520,9 +523,9 @@ export function ToolsAndPermissions({
 
       {/* Save status — hidden for locked/external agents (no writes ever fire) */}
       {toolsEditable && !isExternal && (
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-[var(--space-2-5)]">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
-          <span className="text-[10px] text-[var(--color-muted)]">
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {overrideNames.length} local override{overrideNames.length !== 1 ? 's' : ''}
           </span>
         </div>
@@ -536,18 +539,20 @@ export function ToolsAndPermissions({
           - Summary pill per category
           - disabled=true when isLocked (B-2 / #332) */}
       {globalPoliciesError && (
-        <div className="space-y-2" data-testid="global-policies-load-error">
-          <p className="text-xs text-[var(--color-error)]">
+        <div className="space-y-[var(--space-2)]" data-testid="global-policies-load-error">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
             Failed to load the global permission ceiling. Tool policies remain read-only until it is available.
           </p>
-          <button tabIndex={0}
+          <Button
             type="button"
+            variant="link"
+            size="sm"
             data-testid="global-policies-retry"
             onClick={() => { void refetchGlobalPolicies() }}
-            className="text-[11px] text-[var(--color-secondary)] underline underline-offset-2"
+            className="h-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
           >
             Retry
-          </button>
+          </Button>
         </div>
       )}
       <ToolPolicyEditor
@@ -562,25 +567,27 @@ export function ToolsAndPermissions({
       />
 
       {mcpEditable && (
-        <section className="space-y-2" data-testid="mcp-assignment-section">
-          <p className="text-xs font-medium text-[var(--color-secondary)]">Assigned connectors</p>
-          <p className="text-[11px] text-[var(--color-muted)]">
+        <section className="space-y-[var(--space-2)]" data-testid="mcp-assignment-section">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Assigned connectors</p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             An installed server grants no execution access until it is assigned here.
             Empty means no connectors.
           </p>
           {mcpServersError ? (
-            <div className="space-y-2" data-testid="mcp-servers-load-error">
-              <p className="text-xs text-[var(--color-error)]">
+            <div className="space-y-[var(--space-2)]" data-testid="mcp-servers-load-error">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                 Failed to load configured MCP servers. Existing connector assignments are preserved.
               </p>
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="link"
+                size="sm"
                 data-testid="mcp-servers-retry"
                 onClick={() => { void refetchMcpServers() }}
-                className="text-[11px] text-[var(--color-secondary)] underline underline-offset-2"
+                className="h-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
               >
                 Retry
-              </button>
+              </Button>
             </div>
           ) : (
             <MCPServerPicker

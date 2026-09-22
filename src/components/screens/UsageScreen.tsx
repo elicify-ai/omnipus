@@ -5,6 +5,9 @@ import { ChartBar, ChatCircle, CaretUp, CaretDown, Scales } from '@phosphor-icon
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { fetchTokenStats, fetchSessions, tokenStatsQueryKeys, type TokenStatsPeriod, type Session } from '@/lib/api'
 import { formatTokens } from '@/lib/formatTokens'
 import { ScreenHeader } from '@/components/layout/ScreenHeader'
@@ -22,19 +25,19 @@ interface StatCardProps {
 
 function StatCard({ label, value, hero = false, unit }: StatCardProps) {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 flex flex-col gap-1">
+    <Card className="p-[var(--space-3)] flex flex-col gap-[var(--space-1)]">
       <div
         className={`font-mono tabular-nums font-bold${hero ? ' text-2xl text-[var(--color-accent)]' : ' text-base text-[var(--color-secondary)]'}`}
       >
         {value}
         {unit && (
-          <span className={`font-sans font-normal${hero ? ' text-sm ml-1 text-[var(--color-muted)]' : ' text-xs ml-1 text-[var(--color-muted)]'}`}>
+          <span className={`font-body font-[var(--font-weight-regular)]${hero ? ' text-[length:var(--type-body-compact-size)] ml-1 text-[var(--color-muted)]' : ' text-[length:var(--type-utility-xs-size)] ml-1 text-[var(--color-muted)]'}`}>
             {unit}
           </span>
         )}
       </div>
-      <div className="text-xs text-[var(--color-muted)]">{label}</div>
-    </div>
+      <div className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{label}</div>
+    </Card>
   )
 }
 
@@ -42,20 +45,17 @@ function StatCard({ label, value, hero = false, unit }: StatCardProps) {
 
 function UsageSkeleton() {
   return (
-    <div className="space-y-6" data-testid="usage-skeleton" aria-busy="true" aria-label="Loading usage data">
+    <div className="space-y-[var(--space-4)]" data-testid="usage-skeleton" aria-busy="true" aria-label="Loading usage data">
       {/* Hero row skeleton */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-[var(--space-3)]">
         {[1, 2, 3, 4].map((i) => (
-          <div
-            key={i}
-            className="h-20 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
-          />
+          <Card key={i} className="h-20 animate-pulse" />
         ))}
       </div>
       {/* Bar list skeleton */}
-      <div className="space-y-3">
+      <div className="space-y-[var(--space-2-5)]">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="flex items-center gap-3">
+          <div key={i} className="flex items-center gap-[var(--space-2-5)]">
             <div className="w-24 h-3 rounded bg-[var(--color-surface-2)] animate-pulse" />
             <div className="flex-1 h-2 rounded-full bg-[var(--color-surface-2)] animate-pulse" />
             <div className="w-12 h-3 rounded bg-[var(--color-surface-2)] animate-pulse" />
@@ -77,18 +77,18 @@ interface BarItem {
 function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) {
   if (items.length === 0) {
     return (
-      <p className="text-sm text-[var(--color-muted)] py-4 text-center">No data for this period.</p>
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-[var(--space-3)] text-center">No data for this period.</p>
     )
   }
   return (
-    <div className="space-y-2.5" role="list">
+    <div className="space-y-[var(--space-2)]" role="list">
       {items.map((item) => {
         const pct = maxTokens > 0 ? Math.round((item.tokens / maxTokens) * 100) : 0
         const formattedTokens = formatTokens(item.tokens)
         return (
-          <div key={item.name} className="flex items-center gap-3" role="listitem">
+          <div key={item.name} className="flex items-center gap-[var(--space-2-5)]" role="listitem">
             {/* Name */}
-            <div className="w-28 sm:w-36 shrink-0 truncate text-xs text-[var(--color-secondary)]" title={item.name}>
+            <div className="w-28 sm:w-36 shrink-0 truncate text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]" title={item.name}>
               {item.href ? (
                 <Link to={item.href} tabIndex={0} className="hover:text-[var(--color-accent)] transition-colors">
                   {item.name}
@@ -107,7 +107,7 @@ function BarList({ items, maxTokens }: { items: BarItem[]; maxTokens: number }) 
             </div>
             {/* Count */}
             <div
-              className="w-14 text-right text-xs font-mono tabular-nums text-[var(--color-muted)] shrink-0"
+              className="w-14 text-right text-[length:var(--type-utility-xs-size)] font-mono tabular-nums text-[var(--color-muted)] shrink-0"
               aria-label={`${item.tokens} tokens`}
             >
               {formattedTokens}
@@ -155,7 +155,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
   })
 
   if (sorted.length === 0) {
-    return <p className="text-sm text-[var(--color-muted)] py-4 text-center">No session data.</p>
+    return <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] py-[var(--space-3)] text-center">No session data.</p>
   }
 
   const titleSortIcon = sortKey === 'title' ? (sortDir === 'asc' ? <CaretUp size={10} weight="bold" aria-hidden="true" /> : <CaretDown size={10} weight="bold" aria-hidden="true" />) : null
@@ -163,44 +163,46 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-xs" data-testid="sessions-table">
+      <table className="w-full text-[length:var(--type-utility-xs-size)]" data-testid="sessions-table">
         <thead>
           <tr className="border-b border-[var(--color-border)] text-[var(--color-muted)]">
             <th
               scope="col"
-              className="text-left py-2 pr-4 font-medium"
+              className="text-left py-[var(--space-2)] pr-[var(--space-3)] font-medium"
               aria-sort={sortKey === 'title' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
             >
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="ghost"
                 onClick={() => handleSort('title')}
-                className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
+                className={`h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] font-medium hover:bg-transparent hover:text-[var(--color-secondary)]${sortKey === 'title' ? ' text-[var(--color-accent)]' : ''}`}
               >
                 Session
                 {titleSortIcon}
-              </button>
+              </Button>
             </th>
             <th
               scope="col"
-              className="text-right py-2 pl-4 font-medium"
+              className="text-right py-[var(--space-2)] pl-[var(--space-3)] font-medium"
               aria-sort={sortKey === 'tokens' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
             >
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="ghost"
                 onClick={() => handleSort('tokens')}
-                className={`inline-flex items-center gap-1 hover:text-[var(--color-secondary)] transition-colors${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
+                className={`h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] font-medium hover:bg-transparent hover:text-[var(--color-secondary)]${sortKey === 'tokens' ? ' text-[var(--color-accent)]' : ''}`}
               >
                 {tokensSortIcon}
                 Tokens
-              </button>
+              </Button>
             </th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((row) => (
             <tr key={row.id} className="border-b border-[var(--color-border)]/50 hover:bg-[var(--color-surface-1)] transition-colors">
-              <td className="py-2 pr-4 max-w-[200px] text-[var(--color-secondary)]">
-                <div className="flex items-center gap-1.5 min-w-0" title={row.title}>
+              <td className="py-[var(--space-2)] pr-[var(--space-3)] max-w-[200px] text-[var(--color-secondary)]">
+                <div className="flex items-center gap-[var(--space-1)] min-w-0" title={row.title}>
                   <Link
                     to="/sessions/$sessionId"
                     params={{ sessionId: row.id }}
@@ -213,7 +215,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
                     <Badge
                       variant="muted"
                       data-testid="session-verifier-tag"
-                      className="shrink-0 gap-0.5 px-1.5 py-0 text-[9px] font-medium uppercase tracking-wider"
+                      className="shrink-0 gap-[var(--space-0-5)] px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] font-medium uppercase tracking-wider"
                     >
                       <Scales size={9} weight="bold" aria-hidden="true" />
                       Verifier
@@ -221,7 +223,7 @@ function SessionsTable({ rows }: { rows: SessionRow[] }) {
                   )}
                 </div>
               </td>
-              <td className="py-2 pl-4 text-right font-mono tabular-nums text-[var(--color-muted)]">
+              <td className="py-[var(--space-2)] pl-[var(--space-3)] text-right font-mono tabular-nums text-[var(--color-muted)]">
                 {formatTokens(row.tokens)}
               </td>
             </tr>
@@ -349,42 +351,36 @@ export function UsageScreen() {
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Usage" />
       <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-6 py-8 space-y-8">
+      <div className="max-w-4xl mx-auto px-[var(--space-4)] py-[var(--space-5)] space-y-[var(--space-5)]">
         {/* Header + Period selector */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div className="flex items-center gap-3">
+        <div className="flex items-start justify-between gap-[var(--space-3)] flex-wrap">
+          <div className="flex items-center gap-[var(--space-2-5)]">
             <ChartBar size={22} weight="fill" className="text-[var(--color-accent)] shrink-0" />
             <div>
               {/* ScreenHeader above already renders "Usage" as the page's h2 —
                   this is a decorative restatement, not a second heading. */}
               <div className="font-headline text-xl font-bold text-[var(--color-secondary)]">Usage</div>
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">Token usage by agent, model, and session</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">Token usage by agent, model, and session</p>
             </div>
           </div>
 
           {/* Period segmented control */}
-          <div
-            className="flex items-center gap-0.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0.5"
-            role="group"
+          <SegmentedControl
             aria-label="Select time period"
+            value={period}
+            onValueChange={(v) => setPeriod(v as TokenStatsPeriod)}
+            className="bg-[var(--color-surface-1)]"
           >
             {PERIODS.map(({ value, label }) => (
-              <button tabIndex={0}
+              <SegmentedControlItem
                 key={value}
-                type="button"
-                onClick={() => setPeriod(value)}
+                value={value}
                 data-testid={`period-${value}`}
-                aria-pressed={period === value}
-                className={`px-3 py-1 rounded-md text-xs font-medium transition-colors${
-                  period === value
-                    ? ' bg-[var(--color-surface-2)] text-[var(--color-accent)]'
-                    : ' text-[var(--color-muted)] hover:text-[var(--color-secondary)]'
-                }`}
               >
                 {label}
-              </button>
+              </SegmentedControlItem>
             ))}
-          </div>
+          </SegmentedControl>
         </div>
 
         {/* Loading state */}
@@ -392,7 +388,7 @@ export function UsageScreen() {
 
         {/* Error state */}
         {!isLoading && statsError && (
-          <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]">
+          <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
             Could not load usage data. Check your connection and try again.
           </div>
         )}
@@ -400,7 +396,7 @@ export function UsageScreen() {
         {/* Partial-data warning — some session stores failed to load, so totals may under-count. */}
         {!isLoading && !statsError && summary?.partial && (
           <div
-            className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-4 py-3 text-sm text-[var(--color-secondary)]"
+            className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10 px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
             data-testid="usage-partial-warning"
             role="status"
           >
@@ -411,18 +407,18 @@ export function UsageScreen() {
         {/* Empty state */}
         {!isLoading && !statsError && isEmpty && (
           <div
-            className="flex flex-col items-center justify-center py-20 gap-4 text-center"
+            className="flex flex-col items-center justify-center py-[var(--space-9)] gap-[var(--space-3)] text-center"
             data-testid="usage-empty"
           >
             <ChatCircle size={48} className="text-[var(--color-border)]" aria-hidden="true" />
             <div>
-              <p className="text-sm font-medium text-[var(--color-secondary)]">No usage yet</p>
-              <p className="text-xs text-[var(--color-muted)] mt-1">Start a chat to see token usage here.</p>
+              <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">No usage yet</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-1)]">Start a chat to see token usage here.</p>
             </div>
             <Link
               to="/"
               tabIndex={0}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-accent)] text-[var(--color-primary)] text-sm font-medium hover:opacity-90 transition-opacity"
+              className="inline-flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] rounded-lg bg-[var(--color-accent)] text-[var(--color-primary)] text-[length:var(--type-body-compact-size)] font-medium hover:opacity-90 transition-opacity"
             >
               Start a chat
             </Link>
@@ -434,7 +430,7 @@ export function UsageScreen() {
           <>
             {/* Hero stat row — Total / Cached (subset of total) / Uncached / Sessions */}
             {/* Cached + Uncached == Total. Cache tokens are a subset, not additive. */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4" data-testid="usage-hero-row">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-[var(--space-3)]" data-testid="usage-hero-row">
               <StatCard
                 label="Total tokens"
                 value={formatTokens(totalTokens)}
@@ -458,7 +454,7 @@ export function UsageScreen() {
             </div>
 
             {/* Secondary stat */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-2 gap-[var(--space-3)]">
               <StatCard
                 label="Top agent"
                 value={topAgent ? (topAgent.agent_name ?? topAgent.agent_id) : '—'}
@@ -474,7 +470,7 @@ export function UsageScreen() {
               value={breakdownTab}
               onValueChange={(v) => setBreakdownTab(v as 'agent' | 'model' | 'session')}
             >
-              <TabsList className="mb-4">
+              <TabsList className="mb-[var(--space-3)]">
                 <TabsTrigger value="agent" data-testid="tab-agent">By agent</TabsTrigger>
                 <TabsTrigger value="model" data-testid="tab-model">By model</TabsTrigger>
                 <TabsTrigger value="session" data-testid="tab-session">By session</TabsTrigger>
@@ -495,18 +491,19 @@ export function UsageScreen() {
                   // state ("No session data.") is indistinguishable from an
                   // HTTP failure unless this branch intercepts it first.
                   <div
-                    className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm text-[var(--color-error)]"
+                    className="flex items-center justify-between gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
                     data-testid="usage-session-error"
                     role="alert"
                   >
                     <span>Could not load per-session data.</span>
-                    <button tabIndex={0}
+                    <Button
                       type="button"
+                      variant="link"
                       onClick={() => void refetchSessions()}
-                      className="shrink-0 font-medium underline hover:no-underline"
+                      className="shrink-0 text-[var(--color-error)] hover:text-[var(--color-error)] underline hover:no-underline"
                     >
                       Retry
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   <SessionsTable rows={sessionRows} />

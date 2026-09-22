@@ -39,14 +39,14 @@ export function WorkspaceChatTab({ workspaceId }: WorkspaceChatTabProps) {
 function ChatRestoreSkeleton() {
   return (
     <div
-      className="flex flex-col absolute inset-0 items-center justify-center gap-3"
+      className="flex flex-col absolute inset-0 items-center justify-center gap-[var(--space-2-5)]"
       data-testid="workspace-chat-restoring"
     >
       <div
         className="h-8 w-8 rounded-full border-2 border-[var(--color-accent)] border-t-transparent animate-spin"
         aria-hidden="true"
       />
-      <p className="text-xs text-[var(--color-muted)]">Restoring your conversation…</p>
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Restoring your conversation…</p>
     </div>
   )
 }

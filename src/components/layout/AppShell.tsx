@@ -3,6 +3,7 @@ import { Outlet } from '@tanstack/react-router'
 import { Sidebar } from './Sidebar'
 import { NotificationPanel } from './NotificationPanel'
 import { ToastContainer } from '@/components/ui/toast-container'
+import { Button } from '@/components/ui/button'
 import { ToolApprovalModal } from '@/components/agents/ToolApprovalModal'
 import { CrossWorkspaceApprovalBanner } from '@/components/layout/CrossWorkspaceApprovalBanner'
 import { MediaLightbox } from '@/components/chat/MediaLightbox'
@@ -167,7 +168,7 @@ export function AppShell() {
       <a
         href="#main-content"
         tabIndex={1}
-        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-3 focus:py-2 focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-sm"
+        className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:top-2 focus:left-2 focus:px-[var(--space-2-5)] focus:py-[var(--space-2)] focus:rounded-md focus:bg-[var(--color-surface-2)] focus:text-[var(--color-secondary)] focus:text-[length:var(--type-body-compact-size)]"
       >
         Skip to content
       </a>
@@ -193,16 +194,18 @@ export function AppShell() {
           {connectionError && (
             <div
               role="alert"
-              className="flex items-center justify-between gap-2 px-4 py-2 bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-xs text-[var(--color-error)] shrink-0"
+              className="flex items-center justify-between gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)]/10 border-b border-[var(--color-error)]/20 text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] shrink-0"
             >
               <span>{connectionError}</span>
-              <button tabIndex={0}
+              <Button
                 type="button"
+                variant="ghost"
+                size="sm"
                 onClick={reconnect}
-                className="px-2 py-1 rounded text-xs hover:bg-[var(--color-error)]/20 transition-colors"
+                className="h-auto px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] hover:bg-[var(--color-error)]/20 hover:text-[var(--color-error)] transition-colors"
               >
                 Retry
-              </button>
+              </Button>
             </div>
           )}
 
@@ -211,7 +214,7 @@ export function AppShell() {
             <div
               data-testid="dev-mode-banner"
               role="alert"
-              className="flex items-center gap-2 px-4 py-2 bg-[var(--color-error)] text-white text-xs font-medium shrink-0"
+              className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-error)] text-[var(--color-primary)] text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
             >
               <span>Development mode active — authentication bypass enabled</span>
             </div>
@@ -225,7 +228,7 @@ export function AppShell() {
             <div
               data-testid="app-state-fetch-error-banner"
               role="alert"
-              className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-b border-amber-500/30 text-amber-400 text-xs font-medium shrink-0"
+              className="flex items-center gap-[var(--space-2)] px-[var(--space-3)] py-[var(--space-2)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] border-b border-[color-mix(in_srgb,var(--color-warning)_30%,transparent)] text-[var(--color-warning)] text-[length:var(--type-utility-xs-size)] font-medium shrink-0"
             >
               <span>
                 Could not fetch gateway state — security status (e.g. development-mode bypass) is

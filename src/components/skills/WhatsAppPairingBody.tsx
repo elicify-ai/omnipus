@@ -7,6 +7,7 @@ import {
 } from '@phosphor-icons/react'
 import type { Icon } from '@phosphor-icons/react'
 import { QRCodeSVG } from 'qrcode.react'
+import { Button } from '@/components/ui/button'
 import type { WhatsAppPairingState } from '@/store/whatsappPairing'
 
 // RetryableState: shared layout for the timeout and error cases — both show an
@@ -23,21 +24,23 @@ function RetryableState({
   onRetry?: () => void
 }) {
   return (
-    <div className="flex flex-col items-center gap-3">
-      <div className={`flex items-center gap-2 ${iconProps?.className ?? ''}`}>
+    <div className="flex flex-col items-center gap-[var(--space-2-5)]">
+      <div className={`flex items-center gap-[var(--space-2)] ${iconProps?.className ?? ''}`}>
         <IconComponent size={14} {...iconProps} className={undefined} />
-        <p className="text-xs">{message}</p>
+        <p className="text-[length:var(--type-utility-xs-size)]">{message}</p>
       </div>
       {onRetry && (
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="outline"
+          size="sm"
           onClick={onRetry}
           data-testid="whatsapp-retry"
-          className="flex items-center gap-1.5 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors"
+          className="gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
         >
           <ArrowsClockwise size={13} />
           Retry
-        </button>
+        </Button>
       )}
     </div>
   )
@@ -56,9 +59,9 @@ export function WhatsAppPairingBody({
   // Shared spinner — used for both the explicit 'waiting' state and any
   // unexpected/unknown status that falls through the switch below.
   const generatingSpinner = (
-    <div className="flex items-center gap-2 text-[var(--color-muted)]">
+    <div className="flex items-center gap-[var(--space-2)] text-[var(--color-muted)]">
       <Spinner size={14} className="animate-spin" />
-      <p className="text-xs">Generating your QR code&hellip;</p>
+      <p className="text-[length:var(--type-utility-xs-size)]">Generating your QR code&hellip;</p>
     </div>
   )
 
@@ -72,10 +75,10 @@ export function WhatsAppPairingBody({
     return (
       <>
         {/* QR must sit on a light background to scan reliably in dark mode. */}
-        <div data-testid="whatsapp-qr" className="rounded-md bg-white p-3">
+        <div data-testid="whatsapp-qr" className="rounded-md bg-[var(--color-surface-paper)] p-[var(--space-2-5)]">
           <QRCodeSVG value={pairing.qr} size={184} level="L" title="WhatsApp pairing QR code" />
         </div>
-        <p className="text-xs text-[var(--color-secondary)] text-center">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] text-center">
           Open <span className="font-medium">WhatsApp</span> on your phone, go to{' '}
           <span className="font-medium">Settings &rarr; Linked Devices &rarr; Link a Device</span>,
           then scan this code. It refreshes every 20s.
@@ -87,9 +90,9 @@ export function WhatsAppPairingBody({
   switch (pairing.status) {
     case 'linked':
       return (
-        <div className="flex items-center gap-2 text-[var(--color-success)]">
+        <div className="flex items-center gap-[var(--space-2)] text-[var(--color-success)]">
           <CheckCircle size={16} weight="fill" />
-          <p className="text-xs font-medium">Linked successfully.</p>
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium">Linked successfully.</p>
         </div>
       )
     case 'timeout':

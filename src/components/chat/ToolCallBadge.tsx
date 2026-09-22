@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { CaretDown, CaretUp } from '@phosphor-icons/react'
 import type { ToolCall } from '@/lib/api'
 import type { MarshalErrorResult } from '@/lib/ws'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { humanizeToolName } from '@/lib/humanizeToolName'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
@@ -127,8 +127,8 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread. Separation comes from `mt-2`
     // spacing and the status dot, not a card frame.
-    <div data-testid="tool-call-badge" data-tool={toolCall.tool} className="mt-2 text-xs font-mono">
-      <div className="flex w-full items-center gap-2">
+    <div data-testid="tool-call-badge" data-tool={toolCall.tool} className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
+      <div className="flex w-full items-center gap-[var(--space-2)]">
         {/* Toggle button. Mirrors GenericToolCall.tsx's `disabled={!hasDetail}`
             gate: while running, there is nothing to expand — a focusable
             button whose Enter/Space no-ops while still announcing
@@ -137,58 +137,44 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
             aria-expanded entirely (rather than leaving it stuck at `false`,
             which would falsely announce "collapsible, currently collapsed"
             for a row that can never actually expand yet). */}
-        <button tabIndex={0}
-          type="button"
-          onClick={() => !isRunning && setExpanded((e) => !e)}
-          disabled={isRunning}
-          className={cn(
-            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
-            !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            isRunning && 'cursor-default'
-          )}
-          aria-expanded={!isRunning ? expanded : undefined}
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={!isRunning}
+          data-testid="tool-call-toggle"
         >
           {config.indicator}
           <span className="text-[var(--color-secondary)] font-medium">
             {humanizeToolName(toolCall.tool)}
           </span>
-          <span className={cn('text-[var(--color-muted)]', config.textClass)}>{config.label}</span>
-          {/* Caret lives inside the toggle button (not a split-out sibling
-              control) — there is no other independently-clickable action on
-              this row to justify splitting the row, so the whole row stays
-              one click target (mirrors BashOutput.tsx). */}
-          {!isRunning && (
-            <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-              {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-            </span>
-          )}
-        </button>
+          <span className={cn('text-[var(--color-muted)]')}>{config.label}</span>
+        </DisclosureRow>
       </div>
 
       {/* Expanded detail — indented quote-block: a thin left accent line
           stands in for the old bordered panel, aligned under the status-dot
           column instead of boxing the whole row. */}
       {expanded && !isRunning && (
-        <div className="ml-[3px] space-y-2 border-l-2 border-[var(--color-border)] py-1 pl-3">
+        <div className="ml-[var(--space-1)] space-y-[var(--space-2)] border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)]">
           <div>
-            <div className="text-[var(--color-muted)] mb-1">Tool</div>
-            <code className="text-[10px] text-[var(--color-secondary)] break-all">
+            <div className="text-[var(--color-muted)] mb-[var(--space-1)]">Tool</div>
+            <code className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] break-all">
               {toolCall.tool}
             </code>
           </div>
           <div>
-            <div className="text-[var(--color-muted)] mb-1">Parameters</div>
+            <div className="text-[var(--color-muted)] mb-[var(--space-1)]">Parameters</div>
             {/* Fix 7 (2026-07-16): capped like the Result pane below — params
                 are now retained post-completion (see chat.ts's params-survive
                 -merge fix), so an uncapped write_file/edit content param can
                 render arbitrarily tall. */}
-            <pre className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+            <pre className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {JSON.stringify(toolCall.params, null, 2)}
             </pre>
           </div>
           {toolCall.result !== undefined && (
             <div>
-              <div className="text-[var(--color-muted)] mb-1">Result</div>
+              <div className="text-[var(--color-muted)] mb-[var(--space-1)]">Result</div>
               {/* Keyboard-scrollable: WebKit doesn't put a plain scrollable
                   <pre> in the Tab order by default, so a keyboard-only user
                   can't reach/scroll it at all. tabIndex + role="region" +
@@ -197,7 +183,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
                 tabIndex={0}
                 role="region"
                 aria-label="Tool output"
-                className="text-[10px] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
+                className="text-[length:var(--type-caption-size)] text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto"
               >
                 {typeof toolCall.result === 'string'
                   ? toolCall.result
@@ -206,7 +192,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
             </div>
           )}
           {toolCall.error && (
-            <div className="text-[var(--color-error)] text-[10px]">{toolCall.error}</div>
+            <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)]">{toolCall.error}</div>
           )}
         </div>
       )}

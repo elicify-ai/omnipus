@@ -391,22 +391,22 @@ export function CreateAgentWizard({
         // shifts focus into the dialog, then restores focus on close.
         onOpenAutoFocus={onOpenAutoFocus}
       >
-        <SheetHeader className="px-4 sm:px-8">
+        <SheetHeader className="px-[var(--space-3)] sm:px-[var(--space-5)]">
           <SheetTitle>+ New agent</SheetTitle>
         </SheetHeader>
-        <div className="px-4 sm:px-8 pt-3 pb-4 shrink-0">
+        <div className="px-[var(--space-3)] sm:px-[var(--space-5)] pt-[var(--space-2-5)] pb-[var(--space-3)] shrink-0">
           <SheetDescription>
             Configure the agent's identity, personality, and tools.
           </SheetDescription>
-          <div className="flex flex-col gap-2 mt-4">
+          <div className="flex flex-col gap-[var(--space-2)] mt-[var(--space-3)]">
             {/* Type chip (locked). The [x] cancels the wizard per §11 #3. */}
-            <div className="flex items-center justify-between gap-2 rounded-md border border-[var(--color-border)] px-3 py-2">
-              <div className="flex items-center gap-2 text-sm">
+            <div className="flex items-center justify-between gap-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)]">
+              <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
                 <span className="text-[var(--color-muted)]">Type:</span>
                 <span data-testid="type-chip" className="font-medium">
                   {TYPE_CHIP_LABEL[initialType]}
                 </span>
-                <span className="text-xs text-[var(--color-muted)]">(locked)</span>
+                <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">(locked)</span>
               </div>
               <Button
                 type="button"
@@ -420,12 +420,12 @@ export function CreateAgentWizard({
               </Button>
             </div>
             {isExternal && initialCli && (
-              <div className="flex items-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-sm">
+              <div className="flex items-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)]">
                 <span className="text-[var(--color-muted)]">CLI:</span>
                 <span data-testid="cli-chip" className="font-medium">
                   {CLI_CHIP_LABEL[initialCli]}
                 </span>
-                <span className="text-xs text-[var(--color-muted)]">(locked)</span>
+                <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">(locked)</span>
               </div>
             )}
           </div>
@@ -437,7 +437,7 @@ export function CreateAgentWizard({
               Both render once per step — the original code had two spans
               emitting the same character, which stacked. */}
           <ol
-            className="flex items-center gap-2 mt-4 text-sm"
+            className="flex items-center gap-[var(--space-2)] mt-[var(--space-3)] text-[length:var(--type-body-compact-size)]"
             aria-label={`Wizard progress: step ${step} of ${totalSteps}`}
             data-testid="wizard-stepper"
           >
@@ -482,14 +482,14 @@ export function CreateAgentWizard({
           ref={stepPanelRef}
           tabIndex={-1}
           aria-label={`Step ${step} of ${totalSteps}: ${stepNames[step - 1]}`}
-          className="flex-1 overflow-auto px-4 sm:px-8 py-6 space-y-4"
+          className="flex-1 overflow-auto px-[var(--space-3)] sm:px-[var(--space-5)] py-[var(--space-4)] space-y-[var(--space-3)]"
         >
           {submitError && (
             <div
               ref={errorRef}
               tabIndex={-1}
               data-testid="wizard-submit-error"
-              className="rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-3 py-2 text-sm text-[var(--color-error)] focus:outline-none"
+              className="rounded-md border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)] focus:outline-none"
             >
               <FormError id="wizard-submit-error-text" error={submitError} className="mt-0" />
             </div>
@@ -525,12 +525,12 @@ export function CreateAgentWizard({
             visually reorder the buttons away from Tab order again (FW-4 fix,
             2026-07-16: this exact override had reintroduced the reversal
             the shared primitive was fixed to remove). */}
-        <SheetFooter className="px-4 sm:px-8 py-4 border-t border-[var(--color-border)]">
+        <SheetFooter className="px-[var(--space-3)] sm:px-[var(--space-5)] py-[var(--space-3)] border-t border-[var(--color-border)]">
           {missingLabels.length > 0 && (
             <p
               role="status"
               data-testid="wizard-advance-hint"
-              className="text-xs text-[var(--color-muted)] self-center sm:mr-auto sm:order-first"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] self-center sm:mr-auto sm:order-first"
             >
               Missing: {missingLabels.join(', ')}
             </p>
@@ -539,7 +539,7 @@ export function CreateAgentWizard({
             <p
               role="alert"
               data-testid="wizard-cli-validation-blocked"
-              className="text-xs text-[var(--color-error)] self-center sm:mr-auto sm:order-first"
+              className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] self-center sm:mr-auto sm:order-first"
             >
               CLI path failed validation ({payload.executor_cli_validation_reason}) — fix the path on step ① before creating.
             </p>

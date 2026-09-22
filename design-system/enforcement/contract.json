@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "mode": "audit",
+  "activation": "Only after A verification and B fixture/integration gates; no C1 before both pass.",
+  "scannerApi": "export function scan({ path, source, policy, modules, catalog }) returning Finding[] synchronously; export const extensions = array of handled extensions including leading dot",
+  "finding": {
+    "ruleId": "stable rule identifier",
+    "path": "repository-relative POSIX source path",
+    "syntax": "nonempty canonical offending syntax without position/trivia; AST printer or parsed declaration normalization, not whole file",
+    "message": "actionable explanation",
+    "line": "optional positive integer (display only)",
+    "column": "optional positive integer (display only)"
+  },
+  "fingerprint": "Orchestrator SHA256 of JSON.stringify([ruleId,path,syntax]); count occurrences per fingerprint. Position never participates. Counts may decrease; no new fingerprint or increased count accepted in audit mode.",
+  "policy": {
+    "tokenCssNames": "array of all registered CSS token names",
+    "resolvedTokens": "id to resolved value map; canonical generated tokens are read-only",
+    "note": "Scanners report raw findings. Registry exceptions and baseline ledger accounting applied centrally; never silently exempt broad directories in scanners.",
+    "resolvedCssTokens": "Optional for fixture compatibility; canonical policy.mjs always supplies exact declared CSS custom property to resolved value map. When supplied, it must cover every tokenCssNames entry exactly. Do not derive CSS names from token IDs.",
+    "loader": "scripts/design-system-locks/policy.mjs validates both canonical token sources using the Stage A graph validator and creates deterministic tokenCssNames, resolvedTokens and resolvedCssTokens.",
+    "required": "Audit requires an explicitly supplied live policy. Missing/null policy is fatal. An explicit empty registered-token policy is permitted for intentional isolated fixtures; production policy is loaded from validated canonical token sources.",
+    "identity": "tokenCssNames contains unique valid CSS custom-property names. If resolvedCssTokens is supplied, its key set must exactly equal that unique token set."
+  },
+  "failClosed": "Parser failures and unsupported governed syntax must become explicit findings or errors, never empty success. Orchestrator treats scanner exceptions as blocking; no baseline for infrastructure/parser errors.",
+  "baseline": "Every existing-debt fingerprint references an owned temporary ledger entry with replacement, expiryCheckpoint and exact rule/path/fingerprint boundary. No total-count-only baseline; no auto-rebaseline command in CI.",
+  "exceptions": "Permanent exceptions registered with exact path/rule boundary and reason; temporary entries expire by ordered checkpoints A,B,C1,C2,C3,C4,C5,C6. Reject missing owners/replacements/expiry, duplicate/unknown entries and expired entries.",
+  "currentCheckpoint": "C1",
+  "currentCheckpointGovernance": "Single source of truth for which checkpoint the audit enforces. scripts/design-system-locks/current-checkpoint.mjs reads exactly this field (never a literal in package.json, CI YAML, or any other file) and audit.mjs's isExpired() compares every ledger entry's expiryCheckpoint against it. Checkpoints are an ordered stage sequence (design-system-migration-plan.md), not calendar dates: 'not a date any batch is due' (stage-b-closure-summary.md). Advancing this value is the lead's decision (see ownership) and requires the closing checkpoint's own exit criteria to be met first (e.g. C1's: docs/internal/design/evidence/c1-execution-record.md '## Batch close') — a reviewed, versioned edit here, never a silent default. Moving this value forward past a checkpoint that still has owned ledger entries at or before it is exactly what is supposed to make the audit fail on that debt (expired-ledger); that is not a regression to work around by re-dating the entries.",
+  "sourceScope": "Complete applicable src tree plus packages/ui/src when present, including CSS/JS/JSX/TS/TSX/SVG. Canonical src remains required. Tests, stories, generated token definitions and third-party/adaptor boundaries must be enumerated centrally as reviewed boundaries, not implicit scanner skip logic. Governed extension matching is case-insensitive.",
+  "ownership": {
+    "css-colors.mjs": "GLM CSS colors",
+    "ts-colors.mjs": "Grok AST colors",
+    "typography.mjs": "GLM typography",
+    "spacing.mjs": "Grok spacing",
+    "controls.mjs": "GLM raw controls/imports",
+    "status.mjs": "Grok D4 status palette",
+    "coverage.mjs": "GLM public executed coverage",
+    "audit.mjs": "Grok orchestration/ledger",
+    "policy.mjs": "lead: canonical policy loading and integration",
+    "current-checkpoint.mjs": "lead: reads currentCheckpoint above; the only legal source of the --checkpoint value any caller passes to audit.mjs"
+  },
+  "integrationFreeze": "Workers modify only new scripts/design-system-locks, tests/design-system-locks and assigned enforcement files. No existing Stage A files, package/lock/config/CI, application files, or generated outputs. Lead integrates after A gate.",
+  "coverageApi": "coverage.mjs exports checkCoverage({root,indexPath,evidencePaths}) returning {errors: string[]}; compose existing Stage A validators read-only, no scanner API required.",
+  "moduleContext": "Audit supplies modules as a frozen plain object mapping every collected governed POSIX path to its source string, rooted in that audit invocation. Current source equals modules[path]. Isolated scanner calls may omit context, but unresolved imports then remain unsupported. Scanners must not read another checkout through process.cwd or unscoped filesystem access; missing modules, cycles, and unsupported callees cannot be assumed safe.",
+  "sourceFilesystem": "Source roots and entries must be physical regular directories/files. Symbolic links are rejected with structured source-filesystem errors; external targets are never followed. Directory/stat/read failures produce blocking report evidence, never silent empty success.",
+  "catalogContext": "Audit supplies a separately deep-frozen catalog snapshot from the requested root design-system/catalog.json when controls.mjs is loaded. The object has version and entries with source, exports, publicExports and publicTypes arrays; relevant shapes are validated. Missing/malformed required catalog is fatal invalid-catalog. Injected non-controls fixtures may omit it; controls requires explicit valid context when classifying UI imports. No scanner-owned filesystem read or global cross-root classification cache.",
+  "runtimeBoundaryClassification": "A scanner may classify a proven direct runtime paint parameter/member read at a known DOM style, SVG or canvas paint site as a blocking extension-boundary, identified by exact path/rule plus stable receiving symbol, receiver kind, paint property and AST-normalized expression. This is not an exemption and does not assert contrast compliance. Static definitions/defaults/fallbacks remain independently scanned. Opaque calls, store/variant outputs, unknown receivers and unproven transforms remain unsupported. Exact central ledger/registry approval is required; status chrome remains governed and temporary migration obligations expire at the assigned checkpoint.",
+  "safeAreaPolicy": "A syntactically valid env() for exactly safe-area-inset-top/right/bottom/left without its required fallback is a specific spacing/missing-safe-area-fallback policy violation, not an unsupported parser case. It stays blocking for new debt and may enter an exact owned temporary C1 ledger whose replacement supplies a justified closed-scale fallback. Malformed syntax, unknown names and unproven expressions remain parse/unsupported failures. A valid closed-scale fallback remains a centrally reviewed runtime extension boundary; invalid static fallback stays off-scale. No env() wildcard exemption is permitted.",
+  "arbitraryTextTypePolicy": "A well-formed text-[var(--...)] utility without a color:/length: hint whose kind cannot be proven from the canonical token policy emits blocking typography/missing-arbitrary-type-hint debt. Its exact owned C1 replacement states the intended type and separately resolves any undefined token. A type hint never approves an unknown token. Malformed, interpolated or otherwise unhandled grammar remains unsupported; statically proven registered kinds retain their existing checks.",
+  "unverifiedGovernedValuePolicy": "ts-colors/unverified-governed-value is permitted only when parsing succeeded and an exact governed styling sink is proven with stable receiving identity and AST-normalized expression, but the direct value is not statically token-proven. Missing/cyclic modules, opaque helper/variant/store provenance, unknown receiver/property, computed properties and whole style objects remain unsupported. Static definitions and raw fallbacks remain independently scanned. This rule is blocking debt requiring exact owned temporary ledger review; it is never an automatic exemption or a generic replacement for unsupported findings."
+}

@@ -10,13 +10,13 @@
 // below) and TaskDetailPanel's Runs section (§4.4, Board/List normal-task
 // re-run flow). Do not fork/duplicate this component — extend it in place.
 //
-// Each run renders: a status badge sharing taskStatusConfig's STATUS_BADGE/
-// statusLabel vocabulary (TaskRun.status is in_progress | done | failed |
-// skipped — the first three ARE Task['status'] members, but skipped is a
-// TaskRun-only outcome, the overlap guard's declined-fire result, that is NOT
-// a valid Task['status'] value; see taskStatusConfig.ts's doc comment — so
-// the two surfaces share colors/labels via STATUS_BADGE/statusLabel's
-// TaskRun['status'] widening, not an identical status domain), how it
+// Each run renders: a `StatusBadge` sharing `StatusBadge.tsx`'s colour
+// vocabulary and taskStatusConfig's `statusLabel` (TaskRun.status is
+// in_progress | done | failed | skipped — the first three ARE Task['status']
+// members, but skipped is a TaskRun-only outcome, the overlap guard's
+// declined-fire result, that is NOT a valid Task['status'] value — so the two
+// surfaces share colors/labels via each helper's TaskRun['status'] widening,
+// not an identical status domain), how it
 // started (scheduled fire vs manual Run-now), when it ended,
 // its terminal result (mirrors TaskResultField's compact display idiom via
 // the shared `hasVisibleResult` gate — Q3 dedup), and an Open-in-Chat action
@@ -31,9 +31,9 @@ import { useNavigate } from '@tanstack/react-router'
 import { ChatCircle, ClockCounterClockwise, Warning } from '@phosphor-icons/react'
 import { fetchTaskRuns, tasksQueryKeys, isApiError } from '@/lib/api'
 import type { TaskRun } from '@/lib/api'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { STATUS_BADGE, statusLabel } from '@/components/workspaces/taskStatusConfig'
+import { StatusBadge } from '@/components/workspaces/StatusBadge'
+import { statusLabel } from '@/components/workspaces/taskStatusConfig'
 import { formatDateTime } from '@/lib/dateFormat'
 import { hasVisibleResult } from '@/lib/taskRuns'
 import { cn } from '@/lib/utils'
@@ -87,8 +87,8 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
   }
 
   return (
-    <div className={cn('space-y-1.5', className)}>
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
+    <div className={cn('space-y-[var(--space-1)]', className)}>
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
         Run history
       </p>
 
@@ -97,9 +97,9 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
       ) : isError ? (
         <div
           data-testid="task-runs-error"
-          className="flex items-center justify-between gap-2 rounded-md border border-[color:var(--color-error)]/30 bg-[color:var(--color-error)]/10 px-3 py-2 text-xs text-[color:var(--color-error)]"
+          className="flex items-center justify-between gap-[var(--space-2)] rounded-md border border-[color:var(--color-error)]/30 bg-[color:var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[color:var(--color-error)]"
         >
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-[var(--space-1)]">
             <Warning size={13} weight="fill" />
             {isApiError(error) ? error.userMessage : 'Failed to load run history.'}
           </span>
@@ -107,7 +107,7 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
             type="button"
             variant="outline"
             size="sm"
-            className="h-6 shrink-0 px-2 text-[11px]"
+            className="h-6 shrink-0 px-[var(--space-2)] text-[length:var(--type-caption-size)]"
             onClick={() => void refetch()}
             disabled={isFetching}
           >
@@ -117,13 +117,13 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
       ) : visibleRuns.length === 0 ? (
         <div
           data-testid="task-runs-empty"
-          className="flex items-center gap-1.5 rounded-md border border-dashed border-[var(--color-border)] px-3 py-3 text-xs text-[var(--color-muted)]"
+          className="flex items-center gap-[var(--space-1)] rounded-md border border-dashed border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
         >
           <ClockCounterClockwise size={14} />
           No runs yet.
         </div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-[var(--space-2)]">
           {visibleRuns.map((run) => (
             <TaskRunRow key={run.run_id} run={run} onOpenInChat={() => openRunInChat(run)} />
           ))}
@@ -134,7 +134,6 @@ export function TaskRunsList({ taskId, onNavigate, className, dayRange }: TaskRu
 }
 
 function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => void }) {
-  const badgeClass = STATUS_BADGE[run.status] ?? STATUS_BADGE.inbox
   const isFailed = run.status === 'failed'
   const showResult = hasVisibleResult(run.status, run.result)
 
@@ -142,26 +141,26 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
     <li
       data-testid="task-run-row"
       className={cn(
-        'space-y-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2.5',
-        isFailed && 'border-[color:var(--color-error)]/30',
+        'space-y-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-2)]',
+        isFailed ? 'border-[color:var(--color-error)]/30' : undefined,
       )}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Badge className={cn('h-6 rounded-md border-transparent px-2 text-[11px]', badgeClass)}>
+      <div className="flex items-center justify-between gap-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)]">
+          <StatusBadge status={run.status} className="h-6 rounded-md border-transparent px-[var(--space-2)] text-[length:var(--type-caption-size)]">
             {statusLabel(run.status)}
-          </Badge>
-          <span className="text-[11px] text-[var(--color-muted)]">
+          </StatusBadge>
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {run.kind === 'manual' ? 'Run now' : 'Scheduled'}
           </span>
         </div>
-        <span className="text-[11px] text-[var(--color-muted)]">{formatDateTime(run.ended_at)}</span>
+        <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{formatDateTime(run.ended_at)}</span>
       </div>
 
       {showResult ? (
         <pre
           data-testid="task-run-result"
-          className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-2 font-mono text-xs leading-relaxed text-[var(--color-secondary)]"
+          className="max-h-[120px] overflow-y-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-surface-2)] p-[var(--space-2)] font-mono text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-secondary)]"
         >
           {run.result}
         </pre>
@@ -172,7 +171,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
           type="button"
           variant="outline"
           size="sm"
-          className="h-7 w-full gap-2 text-xs"
+          className="h-7 w-full gap-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
           onClick={onOpenInChat}
         >
           <ChatCircle size={12} />
@@ -185,7 +184,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
 
 function TaskRunsSkeleton() {
   return (
-    <div className="animate-pulse space-y-2" data-testid="task-runs-skeleton">
+    <div className="animate-pulse space-y-[var(--space-2)]" data-testid="task-runs-skeleton">
       {[1, 2, 3].map((i) => (
         <div key={i} className="h-16 rounded-md bg-[var(--color-surface-2)]" />
       ))}

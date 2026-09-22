@@ -43,8 +43,8 @@ export function BashApprovalPreview({ args }: ToolApprovalPreviewContext) {
 
   return (
     <div>
-      <p className="text-xs text-[var(--color-muted)] mb-1">Command</p>
-      <pre className="font-mono text-xs bg-[var(--color-surface-2)] rounded-lg px-3 py-2 whitespace-pre-wrap break-all text-[var(--color-secondary)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-1)]">Command</p>
+      <pre className="font-mono text-[length:var(--type-utility-xs-size)] bg-[var(--color-surface-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] whitespace-pre-wrap break-all text-[var(--color-secondary)]">
         {preview.envPrefix && (
           <span className="text-[var(--color-muted)]">{preview.envPrefix} </span>
         )}
@@ -52,7 +52,7 @@ export function BashApprovalPreview({ args }: ToolApprovalPreviewContext) {
         <span>{preview.args}</span>
       </pre>
       {cwd && (
-        <p className="mt-1 text-[10px] text-[var(--color-muted)]">
+        <p className="mt-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           <span className="text-[var(--color-border)]">dir: </span>
           <span className="font-mono">{cwd}</span>
         </p>

@@ -10,6 +10,7 @@ import { cellValue, findCell, rowExcludedFromTotals, rowsByPath, FILE_NAME_PROPE
 import { ExcludedRowMark, GroupHeaderLabel, TotalsFooter } from './PartChrome'
 import { CellText, type ViewCellLinkResolver } from './ViewCellLink'
 import { EditableCell, canEditCell, type RecordEditContext } from './RecordFieldEditor'
+import { Button } from '@/components/ui/button'
 
 function detailProperty(part: ViewResultPart): string | undefined {
   return (part.columns ?? []).find((c) => c !== FILE_NAME_PROPERTY)
@@ -37,26 +38,25 @@ function ListRow({
   const renderDetailValue = (v: string): ReactNode => (cellLinks ? <CellText value={v} resolver={cellLinks} /> : v)
   return (
     <li
-      className={`flex items-baseline gap-2 border-b border-[var(--color-border)] px-3 py-1.5 text-[13px] last:border-b-0 ${
+      className={`flex items-baseline gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] last:border-b-0 ${
         onOpenPath ? 'cursor-pointer hover:bg-[var(--color-surface-2)]/40' : ''
       }`}
       data-testid="viewpart-list-row"
       {...(onOpenPath ? { onClick: () => onOpenPath(row.path) } : {})}
     >
       {onOpenPath ? (
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="ghost"
           onClick={(event) => {
             event.stopPropagation()
             onOpenPath(row.path)
           }}
           aria-label={`Open ${row.title}`}
           data-testid="viewpart-row-open"
-          className="min-w-0 truncate text-left text-[var(--color-secondary)]"
+          className="h-auto min-w-0 truncate rounded p-0 text-left font-[var(--font-weight-regular)] text-[var(--color-secondary)] hover:bg-transparent"
         >
           {row.title}
-        </button>
+        </Button>
       ) : (
         <span className="min-w-0 truncate text-[var(--color-secondary)]">{row.title}</span>
       )}
@@ -67,7 +67,7 @@ function ListRow({
           no editContext, or an empty NON-editable detail, renders exactly as
           before: nothing at all. */}
       {(detailValue !== '' || (detailCell !== undefined && canEditCell(editContext, row, detailCell))) && (
-        <span className="min-w-0 truncate text-[12px] text-[var(--color-muted)]">
+        <span className="min-w-0 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           ·{' '}
           {detailCell !== undefined ? (
             <EditableCell context={editContext} row={row} cell={detailCell} renderValue={renderDetailValue} />
@@ -122,7 +122,7 @@ export function ListPart({
       ) : (
         groups.map((group) => (
           <div key={`${group.key}|${group.absent === true}`}>
-            <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1">
+            <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)]">
               <GroupHeaderLabel label={group.key} count={group.count} absent={group.absent} />
             </div>
             <ul>

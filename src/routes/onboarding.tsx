@@ -16,9 +16,12 @@ import {
   EyeSlash,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ModelSelector, type ModelCatalogGroup } from '@/components/ui/model-selector'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { ModelSelector } from '@/components/ui/model-selector'
+import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
 import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
@@ -654,7 +657,7 @@ function OnboardingWizard() {
 
   return (
     <div
-      className="h-screen flex flex-col items-center p-6 relative overflow-y-auto overflow-x-hidden overscroll-y-contain"
+      className="h-screen flex flex-col items-center p-[var(--space-4)] relative overflow-y-auto overflow-x-hidden overscroll-y-contain"
       style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)', justifyContent: 'safe center' }}
     >
       {/* Atmospheric depth — subtle Forge Gold radial glow */}
@@ -663,7 +666,7 @@ function OnboardingWizard() {
         className="fixed inset-0 pointer-events-none"
         style={{
           background:
-            'radial-gradient(ellipse 65% 55% at 50% 50%, rgba(212,175,55,0.055) 0%, transparent 68%)',
+            'radial-gradient(ellipse 65% 55% at 50% 50%, color-mix(in srgb, var(--color-accent) 5.5%, transparent) 0%, transparent 68%)',
         }}
       />
       {/* Top edge accent line */}
@@ -672,7 +675,7 @@ function OnboardingWizard() {
         className="fixed top-0 left-0 right-0 h-px pointer-events-none"
         style={{
           background:
-            'linear-gradient(90deg, transparent 0%, rgba(212,175,55,0.35) 50%, transparent 100%)',
+            'linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-accent) 35%, transparent) 50%, transparent 100%)',
         }}
       />
 
@@ -680,7 +683,7 @@ function OnboardingWizard() {
       {appStateBannerMessage && (
         <div
           role="alert"
-          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2.5 text-sm text-red-400"
+          className="fixed top-4 left-1/2 -translate-x-1/2 w-full max-w-md z-20 rounded-md border border-[color-mix(in_srgb,var(--color-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-error)_10%,transparent)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]"
         >
           {appStateBannerMessage}
         </div>
@@ -702,17 +705,17 @@ function OnboardingWizard() {
           sibling for it. totalSteps is 2 in platform mode and 4 in local mode
           (WP5, ADR-0010) — the two upstream admin-account steps ahead of it. */}
       {!completed && (
-        <div className="flex flex-col items-center gap-2 mb-12 z-10">
+        <div className="flex flex-col items-center gap-[var(--space-2)] mb-[var(--space-7)] z-10">
           {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
           <span
             aria-hidden
-            className="text-xs font-medium tracking-wide"
+            className="text-[length:var(--type-utility-xs-size)] font-medium tracking-wide"
             style={{ color: 'var(--color-muted)' }}
           >
             Step {step} of {totalSteps}
           </span>
           <div
-            className="flex items-center gap-2"
+            className="flex items-center gap-[var(--space-2)]"
             role="progressbar"
             aria-valuenow={step}
             aria-valuemin={1}
@@ -728,10 +731,10 @@ function OnboardingWizard() {
                   width: s === step ? 24 : 8,
                   backgroundColor:
                     s === step
-                      ? '#d4af37'
+                      ? 'var(--color-accent)'
                       : s < step
-                      ? 'rgba(212,175,55,0.45)'
-                      : '#2d3748',
+                      ? 'color-mix(in srgb, var(--color-accent) 45%, transparent)'
+                      : 'var(--color-border)',
                 }}
                 transition={{ duration: 0.3, ease: 'easeInOut' }}
                 className="h-2 rounded-full"
@@ -901,7 +904,7 @@ function NameStep({
     // SPA; the submit button's own `disabled` gates both click AND the
     // browser's Enter-key implicit submission, preserving validation.
     <form
-      className="flex flex-col items-center text-center gap-6"
+      className="flex flex-col items-center text-center gap-[var(--space-4)]"
       onSubmit={(e) => {
         e.preventDefault()
         onContinue()
@@ -914,7 +917,7 @@ function NameStep({
       >
         <div
           className="h-16 w-16 rounded-full flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
         >
           <User size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
         </div>
@@ -925,11 +928,11 @@ function NameStep({
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.15, duration: 0.38 }}
       >
-        <h2 className="font-headline text-3xl font-bold mb-2"
+        <h2 className="font-headline text-3xl font-bold mb-[var(--space-2)]"
           style={{ color: 'var(--color-secondary)' }}>
           What should I call you?
         </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           Choose a username — this is the one account for your Omnipus
         </p>
       </motion.div>
@@ -938,13 +941,12 @@ function NameStep({
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.25, duration: 0.38 }}
-        className="w-full space-y-4"
+        className="w-full space-y-[var(--space-3)]"
       >
         <div>
-          <label htmlFor="admin-username" className="text-xs font-medium mb-1.5 block"
-            style={{ color: 'var(--color-muted)' }}>
+          <Label htmlFor="admin-username" className="mb-[var(--space-2)] block">
             Username
-          </label>
+          </Label>
           <Input
             id="admin-username"
             type="text"
@@ -962,10 +964,10 @@ function NameStep({
             data-testid="onboarding-error"
             role="alert"
             aria-live="assertive"
-            className="flex items-start gap-2 text-sm"
+            className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
             style={{ color: 'var(--color-error)' }}
           >
-            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+            <XCircle size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
             <span>{error}</span>
           </div>
         )}
@@ -980,7 +982,7 @@ function NameStep({
       >
         <Button
           type="submit"
-          className="w-full h-11 gap-2 font-headline font-bold text-base"
+          className="w-full h-11 gap-[var(--space-2)] font-headline font-bold text-base"
           disabled={!username.trim()}
         >
           Continue
@@ -1022,7 +1024,7 @@ function PasswordStep({
     // navigation, and the submit button's `disabled` still gates Enter-to-
     // submit exactly like it already gated the click handler.
     <form
-      className="flex flex-col items-center text-center gap-6"
+      className="flex flex-col items-center text-center gap-[var(--space-4)]"
       onSubmit={(e) => {
         e.preventDefault()
         onContinue()
@@ -1035,7 +1037,7 @@ function PasswordStep({
       >
         <div
           className="h-16 w-16 rounded-full flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
         >
           <Key size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
         </div>
@@ -1046,11 +1048,11 @@ function PasswordStep({
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.15, duration: 0.38 }}
       >
-        <h2 className="font-headline text-3xl font-bold mb-2"
+        <h2 className="font-headline text-3xl font-bold mb-[var(--space-2)]"
           style={{ color: 'var(--color-secondary)' }}>
           Set your password
         </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           This unlocks your Omnipus — store it somewhere safe
         </p>
       </motion.div>
@@ -1059,14 +1061,13 @@ function PasswordStep({
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.25, duration: 0.38 }}
-        className="w-full space-y-4"
+        className="w-full space-y-[var(--space-3)]"
       >
         {/* Password */}
         <div>
-          <label htmlFor="admin-password" className="text-xs font-medium mb-1.5 block"
-            style={{ color: 'var(--color-muted)' }}>
+          <Label htmlFor="admin-password" className="mb-[var(--space-2)] block">
             Password
-          </label>
+          </Label>
           <div className="relative">
             <Input
               id="admin-password"
@@ -1075,24 +1076,24 @@ function PasswordStep({
               onChange={(e) => onPasswordChange(e.target.value)}
               placeholder="Min. 8 characters"
               autoComplete="new-password"
-              className="pr-9"
+              className="pr-[var(--space-5)]"
               autoFocus
             />
-            <button tabIndex={0}
+            <IconButton
               type="button"
               onClick={onToggleShowPassword}
-              className={EYE_TOGGLE_CLASS}
+              className={`${EYE_TOGGLE_CLASS} hover:bg-transparent`}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-            </button>
+            </IconButton>
           </div>
           {/* Inline password-strength meter — length + character-class heuristic. */}
           {strength && (
-            <div className="mt-2" data-testid="password-strength">
+            <div className="mt-[var(--space-2)]" data-testid="password-strength">
               <div
-                className="flex gap-1"
+                className="flex gap-[var(--space-1)]"
                 role="meter"
                 aria-label="Password strength"
                 aria-valuenow={strength.score}
@@ -1111,7 +1112,7 @@ function PasswordStep({
                   />
                 ))}
               </div>
-              <p className="text-xs mt-1 font-medium" style={{ color: strength.color }}>
+              <p className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-1)] font-medium" style={{ color: strength.color }}>
                 {strength.label}
               </p>
             </div>
@@ -1120,10 +1121,9 @@ function PasswordStep({
 
         {/* Confirm Password */}
         <div>
-          <label htmlFor="admin-password-confirm" className="text-xs font-medium mb-1.5 block"
-            style={{ color: 'var(--color-muted)' }}>
+          <Label htmlFor="admin-password-confirm" className="mb-[var(--space-2)] block">
             Confirm Password
-          </label>
+          </Label>
           <div className="relative">
             <Input
               id="admin-password-confirm"
@@ -1132,17 +1132,17 @@ function PasswordStep({
               onChange={(e) => onPasswordConfirmChange(e.target.value)}
               placeholder="Repeat password"
               autoComplete="new-password"
-              className="pr-9"
+              className="pr-[var(--space-5)]"
             />
-            <button tabIndex={0}
+            <IconButton
               type="button"
               onClick={onToggleShowPassword}
-              className={EYE_TOGGLE_CLASS}
+              className={`${EYE_TOGGLE_CLASS} hover:bg-transparent`}
               style={{ color: 'var(--color-muted)' }}
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-            </button>
+            </IconButton>
           </div>
         </div>
 
@@ -1152,10 +1152,10 @@ function PasswordStep({
             data-testid="onboarding-error"
             role="alert"
             aria-live="assertive"
-            className="flex items-start gap-2 text-sm"
+            className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
             style={{ color: 'var(--color-error)' }}
           >
-            <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+            <XCircle size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
             <span>{error}</span>
           </div>
         )}
@@ -1166,15 +1166,15 @@ function PasswordStep({
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.35, duration: 0.38 }}
-        className="flex items-center gap-3 pt-2 w-full"
+        className="flex items-center gap-[var(--space-2-5)] pt-[var(--space-2)] w-full"
       >
-        <Button type="button" variant="ghost" className="gap-1.5 min-h-11 sm:min-h-0" onClick={onBack}>
+        <Button type="button" variant="ghost" className="gap-[var(--space-1)] min-h-11 sm:min-h-0" onClick={onBack}>
           <ArrowLeft size={14} />
           Back
         </Button>
         <Button
           type="submit"
-          className="flex-1 gap-2 font-headline font-bold"
+          className="flex-1 gap-[var(--space-2)] font-headline font-bold"
           disabled={!isValid}
         >
           Continue
@@ -1211,7 +1211,7 @@ function PersonalStep({
 }) {
   return (
     <form
-      className="flex flex-col items-center text-center gap-6"
+      className="flex flex-col items-center text-center gap-[var(--space-4)]"
       onSubmit={(e) => {
         e.preventDefault()
         onContinue()
@@ -1224,7 +1224,7 @@ function PersonalStep({
       >
         <div
           className="h-16 w-16 rounded-full flex items-center justify-center"
-          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+          style={{ backgroundColor: 'color-mix(in srgb, var(--color-accent) 12%, transparent)' }}
         >
           <User size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
         </div>
@@ -1235,11 +1235,11 @@ function PersonalStep({
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.15, duration: 0.38 }}
       >
-        <h2 className="font-headline text-3xl font-bold mb-2"
+        <h2 className="font-headline text-3xl font-bold mb-[var(--space-2)]"
           style={{ color: 'var(--color-secondary)' }}>
           What should I call you?
         </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           And how you like to be talked to. You can change any of this later.
         </p>
       </motion.div>
@@ -1248,11 +1248,10 @@ function PersonalStep({
         initial={{ y: 14, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.25, duration: 0.38 }}
-        className="w-full space-y-5 text-left"
+        className="w-full space-y-[var(--space-3)] text-left"
       >
         <div>
-          <Label htmlFor="pref-name" className="text-xs font-medium mb-1.5 block"
-            style={{ color: 'var(--color-muted)' }}>
+          <Label htmlFor="pref-name" className="mb-[var(--space-2)] block">
             Name
           </Label>
           <Input
@@ -1266,54 +1265,48 @@ function PersonalStep({
         </div>
 
         <div>
-          <p className="text-xs font-medium mb-1.5" style={{ color: 'var(--color-muted)' }}>Tone</p>
-          <div className="grid gap-2">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-2)]" style={{ color: 'var(--color-muted)' }}>Tone</p>
+          <RadioGroup
+            aria-label="Tone"
+            orientation="vertical"
+            value={tone}
+            onValueChange={(v) => onToneChange(v as OnboardingTone)}
+          >
             {TONE_OPTIONS.map(({ value, label, description }) => (
-              <button
+              <RadioGroupItem
                 key={value}
-                type="button"
-                tabIndex={0}
-                onClick={() => onToneChange(value)}
-                aria-pressed={tone === value}
-                className="text-left rounded-lg border px-3 py-2"
-                style={
-                  tone === value
-                    ? { borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }
-                    : { borderColor: 'var(--color-border)' }
-                }
+                value={value}
+                className="flex-col items-start gap-0 text-left px-[var(--space-2-5)] py-[var(--space-2)]"
               >
-                <span className="text-sm block" style={{ color: 'var(--color-secondary)' }}>{label}</span>
-                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>{description}</span>
-              </button>
+                <span className="text-[length:var(--type-body-compact-size)] block" style={{ color: 'var(--color-secondary)' }}>{label}</span>
+                <span className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>{description}</span>
+              </RadioGroupItem>
             ))}
-          </div>
+          </RadioGroup>
         </div>
 
         <div>
-          <p className="text-xs font-medium mb-1.5" style={{ color: 'var(--color-muted)' }}>How much detail</p>
-          <div className="grid grid-cols-2 gap-2">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium mb-[var(--space-2)]" style={{ color: 'var(--color-muted)' }}>How much detail</p>
+          <RadioGroup
+            aria-label="How much detail"
+            className="grid grid-cols-2 gap-[var(--space-2)]"
+            value={detail}
+            onValueChange={(v) => onDetailChange(v as OnboardingDetail)}
+          >
             {DETAIL_OPTIONS.map(({ value, label, description }) => (
-              <button
+              <RadioGroupItem
                 key={value}
-                type="button"
-                tabIndex={0}
-                onClick={() => onDetailChange(value)}
-                aria-pressed={detail === value}
-                className="text-left rounded-lg border px-3 py-2"
-                style={
-                  detail === value
-                    ? { borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }
-                    : { borderColor: 'var(--color-border)' }
-                }
+                value={value}
+                className="flex-col items-start gap-0 text-left px-[var(--space-2-5)] py-[var(--space-2)]"
               >
-                <span className="text-sm block" style={{ color: 'var(--color-secondary)' }}>{label}</span>
-                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>{description}</span>
-              </button>
+                <span className="text-[length:var(--type-body-compact-size)] block" style={{ color: 'var(--color-secondary)' }}>{label}</span>
+                <span className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>{description}</span>
+              </RadioGroupItem>
             ))}
-          </div>
+          </RadioGroup>
         </div>
 
-        <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
           This is saved to your profile as{' '}
           <strong style={{ color: 'var(--color-secondary)' }}>Workspace Context</strong> — plain
           text you can read and edit any time.
@@ -1329,7 +1322,7 @@ function PersonalStep({
       >
         <Button
           type="submit"
-          className="w-full h-11 gap-2 font-headline font-bold text-base"
+          className="w-full h-11 gap-[var(--space-2)] font-headline font-bold text-base"
           disabled={!name.trim()}
         >
           Continue
@@ -1420,8 +1413,10 @@ function ProviderStep({
   // LOCAL_PROVIDER_CREDENTIAL for the typed key on this path, so this only
   // drives copy — never the Finish gate below (see keyMissing).
   const isLocal = entry?.locality === 'local'
+  // The connection probe's own state (idle/testing/success/error), not a task status.
+  const isProbeError = probeStatus === 'error'
   const missingCli =
-    signIn && probeStatus === 'error' && probeErrorIsMissingCli(probeError)
+    signIn && isProbeError && probeErrorIsMissingCli(probeError)
       ? cliBinaryName(entry)
       : undefined
 
@@ -1444,18 +1439,18 @@ function ProviderStep({
   const probeBlocked = keyMissing || needsCustomEndpoint
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-[var(--space-3)]">
       <div>
         <h2
-          className="font-headline text-2xl font-bold mb-1"
+          className="font-headline text-2xl font-bold mb-[var(--space-1)]"
           style={{ color: 'var(--color-secondary)' }}
         >
           Select your model provider and default model
         </h2>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
           Omnipus needs an AI provider to power your agents.
         </p>
-        <p className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-utility-xs-size)] mt-[var(--space-1)]" style={{ color: 'var(--color-muted)' }}>
           Not sure? OpenAI or OpenRouter are good starting points.
         </p>
       </div>
@@ -1478,64 +1473,62 @@ function ProviderStep({
       {selection && (
         <div
           data-testid="onboarding-provider-summary"
-          className="rounded-lg border p-3 flex items-center justify-between gap-2"
-          style={{ borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }}
+          className="rounded-lg border p-[var(--space-2-5)] flex items-center justify-between gap-[var(--space-2)]"
+          style={{ borderColor: 'var(--color-accent)', backgroundColor: 'color-mix(in srgb, var(--color-accent) 6%, transparent)' }}
         >
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-[var(--space-2)] min-w-0">
             {entry && (
               <BrandIcon slug={catalogLogoSlug(entry)} size={18} decorative className="shrink-0" />
             )}
             <div className="min-w-0">
-              <p className="text-sm font-medium truncate" style={{ color: 'var(--color-secondary)' }}>
+              <p className="text-[length:var(--type-body-compact-size)] font-medium truncate" style={{ color: 'var(--color-secondary)' }}>
                 {selection.displayName}
               </p>
               {/* US-7 parity: the same catalogDisplay derivation Settings uses. */}
               {entry && (
                 <>
-                  <p className="text-xs truncate" style={{ color: 'var(--color-muted)' }}>
+                  <p className="text-[length:var(--type-utility-xs-size)] truncate" style={{ color: 'var(--color-muted)' }}>
                     {/* Issue #800 D2: reflect the operator's own AWS region
                         pick, not the catalog's static us-east-1 default. */}
                     {catalogSubtitle(entry, selection.awsRegion)}
                   </p>
-                  <p className="text-xs font-mono truncate" style={{ color: 'var(--color-muted)' }}>
+                  <p className="text-[length:var(--type-utility-xs-size)] font-mono truncate" style={{ color: 'var(--color-muted)' }}>
                     → {catalogEndpointHint(entry, selection.awsRegion)}
                   </p>
                 </>
               )}
               {selection.apiBase && (
-                <p className="text-xs font-mono truncate" style={{ color: 'var(--color-muted)' }}>
+                <p className="text-[length:var(--type-utility-xs-size)] font-mono truncate" style={{ color: 'var(--color-muted)' }}>
                   → {selection.apiBase}
                 </p>
               )}
-              <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+              <p className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
                 {signIn ? 'Signed in with the provider' : isLocal ? 'No key needed — runs locally' : 'API key'}
               </p>
               {/* FR-045: the sign-in path has nothing to type — the dialog is
                   the whole interaction, and it must be reachable again after
                   the row is confirmed (a session can lapse mid-onboarding). */}
               {signIn && (
-                <button
+                <Button
                   type="button"
-                  tabIndex={0}
+                  variant="outline"
                   data-testid="onboarding-sign-in-btn"
                   onClick={() => onSignIn(selection.providerId, selection.displayName)}
-                  className="mt-1 text-xs font-medium px-2 py-1 rounded border"
-                  style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
+                  className="mt-[var(--space-1)] h-auto rounded border-[var(--color-accent)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]"
                 >
                   Sign in
-                </button>
+                </Button>
               )}
             </div>
           </div>
-          <button
+          <Button
             type="button"
-            tabIndex={0}
+            variant="ghost"
             onClick={onChangeProvider}
-            className="shrink-0 text-xs font-medium px-2.5 py-1.5 rounded transition-colors"
-            style={{ color: 'var(--color-accent)' }}
+            className="h-auto shrink-0 rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]"
           >
             Change
-          </button>
+          </Button>
         </div>
       )}
 
@@ -1545,7 +1538,7 @@ function ProviderStep({
       {needsCustomEndpoint && (
         <p
           data-testid="onboarding-needs-endpoint"
-          className="text-xs"
+          className="text-[length:var(--type-utility-xs-size)]"
           style={{ color: 'var(--color-warning)' }}
         >
           {selection?.displayName} needs a per-resource endpoint. Go back and use{' '}
@@ -1554,9 +1547,9 @@ function ProviderStep({
       )}
 
       {selection && (
-        <div className="space-y-4">
+        <div className="space-y-[var(--space-3)]">
           {/* ── Model — empty, labelled, and the probe's subject (FR-029) ─── */}
-          <div className="space-y-1.5">
+          <div className="space-y-[var(--space-1)]">
             <ModelSelector
               label={ONBOARDING_MODEL_LABEL}
               triggerTestId="onboarding-model-select"
@@ -1568,7 +1561,7 @@ function ProviderStep({
               constrainToCatalog={hasCatalogModels}
               allowFreeTextWhenEmpty
             />
-            <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
               {hasCatalogModels
                 ? 'Your first agent starts on this model. You can change it later.'
                 : 'Enter the model slug for this provider (e.g. MiniMax-M2.7)'}
@@ -1580,7 +1573,7 @@ function ProviderStep({
             <p
               data-testid="onboarding-probe-status"
               role="status"
-              className="flex items-center gap-2 text-sm"
+              className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
               style={{ color: 'var(--color-muted)' }}
             >
               <SpinnerGap size={13} className="animate-spin" />
@@ -1592,7 +1585,7 @@ function ProviderStep({
             <p
               data-testid="onboarding-probe-status"
               role="status"
-              className="flex items-center gap-2 text-sm"
+              className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
               style={{ color: 'var(--color-success)' }}
             >
               <CheckCircle size={14} weight="fill" />
@@ -1602,16 +1595,16 @@ function ProviderStep({
             </p>
           )}
 
-          {probeStatus === 'error' && (
+          {isProbeError && (
             <div
               data-testid="onboarding-error"
               role="alert"
               aria-live="assertive"
-              className="flex items-start gap-2 text-sm"
+              className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
               style={{ color: 'var(--color-error)' }}
             >
-              <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
-              <div className="min-w-0 space-y-1">
+              <XCircle size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
+              <div className="min-w-0 space-y-[var(--space-1)]">
                 <span>
                   <span className="sr-only">Error: </span>
                   {missingCli ? (
@@ -1624,11 +1617,11 @@ function ProviderStep({
                   )}
                 </span>
                 {probeError && (
-                  <details className="text-xs" style={{ color: 'var(--color-muted)' }}>
+                  <details className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
                     <summary tabIndex={0} className="cursor-pointer select-none">
                       Technical details
                     </summary>
-                    <p className="mt-1 font-mono break-words">{probeError}</p>
+                    <p className="mt-[var(--space-1)] font-mono break-words">{probeError}</p>
                   </details>
                 )}
               </div>
@@ -1642,7 +1635,7 @@ function ProviderStep({
           {probeStatus !== 'success' && (
             <Button
               variant="outline"
-              className="w-full gap-2 font-headline font-bold"
+              className="w-full gap-[var(--space-2)] font-headline font-bold"
               data-testid="onboarding-probe-button"
               onClick={onReprobe}
               disabled={probeStatus === 'testing' || probeBlocked}
@@ -1663,7 +1656,7 @@ function ProviderStep({
           {keyMissing && (
             <p
               data-testid="onboarding-key-missing"
-              className="text-xs"
+              className="text-[length:var(--type-utility-xs-size)]"
               style={{ color: 'var(--color-muted)' }}
             >
               Add an API key for {providerDisplayName} — use <strong>Change</strong> to go back to
@@ -1688,10 +1681,10 @@ function ProviderStep({
         <div
           role="alert"
           data-testid="onboarding-error"
-          className="flex items-start gap-2 text-sm text-left"
+          className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-left"
           style={{ color: 'var(--color-error)' }}
         >
-          <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" />
+          <XCircle size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
           <span>{finishError}</span>
         </div>
       )}
@@ -1700,10 +1693,10 @@ function ProviderStep({
       <BrandDisclaimer />
 
       {/* Navigation */}
-      <div className="flex items-center gap-3 pt-2">
+      <div className="flex items-center gap-[var(--space-2-5)] pt-[var(--space-2)]">
         <Button
           variant="ghost"
-          className="gap-1.5 min-h-11 sm:min-h-0"
+          className="gap-[var(--space-1)] min-h-11 sm:min-h-0"
           onClick={onBack}
           disabled={isSaving}
         >
@@ -1712,7 +1705,7 @@ function ProviderStep({
         </Button>
         <Button
           variant={finishEnabled ? 'default' : 'outline'}
-          className="flex-1 gap-2 font-headline font-bold"
+          className="flex-1 gap-[var(--space-2)] font-headline font-bold"
           onClick={onComplete}
           disabled={!finishEnabled || isSaving}
         >
@@ -1748,7 +1741,7 @@ function ProviderStep({
 
 function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void }) {
   return (
-    <div className="flex flex-col items-center text-center gap-8">
+    <div className="flex flex-col items-center text-center gap-[var(--space-5)]">
       {/* Mascot with Forge Gold glow halo */}
       <motion.div
         initial={{ scale: 0.75, opacity: 0 }}
@@ -1761,7 +1754,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
           className="absolute rounded-full blur-3xl pointer-events-none"
           style={{
             inset: '-40%',
-            background: 'rgba(212,175,55,0.14)',
+            background: 'color-mix(in srgb, var(--color-accent) 14%, transparent)',
           }}
         />
         <img
@@ -1776,7 +1769,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         animate={{ y: 0, opacity: 1 }}
         transition={{ delay: 0.18, duration: 0.38 }}
       >
-        <div className="flex items-center justify-center gap-2 mb-2">
+        <div className="flex items-center justify-center gap-[var(--space-2)] mb-[var(--space-2)]">
           <h1 className="font-headline text-3xl sm:text-4xl font-bold leading-tight"
             style={{ color: 'var(--color-secondary)' }}>
             Mia — Assistant
@@ -1788,7 +1781,7 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
             aria-label="Default agent"
           />
         </div>
-        <p className="font-headline text-sm font-bold tracking-wide"
+        <p className="font-headline text-[length:var(--type-body-compact-size)] font-bold tracking-wide"
           style={{ color: 'var(--color-accent)' }}>
           Your personal Assistant
         </p>
@@ -1801,15 +1794,15 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         className="w-full"
       >
         <div
-          className="flex items-start gap-3 p-3 rounded-lg border text-left"
+          className="flex items-start gap-[var(--space-2-5)] p-[var(--space-2-5)] rounded-lg border text-left"
           style={{
             borderColor: 'var(--color-border)',
             backgroundColor: 'var(--color-surface-1)',
           }}
         >
-          <User size={17} weight="duotone" className="shrink-0 mt-0.5"
+          <User size={17} weight="duotone" className="shrink-0 mt-[var(--space-0-5)]"
             style={{ color: 'var(--color-accent)' }} />
-          <p className="text-sm leading-snug" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-[length:var(--type-body-compact-size)] leading-snug" style={{ color: 'var(--color-muted)' }}>
             Your personal Assistant — memory-rich, cross-workspace recall, runs your
             tasks, email, and calendar.
           </p>
@@ -1822,12 +1815,12 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
         transition={{ delay: 0.38, duration: 0.38 }}
         className="w-full"
       >
-        <p className="text-sm leading-relaxed mb-6" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)] leading-relaxed mb-[var(--space-4)]" style={{ color: 'var(--color-muted)' }}>
           Mia is your default agent. She&apos;s bound to My Workspace and knows you
           across all your workspaces. Start chatting to begin.
         </p>
         <Button
-          className="w-full h-11 gap-2 font-headline font-bold text-base"
+          className="w-full h-11 gap-[var(--space-2)] font-headline font-bold text-base"
           onClick={onStartChatting}
         >
           <ChatCircle size={16} weight="fill" />

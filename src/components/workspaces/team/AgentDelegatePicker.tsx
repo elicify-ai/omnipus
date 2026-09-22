@@ -8,6 +8,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { IconButton } from '@/components/ui/icon-button'
 import { validateConnection, type TeamEditState, type TeamNodeModel } from './teamGraphModel'
 
 export interface AgentDelegatePickerProps {
@@ -63,18 +64,17 @@ export function AgentDelegatePicker({
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <button tabIndex={0}
+        <IconButton
           ref={triggerRef}
-          type="button"
           data-node-action="delegate"
           data-testid={`team-node-delegate-${source.id}`}
           aria-label={`Delegate from ${source.name} to another agent`}
           title="Delegate to another agent — keyboard equivalent of dragging the gold connection dot"
-          className="nodrag shrink-0 rounded p-1 text-[var(--color-muted)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)]"
+          className="nodrag h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)]"
           onClick={(e) => e.stopPropagation()}
         >
           <ArrowBendUpRight size={12} weight="bold" />
-        </button>
+        </IconButton>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
@@ -93,7 +93,7 @@ export function AgentDelegatePicker({
         <DropdownMenuLabel>Delegate to…</DropdownMenuLabel>
         <DropdownMenuSeparator />
         {candidates.length === 0 ? (
-          <p className="px-2 py-1.5 text-xs text-[var(--color-muted)]">
+          <p className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             No eligible agents — every other team member already has an edge from{' '}
             {source.name}, or the team has only this one agent.
           </p>
@@ -106,7 +106,7 @@ export function AgentDelegatePicker({
               className="cursor-pointer"
             >
               {n.name}
-              <span className="ml-auto text-[10px] text-[var(--color-muted)]">{n.role}</span>
+              <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)]">{n.role}</span>
             </DropdownMenuItem>
           ))
         )}

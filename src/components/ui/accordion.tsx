@@ -30,13 +30,13 @@ const AccordionTrigger = React.forwardRef<
       // Before {...props} so a caller-supplied tabIndex wins.
       tabIndex={0}
       className={cn(
-        'flex flex-1 items-center justify-between py-3 text-sm font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
+        'flex flex-1 items-center justify-between py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] transition-all hover:text-[var(--color-accent)] [&[data-state=open]>svg]:rotate-180',
         className
       )}
       {...props}
     >
       {children}
-      <CaretDown size={14} className="shrink-0 transition-transform duration-200 text-[var(--color-muted)]" />
+      <CaretDown aria-hidden="true" size={14} className="shrink-0 transition-transform duration-200 motion-reduce:transition-none text-[var(--color-muted)]" />
     </AccordionPrimitive.Trigger>
   </AccordionPrimitive.Header>
 ))
@@ -49,13 +49,13 @@ const AccordionContent = React.forwardRef<
   <AccordionPrimitive.Content
     ref={ref}
     className={cn(
-      'overflow-hidden text-sm',
-      'data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down',
+      'overflow-hidden text-[length:var(--type-body-compact-size)]',
+      'data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down motion-reduce:animate-none',
       className
     )}
     {...props}
   >
-    <div className="pb-3 pt-0">{children}</div>
+    <div className="pb-[var(--space-2-5)] pt-0">{children}</div>
   </AccordionPrimitive.Content>
 ))
 AccordionContent.displayName = AccordionPrimitive.Content.displayName

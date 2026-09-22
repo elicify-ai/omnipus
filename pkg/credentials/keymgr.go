@@ -135,6 +135,9 @@ func Unlock(store *Store) error {
 		if err != nil {
 			return fmt.Errorf("credentials: %w", err)
 		}
+		// UnlockWithKey copies, so this decode buffer can be overwritten as soon
+		// as it has been handed over. The env var's own string cannot be wiped.
+		defer wipe(key)
 		if err := store.UnlockWithKey(key); err != nil {
 			return err
 		}
@@ -149,6 +152,7 @@ func Unlock(store *Store) error {
 		if err != nil {
 			return fmt.Errorf("credentials: OMNIPUS_KEY_FILE %q failed: %w", keyFile, err)
 		}
+		defer wipe(key)
 		if err := store.UnlockWithKey(key); err != nil {
 			return err
 		}
@@ -167,6 +171,7 @@ func Unlock(store *Store) error {
 		if err != nil {
 			return fmt.Errorf("credentials: default key file %q failed: %w", defaultKeyPath, err)
 		}
+		defer wipe(key)
 		if err := store.UnlockWithKey(key); err != nil {
 			return err
 		}
@@ -187,6 +192,9 @@ func Unlock(store *Store) error {
 		if err != nil {
 			return fmt.Errorf("credentials: auto-generate master key: %w", err)
 		}
+		// The key is persisted to disk by design (that file IS the instance's
+		// copy); only this in-memory hand-off buffer is wiped.
+		defer wipe(key)
 		if err := store.UnlockWithKey(key); err != nil {
 			return err
 		}
@@ -284,6 +292,7 @@ func unlockFromDeliveredKey(store *Store, sourcePath, defaultKeyPath string) err
 	if err != nil {
 		return err
 	}
+	defer wipe(key)
 
 	// Prove the key actually opens this store BEFORE destroying the only copy
 	// of it. UnlockWithKey validates length and nothing else (store.go), so
@@ -346,6 +355,9 @@ func unlockFromDeliveredKey(store *Store, sourcePath, defaultKeyPath string) err
 // leaves no half-unlocked store holding a key we just rejected.
 func verifyKeyOpensStore(path string, key []byte) error {
 	probe := NewStore(path)
+	// The probe holds its own copy of the key (UnlockWithKey copies); overwrite
+	// it on every return path, including the "nothing to check" early one.
+	defer probe.Close()
 	if !probe.Exists() {
 		return nil
 	}
@@ -545,6 +557,10 @@ func loadKeyFile(path string) ([]byte, error) {
 	}
 
 	hexKey := strings.TrimRight(string(data), "\r\n")
+	// The file's bytes are hex key material. Overwrite the read buffer as soon
+	// as it has been decoded — the hex string it was converted to is immutable
+	// and cannot be wiped, and the file itself is at rest on disk by design.
+	wipe(data)
 	key, hexErr := hexToKey(hexKey)
 	if hexErr != nil {
 		emitMasterKeyAudit(path, false, fmt.Sprintf("invalid hex: %v", hexErr))
@@ -615,6 +631,12 @@ func emitMasterKeyAuditRule(path string, success bool, detail, policyRule string
 }
 
 // promptPassphrase reads a passphrase from the terminal without echo.
+//
+// The buffer ReadPassword fills is overwritten before returning. The string it
+// is converted to is NOT wiped and cannot be: Go strings are immutable, so
+// every passphrase held as a string — this return value, and the copies its
+// callers keep — stays readable in the heap for the life of the process.
+// Callers minimize how long they hold it; they cannot erase it.
 func promptPassphrase(prompt string) (string, error) {
 	// #nosec G115 -- same as the Unlock TTY check above: os.Stdin.Fd() is a
 	// small kernel-assigned FD, cannot overflow int in practice.
@@ -623,9 +645,12 @@ func promptPassphrase(prompt string) (string, error) {
 	raw, err := term.ReadPassword(fd)
 	fmt.Fprintln(os.Stderr) // newline after silent input
 	if err != nil {
+		wipe(raw)
 		return "", err
 	}
-	return string(raw), nil
+	pass := string(raw)
+	wipe(raw)
+	return pass, nil
 }
 
 // PromptNewPassphrase prompts for a new passphrase with confirmation.

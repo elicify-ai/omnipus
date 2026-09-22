@@ -31,13 +31,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
   EyeSlash,
-  ArrowCounterClockwise,
   Plus,
   X,
   Globe,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import {
   Sheet,
@@ -208,6 +210,15 @@ interface ProviderConfigSheetProps {
    * there is nothing to remove until a provider exists.
    */
   onRemove?: (provider: Provider) => void
+  /**
+   * True while the step-up gate (ADR-0010 WP3: ReAuthDialog in local mode,
+   * ConfirmDialog in platform mode — Spec-6 FR-12.2 consent gate) is open on
+   * top of this Sheet. The explicit state is defense in depth over Radix's
+   * `hideOthers`: `inert` keeps stray Tab focus out of the background Sheet,
+   * while `aria-hidden` also covers accessibility-tree consumers (including
+   * this repo's test queries) that do not read `inert`.
+   */
+  obscuredByDialog?: boolean
 }
 
 function ProviderConfigSheet({
@@ -233,6 +244,7 @@ function ProviderConfigSheet({
   testing,
   handleTest,
   onRemove,
+  obscuredByDialog,
 }: ProviderConfigSheetProps) {
   // FR-033: an accidental close (Esc / overlay) with a dirty key does not
   // close — it asks. This flag is the inline "Discard key?" prompt's state.
@@ -336,6 +348,11 @@ function ProviderConfigSheet({
         widthClass="w-[90vw] sm:max-w-lg"
         className="p-0"
         data-testid="provider-config-sheet"
+        // See the ProviderConfigSheetProps.obscuredByDialog doc comment: keep
+        // the background Sheet inert and hidden while the step-up dialog is
+        // the one true top-level modal.
+        aria-hidden={obscuredByDialog ? true : undefined}
+        inert={obscuredByDialog ? true : undefined}
         // FR-033: preventDefault keeps Radix from unmounting the sheet, so the
         // prompt renders inside a sheet that never lost focus (WCAG 3.2.1).
         onEscapeKeyDown={(e) => {
@@ -356,8 +373,8 @@ function ProviderConfigSheet({
           handleClose('overlay')
         }}
       >
-        <SheetHeader className="px-6 pr-14">
-          <div className="flex items-center gap-2 min-w-0">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
+          <div className="flex items-center gap-[var(--space-2)] min-w-0">
             {entry && (
               <BrandIcon
                 slug={catalogLogoSlug(entry)}
@@ -368,19 +385,20 @@ function ProviderConfigSheet({
             <SheetTitle>{sheetTitle}</SheetTitle>
           </div>
         </SheetHeader>
-        <SheetDescription className="px-6 pt-3">{sheetDescription}</SheetDescription>
+        <SheetDescription className="px-[var(--space-4)] pt-[var(--space-2-5)]">{sheetDescription}</SheetDescription>
 
-        <div className="px-6 space-y-5 overflow-y-auto pr-1 pt-4">
+        <div className="px-[var(--space-4)] space-y-[var(--space-3)] overflow-y-auto pr-[var(--space-1)] pt-[var(--space-3)]">
           {/* View-only variant info — Plan/Region/Endpoint, derived from the
               fetched CatalogProvider (src/lib/catalogDisplay.ts). */}
           {entry && (
-            <div
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
+            <Card
+              variant="inset"
+              className="px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
               data-testid="variant-info"
             >
-              <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-xs">
+              <div className="flex flex-wrap gap-x-[var(--space-4)] gap-y-[var(--space-1)] text-[length:var(--type-utility-xs-size)]">
                 <div>
-                  <span className="text-[var(--color-muted)] mr-1.5">Plan</span>
+                  <span className="text-[var(--color-muted)] mr-[var(--space-1)]">Plan</span>
                   <span
                     className="text-[var(--color-secondary)] font-medium"
                     data-testid="variant-plan"
@@ -390,7 +408,7 @@ function ProviderConfigSheet({
                 </div>
                 {entry.region && (
                   <div>
-                    <span className="text-[var(--color-muted)] mr-1.5">Region</span>
+                    <span className="text-[var(--color-muted)] mr-[var(--space-1)]">Region</span>
                     <span
                       className="text-[var(--color-secondary)] font-medium"
                       data-testid="variant-region"
@@ -400,24 +418,27 @@ function ProviderConfigSheet({
                   </div>
                 )}
                 <div className="w-full">
-                  <span className="text-[var(--color-muted)] mr-1.5">Endpoint</span>
+                  <span className="text-[var(--color-muted)] mr-[var(--space-1)]">Endpoint</span>
                   <span
-                    className="text-[var(--color-secondary)] font-mono text-[11px]"
+                    className="text-[var(--color-secondary)] font-mono text-[length:var(--type-caption-size)]"
                     data-testid="variant-endpoint"
                   >
                     {catalogEndpointHint(entry)}
                   </span>
                 </div>
               </div>
-            </div>
+            </Card>
           )}
 
           {/* AWS region (issue #800), beside the API key entry */}
           {awsRegionOptions.length > 0 && (
             <div>
-              <label htmlFor={`aws-region-input-${draftKey}`} className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+              <Label
+                htmlFor={`aws-region-input-${draftKey}`}
+                className="mb-[var(--space-1)] block text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
+              >
                 AWS region
-              </label>
+              </Label>
               <select
                 id={`aws-region-input-${draftKey}`}
                 tabIndex={0}
@@ -425,7 +446,7 @@ function ProviderConfigSheet({
                 onChange={(e) => {
                   setAwsRegions((prev) => ({ ...prev, [draftKey]: e.target.value }))
                 }}
-                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-3 text-xs"
+                className="flex h-9 w-full rounded-md border border-[var(--color-border)] bg-transparent px-[var(--space-3)] text-[length:var(--type-utility-xs-size)]"
                 data-testid={`aws-region-input-${providerId}`}
               >
                 {awsRegionOptions.map((r) => (
@@ -439,9 +460,9 @@ function ProviderConfigSheet({
 
           {/* API Key input */}
           <div>
-            <label htmlFor={`api-key-input-${draftKey}`} className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+            <Label htmlFor={`api-key-input-${draftKey}`} className="mb-[var(--space-2)] block">
               API Key
-            </label>
+            </Label>
             <div className="relative">
               <Input
                 id={`api-key-input-${draftKey}`}
@@ -453,20 +474,21 @@ function ProviderConfigSheet({
                   setKeySaved((prev) => ({ ...prev, [draftKey]: false }))
                 }}
                 placeholder={hint}
-                className="pr-9 font-mono text-xs"
+                className="pr-[var(--space-5)] font-mono text-[length:var(--type-utility-xs-size)]"
                 autoComplete="off"
                 data-testid={`api-key-input-${providerId}`}
               />
-              <button tabIndex={0}
+              <IconButton
+                variant="ghost"
                 type="button"
                 onClick={() =>
                   setShowKey((prev) => ({ ...prev, [draftKey]: !prev[draftKey] }))
                 }
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
+                className="absolute right-2.5 top-1/2 h-auto w-auto -translate-y-1/2 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                 aria-label={showKey[draftKey] ? 'Hide API key' : 'Show API key'}
               >
                 {showKey[draftKey] ? <EyeSlash size={14} /> : <Eye size={14} />}
-              </button>
+              </IconButton>
             </div>
           </div>
 
@@ -490,37 +512,38 @@ function ProviderConfigSheet({
             }
             return (
               <div>
-                <label htmlFor={`add-model-input-${draftKey}`} className="text-xs font-medium text-[var(--color-muted)] mb-1.5 block">
+                <Label htmlFor={`add-model-input-${draftKey}`} className="mb-[var(--space-2)] block">
                   Models
-                </label>
-                <p className="text-xs text-[var(--color-muted)] mb-2">
+                </Label>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-2)]">
                   This provider has no live model list — add the model slugs you want available in the picker.
                 </p>
                 {models.length > 0 ? (
-                  <ul className="flex flex-wrap gap-1.5 mb-2" data-testid={`model-list-${providerId}`}>
+                  <ul className="flex flex-wrap gap-[var(--space-1)] mb-[var(--space-2)]" data-testid={`model-list-${providerId}`}>
                     {models.map((slug) => (
                       <li key={slug}>
-                        <Badge variant="muted" className="gap-1 font-mono">
+                        <Badge variant="muted" className="gap-[var(--space-1)] font-mono">
                           {slug}
-                          <button tabIndex={0}
+                          <IconButton
+                            variant="ghost"
                             type="button"
                             onClick={() => removeSlug(slug)}
                             aria-label={`Remove ${slug}`}
                             data-testid={`remove-model-${providerId}-${slug}`}
-                            className="text-[var(--color-muted)] hover:text-[var(--color-error)]"
+                            className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                           >
                             <X size={10} weight="bold" />
-                          </button>
+                          </IconButton>
                         </Badge>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-xs text-[var(--color-muted)] mb-2 italic">
+                  <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mb-[var(--space-2)] italic">
                     No models added yet.
                   </p>
                 )}
-                <div className="flex gap-2">
+                <div className="flex gap-[var(--space-2)]">
                   <Input
                     id={`add-model-input-${draftKey}`}
                     value={newModel[draftKey] ?? ''}
@@ -534,7 +557,7 @@ function ProviderConfigSheet({
                       }
                     }}
                     placeholder="e.g. llama-3.1-70b"
-                    className="font-mono text-xs"
+                    className="font-mono text-[length:var(--type-utility-xs-size)]"
                     data-testid={`add-model-input-${providerId}`}
                   />
                   <Button
@@ -563,23 +586,24 @@ function ProviderConfigSheet({
           {/* FR-033 inline discard prompt — rendered inside the sheet so the
               question never steals focus from it (WCAG 3.2.1). */}
           {discardPrompt && (
-            <div
+            <Card
+              variant="inset"
               role="alertdialog"
               aria-labelledby={`discard-key-title-${draftKey}`}
               aria-describedby={`discard-key-body-${draftKey}`}
               data-testid="discard-key-prompt"
-              className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] px-4 py-3 space-y-2"
+              className="px-[var(--space-3)] py-[var(--space-2-5)] space-y-[var(--space-2)]"
             >
               <p
                 id={`discard-key-title-${draftKey}`}
-                className="text-sm font-medium text-[var(--color-secondary)]"
+                className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]"
               >
                 {DRAFT_DISCARD_PROMPT.title}
               </p>
-              <p id={`discard-key-body-${draftKey}`} className="text-xs text-[var(--color-muted)]">
+              <p id={`discard-key-body-${draftKey}`} className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                 The key you typed has not been saved yet.
               </p>
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-[var(--space-2)]">
                 <Button
                   variant="outline"
                   size="sm"
@@ -598,38 +622,38 @@ function ProviderConfigSheet({
                   {DRAFT_DISCARD_PROMPT.confirm}
                 </Button>
               </div>
-            </div>
+            </Card>
           )}
 
           {/* Footer actions */}
-          <div className="flex justify-between gap-2 pt-2">
-            <div className="flex gap-2">
+          <div className="flex justify-between gap-[var(--space-2)] pt-[var(--space-2)]">
+            <div className="flex gap-[var(--space-2)]">
               {provider && provider.status === 'connected' && (
-                <button tabIndex={0}
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={() => handleTest(providerId)}
-                  disabled={testing[providerId]}
+                  actionState={testing[providerId] ? 'pending' : 'idle'}
                   title="Re-test the connection"
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-50"
+                  className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                 >
-                  {testing[providerId] ? (
-                    <ArrowCounterClockwise size={12} className="animate-spin inline" />
-                  ) : 'Test'}
-                </button>
+                  Test
+                </Button>
               )}
               {/* ADR-068 US-3 — destructive, so text tier and far from Save. */}
               {provider && onRemove && (
-                <button tabIndex={0}
+                <Button
+                  variant="ghost"
                   type="button"
                   onClick={() => onRemove(provider)}
-                  className="text-xs text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  className="h-auto w-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                   data-testid={`remove-provider-btn-${providerId}`}
                 >
                   Remove provider
-                </button>
+                </Button>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-[var(--space-2)]">
               <Button
                 variant="outline"
                 size="sm"
@@ -664,7 +688,7 @@ function ProviderConfigSheet({
 
         {/* Disclaimer */}
         {entry && (
-          <div className="mt-6 pt-4 border-t border-[var(--color-border)]">
+          <div className="mt-[var(--space-4)] pt-[var(--space-3)] border-t border-[var(--color-border)]">
             <BrandDisclaimer />
           </div>
         )}
@@ -1117,11 +1141,11 @@ export function ProvidersSection() {
   const canBeDefault = (provider: Provider) => USABLE_PROVIDER_STATUSES.includes(provider.status)
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+    <div className="space-y-[var(--space-3)]">
+      <div className="flex items-start justify-between gap-[var(--space-2-5)]">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Providers</h2>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             API keys are stored encrypted in credentials.json — never in config.json.
           </p>
         </div>
@@ -1135,7 +1159,7 @@ export function ProvidersSection() {
           <Button
             size="sm"
             onClick={openPicker}
-            className="h-8 px-3 text-xs shrink-0 gap-1.5"
+            className="h-8 px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)] shrink-0 gap-[var(--space-1)]"
             data-testid="connect-provider-btn"
           >
             <Plus size={12} weight="bold" /> Connect a provider
@@ -1161,15 +1185,15 @@ export function ProvidersSection() {
       />
 
       {providersError ? (
-        <p className="text-sm text-red-400" data-testid="providers-error">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]" data-testid="providers-error">
           Failed to load providers. Please try again.
         </p>
       ) : isLoading ? (
-        <div className="space-y-2">
+        <div className="space-y-[var(--space-2)]">
           {[1, 2, 3].map((i) => (
-            <div
+            <Card
               key={i}
-              className="h-14 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse"
+              className="h-14 animate-pulse"
             />
           ))}
         </div>
@@ -1177,7 +1201,7 @@ export function ProvidersSection() {
         /* ── Configured-only list, grouped only when a company has ≥2
              configured variants (FIX-2); a single configured provider is a
              flat row with its own BrandIcon + entry.label. ── */
-        <div className="space-y-4">
+        <div className="space-y-[var(--space-3)]">
           {groups.map((group) => {
             if (group.items.length === 1) {
               const { provider, entry } = group.items[0]
@@ -1211,7 +1235,7 @@ export function ProvidersSection() {
                 {/* Company group header — only rendered here, when ≥2 variants
                     are configured (FIX-2). The per-group "Add another…"
                     control is gone (FIX-1). */}
-                <div className="flex items-center gap-2 mb-1.5">
+                <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-1)]">
                   {group.logoSlug ? (
                     <BrandIcon
                       slug={group.logoSlug}
@@ -1222,14 +1246,14 @@ export function ProvidersSection() {
                     <Globe size={18} className="text-[var(--color-muted)]" aria-hidden="true" />
                   )}
                   <span
-                    className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wide"
+                    className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wide"
                     data-testid={`group-header-${group.group}`}
                   >
                     {group.group}
                   </span>
                 </div>
 
-                <div className="space-y-1.5">
+                <div className="space-y-[var(--space-1)]">
                   {group.items.map(({ provider, entry }) => (
                     <ProviderRow
                       key={provider.id}
@@ -1256,24 +1280,24 @@ export function ProvidersSection() {
           })}
 
           {/* Trademark disclaimer whenever brand marks are shown */}
-          <BrandDisclaimer className="mt-2" />
+          <BrandDisclaimer className="mt-[var(--space-2)]" />
         </div>
       ) : (
         /* ── Empty state (FIX-3) — no default-visible roster; a compact
              message + one primary "Connect a provider" CTA. ── */
-        <div
-          className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-8 text-center space-y-3"
+        <Card
+          className="border-dashed px-[var(--space-3)] py-[var(--space-5)] text-center space-y-[var(--space-2-5)]"
           data-testid="providers-empty-state"
         >
-          <p className="text-sm text-[var(--color-muted)]">No providers configured yet.</p>
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">No providers configured yet.</p>
           <Button
             onClick={openPicker}
-            className="gap-1.5"
+            className="gap-[var(--space-1)]"
             data-testid="connect-provider-btn"
           >
             <Plus size={13} weight="bold" /> Connect a provider
           </Button>
-        </div>
+        </Card>
       )}
 
       {/* Provider picker Sheet (FIX-3) — the sheet is Settings' own container;
@@ -1285,13 +1309,13 @@ export function ProvidersSection() {
           className="flex h-full flex-col p-0"
           data-testid="provider-picker-sheet"
         >
-          <SheetHeader className="px-6 pr-14">
+          <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
             <SheetTitle>Connect a provider</SheetTitle>
           </SheetHeader>
-          <SheetDescription className="px-6 pt-2">
+          <SheetDescription className="px-[var(--space-4)] pt-[var(--space-2)]">
             Pick the provider whose key or account you want to use.
           </SheetDescription>
-          <div className="flex-1 overflow-y-auto px-6 py-4">
+          <div className="flex-1 overflow-y-auto px-[var(--space-4)] py-[var(--space-3)]">
             <ProviderPicker
               data-testid="settings-provider-picker"
               catalog={catalogDoc}
@@ -1305,7 +1329,7 @@ export function ProvidersSection() {
             />
             {/* FR-014: brand marks are rendered above, so the disclaimer rides
                 with them. */}
-            <BrandDisclaimer className="mt-4" />
+            <BrandDisclaimer className="mt-[var(--space-3)]" />
           </div>
         </SheetContent>
       </Sheet>
@@ -1347,6 +1371,7 @@ export function ProvidersSection() {
         testing={testing}
         handleTest={handleTest}
         onRemove={(provider) => setRemoveTarget(provider)}
+        obscuredByDialog={stepUp.open}
       />
 
       {removeTarget && (

@@ -211,7 +211,7 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
     act(() => {
       vi.advanceTimersByTime(2100)
     })
-    expect(screen.getByTestId('reconnect-banner')).toHaveTextContent(/Reconnecting…\s*\(attempt 1\)/)
+    expect(screen.queryByTestId('reconnect-banner')).not.toBeInTheDocument()
   })
 
   it('reconnectPhase "slow" (isConnected:false): textarea and Send stay ENABLED so a message can be queued', () => {
@@ -227,7 +227,7 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
     act(() => {
       vi.advanceTimersByTime(2100)
     })
-    expect(screen.getByTestId('reconnect-banner')).toHaveTextContent(/slow retry/)
+    expect(screen.queryByTestId('reconnect-banner')).not.toBeInTheDocument()
   })
 
   it('isConnected:false with reconnectPhase:null (just dropped / never yet connected): textarea and Send are DISABLED', () => {
@@ -252,7 +252,7 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
 
     expect(screen.getByTestId('composer-input')).toBeDisabled()
     expect(screen.getByTestId('chat-send')).toBeDisabled()
-    expect(screen.getByTestId('reconnect-banner')).toHaveTextContent(/Connection lost after all retry attempts/)
+    expect(screen.queryByTestId('reconnect-banner')).not.toBeInTheDocument()
   })
 
   it('isConnected:true, reconnectPhase:null (the normal case): textarea and Send are ENABLED and no reconnect banner renders', () => {
@@ -264,45 +264,39 @@ describe('OmnipusComposer — composer usability while reconnecting (#105 offlin
   })
 })
 
-describe('OmnipusComposer — outbound-queue-indicator banner (#105 offline send queue)', () => {
+describe('OmnipusComposer — legacy queue banner is replaced by per-message state (#823)', () => {
   it('renders nothing when both queues are empty', () => {
     render(<OmnipusComposer />)
     expect(screen.queryByTestId('outbound-queue-indicator')).not.toBeInTheDocument()
   })
 
-  it('shows the singular count when exactly one message is buffered in outboundQueue', () => {
+  it('does not show a global count when one message is buffered', () => {
     act(() => {
       useChatStore.setState({ outboundQueue: ['hello while offline'] })
       useConnectionStore.setState({ isConnected: false, reconnectPhase: 'reconnecting', reconnectAttempt: 1 })
     })
     render(<OmnipusComposer />)
 
-    expect(screen.getByTestId('outbound-queue-indicator')).toHaveTextContent(
-      '1 message queued — will send on reconnect',
-    )
+    expect(screen.queryByTestId('outbound-queue-indicator')).not.toBeInTheDocument()
   })
 
-  it('shows the plural, summed count when messages are split across outboundQueue and pendingDrainQueue', () => {
+  it('does not show a global count when messages are split across both queues', () => {
     act(() => {
       useChatStore.setState({ outboundQueue: ['b'], pendingDrainQueue: ['a'] })
       useConnectionStore.setState({ isConnected: true, reconnectPhase: null })
     })
     render(<OmnipusComposer />)
 
-    expect(screen.getByTestId('outbound-queue-indicator')).toHaveTextContent(
-      '2 messages queued — will send on reconnect',
-    )
+    expect(screen.queryByTestId('outbound-queue-indicator')).not.toBeInTheDocument()
   })
 
-  it('shows the "sending…" wording once the queue has fully moved to pendingDrainQueue (mid-drain)', () => {
+  it('does not show a global sending line while pendingDrainQueue drains', () => {
     act(() => {
       useChatStore.setState({ outboundQueue: [], pendingDrainQueue: ['queued message'] })
       useConnectionStore.setState({ isConnected: true, reconnectPhase: null })
     })
     render(<OmnipusComposer />)
 
-    expect(screen.getByTestId('outbound-queue-indicator')).toHaveTextContent(
-      '1 queued message sending…',
-    )
+    expect(screen.queryByTestId('outbound-queue-indicator')).not.toBeInTheDocument()
   })
 })

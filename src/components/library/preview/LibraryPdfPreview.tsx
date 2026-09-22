@@ -110,10 +110,8 @@
 // then match nothing and pass.
 
 import { useEffect, useRef, useState } from 'react'
-import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X,
-  MagnifyingGlassMinus,
-  MagnifyingGlassPlus,
-} from '@phosphor-icons/react'
+import { createPortal } from 'react-dom'
+import { SpinnerGap, Eye, PencilSimple, FloppyDisk, Signature, X } from '@phosphor-icons/react'
 import { ApiError, downloadLibraryFileVersioned, putLibraryContentBinary, isLibraryVersionConflict } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
@@ -121,17 +119,19 @@ import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/store/ui'
 import { PreviewHeaderPortal } from './previewHeaderSlot'
-import { LIBRARY_ICON_BTN } from '../LibraryPreviewPane'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
+import { IconButton } from '@/components/ui/icon-button'
+import { Button } from '@/components/ui/button'
+import { ZoomPill, clampZoomScale, useZoomableViewKeyboard } from '@/components/ui/zoomable-view'
 import { setLibraryEditorDirty } from './unsavedGuard'
 import { getLibraryErrorMessage } from '../libraryErrorMessage'
 import { LibrarySignaturePad, SIGNATURE_PAD_WIDTH, SIGNATURE_PAD_HEIGHT } from './LibrarySignaturePad'
 import { buildInkAnnotationEntry } from './pdfInkAnnotation'
 import type { SignatureStroke } from './pdfInkAnnotation'
 import { uint8ArrayToBase64 } from './pdfBinaryEncoding'
-import { pdfWorkerPool, PDF_WORKER_POOL_CEILING } from './pdfWorkerPool'
-import type { PdfWorkerLease } from './pdfWorkerPool'
-import { INLINE_PREVIEW_BOX_CLASS } from './libraryPreviewVariant'
+import { PDF_WORKER_POOL_CEILING } from './pdfWorkerPool'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
+import { usePdfLoadEffect } from './LibraryPdfPreview.loadEffect'
 
 // Type-only: erased at build time, so it does not pull pdfjs-dist into the
 // eager module graph.
@@ -142,7 +142,7 @@ import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist'
  *  MUST return a real 404 under this prefix rather than its index.html
  *  fallback (FR-018b) — otherwise a missing character map arrives as HTTP 200
  *  HTML, the page renders blank, and nothing names the cause. */
-const ASSET_BASE = `${import.meta.env.BASE_URL}pdfjs/`
+export const ASSET_BASE = `${import.meta.env.BASE_URL}pdfjs/`
 
 /** Human name per asset directory, used in the error a missing one produces.
  *  Each failure mode below is the SILENT one this naming exists to end. */
@@ -155,27 +155,39 @@ const ASSET_DIR_MEANING: Record<string, string> = {
 
 /** Rendering scale bounds. Below 0.25 text is unreadable; above 4 a large page
  *  exceeds browsers' canvas area limits and renders as a blank bitmap. */
-const MIN_SCALE = 0.25
-const MAX_SCALE = 4
+export const MIN_SCALE = 0.25
+export const MAX_SCALE = 4
 
-/** UAT D-37 (2026-09-13): the reader's own magnification, applied to the
- *  pages container as a CSS `zoom` ON TOP of the automatic fit-to-width
- *  render scale (`MIN_SCALE`/`MAX_SCALE` above clamp THAT, and were the only
- *  "scale" in this file — a reader had no control at all). A display zoom,
- *  not a re-render: re-rendering would reload the document (the render
- *  effect owns the fetch), and the canvas is already drawn at the device
- *  pixel ratio, so it stays sharp up to the 200% cap. */
-export const PDF_ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const
-export const PDF_ZOOM_DEFAULT = 1
-
-/** The next zoom step in `direction`, or the current value at either end. */
-export function nextPdfZoom(current: number, direction: 'in' | 'out'): number {
-  const idx = PDF_ZOOM_STEPS.findIndex((z) => Math.abs(z - current) < 1e-6)
-  const at = idx === -1 ? PDF_ZOOM_STEPS.indexOf(1) : idx
-  const next = direction === 'in' ? at + 1 : at - 1
-  if (next < 0 || next >= PDF_ZOOM_STEPS.length) return PDF_ZOOM_STEPS[at]
-  return PDF_ZOOM_STEPS[next]
-}
+/** The reader's own magnification (UAT D-37), applied to the pages container
+ *  as a CSS `zoom` on top of the automatic fit-to-width render scale
+ *  (`MIN_SCALE`/`MAX_SCALE` above clamp that render scale, a separate
+ *  concern: how many pixels a page's canvas is drawn with). It uses the
+ *  shared `ZoomPill` and the shared 25%-400% range (D18,
+ *  docs/internal/design/components/zoomable-view.md).
+ *
+ *  The CSS `zoom` is layout only — every page's element and canvas keep the
+ *  SAME fit-width CSS pixel size at every zoom level, so the text layer,
+ *  annotation layer and signature overlays (all positioned in that same
+ *  CSS-pixel space) stay aligned automatically as the whole container is
+ *  magnified uniformly. What DOES change with zoom is the canvas's backing
+ *  resolution: `targetRasterScale` above raises the device-pixels-per-CSS-
+ *  pixel a page is drawn at as zoom rises past 100%, so text stays sharp
+ *  rather than being magnified from a fixed bitmap. Re-rasterising a page
+ *  keeps the SAME loaded `PDFDocumentProxy` and `PDFPageProxy` (`docRef`,
+ *  `pagesRef`) — there is no re-fetch and no reopen — and is scoped to
+ *  pages currently near the viewport (`nearViewportPageNumbers`), debounced
+ *  while the reader is actively zooming or scrolling
+ *  (`RERASTER_DEBOUNCE_MS`), and capped in backing-store size
+ *  (`MAX_CANVAS_DIMENSION_PX`/`MAX_CANVAS_PIXELS`) so a long document never
+ *  re-rasterises every page at once and a single page never grows without
+ *  bound. `rasterizePage` draws the new resolution into a fresh, detached
+ *  canvas and swaps it in only once rendering finishes, so the previously
+ *  magnified (softer but complete) picture stays on screen the whole time —
+ *  never a blank page while the sharp one is being drawn.
+ *
+ *  Fit and 100% are the same action here (see `zoomToFit`/`zoomTo100`):
+ *  the base render is already fitted, and this zoom multiplies it. */
+const PDF_READER_ZOOM_DEFAULT = 1
 
 /** UAT D-63 (2026-09-13): the page a reader is LOOKING AT — the first
  *  rendered page whose bottom edge is below the container's scroll top — so
@@ -202,9 +214,89 @@ export function firstVisiblePdfPage(container: HTMLElement): number {
   return 1
 }
 
-/** Cap the canvas backing store at 2x. Beyond that the memory cost per page
- *  grows faster than the visible gain on a 3x display. */
-const MAX_PIXEL_RATIO = 2
+/** Cap the canvas backing store at 2x for the UNZOOMED (100%) render. Beyond
+ *  that the memory cost per page grows faster than the visible gain on a 3x
+ *  display. The reader's own zoom (`PDF_READER_ZOOM_DEFAULT` below) is layered
+ *  on top of this, separately capped by `MAX_CANVAS_DIMENSION_PX`/
+ *  `MAX_CANVAS_PIXELS`. */
+export const MAX_PIXEL_RATIO = 2
+
+/** Ceilings on a single page canvas's backing-store resolution once the
+ *  reader's zoom (not just device pixel ratio) is included. Two independent
+ *  caps, because either alone has a blind spot: the area cap alone lets a
+ *  very tall, narrow page reach an extreme single-side dimension before the
+ *  area limit engages; the dimension cap alone lets a very wide, short page
+ *  reach an extreme pixel count while staying under either side limit.
+ *  `MAX_CANVAS_DIMENSION_PX` sits well under the ~16,384px per-side ceiling
+ *  the engines this product ships on enforce; `MAX_CANVAS_PIXELS` is Safari's
+ *  hard canvas-area limit on iOS and iPadOS (4096 * 4096 = 16,777,216 pixels,
+ *  about 64MB of RGBA) — a larger canvas silently renders blank there. On a 2x display a typical
+ *  fit-width page keeps full detail up to about 200% zoom; above that the
+ *  cap holds it near 5x its CSS size (a measured 400% crop keeps 98% of the
+ *  uncapped sharpness), and a large page or ultra-wide pane never reaches
+ *  for hundreds of megabytes — and only pages visible or near the scroll viewport are ever
+ *  rasterised at these ceilings (`rasterizePage`/`nearViewportPageNumbers`
+ *  below) — never every page of a long document at once. */
+export const MAX_CANVAS_DIMENSION_PX = 8192
+export const MAX_CANVAS_PIXELS = 4096 * 4096
+
+/** Computes the backing-store scale (device pixels per CSS pixel of the
+ *  page's FIT-WIDTH viewport — the same viewport `pageEl`/`canvas.style`
+ *  size, unaffected by zoom) a page's canvas should be drawn at for a given
+ *  reader zoom level. At `zoom <= 1` this is exactly `deviceRatio` — the
+ *  same number every page has always rendered at — so 100% and below are
+ *  byte-for-byte the pre-existing behaviour. Above 100% it grows with zoom
+ *  so the canvas keeps roughly one device pixel per screen pixel at the
+ *  CURRENT magnification, clamped so a page's backing store never exceeds
+ *  `MAX_CANVAS_DIMENSION_PX` per side or `MAX_CANVAS_PIXELS` total — the
+ *  clamp can only ever raise the result above `deviceRatio`, never below it,
+ *  so it can only soften a very large page at extreme zoom, never regress a
+ *  small one below what it already rendered at. */
+export function targetRasterScale(fitViewportWidth: number, fitViewportHeight: number, zoom: number, deviceRatio: number): number {
+  if (zoom <= 1) return deviceRatio
+  const baseW = fitViewportWidth * deviceRatio
+  const baseH = fitViewportHeight * deviceRatio
+  const byDimension = Math.min(MAX_CANVAS_DIMENSION_PX / baseW, MAX_CANVAS_DIMENSION_PX / baseH)
+  const byArea = Math.sqrt(MAX_CANVAS_PIXELS / (baseW * baseH))
+  const zoomFactor = Math.max(1, Math.min(zoom, byDimension, byArea))
+  return deviceRatio * zoomFactor
+}
+
+/** How long to wait, in ms, after the LAST zoom step (wheel tick, pinch
+ *  frame, or pill click) or scroll movement before re-rasterising
+ *  near-viewport pages at the new target resolution (`rasterizePage` below).
+ *  A wheel/pinch gesture fires many steps in a row; without this each one
+ *  would start its own redraw, competing for the same canvas. The magnified
+ *  (but not yet re-rasterised) picture stays on screen throughout — nothing
+ *  is blanked while this timer is pending. */
+export const RERASTER_DEBOUNCE_MS = 150
+
+/** How far beyond the container's own visible rectangle, in CSS pixels, a
+ *  page still counts as "near" and gets proactively re-rasterised — roughly
+ *  one screenful, so the next page a reader scrolls to is already sharp
+ *  rather than rasterising on arrival. Pages further away keep whatever
+ *  resolution they last had until they come this close. */
+const NEAR_VIEWPORT_MARGIN_PX = 600
+
+/** The page numbers whose element is within `NEAR_VIEWPORT_MARGIN_PX` of the
+ *  container's own visible rectangle — the set `rasterizePage` calls are
+ *  scoped to, so a long document never re-rasterises every page at once for
+ *  one zoom step. Uses `getBoundingClientRect`, the same measurement
+ *  `firstVisiblePdfPage` above already relies on being correct under the
+ *  D-37 CSS `zoom` (see that function's own comment) — jsdom's all-zero
+ *  rects make every page "near" by this same math, which is the safe
+ *  default for a test environment that never lays anything out. */
+function nearViewportPageNumbers(container: HTMLElement, pageEls: Map<number, HTMLDivElement>): number[] {
+  const containerRect = container.getBoundingClientRect()
+  const top = containerRect.top - NEAR_VIEWPORT_MARGIN_PX
+  const bottom = containerRect.bottom + NEAR_VIEWPORT_MARGIN_PX
+  const result: number[] = []
+  for (const [n, el] of pageEls) {
+    const rect = el.getBoundingClientRect()
+    if (rect.bottom >= top && rect.top <= bottom) result.push(n)
+  }
+  return result
+}
 
 /** Page width, in CSS pixels, used ONLY when this component's own box
  *  genuinely measures zero — it is not laid out yet, or its parent is
@@ -247,7 +339,7 @@ let downloadTimeoutOverrideMs: number | null = null
 export function __setPdfDownloadTimeoutForTests(ms: number | null): void {
   downloadTimeoutOverrideMs = ms
 }
-function downloadTimeoutMs(): number {
+export function downloadTimeoutMs(): number {
   return downloadTimeoutOverrideMs ?? PDF_DOWNLOAD_TIMEOUT_MS
 }
 
@@ -276,7 +368,7 @@ function assetFetchTimeoutMs(): number {
  *  (`WorkerTransport.destroy` in build/pdf.mjs 6.2.108), so a worker that has
  *  stopped replying makes that promise never settle — the grace timeout is
  *  what stops "tear down politely" from meaning "never tear down". */
-const WORKER_TERMINATE_GRACE_MS = 2000
+export const WORKER_TERMINATE_GRACE_MS = 2000
 
 /** The width a page should be rendered at, and whether that number was
  *  MEASURED or guessed.
@@ -287,7 +379,7 @@ const WORKER_TERMINATE_GRACE_MS = 2000
  *  element — so measuring it returns 0 on every first load and the fallback
  *  silently becomes the ONLY width this component ever renders at. The root is
  *  never hidden, so it is the real box. */
-function measureRenderWidth(container: HTMLElement): { width: number; fallback: boolean } {
+export function measureRenderWidth(container: HTMLElement): { width: number; fallback: boolean } {
   const width = container.parentElement?.clientWidth ?? 0
   if (width > 0) return { width, fallback: false }
   return { width: FALLBACK_RENDER_WIDTH, fallback: true }
@@ -301,7 +393,7 @@ let firstPageTimeoutOverrideMs: number | null = null
 export function __setPdfFirstPageTimeoutForTests(ms: number | null): void {
   firstPageTimeoutOverrideMs = ms
 }
-function firstPageTimeoutMs(): number {
+export function firstPageTimeoutMs(): number {
   return firstPageTimeoutOverrideMs ?? PDF_FIRST_PAGE_TIMEOUT_MS
 }
 
@@ -309,7 +401,7 @@ function firstPageTimeoutMs(): number {
  *  class it arrives as: `fetch` rejects with a `DOMException`, but a helper
  *  that wraps or re-creates one may not. Matching on the NAME is what the
  *  platform itself documents as the discriminator. */
-function isAbortError(err: unknown): boolean {
+export function isAbortError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { name?: string }).name === 'AbortError'
 }
 
@@ -414,7 +506,7 @@ async function probeRuntimeAssets(): Promise<void> {
   )
 }
 
-function ensureRuntimeAssets(): Promise<void> {
+export function ensureRuntimeAssets(): Promise<void> {
   if (!assetProbe) {
     assetProbe = probeRuntimeAssets().catch((err: unknown) => {
       assetProbe = null
@@ -440,7 +532,7 @@ interface PdfBytesRead {
   version: string | null
 }
 
-async function fetchPdfBytes(workspaceId: string, path: string, signal: AbortSignal): Promise<PdfBytesRead> {
+export async function fetchPdfBytes(workspaceId: string, path: string, signal: AbortSignal): Promise<PdfBytesRead> {
   // ADR-083 EMB-007/EMB-007c — this download IS the only read on this
   // component's save path (there is no JSON `GET .../content` call here at
   // all), so it is the sole source of the version token `handleSave` below
@@ -531,9 +623,10 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
   const [status, setStatus] = useState<'queued' | 'loading' | 'ready' | 'error'>('loading')
   const [error, setError] = useState<string | null>(null)
   const [pageCount, setPageCount] = useState(0)
-  // D-37: display zoom (see PDF_ZOOM_STEPS). D-63: the page the signature
-  // dialog should default to, captured at the moment it is opened.
-  const [zoom, setZoom] = useState<number>(PDF_ZOOM_DEFAULT)
+  // D-37: display zoom (see PDF_READER_ZOOM_DEFAULT above). D-63: the page
+  // the signature dialog should default to, captured at the moment it is
+  // opened.
+  const [zoom, setZoom] = useState<number>(PDF_READER_ZOOM_DEFAULT)
   const [signatureDefaultPage, setSignatureDefaultPage] = useState(1)
   // Distinct from `status === 'ready'`: that flips as soon as the DOCUMENT
   // opens, while pages still render progressively afterwards (existing
@@ -579,6 +672,40 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
   const signaturePreviewElsRef = useRef<Map<string, HTMLDivElement>>(new Map())
   const pendingSaveBytesRef = useRef<Uint8Array | null>(null)
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // ── Zoom re-rasterisation (see `targetRasterScale`'s comment above) ───────
+  // The <canvas> currently mounted for each page — `rasterizePage` swaps this
+  // out for a freshly-drawn one, so later callers always redraw against
+  // whichever canvas is actually on screen, not a stale reference to the
+  // FIRST one.
+  const pageCanvasElsRef = useRef<Map<number, HTMLCanvasElement>>(new Map())
+  // The backing-store scale (`targetRasterScale`'s return value) currently
+  // painted on each page's canvas. `rasterizePage` reads this to skip a
+  // redraw that would produce an identical result — every zoom step below
+  // the cap, or a zoom step that lands on an already-capped page, is a
+  // real no-op rather than a wasted render.
+  const paintedScaleRef = useRef<Map<number, number>>(new Map())
+  // Bumped on every `rasterizePage` call for a given page. A redraw that
+  // finishes after a NEWER one already committed (e.g. two zoom steps fired
+  // close together) checks its own generation before swapping in the canvas
+  // it just built — the newer redraw's result must win, never the older one
+  // landing last and silently downgrading the resolution just shown.
+  const pageRenderGenerationRef = useRef<Map<number, number>>(new Map())
+  // The in-flight `page.render()` task for each page's CURRENT redraw, so a
+  // second zoom step arriving before the first redraw finishes cancels the
+  // now-pointless one instead of letting two renders race for the same slot.
+  const pendingRasterTasksRef = useRef<Map<number, { cancel: () => void }>>(new Map())
+  // `Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)` for the CURRENT
+  // load, captured once when the pages are drawn (device pixel ratio does
+  // not change mid-session) and reused by every later re-rasterisation so it
+  // matches the number the base render used.
+  const deviceRatioRef = useRef<number>(1)
+  // A live mirror of the `zoom` state, read by the scroll-triggered
+  // re-raster effect below (registered once, with no `zoom` dependency, so
+  // scrolling never re-subscribes the listener) and by the load effect's
+  // initial per-page render (which does not depend on `zoom` either — a
+  // Save-triggered reload must draw at whatever zoom the reader is
+  // currently at, not silently reset to 100%).
+  const zoomRef = useRef<number>(PDF_READER_ZOOM_DEFAULT)
   // True only while `handleSave` is awaiting `doc.saveDocument()` / the PUT.
   // `saveDocument()` talks to the worker and never settles if that worker
   // died, so a load failure discovered mid-save has to unwedge the indicator
@@ -611,620 +738,245 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     }
   }, [])
 
-  // D-37's zoom gesture, as a NATIVE non-passive listener (Claude review
-  // 2026-09-14, cut-list). It used to live in the container's onWheel prop,
-  // and React attaches delegated wheel listeners PASSIVELY at the root —
-  // calling preventDefault() there cannot cancel anything, so Ctrl/Cmd+wheel
-  // zoomed the PDF *and* the whole browser page at once. Registered directly
-  // on the pages container with { passive: false }, preventDefault actually
-  // suppresses the browser's own zoom gesture for the container. Only the
-  // Ctrl/Cmd case is cancelled — a plain wheel is ordinary scrolling.
+  // D-37's zoom actions, moved onto the shared ZoomableView contract (D18,
+  // docs/internal/design/components/zoomable-view.md, "Scope extension
+  // 2026-09-21"). These feed the catalogued `ZoomPill` in the header below
+  // (this file's own zoom-pill JSX is gone) and the keyboard hook just
+  // below, over the shared `clampZoomScale` 25%-400% range — replacing the
+  // old fixed 50%-200% six-step ladder. Deliberately NOT
+  // `useZoomableMedia`/`ZoomableMediaSurface`: those model a single
+  // pannable image/SVG inside a fixed frame (drag-to-pan, pinch, a
+  // frame-relative fit scale) — this preview is a SCROLLABLE, multi-page
+  // document, where "zoom" is a uniform reader magnification layered on top
+  // of the already-fitted per-page render (`MIN_SCALE`/`MAX_SCALE` above),
+  // never a pan/frame transform. Only the parts of the shared contract that
+  // actually fit a paginated document move over: the pill, the clamp, and
+  // the keyboard shortcuts.
+  function zoomIn() {
+    setZoom((z) => clampZoomScale(z * 1.25))
+  }
+  function zoomOut() {
+    setZoom((z) => clampZoomScale(z / 1.25))
+  }
+  // "Fit" and "100%" are the SAME action here: this reader zoom is a pure
+  // multiplier on top of the per-page fit-to-width render (see the
+  // pagesToRender loop below), so 1 — no extra magnification — is
+  // simultaneously "the fitted page" and "100%".
+  function zoomToFit() {
+    setZoom(PDF_READER_ZOOM_DEFAULT)
+  }
+  function zoomTo100() {
+    setZoom(PDF_READER_ZOOM_DEFAULT)
+  }
+  const handleZoomKeyDown = useZoomableViewKeyboard({
+    onZoomIn: zoomIn,
+    onZoomOut: zoomOut,
+    onFit: zoomToFit,
+    onZoomTo100: zoomTo100,
+  })
+
+  // The Ctrl/Cmd+wheel zoom gesture, as a NATIVE non-passive listener (Claude
+  // review 2026-09-14, cut-list — the precedent `ZoomableMediaSurface`'s own
+  // wheel handling in zoomable-view.tsx follows for the identical reason;
+  // see that file's header comment). It used to live in the container's
+  // onWheel prop, and React attaches delegated wheel listeners PASSIVELY at
+  // the root — calling preventDefault() there cannot cancel anything, so
+  // Ctrl/Cmd+wheel zoomed the PDF *and* the whole browser page at once.
+  // Registered directly on the pages container with { passive: false },
+  // preventDefault actually suppresses the browser's own zoom gesture for
+  // the container. Only the Ctrl/Cmd case is cancelled — a plain wheel is
+  // ordinary scrolling, since this is a scrollable document, not a
+  // fixed-frame media surface.
   useEffect(() => {
     const el = containerRef.current
     if (!el) return
     const onWheel = (event: WheelEvent) => {
       if (!(event.ctrlKey || event.metaKey)) return
       event.preventDefault()
-      setZoom((z) => nextPdfZoom(z, event.deltaY < 0 ? 'in' : 'out'))
+      setZoom((z) => clampZoomScale(event.deltaY < 0 ? z * 1.25 : z / 1.25))
     }
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [])
 
   useEffect(() => {
+    zoomRef.current = zoom
+  }, [zoom])
+
+  /** Redraws ONE page's canvas at `targetScale` device-pixels-per-CSS-pixel,
+   *  reusing the SAME `PDFPageProxy`/`PageViewport` the base render already
+   *  holds (`pagesRef`/`pageViewportsRef`) — no re-fetch, no reopen. Builds
+   *  the new bitmap into a detached canvas and swaps it in only once it is
+   *  actually ready, so the page never goes blank: the previous canvas
+   *  (softer, but complete) stays on screen for the entire redraw. A no-op
+   *  when the page is already painted at `targetScale` (`paintedScaleRef`).
+   *
+   *  Failure here — the page's worker already torn down (an inline embed
+   *  past its base render, see EMB-032's note above `endWorkerThreadThen
+   *  ReleaseLease`'s inline branch), or a stale generation losing a race to
+   *  a newer redraw — leaves the CURRENT canvas exactly as it was: always a
+   *  complete, correct picture at some resolution, never a blank or
+   *  half-drawn one. That is why this catches and returns rather than
+   *  surfacing a toast: the fallback is itself a working display, not a
+   *  lost user action, and an inline embed hitting this on every zoom step
+   *  (expected, not a bug) would otherwise toast on every step. */
+  async function rasterizePage(pageNumber: number, targetScale: number) {
+    if (paintedScaleRef.current.get(pageNumber) === targetScale) return
+    const pdfjs = pdfjsRef.current
+    const page = pagesRef.current.get(pageNumber)
+    const viewport = pageViewportsRef.current.get(pageNumber)
+    const pageEl = pageElsRef.current.get(pageNumber)
+    const oldCanvas = pageCanvasElsRef.current.get(pageNumber)
+    if (!pdfjs || !page || !viewport || !pageEl || !oldCanvas) return
+
+    pendingRasterTasksRef.current.get(pageNumber)?.cancel()
+
+    const generation = (pageRenderGenerationRef.current.get(pageNumber) ?? 0) + 1
+    pageRenderGenerationRef.current.set(pageNumber, generation)
+
+    const newCanvas = document.createElement('canvas')
+    newCanvas.width = Math.floor(viewport.width * targetScale)
+    newCanvas.height = Math.floor(viewport.height * targetScale)
+    // The CSS box size is the FIT-WIDTH size, unaffected by targetScale —
+    // that is what keeps the page's layout, and every overlay positioned
+    // against it, identical at every zoom level (see this file's zoom
+    // comment above `PDF_READER_ZOOM_DEFAULT`).
+    newCanvas.style.width = `${viewport.width}px`
+    newCanvas.style.height = `${viewport.height}px`
+    newCanvas.className = oldCanvas.className
+    const ctx = newCanvas.getContext('2d')
+    if (!ctx) return
+
+    let renderTask: ReturnType<PDFPageProxy['render']>
+    try {
+      renderTask = page.render({
+        canvas: newCanvas,
+        canvasContext: ctx,
+        viewport,
+        transform: targetScale === 1 ? undefined : [targetScale, 0, 0, targetScale, 0, 0],
+        // Same read-only, static-appearance mode the base render uses — see
+        // the module doc's "Read-only BASE render (NB-17)" note. A redraw is
+        // the identical picture at a different resolution, never a live one.
+        annotationMode: pdfjs.AnnotationMode.ENABLE,
+        isEditing: false,
+      })
+    } catch {
+      return
+    }
+    pendingRasterTasksRef.current.set(pageNumber, renderTask)
+    try {
+      await renderTask.promise
+    } catch {
+      return
+    } finally {
+      if (pendingRasterTasksRef.current.get(pageNumber) === renderTask) {
+        pendingRasterTasksRef.current.delete(pageNumber)
+      }
+    }
+    // A newer redraw for this SAME page already committed while this one was
+    // in flight — its result must win, not this stale one landing last.
+    if (pageRenderGenerationRef.current.get(pageNumber) !== generation) return
+    if (!pageEl.isConnected || !oldCanvas.isConnected) return
+    pageEl.replaceChild(newCanvas, oldCanvas)
+    pageCanvasElsRef.current.set(pageNumber, newCanvas)
+    paintedScaleRef.current.set(pageNumber, targetScale)
+  }
+
+  // Re-rasterise near-viewport pages once the reader STOPS zooming
+  // (RERASTER_DEBOUNCE_MS after the last `zoom` change) — a wheel/pinch
+  // gesture fires many steps, and this coalesces them into one redraw per
+  // gesture rather than one per step. Skipped entirely before the base
+  // render has finished (`allPagesRendered`): there is nothing to
+  // re-rasterise yet, and `pagesRef`/`pageViewportsRef` are still being
+  // populated by the load effect below.
+  useEffect(() => {
+    if (!allPagesRendered) return
     const container = containerRef.current
     if (!container) return
-
-    let cancelled = false
-    // Set by `failLoad` below — the "this load has already reported a
-    // failure" latch that makes reporting one idempotent no matter how many
-    // discoverers race to it (the async chain, the worker error listener, the
-    // first-page watchdog).
-    let loadFailed = false
-    const abort = new AbortController()
-    let doc: PDFDocumentProxy | null = null
-    let loadingTask: { destroy: () => Promise<void> } | null = null
-    const cancelRender: Array<() => void> = []
-    // Hoisted out of the async chain below so this effect's CLEANUP can reach
-    // it. This component constructs the Worker thread, so this component is
-    // the only thing that can end it — see the cleanup for the three measured
-    // reasons `loadingTask.destroy()` does not.
-    let port: Worker | null = null
-
-    // Where this load has got to, in words a reader can act on. Used by the
-    // first-page watchdog to name what it was waiting for instead of saying
-    // "something went wrong".
-    let stage = 'waiting for a PDF worker slot'
-
-    // EMB-032 — the bounded worker pool. `lease` is null until the pool
-    // grants a slot; `releaseLease` is idempotent so it is safe to call from
-    // the worker's own error handler AND again from this effect's cleanup.
-    let lease: PdfWorkerLease | null = null
-    let leaseReleased = false
-    const releaseLease = () => {
-      if (leaseReleased || !lease) return
-      leaseReleased = true
-      lease.release()
-    }
-
-    // SILENT-FAILURES-pdf-pool.md findings 1 & 9 — ends the Worker THREAD
-    // before releasing the pool SLOT, no matter which path this load ends
-    // through (a worker crash, any other failure via `failLoad`, or
-    // unmount). Releasing a slot grants it to the next queued document
-    // SYNCHRONOUSLY (pdfWorkerPool.ts's `grantNext`), so releasing while
-    // THIS document's thread is still alive briefly puts a real THIRD
-    // `Worker` on the page even though the pool still reports a tidy two —
-    // finding 1's confirmed-in-browser defect, and finding 9's "3 workers
-    // for up to 2s" on ordinary unmount. Every failure path used to call
-    // bare `releaseLease()` and leave the thread running for something
-    // else (usually never) to terminate; this makes ending the thread part
-    // of ending the load, always, and holds the slot for exactly as long
-    // as the thread is alive — never less.
-    let endingWorker = false
-    let workerTerminated = false
-    const terminateWorkerThread = () => {
-      if (workerTerminated) return
-      workerTerminated = true
-      try {
-        port?.terminate()
-      } catch {
-        // Already gone; nothing to do.
+    const deviceRatio = deviceRatioRef.current
+    const timer = setTimeout(() => {
+      for (const n of nearViewportPageNumbers(container, pageElsRef.current)) {
+        const viewport = pageViewportsRef.current.get(n)
+        if (!viewport) continue
+        void rasterizePage(n, targetRasterScale(viewport.width, viewport.height, zoom, deviceRatio))
       }
+    }, RERASTER_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [zoom, allPagesRendered])
+
+  // Re-rasterise near-viewport pages once SCROLLING settles, at whatever
+  // zoom is currently active (`zoomRef`, not `zoom` — this effect has no
+  // `zoom` dependency so it registers the listener exactly once). Handles
+  // the case the zoom-triggered effect above cannot: a reader who zoomed in,
+  // then scrolled to a page that was never near the viewport while zoom was
+  // settling, and so was never re-rasterised at the current zoom's target
+  // resolution.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onScroll = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        const deviceRatio = deviceRatioRef.current
+        for (const n of nearViewportPageNumbers(container, pageElsRef.current)) {
+          const viewport = pageViewportsRef.current.get(n)
+          if (!viewport) continue
+          void rasterizePage(n, targetRasterScale(viewport.width, viewport.height, zoomRef.current, deviceRatio))
+        }
+      }, RERASTER_DEBOUNCE_MS)
     }
-    const endWorkerThreadThenReleaseLease = () => {
-      if (endingWorker) return
-      endingWorker = true
-      // Already terminated (the worker's own `error` listener got there
-      // first) or never constructed at all (failed before the worker
-      // existed) — nothing to wait on, release now.
-      if (workerTerminated || !loadingTask) {
-        terminateWorkerThread()
-        releaseLease()
-        return
-      }
-      // Same polite-then-forced shutdown the cleanup below has always used
-      // (see its own comment for the three measured reasons
-      // `loadingTask.destroy()` alone does not end a caller-supplied
-      // worker) — just reachable from every path that ends this load, not
-      // only unmount, and gating the release on it completing.
-      const grace = setTimeout(terminateWorkerThread, WORKER_TERMINATE_GRACE_MS)
-      void loadingTask
-        .destroy()
-        .catch(() => {})
-        .finally(() => {
-          clearTimeout(grace)
-          terminateWorkerThread()
-          releaseLease()
-        })
-    }
-
-    let firstPageWatchdog: ReturnType<typeof setTimeout> | null = null
-    const clearFirstPageWatchdog = () => {
-      if (firstPageWatchdog === null) return
-      clearTimeout(firstPageWatchdog)
-      firstPageWatchdog = null
-    }
-
-    // THE one way this load reports a failure.
-    //
-    // It exists because the failure that is hardest to see is the one
-    // discovered by something that is not the async chain. The worker `error`
-    // listener below stays attached for this component's whole life
-    // (`{ once: true }` means fire-once, not load-only); when it fires AFTER
-    // `Promise.race([task.promise, workerFailed])` has already settled, its
-    // `reject` lands on a promise nobody is listening to — no throw, no
-    // unhandledrejection, no state change. The pane is left `ready` with an
-    // empty container, no spinner and no error, indefinitely. So every
-    // discoverer of a failure calls THIS, which is reachable at any time and
-    // is idempotent, rather than relying on a rejection reaching the catch.
-    const failLoad = (err: unknown) => {
-      if (loadFailed) return
-      loadFailed = true
-      clearFirstPageWatchdog()
-      endWorkerThreadThenReleaseLease()
-      if (!cancelled) {
-        setError(err instanceof Error ? err.message : String(err))
-        setStatus('error')
-        if (savingRef.current) {
-          // `doc.saveDocument()` round-trips through the worker. If that
-          // worker is what just died, this promise never settles — so the
-          // "Saving…" indicator has to be told here or it never stops.
-          savingRef.current = false
-          setSaveStatus('error')
-          setSaveError(err instanceof Error ? err.message : String(err))
-        }
-      }
-      // Nothing further from THIS load may paint, and any in-flight network
-      // work for it is now pointless.
-      cancelled = true
-      abort.abort()
-    }
-
-    setStatus('loading')
-    setError(null)
-    setPageCount(0)
-    setAllPagesRendered(false)
-    setMode('view')
-    setHasFormFields(null)
-    setFieldProbeError(null)
-    setEditLayerError(null)
-    setDirty(false)
-    setSaveStatus('idle')
-    setSaveError(undefined)
-    setLastSavedAt(undefined)
-    setSignaturePadOpen(false)
-    setPlacedSignatures([])
-    pagesRef.current.clear()
-    pageViewportsRef.current.clear()
-    pageElsRef.current.clear()
-    pageAnnotationsRef.current.clear()
-    annotationLayerDivsRef.current.clear()
-    signaturePreviewElsRef.current.clear()
-    docRef.current = null
-    pdfjsRef.current = null
-    container.replaceChildren()
-
-    void (async () => {
-      try {
-        // EMB-032 — wait for a worker-pool slot BEFORE doing any of the work
-        // that slot exists to bound (asset probing, the byte fetch, and the
-        // Worker construction itself). `onQueued` only fires when the
-        // ceiling was actually the reason this document is waiting, so the
-        // common, under-ceiling case never flashes the waiting state.
-        lease = await pdfWorkerPool.acquire(abort.signal, () => {
-          if (!cancelled) setStatus('queued')
-        })
-        if (cancelled) {
-          releaseLease()
-          return
-        }
-        setStatus('loading')
-
-        // Assets first: a missing directory must fail with a name, not with a
-        // blank page (FR-018b). Deliberately NOT covered by the first-page
-        // watchdog below — see its own comment for why.
-        stage = 'checking the PDF.js runtime assets'
-        await ensureRuntimeAssets()
-        if (cancelled) return
-
-        // The one and only reference to pdfjs-dist. Keep it dynamic.
-        stage = 'loading the PDF.js runtime'
-        const pdfjs = await import('pdfjs-dist')
-        if (cancelled) return
-
-        // A just-completed Save already has the new bytes in memory — reuse
-        // them instead of re-fetching what we just uploaded. Consumed once.
-        let data: ArrayBuffer | Uint8Array
-        if (pendingSaveBytesRef.current) {
-          data = pendingSaveBytesRef.current
-          pendingSaveBytesRef.current = null
-          // versionRef already holds the fresh token handleSave's own
-          // response returned for these exact bytes (EMB-007) — no read
-          // happened on this path, so nothing to update it from.
-        } else {
-          // SILENT-FAILURES-pdf-pool.md finding 3 — the byte download gets
-          // its OWN deadline and its OWN honest message, separate from the
-          // parsing watchdog below. A large PDF on a slow connection used to
-          // be cut off by the SAME 45s the parser gets, and the resulting
-          // error blamed "the parsing worker" for a stage the worker had not
-          // even reached yet. Every "Try again" then repeated the identical
-          // doomed download.
-          stage = `downloading ${entry.name}`
-          let downloadTimedOut = false
-          const downloadTimer = setTimeout(() => {
-            downloadTimedOut = true
-            abort.abort()
-          }, downloadTimeoutMs())
-          try {
-            const read = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
-            data = read.bytes
-            versionRef.current = read.version
-          } catch (err) {
-            if (downloadTimedOut) {
-              throw new Error(
-                `This PDF did not finish downloading within ${Math.round(downloadTimeoutMs() / 1000)} seconds. ` +
-                  `That is the network connection, not the PDF parser — check the connection and try again.`,
-                { cause: err },
-              )
-            }
-            throw err
-          } finally {
-            clearTimeout(downloadTimer)
-          }
-        }
-        if (cancelled) return
-
-        // The first-page deadline starts HERE — once the bytes are in hand —
-        // not at mount and not while they were still downloading (finding 3
-        // above). Time spent queued behind the pool's ceiling, checking
-        // assets, or downloading is a legitimate, separately-explained wait;
-        // counting it against the PARSER's deadline is what let a slow
-        // network masquerade as a wedged worker.
-        firstPageWatchdog = setTimeout(() => {
-          failLoad(
-            new Error(
-              `This PDF did not put a page on screen within ${Math.round(firstPageTimeoutMs() / 1000)} seconds. ` +
-                `It stopped at: ${stage}. The parsing worker may have run out of memory or stopped responding — ` +
-                `try again, and if it keeps happening this document may be too large or too damaged to render here.`,
-            ),
-          )
-        }, firstPageTimeoutMs())
-
-        // FR-019c — our own worker, handed to PDF.js as a port, so there is no
-        // fake-worker fallback branch to fall into.
-        stage = 'starting the PDF parsing worker'
-        let workerPort: Worker
-        try {
-          workerPort = new Worker(`${ASSET_BASE}pdf.worker.min.mjs`, { type: 'module' })
-        } catch (err) {
-          throw new Error(
-            `The PDF parsing worker could not start, so this PDF was not opened. ` +
-              `Parsing never runs on the main thread. Cause: ${String(err)}`,
-            { cause: err },
-          )
-        }
-        port = workerPort
-        // `PDFWorker.create` rather than `new PDFWorker`: same object, but the
-        // published .d.ts types the constructor's `port` as `null | undefined`
-        // (a JSDoc default-value artefact) while `create`'s PDFWorkerParameters
-        // types it as `Worker`.
-        const pdfWorker = pdfjs.PDFWorker.create({ name: 'omnipus-library-pdf', port: workerPort })
-
-        // A missing worker file (or the SPA fallback serving index.html with a
-        // 200) makes `new Worker` succeed synchronously but fail asynchronously
-        // with an `error` event; the worker then never replies and
-        // `task.promise` hangs on "Opening…" forever. Race the load against that
-        // error so the catch below surfaces a visible error instead — the exact
-        // silent-degrade this component's header says it prevents (FR-018b).
-        //
-        // ⚠️ This listener outlives the race. `{ once: true }` means fire-ONCE,
-        // not fire-only-during-load: a worker that dies AFTER the document
-        // opened still fires it, and by then `reject` is shouting into a
-        // promise the already-settled `Promise.race` discarded. That is why
-        // the body below reports through `failLoad` — reachable at any time —
-        // and treats `reject` as the merely-useful-if-anyone-is-still-
-        // listening extra, not the mechanism.
-        const workerFailed = new Promise<never>((_, reject) => {
-          workerPort.addEventListener(
-            'error',
-            (ev: ErrorEvent) => {
-              // EMB-032 — poisoned-worker eviction. This worker is done for
-              // THIS document only (a worker error rejects only the leases
-              // held on that worker — there is one lease and one worker per
-              // document, never shared); terminate it immediately so nothing
-              // keeps talking to a dead transport (the shared
-              // `terminateWorkerThread` below, not a separate call, so
-              // `failLoad`'s own `endWorkerThreadThenReleaseLease` sees it is
-              // already done and releases the slot right away rather than
-              // waiting out a `destroy()` grace period against a worker that
-              // is already gone).
-              terminateWorkerThread()
-              const cause = ev.message ? ` Cause: ${ev.message}` : ''
-              // Two genuinely different failures, said differently, because
-              // "was not opened" is a lie once it HAS been opened and the
-              // reader is looking at its pages.
-              const err = doc
-                ? new Error(
-                    `The PDF parsing worker stopped after this document was opened, so it can no longer be ` +
-                      `rendered or saved. Any unsaved entries are still in this tab but cannot be written ` +
-                      `until it is reopened.${cause}`,
-                  )
-                : new Error(
-                    `The PDF parsing worker at ${ASSET_BASE}pdf.worker.min.mjs failed to load, ` +
-                      `so this PDF was not opened. It may be missing or served as an HTML fallback.${cause}`,
-                  )
-              failLoad(err)
-              reject(err)
-            },
-            { once: true },
-          )
-        })
-        // The race below is what normally consumes this rejection. If the
-        // chain throws BEFORE the race is constructed, nothing would —
-        // attaching an inert handler keeps a real, already-reported failure
-        // from also surfacing as an unhandled rejection.
-        workerFailed.catch(() => {})
-
-        const task = pdfjs.getDocument({
-          data,
-          worker: pdfWorker,
-          // D15.7 — XFA is a scripting surface and is unsupported anyway.
-          enableXfa: false,
-          // FR-018a — fetched per document, not bundled. See the header of
-          // vite.config.ts for what each one being absent does.
-          cMapUrl: `${ASSET_BASE}cmaps/`,
-          cMapPacked: true,
-          standardFontDataUrl: `${ASSET_BASE}standard_fonts/`,
-          wasmUrl: `${ASSET_BASE}wasm/`,
-          useWasm: true,
-          iccUrl: `${ASSET_BASE}iccs/`,
-        })
-        loadingTask = task
-        stage = 'opening the document'
-        doc = await Promise.race([task.promise, workerFailed])
-        if (cancelled) return
-        docRef.current = doc
-        pdfjsRef.current = pdfjs
-        // Any AcroForm fill or placed signature mutates this SAME object —
-        // this is the one hook point for "is there an unsaved edit" that
-        // covers both mechanisms without this component having to intercept
-        // every widget's own change listener. `onSetModified`/`onResetModified`
-        // are typed as bare `null` in annotation_storage.d.ts (a JSDoc
-        // initial-value artefact — the class assigns and calls them as
-        // callback slots at runtime; verified against build/pdf.mjs's
-        // `#setModified`/`resetModified`), so a documented cast is needed to
-        // assign a real function.
-        const annotationStorage = doc.annotationStorage as unknown as {
-          onSetModified: (() => void) | null
-          onResetModified: (() => void) | null
-        }
-        annotationStorage.onSetModified = () => {
-          if (!cancelled) setDirty(true)
-        }
-        annotationStorage.onResetModified = () => {
-          if (!cancelled) setDirty(false)
-        }
-        void doc
-          .getFieldObjects()
-          .then((fields) => {
-            if (!cancelled) setHasFormFields(!!fields && Object.keys(fields).length > 0)
-          })
-          .catch((err: unknown) => {
-            // A field-object read failure costs the "has fields" banner only —
-            // the AnnotationLayer render below still tries per-page
-            // annotations regardless, so filling still works if the fields
-            // ARE there; this just can't promise it up front. It is NOT a
-            // reason to fail the whole load.
-            //
-            // But it is also not nothing: swallowing the error left
-            // `hasFormFields === null`, which is the same value as "not asked
-            // yet" — so a probe that failed and a probe that never ran looked
-            // identical to every reader of that state. The reason is kept and
-            // shown in Edit mode instead.
-            if (cancelled) return
-            setHasFormFields(null)
-            setFieldProbeError(err instanceof Error ? err.message : String(err))
-          })
-        setPageCount(doc.numPages)
-
-        // EMB-105 / US-12 AS-4 — a page-fragment embed renders ONE page, not
-        // the whole document. Validated against the REAL page count this
-        // document just reported (not against any earlier guess), so a
-        // fragment naming a page beyond the document's end is a genuine,
-        // honest failure — never a silently empty page.
-        let pagesToRender: number[]
-        if (pageFragment !== undefined) {
-          if (!Number.isInteger(pageFragment) || pageFragment < 1 || pageFragment > doc.numPages) {
-            throw new Error(
-              `Page ${pageFragment} does not exist in this ${doc.numPages}-page PDF.`,
-            )
-          }
-          pagesToRender = [pageFragment]
-        } else {
-          pagesToRender = Array.from({ length: doc.numPages }, (_, i) => i + 1)
-        }
-        if (pagesToRender.length === 0) {
-          // A zero-page document would otherwise fall straight through the
-          // loop below with nothing appended and nothing thrown — the
-          // silently empty pane, arrived at by a different road.
-          throw new Error('This PDF reports no pages, so there is nothing to display.')
-        }
-
-        // `status` deliberately does NOT flip to 'ready' here. It used to,
-        // one statement before the first `getPage()` — from that instant the
-        // spinner was gone and the (empty) container was visible, so a worker
-        // that wedged without erroring showed a white box indistinguishable
-        // from a blank first page. Ready now means "a page is actually on
-        // screen"; until then this stays `loading` and the watchdog above is
-        // what bounds it.
-        const { width, fallback: widthIsFallback } = measureRenderWidth(container)
-        if (widthIsFallback) {
-          // Make the guess VISIBLE. Rendering every PDF at a plausible
-          // hardcoded width is precisely the failure nobody can see, so the
-          // state is written where a developer and a test can both read it.
-          container.setAttribute('data-width-source', 'fallback')
-        } else {
-          container.removeAttribute('data-width-source')
-        }
-        const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)
-        let firstPageOnScreen = false
-
-        for (const n of pagesToRender) {
-          stage = `rendering page ${n}`
-          const page: PDFPageProxy = await doc.getPage(n)
-          if (cancelled) return
-
-          const unscaled = page.getViewport({ scale: 1 })
-          const fit = (width - 32) / unscaled.width
-          const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, fit))
-          const viewport = page.getViewport({ scale })
-
-          const pageEl = document.createElement('div')
-          pageEl.className = 'relative mx-auto my-4 shadow-lg'
-          pageEl.style.width = `${viewport.width}px`
-          pageEl.style.height = `${viewport.height}px`
-          // The text layer sizes its spans from these; they must match the
-          // scale the canvas was rendered at or selection lands off the glyphs.
-          pageEl.style.setProperty('--scale-factor', String(scale))
-          pageEl.style.setProperty('--total-scale-factor', String(scale))
-          pageEl.setAttribute('data-testid', 'library-pdf-page')
-          pageEl.setAttribute('data-page-number', String(n))
-
-          const canvas = document.createElement('canvas')
-          canvas.width = Math.floor(viewport.width * ratio)
-          canvas.height = Math.floor(viewport.height * ratio)
-          canvas.style.width = `${viewport.width}px`
-          canvas.style.height = `${viewport.height}px`
-          canvas.className = 'block h-full w-full bg-white'
-          pageEl.appendChild(canvas)
-
-          const textLayerEl = document.createElement('div')
-          textLayerEl.className = 'omnipus-pdf-text-layer'
-          pageEl.appendChild(textLayerEl)
-
-          container.appendChild(pageEl)
-
-          pagesRef.current.set(n, page)
-          pageViewportsRef.current.set(n, viewport)
-          pageElsRef.current.set(n, pageEl)
-
-          const ctx = canvas.getContext('2d')
-          if (!ctx) throw new Error('This browser did not provide a 2D canvas context.')
-
-          const renderTask = page.render({
-            canvas,
-            canvasContext: ctx,
-            viewport,
-            transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
-            // NB-17 — the BASE canvas stays read-only. ENABLE draws annotation
-            // appearance streams (including already-filled form values) as
-            // static graphics. ENABLE_FORMS and ENABLE_STORAGE are the modes
-            // that make the CANVAS ITSELF paint live widgets, which this file
-            // still never uses — Edit mode's interactivity comes entirely
-            // from the separate AnnotationLayer overlaid on top (below).
-            annotationMode: pdfjs.AnnotationMode.ENABLE,
-            isEditing: false,
-          })
-          cancelRender.push(() => renderTask.cancel())
-
-          const textLayer = new pdfjs.TextLayer({
-            textContentSource: page.streamTextContent(),
-            container: textLayerEl,
-            viewport,
-          })
-          cancelRender.push(() => textLayer.cancel())
-
-          await Promise.all([renderTask.promise, textLayer.render()])
-          if (cancelled) return
-
-          if (!firstPageOnScreen) {
-            // The first page is drawn and in the DOM — the one moment at
-            // which showing the container is honest. The watchdog's job is
-            // done at exactly the same instant, and not before: clearing it
-            // merely on `appendChild` would leave a render that never
-            // finishes covered by nothing at all.
-            firstPageOnScreen = true
-            clearFirstPageWatchdog()
-            setStatus('ready')
-          }
-
-          const annotations = await page.getAnnotations({ intent: 'display' })
-          if (cancelled) return
-          pageAnnotationsRef.current.set(n, annotations)
-        }
-
-        // EMB-032 — deliberately NO releaseLease() here, and that is not an
-        // oversight. Reaching this point means the document is open and its
-        // first pass over every page is done, but its `PDFWorker` is not
-        // finished being used: entering Edit mode below mounts a real
-        // `AnnotationLayer` against this SAME `doc`, and `handleSave` calls
-        // `doc.saveDocument()` — both keep talking to this worker for as
-        // long as the component stays mounted. The lease (and the worker
-        // instance it stands for) is held for the component's WHOLE mounted
-        // lifetime, released only on failure, abandonment before its turn,
-        // or unmount (see the effect's cleanup below, and pdfWorkerPool.ts's
-        // own header for why releasing on render success would break
-        // EMB-032's "at most two worker instances" ceiling rather than
-        // honour it).
-        if (!cancelled) {
-          setAllPagesRendered(true)
-          if (variant === 'inline') {
-            // SILENT-FAILURES-pdf-pool.md finding 2 — "a waiting PDF never
-            // opens on a short note". An inline embed has no header to reach
-            // Edit mode from at all (see this file's own note on
-            // `pageFragment` above — the SAME asymmetry, applied generally:
-            // every inline mount, fragment or not, is view-only because
-            // `PreviewHeaderSlotProvider` does not exist outside the pane).
-            // So nothing past this point — a static canvas already drawn,
-            // and the D-37 zoom control, which is CSS `zoom` only, never a
-            // re-render — ever talks to this worker again. Holding its pool
-            // slot for the rest of this component's mounted lifetime is
-            // correct for the PANE (Edit/Save keep using it, see
-            // pdfWorkerPool.ts's header), but on an inline embed it only
-            // starves a queued sibling on a note too short to ever unmount
-            // anything via LazyEmbedMount's 1800px margin. Ending the
-            // thread and freeing the slot HERE is what makes "will open
-            // automatically once another PDF finishes loading" true on a
-            // short page, not only a long one.
-            endWorkerThreadThenReleaseLease()
-          }
-        }
-      } catch (err) {
-        if (cancelled) {
-          clearFirstPageWatchdog()
-          endWorkerThreadThenReleaseLease()
-          return
-        }
-        // SILENT-FAILURES-pdf-pool.md finding 8 — every abort THIS load
-        // starts sets `cancelled` first (see `failLoad` and this effect's
-        // cleanup), so reaching here with `cancelled` still false means
-        // something else cancelled work this load never asked to end —
-        // latent today, but a real, reportable failure if it ever happens,
-        // not a silent, watchdog-disarmed return.
-        if (isAbortError(err) || (err && typeof err === 'object' && (err as { name?: string }).name === 'RenderingCancelledException')) {
-          failLoad(err instanceof Error ? err : new Error(String(err)))
-          return
-        }
-        // Every OTHER failure ends this load attempt for good. `failLoad`
-        // ends the worker thread and releases the pool slot (so a queued
-        // document is not held behind one that is never going to finish),
-        // stops the watchdog, and renders the reason. The `workerFailed`
-        // path above already went through the same function before this
-        // catch was reached; its `loadFailed` latch is what makes calling it
-        // twice safe.
-        failLoad(err)
-      }
-    })()
-
+    container.addEventListener('scroll', onScroll, { passive: true })
     return () => {
-      cancelled = true
-      abort.abort()
-      clearFirstPageWatchdog()
-      for (const cancel of cancelRender) {
-        try {
-          cancel()
-        } catch {
-          // A task that already settled throws on cancel; nothing to do.
-        }
-      }
-
-      // ── Ending the Worker THREAD. This is ours to do. ───────────────────
-      // `endWorkerThreadThenReleaseLease` (defined above, shared with
-      // `failLoad`) is what actually ends it — see its own comment for the
-      // three measured reasons a bare `loadingTask.destroy()` does not end a
-      // CALLER-SUPPLIED worker, and for why the slot is held until the
-      // thread is confirmed gone rather than freed first: freeing it first
-      // let a queued sibling construct a genuinely fresh THIRD `Worker`
-      // while this one was still shutting down (finding 9 — up to 2s of 3
-      // live workers on every unmount, `LazyEmbedMount`'s scroll-past-and-
-      // back included), even though `pdfWorkerPool` — which counts LEASES,
-      // not threads — kept reporting a tidy "at most two". Idempotent with
-      // whatever the async chain above already did (a worker crash or any
-      // other in-flight failure), so calling it again here on a load that
-      // already ended is a safe no-op, not a second teardown.
-      endWorkerThreadThenReleaseLease()
+      container.removeEventListener('scroll', onScroll)
+      if (timer) clearTimeout(timer)
     }
-  }, [workspaceId, entry.path, reloadNonce, pageFragment, variant])
+  }, [])
+
+  usePdfLoadEffect({
+    containerRef,
+    workspaceId,
+    entryName: entry.name,
+    entryPath: entry.path,
+    reloadNonce,
+    pageFragment,
+    variant,
+    refs: {
+      pagesRef,
+      pageViewportsRef,
+      pageElsRef,
+      pageCanvasElsRef,
+      paintedScaleRef,
+      pageAnnotationsRef,
+      annotationLayerDivsRef,
+      signaturePreviewElsRef,
+      docRef,
+      pdfjsRef,
+      pendingRasterTasksRef,
+      pageRenderGenerationRef,
+      pendingSaveBytesRef,
+      versionRef,
+      savingRef,
+      zoomRef,
+      deviceRatioRef,
+    },
+    setters: {
+      setStatus,
+      setError,
+      setPageCount,
+      setAllPagesRendered,
+      setMode,
+      setHasFormFields,
+      setFieldProbeError,
+      setEditLayerError,
+      setDirty,
+      setSaveStatus,
+      setSaveError,
+      setLastSavedAt,
+      setSignaturePadOpen,
+      setPlacedSignatures,
+    },
+  })
 
   // Edit-mode AnnotationLayer mount/unmount. Runs only once every page has
   // finished its base render (see `allPagesRendered` above) — entering Edit
@@ -1467,6 +1219,11 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     // is attached to the page.
     if (!ctx) return false
     ctx.scale(ratio, ratio)
+    // No fitting design-system colour token: `--color-primary` (Deep Space
+    // Black, #0A0A0B) is the nearest by meaning but is not byte-identical to
+    // this ink colour, and a canvas `strokeStyle` needs a real CSS <color>
+    // value it can parse, not a `var(--token)` reference. Reported to the
+    // token lane — see LibrarySignaturePad.tsx's identical ink colour.
     ctx.strokeStyle = '#111111'
     ctx.lineWidth = 2
     ctx.lineCap = 'round'
@@ -1483,14 +1240,14 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       ctx.stroke()
     }
 
-    const removeBtn = document.createElement('button')
-    removeBtn.type = 'button'
-    removeBtn.className = 'omnipus-pdf-signature-remove'
-    removeBtn.setAttribute('aria-label', 'Remove signature')
-    removeBtn.setAttribute('data-testid', `library-pdf-signature-remove-${key}`)
-    removeBtn.textContent = '×'
-    removeBtn.addEventListener('click', () => handleRemoveSignature(key))
-    wrapper.appendChild(removeBtn)
+    // The remove affordance itself is NOT built here as a raw DOM node — a
+    // catalogued `IconButton` is portalled into `wrapper` from this
+    // component's own render (see the `placedSignatures.map(...)` block near
+    // the JSX return) once `handleInsertSignature` commits this key to
+    // `placedSignatures` state. `wrapper` is registered in
+    // `signaturePreviewElsRef` synchronously, just below, before that state
+    // update is dispatched, so the portal target always exists by the time
+    // React looks for it.
 
     pageEl.appendChild(wrapper)
     signaturePreviewElsRef.current.set(key, wrapper)
@@ -1599,7 +1356,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     <div
       className={
         inline
-          ? `flex ${INLINE_PREVIEW_BOX_CLASS} flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-0)]`
+          ? 'flex h-[28rem] max-h-[70vh] min-h-0 flex-col overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-0)]'
           : 'flex flex-1 min-h-0 flex-col overflow-hidden bg-[var(--color-surface-0)]'
       }
       data-testid="library-pdf-preview"
@@ -1694,7 +1451,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
   margin: 0;
   vertical-align: top;
   font: calc(9px * var(--total-scale-factor)) sans-serif;
-  background: rgba(212, 175, 55, 0.12);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   border: 1.5px solid var(--color-accent);
   border-radius: 2px;
 }
@@ -1702,7 +1459,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 .omnipus-pdf-annotation-layer .textWidgetAnnotation :is(input, textarea):focus,
 .omnipus-pdf-annotation-layer .choiceWidgetAnnotation select:focus {
   outline: 2px solid var(--color-accent);
-  background: rgba(212, 175, 55, 0.2);
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
 }
 .omnipus-pdf-annotation-layer .textWidgetAnnotation :is(input, textarea)[disabled],
 .omnipus-pdf-annotation-layer .choiceWidgetAnnotation select[disabled] {
@@ -1736,74 +1493,35 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 `}</style>
 
       <PreviewHeaderPortal>
-        <div className="flex items-center gap-0.5" role="group" aria-label="View mode">
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => handleToggleMode('view')}
-            aria-pressed={mode === 'view'}
+        <SegmentedControl
+          aria-label="View mode"
+          value={mode}
+          onValueChange={(v) => handleToggleMode(v as 'view' | 'edit')}
+          className="gap-0 p-[var(--space-0-5)]"
+        >
+          <SegmentedControlItem
+            value="view"
             aria-label="View"
             title="View"
             data-testid="library-pdf-mode-view"
-            className={cn(LIBRARY_ICON_BTN, mode === 'view' && 'text-[var(--color-accent)]')}
+            className="h-7 w-7 p-0"
           >
             <Eye size={15} weight={mode === 'view' ? 'fill' : 'regular'} />
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => handleToggleMode('edit')}
+          </SegmentedControlItem>
+          <SegmentedControlItem
+            value="edit"
             disabled={!canEdit}
-            aria-pressed={mode === 'edit'}
             aria-label="Edit"
             title={canEdit ? 'Fill fields or add a signature' : 'Edit'}
             data-testid="library-pdf-mode-edit"
-            className={cn(LIBRARY_ICON_BTN, mode === 'edit' && 'text-[var(--color-accent)]')}
+            className="h-7 w-7 p-0"
           >
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
-          </button>
-        </div>
-        <div className="flex items-center gap-0.5" role="group" aria-label="Zoom">
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => setZoom((z) => nextPdfZoom(z, 'out'))}
-            disabled={zoom <= PDF_ZOOM_STEPS[0]}
-            aria-label="Zoom out"
-            title="Zoom out"
-            data-testid="library-pdf-zoom-out"
-            className={LIBRARY_ICON_BTN}
-          >
-            <MagnifyingGlassMinus size={15} />
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => setZoom(PDF_ZOOM_DEFAULT)}
-            aria-label={`Zoom ${Math.round(zoom * 100)} percent — reset to 100 percent`}
-            title="Reset zoom"
-            data-testid="library-pdf-zoom-reset"
-            className="rounded px-1 text-[11px] tabular-nums text-[var(--color-muted)] hover:text-[var(--color-secondary)]"
-          >
-            {Math.round(zoom * 100)}%
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
-            onClick={() => setZoom((z) => nextPdfZoom(z, 'in'))}
-            disabled={zoom >= PDF_ZOOM_STEPS[PDF_ZOOM_STEPS.length - 1]}
-            aria-label="Zoom in"
-            title="Zoom in"
-            data-testid="library-pdf-zoom-in"
-            className={LIBRARY_ICON_BTN}
-          >
-            <MagnifyingGlassPlus size={15} />
-          </button>
-        </div>
+          </SegmentedControlItem>
+        </SegmentedControl>
+        <ZoomPill zoom={zoom} onZoomIn={zoomIn} onZoomOut={zoomOut} onFit={zoomToFit} onZoomTo100={zoomTo100} />
         {mode === 'edit' && (
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             onClick={() => {
               // D-63: read the page on screen NOW, not the document's last page.
               const c = containerRef.current
@@ -1814,31 +1532,32 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             aria-label="Add signature"
             title="Draw and place a signature"
             data-testid="library-pdf-add-signature"
-            className={LIBRARY_ICON_BTN}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
           >
             <Signature size={15} />
-          </button>
+          </IconButton>
         )}
         <AutoSaveIndicator status={saveStatus} error={saveError} lastSavedAt={lastSavedAt} />
         {mode === 'edit' && (
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             onClick={() => void handleSave()}
             disabled={!dirty || saveStatus === 'saving'}
             aria-label={saveStatus === 'saving' ? 'Saving' : 'Save'}
             title={saveStatus === 'saving' ? 'Saving…' : 'Save'}
             data-testid="library-pdf-save"
-            className={cn(LIBRARY_ICON_BTN, dirty && saveStatus !== 'saving' && 'text-[var(--color-accent)]')}
+            className={cn(
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]',
+              dirty && saveStatus !== 'saving' ? 'text-[var(--color-accent)]' : undefined,
+            )}
           >
             <FloppyDisk size={15} weight={dirty ? 'fill' : 'regular'} />
-          </button>
+          </IconButton>
         )}
       </PreviewHeaderPortal>
 
       {mode === 'edit' && allPagesRendered && hasFormFields === false && (
         <div
-          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-muted)]"
+          className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-no-fields-note"
         >
           This PDF has no fillable form fields — you can still add a signature.
@@ -1852,7 +1571,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         // annotation layer builds from the page's own annotations — so this
         // says what is true rather than guessing either way.
         <div
-          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-muted)]"
+          className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-field-probe-error"
           title={fieldProbeError}
         >
@@ -1863,7 +1582,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       {mode === 'edit' && editLayerError !== null && (
         <div
           role="alert"
-          className="flex shrink-0 items-center gap-2 border-b border-[var(--color-error)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-secondary)]"
+          className="flex shrink-0 items-center gap-[var(--space-2)] border-b border-[var(--color-error)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
           data-testid="library-pdf-edit-layer-error"
         >
           {editLayerError}
@@ -1872,22 +1591,21 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 
       {mode === 'edit' && placedSignatures.length > 0 && (
         <div
-          className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-[11px] text-[var(--color-muted)]"
+          className="flex shrink-0 flex-wrap items-center gap-[var(--space-1)] border-b border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-signature-list"
         >
           <span>Signatures placed (not yet saved):</span>
           {placedSignatures.map((sig) => (
-            <button
+            <Button
               key={sig.key}
-              type="button"
-              tabIndex={0}
+              variant="outline"
               onClick={() => handleRemoveSignature(sig.key)}
-              className="inline-flex items-center gap-1 rounded border border-[var(--color-border)] px-1.5 py-0.5 hover:bg-[var(--color-surface-2)]"
+              className="h-auto gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-0-5)] font-[var(--font-weight-regular)] text-[length:inherit]"
               title={`Remove the signature on page ${sig.pageNumber}`}
               data-testid={`library-pdf-signature-chip-${sig.key}`}
             >
               Page {sig.pageNumber} <X size={10} />
-            </button>
+            </Button>
           ))}
         </div>
       )}
@@ -1903,7 +1621,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         // immediate or may be a genuine wait if nothing does — never a
         // silent, unexplained hang.
         <div
-          className="flex flex-1 items-center justify-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]"
+          className="flex flex-1 items-center justify-center gap-[var(--space-2)] p-[var(--space-4)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-queued"
         >
           <SpinnerGap className="h-4 w-4 shrink-0 animate-spin" aria-hidden />
@@ -1916,7 +1634,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
 
       {status === 'loading' && (
         <div
-          className="flex flex-1 items-center justify-center gap-2 text-sm text-[var(--color-muted)]"
+          className="flex flex-1 items-center justify-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]"
           data-testid="library-pdf-loading"
         >
           <SpinnerGap className="h-4 w-4 animate-spin" aria-hidden />
@@ -1925,34 +1643,38 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       )}
 
       {status === 'error' && (
-        <div className="flex flex-1 items-center justify-center p-6" data-testid="library-pdf-error">
+        <div className="flex flex-1 items-center justify-center p-[var(--space-4)]" data-testid="library-pdf-error">
           <div
             role="alert"
-            className="max-w-lg rounded-md border border-[var(--color-error)] bg-[var(--color-surface-1)] p-4 text-sm text-[var(--color-secondary)]"
+            className="max-w-lg rounded-md border border-[var(--color-error)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
           >
             <p className="font-medium">This PDF could not be displayed.</p>
-            <p className="mt-2 text-[var(--color-muted)]">{error}</p>
-            <button
-              type="button"
-              tabIndex={0}
+            <p className="mt-[var(--space-2)] text-[var(--color-error)]">{error}</p>
+            <Button
+              variant="outline"
               onClick={handleRetry}
               data-testid="library-pdf-retry"
-              className="mt-3 rounded border border-[var(--color-border)] px-3 py-1 text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+              className="mt-[var(--space-2-5)] h-auto rounded px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)]"
             >
               Try again
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       <div
         ref={containerRef}
-        className={`min-h-0 flex-1 overflow-auto p-2 ${status === 'ready' ? '' : 'hidden'}`}
+        className={`min-h-0 flex-1 overflow-auto p-[var(--space-2)] ${status === 'ready' ? '' : 'hidden'}`}
         // D-37: the reader's magnification. `zoom` (not `transform`) so the
         // scroll extents follow the magnified content.
         style={{ zoom }}
         data-zoom={zoom}
         data-testid="library-pdf-pages"
+        // D18's shared keyboard contract ("+, −, 0 for fit and 1 for 100%,
+        // while the view is focused") — this is the view the pill above
+        // controls, so it is the frame that owns focus and the shortcuts.
+        tabIndex={0}
+        onKeyDown={handleZoomKeyDown}
         aria-label={
           pageFragment !== undefined
             ? `${entry.name}, page ${pageFragment} of ${pageCount}`
@@ -1967,6 +1689,36 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         defaultPageNumber={signatureDefaultPage}
         onInsert={handleInsertSignature}
       />
+
+      {/* The per-signature remove button drawn on the page canvas
+          (`renderSignaturePreview`'s `wrapper`, above) is a catalogued
+          `IconButton`, portalled into that imperatively-created DOM node —
+          `wrapper` is not part of the React tree at all (PDF.js's own pages
+          are built with `document.createElement`, not JSX), so a real
+          `<button>` element inside it can only be React's if React is told
+          to render there via a portal rather than by hand-building one.
+          `.omnipus-pdf-signature-remove` (this file's own <style> block
+          above) is unlayered CSS, so it still wins over every conflicting
+          Tailwind utility Button/IconButton bring along (Tailwind's own
+          utilities are emitted inside `@layer utilities`, which always loses
+          to unlayered CSS regardless of specificity or source order) — the
+          button keeps its exact prior size, shape, color and position. */}
+      {placedSignatures.map((sig) => {
+        const portalTarget = signaturePreviewElsRef.current.get(sig.key)
+        if (!portalTarget) return null
+        return createPortal(
+          <IconButton
+            aria-label="Remove signature"
+            data-testid={`library-pdf-signature-remove-${sig.key}`}
+            className="omnipus-pdf-signature-remove"
+            onClick={() => handleRemoveSignature(sig.key)}
+          >
+            ×
+          </IconButton>,
+          portalTarget,
+          sig.key,
+        )
+      })}
     </div>
   )
 }

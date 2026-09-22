@@ -1,0 +1,17 @@
+{
+  "version": 1, "component": "Skeleton", "exports": ["Skeleton", "SkeletonProps"], "category": "primitive", "source": "src/components/ui/skeleton.tsx", "documentation": "docs/internal/design/components/skeleton.md", "owner": "design-system", "themes": ["dark"], "variants": ["structural"], "sizes": ["caller-defined"], "states": ["reserved", "visible", "minimum-dwell"],
+  "stories": [{ "file": "src/components/ui/skeleton.stories.tsx", "exports": ["Loading", "ReservedBeforeDelay"] }],
+  "checks": [
+    { "id": "skeleton-unit", "kind": "unit", "file": "src/components/ui/skeleton.test.tsx", "test": "Skeleton — delayed visibility with reserved structure reserves its requested geometry immediately and appears after 400ms", "applicable": true },
+    { "id": "skeleton-interaction", "kind": "interaction", "file": "src/components/ui/skeleton.stories.tsx", "test": "Loading", "story": "Loading", "applicable": true },
+    { "id": "skeleton-axe", "kind": "axe", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-axe] axe", "story": "Loading", "applicable": true },
+    { "id": "skeleton-keyboard", "kind": "keyboard", "applicable": false, "reason": "Skeleton is decorative and cannot receive focus." },
+    { "id": "skeleton-browser", "kind": "browser", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-browser] browser", "story": "Loading", "applicable": true },
+    { "id": "skeleton-pointer", "kind": "pointer", "applicable": false, "reason": "Skeleton is decorative and has no pointer target." },
+    { "id": "skeleton-reduced-motion", "kind": "reduced-motion", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-reduced-motion] reduced-motion", "story": "Loading", "applicable": true },
+    { "id": "skeleton-forced-colors", "kind": "forced-colors", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-forced-colors] forced-colors", "story": "Loading", "applicable": true },
+    { "id": "skeleton-root-size", "kind": "root-size", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-root-size] root-size", "story": "Loading", "applicable": true },
+    { "id": "skeleton-zoom", "kind": "zoom", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-zoom] zoom", "story": "Loading", "applicable": true },
+    { "id": "skeleton-reflow", "kind": "reflow", "file": "tests/design-system/browser.spec.ts", "test": "Skeleton [check:skeleton-reflow] reflow", "story": "Loading", "applicable": true }
+  ]
+}

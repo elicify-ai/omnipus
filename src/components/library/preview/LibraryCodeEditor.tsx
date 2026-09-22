@@ -50,7 +50,7 @@ function loadChromeExtensions(): Promise<Extension[]> {
             fontSize: '12.5px',
           },
           '.cm-scroller': {
-            fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+            fontFamily: 'var(--type-code-family)',
           },
           '.cm-content': {
             caretColor: 'var(--color-accent)',
@@ -59,7 +59,7 @@ function loadChromeExtensions(): Promise<Extension[]> {
             borderLeftColor: 'var(--color-accent)',
           },
           '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-            backgroundColor: 'rgba(212, 175, 55, 0.25)',
+            backgroundColor: 'color-mix(in srgb, var(--color-accent) 25%, transparent)',
           },
           '.cm-gutters': {
             backgroundColor: 'var(--color-surface-1)',
@@ -67,13 +67,13 @@ function loadChromeExtensions(): Promise<Extension[]> {
             border: 'none',
             borderRight: '1px solid var(--color-border)',
           },
-          '.cm-activeLine': { backgroundColor: 'rgba(212, 175, 55, 0.06)' },
+          '.cm-activeLine': { backgroundColor: 'color-mix(in srgb, var(--color-accent) 6%, transparent)' },
           '.cm-activeLineGutter': {
-            backgroundColor: 'rgba(212, 175, 55, 0.08)',
+            backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
             color: 'var(--color-secondary)',
           },
           '.cm-matchingBracket, .cm-nonmatchingBracket': {
-            backgroundColor: 'rgba(212, 175, 55, 0.3)',
+            backgroundColor: 'color-mix(in srgb, var(--color-accent) 30%, transparent)',
             outline: 'none',
           },
         },
@@ -96,7 +96,7 @@ interface LibraryCodeEditorProps {
 function EditorFallback() {
   return (
     <div
-      className="flex h-full min-h-[200px] items-center justify-center text-xs text-[var(--color-muted)]"
+      className="flex h-full min-h-[200px] items-center justify-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
       data-testid="library-editor-loading"
     >
       Loading editor…

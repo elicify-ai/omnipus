@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
+import { Button } from '@/components/ui/button'
 import type { WorkspaceTab } from './WorkspaceTabBar'
 
 interface DefaultWorkspaceRedirectProps {
@@ -57,23 +58,23 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
 
   if (isError) {
     return (
-      <div className="flex flex-col items-center justify-center gap-3 h-full min-h-[200px] p-8 text-center">
+      <div className="flex flex-col items-center justify-center gap-[var(--space-2-5)] h-full min-h-[200px] p-[var(--space-5)] text-center">
         <WarningCircle size={20} weight="bold" className="text-[var(--color-error)]" />
-        <p className="text-sm text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
           Could not load workspaces. Check your connection, then retry.
         </p>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           data-testid="workspace-redirect-retry"
           onClick={() => void refetch()}
           disabled={isFetching}
           aria-label="Retry loading workspaces"
-          className="inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50"
-          style={{ borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
+          className="gap-[var(--space-1)] border-[var(--color-accent)] text-[var(--color-accent)] hover:bg-transparent"
         >
           <ArrowClockwise size={14} className={isFetching ? 'animate-spin' : undefined} />
           {isFetching ? 'Retrying…' : 'Retry'}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -81,7 +82,7 @@ export function DefaultWorkspaceRedirect({ tab = 'chat' }: DefaultWorkspaceRedir
   // Loaded, but there are no workspaces to redirect into — don't spin forever.
   if (!isLoading && (workspaces?.length ?? 0) === 0) {
     return (
-      <div className="flex items-center justify-center h-full min-h-[200px] p-8 text-center text-sm text-[var(--color-muted)]">
+      <div className="flex items-center justify-center h-full min-h-[200px] p-[var(--space-5)] text-center text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
         No workspaces yet. Create one to get started.
       </div>
     )

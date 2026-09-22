@@ -31,6 +31,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { buildProviderModelGroups } from '@/lib/providerModelGroups'
 import { isEligibleNewDefault, providerStatusLabel } from '@/lib/providerStatus'
 import type {
@@ -182,25 +183,25 @@ export function RemoveProviderDialog({
         {onlyProvider && (
           <p
             data-testid="remove-provider-only-copy"
-            className="text-sm text-[var(--color-warning)]"
+            className="text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]"
           >
             {ONLY_PROVIDER_COPY}
           </p>
         )}
 
         {grouped.length > 0 && (
-          <div className="space-y-3" data-testid="remove-provider-dependents">
+          <div className="space-y-[var(--space-2-5)]" data-testid="remove-provider-dependents">
             {grouped.map(({ role, dependents }) => (
-              <div key={role} data-testid={`dependent-group-${role}`} className="space-y-1">
-                <p className="text-xs font-semibold text-[var(--color-secondary)]">
+              <div key={role} data-testid={`dependent-group-${role}`} className="space-y-[var(--space-1)]">
+                <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
                   {dependentGroupHeading(role, displayName)}
                 </p>
-                <ul className="max-h-40 overflow-y-auto space-y-0.5">
+                <ul className="max-h-40 overflow-y-auto space-y-[var(--space-0-5)]">
                   {dependents.map((dependent) => (
                     <li
                       key={`${role}:${dependent.id}`}
                       data-testid={`dependent-${role}-${dependent.id}`}
-                      className="text-xs text-[var(--color-muted)]"
+                      className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
                     >
                       {dependent.name}
                     </li>
@@ -212,43 +213,45 @@ export function RemoveProviderDialog({
         )}
 
         {needsNewDefault && !onlyProvider && (
-          <div className="space-y-2" data-testid="new-default-section">
-            <p className="text-xs font-semibold text-[var(--color-secondary)]">New default model</p>
-            <p className="text-xs text-[var(--color-muted)]">
+          <div className="space-y-[var(--space-2)]" data-testid="new-default-section">
+            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">New default model</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {displayName} backs the default model. Choose the model that takes over before
               removing it.
             </p>
-            <div className="flex flex-wrap gap-1.5">
+            <SegmentedControl
+              aria-label="New default model provider"
+              value={activeCandidateId}
+              onValueChange={(candidateIdValue) => {
+                setCandidateId(candidateIdValue)
+                // A model belongs to the provider it was picked under —
+                // carrying it across would submit a pair that does not exist.
+                setModel('')
+              }}
+              className="h-auto flex-wrap gap-[var(--space-1)] border-0 bg-transparent p-0"
+            >
               {candidates.map((candidate) => {
                 const pressed = candidate.id === activeCandidateId
                 return (
-                  <button
+                  <SegmentedControlItem
                     key={candidate.id}
-                    type="button"
-                    tabIndex={0}
-                    aria-pressed={pressed}
+                    value={candidate.id}
                     data-testid={`new-default-provider-${candidate.id}`}
-                    onClick={() => {
-                      setCandidateId(candidate.id)
-                      // A model belongs to the provider it was picked under —
-                      // carrying it across would submit a pair that does not exist.
-                      setModel('')
-                    }}
-                    className="flex items-center gap-1.5 rounded border px-2 py-1 text-xs"
-                    style={{
-                      borderColor: pressed ? 'var(--color-accent)' : 'var(--color-border)',
-                      color: 'var(--color-secondary)',
-                      background: pressed ? 'var(--color-surface-2)' : 'transparent',
-                    }}
+                    className={[
+                      'h-auto gap-[var(--space-1)] rounded border px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shadow-none text-[var(--color-secondary)]',
+                      pressed
+                        ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
+                        : 'border-[var(--color-border)] bg-transparent hover:bg-transparent hover:text-[var(--color-secondary)]',
+                    ].join(' ')}
                   >
                     <span>{candidate.display_name ?? candidate.name ?? candidate.id}</span>
                     <span className="text-[var(--color-muted)]">
                       {providerStatusLabel(candidate.status)}
                     </span>
-                  </button>
+                  </SegmentedControlItem>
                 )
               })}
-            </div>
+            </SegmentedControl>
             <ModelSelector
               models={[]}
               value={model}

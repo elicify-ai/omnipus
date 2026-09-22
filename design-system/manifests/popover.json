@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "component": "Popover",
+  "exports": [
+    "Popover",
+    "PopoverTrigger",
+    "PopoverContent",
+    "PopoverAnchor"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/popover.tsx",
+  "documentation": "docs/internal/design/components/popover.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "PopoverContract",
+        "PopoverKeyboard"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "popover-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/overlays.test.tsx",
+      "test": "overlay source contracts preserves popover portal composition"
+    },
+    {
+      "id": "popover-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Popover Contract",
+      "story": "PopoverContract"
+    },
+    {
+      "id": "popover-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-axe] axe",
+      "story": "PopoverContract"
+    },
+    {
+      "id": "popover-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-keyboard] keyboard",
+      "story": "PopoverKeyboard"
+    },
+    {
+      "id": "popover-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-browser] browser",
+      "story": "PopoverContract"
+    },
+    {
+      "id": "popover-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-pointer] pointer",
+      "story": "PopoverKeyboard"
+    },
+    {
+      "id": "popover-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-reduced-motion] reduced-motion",
+      "story": "PopoverContract"
+    },
+    {
+      "id": "popover-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-forced-colors] forced-colors",
+      "story": "PopoverContract"
+    },
+    {
+      "id": "popover-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-root-size] root-size",
+      "story": "PopoverContract"
+    },
+    {
+      "id": "popover-zoom",
+      "kind": "zoom",
+      "applicable": false,
+      "reason": "CSS zoom is not valid cross-engine evidence for portalled Radix positioning because layout and visual coordinate spaces diverge. Native 200% browser zoom remains mandatory manual release evidence and is pending in docs/internal/design/evidence/native-200-percent-zoom-checklist.md."
+    },
+    {
+      "id": "popover-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Popover [check:popover-reflow] reflow",
+      "story": "PopoverContract"
+    }
+  ]
+}

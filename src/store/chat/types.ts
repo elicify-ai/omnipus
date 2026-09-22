@@ -125,6 +125,8 @@ export type SubagentSpan = SubagentSpanRunning | SubagentSpanTerminal
 // consumer of both fields — see its D1 precedence doc comment.
 export type ChatMessage = Message & {
   isStreaming?: boolean
+  /** SPA-only acknowledgement state for a user-authored message. */
+  deliveryStatus?: 'queued' | 'sending' | 'received' | 'working' | 'failed'
   media?: MediaAttachment[]
   spans?: SubagentSpan[]
   /** Agent that produced this message (assistant messages only). */
@@ -243,6 +245,15 @@ export type ChatMessage = Message & {
   browserHandoverNoticeId?: string
 }
 
+export interface QueuedOutboundMessage {
+  id: string
+  content: string
+  timestamp: string
+}
+
+/** Strings remain readable for persisted/test state created before #823. */
+export type OutboundQueueItem = string | QueuedOutboundMessage
+
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
 export interface ClientTruncatedResult {
   _truncated_client: true
@@ -296,6 +307,12 @@ export interface SessionChatState {
   isReplaying: boolean
   /** Set when a done frame arrives while isReplaying was true. */
   replayCompletedForSession: string | null
+  /**
+   * Issue #822: a real turn done arrived during replay before catch-up opened
+   * any assistant bubble. The next token is the completed catch-up snapshot,
+   * not a new live stream. Optional for hand-built fixture compatibility.
+   */
+  terminalCatchUpPending?: boolean
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null
@@ -714,9 +731,9 @@ export interface ChatStore {
   // Messages typed while the WS is disconnected are buffered here (max 5).
   // drainOutboundQueue() is called by OmnipusRuntimeProvider on reconnect.
   /** Pending outbound messages queued while WS was disconnected. Max 5. */
-  outboundQueue: string[]
+  outboundQueue: OutboundQueueItem[]
   /** Queue a message for when the WS reconnects. Returns false if queue is full. */
-  enqueueOutboundMessage: (content: string) => boolean
+  enqueueOutboundMessage: (content: string, queuedMessage?: QueuedOutboundMessage) => boolean
   /** Send all queued messages now that the WS is connected. */
   drainOutboundQueue: () => void
   /**
@@ -733,7 +750,7 @@ export interface ChatStore {
    * clears. Exposed on the store (not a closured helper) so tests can invoke
    * it directly if needed.
    */
-  pendingDrainQueue: string[]
+  pendingDrainQueue: OutboundQueueItem[]
 
   // ── Actions ───────────────────────────────────────────────────────────────────
   // opts.mediaRefs: optional media:// refs (e.g. uploaded images) threaded
@@ -745,7 +762,7 @@ export interface ChatStore {
   //   forwards it as `metadata.model_name` in the WS message frame. The
   //   server honors it when present and falls back to the agent's `model`
   //   config when absent.
-  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string }) => void
+  sendMessage: (content: string, opts?: { mediaRefs?: string[]; attachments?: MediaAttachment[]; model_name?: string; clientMessageId?: string; queuedAt?: string }) => void
   /** Validate an outbound MessageFrame against the generated Zod schema. Logs and dev-toasts on failure but never blocks the send. `sessionId` (the sending session, or the pending-bucket key when no session exists yet) is threaded through into the production telemetry record for operator correlation. */
   _validateOutboundFrame: (payload: unknown, sessionId?: string | null) => void
   /**

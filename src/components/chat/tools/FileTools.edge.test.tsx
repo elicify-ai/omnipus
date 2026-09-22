@@ -390,12 +390,16 @@ describe('FileReadBlock — flat text-line status dot', () => {
     const { container } = renderRead('const x = 1\n', 'complete')
     fireEvent.click(container.querySelector('button')!)
     const root = container.firstElementChild as HTMLElement
+    // DisclosureRow (a catalogued Button) renders as a single <button> node —
+    // Button's actionState live region (button.tsx's ActionAnnouncement) is
+    // portalled straight to document.body, never a DOM child here — so the
+    // detail panel is root.children[1], right after the header button.
     const panel = root.children[1] as HTMLElement
     expect(panel.className).toContain('border-l-2')
     expect(panel.className).not.toMatch(/\bborder-b\b/)
     // The <pre> keeps its dark code-block background.
     const pre = panel.querySelector('pre')
-    expect(pre?.className).toContain('bg-[#0d1117]')
+    expect(pre?.className).toContain('bg-[var(--color-code-surface)]')
   })
 })
 
@@ -628,8 +632,12 @@ describe('FileTreeBlock — flat text-line status dot', () => {
   it('expanded tree panel uses a left accent line, and entries keep their Folder/File icons + indentation', () => {
     const { container } = renderTree(treeResult, 'complete')
     fireEvent.click(container.querySelector('button')!)
-    const root = container.firstElementChild as HTMLElement
-    const panel = root.children[1] as HTMLElement
+    // Not a positional sibling lookup (root.children[1]): Button now renders
+    // TWO nodes — the <button> plus an sr-only status span (ActionAnnouncement,
+    // src/components/ui/button.tsx) — so the tree panel is no longer the
+    // header's next sibling by index. data-testid is the stable hook.
+    const panel = container.querySelector('[data-testid="file-tree-panel"]') as HTMLElement
+    expect(panel).toBeTruthy()
     expect(panel.className).toContain('border-l-2')
     // 3 entries parsed from treeResult — each keeps its own icon (svg) + name.
     const rows = panel.querySelectorAll(':scope > div')

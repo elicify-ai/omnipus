@@ -6,8 +6,8 @@ interface AvatarProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 const sizeClasses = {
-  sm: 'h-7 w-7 text-xs',
-  md: 'h-9 w-9 text-sm',
+  sm: 'h-7 w-7 text-[length:var(--type-utility-xs-size)]',
+  md: 'h-9 w-9 text-[length:var(--type-body-compact-size)]',
   lg: 'h-12 w-12 text-base',
 }
 
@@ -26,9 +26,11 @@ const Avatar = React.forwardRef<HTMLDivElement, AvatarProps>(
 )
 Avatar.displayName = 'Avatar'
 
+export type AvatarImageProps = Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'alt'> & { alt: string }
+
 const AvatarImage = React.forwardRef<
   HTMLImageElement,
-  React.ImgHTMLAttributes<HTMLImageElement>
+  AvatarImageProps
 >(({ className, ...props }, ref) => (
   <img
     ref={ref}

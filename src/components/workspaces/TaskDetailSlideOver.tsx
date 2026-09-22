@@ -17,12 +17,12 @@ export function TaskDetailSlideOver({ task, onClose }: TaskDetailSlideOverProps)
   return (
     <Sheet open={task != null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SheetContent side="right" className="w-full sm:w-[420px] md:w-[480px] overflow-y-auto p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>
             {task?.title ?? ''}
           </SheetTitle>
         </SheetHeader>
-        <div className="px-6 py-4">
+        <div className="px-[var(--space-4)] py-[var(--space-3)]">
 
         {task && (
           // `key` is load-bearing, not a React-list formality. The sheet stays

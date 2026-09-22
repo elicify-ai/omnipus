@@ -31,18 +31,18 @@
   --fc-neutral-text-color: var(--color-muted);
 
   /* Today cell — subtle Forge-Gold tint (not blinding) */
-  --fc-today-bg-color: rgba(212, 175, 55, 0.07);
+  --fc-today-bg-color: color-mix(in srgb, var(--color-accent) 7%, transparent);
 
   /* Now indicator: Forge Gold, NOT FullCalendar's default red (spec M-2 / FR-017) */
   --fc-now-indicator-color: var(--color-accent);
 
   /* Selection / drag highlight */
-  --fc-highlight-color: rgba(212, 175, 55, 0.12);
+  --fc-highlight-color: color-mix(in srgb, var(--color-accent) 12%, transparent);
 
   /* Event border removed — chip BG is the colour signal */
   --fc-event-border-color: transparent;
   --fc-event-bg-color: transparent;
-  --fc-event-text-color: #0a0a0b;
+  --fc-event-text-color: var(--color-primary);
 
   /* List view */
   --fc-list-event-hover-bg-color: var(--color-surface-3);
@@ -58,7 +58,7 @@
 /* ------------------------------------------------------------------ */
 
 .fc {
-  font-family: var(--font-body);
+  font-family: var(--font-family-body);
   color: var(--color-secondary);
 }
 
@@ -95,11 +95,11 @@
 
 .fc .fc-col-header-cell-cushion {
   color: var(--color-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-utility-xs-size);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 6px 4px;
+  letter-spacing: var(--font-letter-spacing-calendar-label);
+  padding: var(--space-2) var(--space-1);
   text-decoration: none;
 }
 
@@ -117,14 +117,17 @@
   transition: background 0.12s ease;
 }
 
-/* Today cell: gold tint applied via --fc-today-bg-color above */
+/* Today cell: gold tint. --fc-today-bg-color (above) still carries the same
+ * tint for FullCalendar's own internal default styling elsewhere in its
+ * bundled CSS; this explicit override reads the registered token expression
+ * directly rather than through that unregistered custom-property alias. */
 .fc .fc-day-today {
-  background-color: var(--fc-today-bg-color) !important;
+  background-color: color-mix(in srgb, var(--color-accent) 7%, transparent) !important;
 }
 
 /* Out-of-range days (previous/next month overflow) */
 .fc .fc-day-other {
-  background: rgba(255, 255, 255, 0.015) !important;
+  background: color-mix(in srgb, var(--color-surface-paper) 1.5%, transparent) !important;
 }
 
 .fc .fc-day-other .fc-daygrid-day-number {
@@ -137,14 +140,14 @@
   display: flex;
   flex-direction: row;
   align-items: center;
-  padding: 2px 4px;
+  padding: var(--space-0-5) var(--space-1);
   min-height: 28px;
 }
 
 .fc .fc-daygrid-day-number,
 .fc .fc-daygrid-day-top a {
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
   text-decoration: none;
 }
 
@@ -166,13 +169,13 @@
   justify-content: center;
   min-width: 24px;
   min-height: 24px;
-  padding: 0 6px;
+  padding: var(--space-0) var(--space-2);
   border-radius: 9999px;
   background-color: var(--color-accent);
-  color: #0a0a0b;
-  font-size: 0.75rem;
-  font-weight: 700;
-  font-family: var(--font-body);
+  color: var(--color-primary);
+  font-size: var(--type-utility-xs-size);
+  font-weight: var(--font-weight-bold);
+  font-family: var(--font-family-body);
 }
 
 .fc-sovereign-day-number {
@@ -184,8 +187,8 @@
   padding: 0 4px;
   border-radius: 9999px;
   color: var(--color-muted);
-  font-size: 0.75rem;
-  font-family: var(--font-body);
+  font-size: var(--type-utility-xs-size);
+  font-family: var(--font-family-body);
 }
 
 /* ---------------------------------------------------------------------------
@@ -201,7 +204,7 @@
 
 .fc .fc-daygrid-day:not(.fc-day-other):hover,
 .fc .fc-daygrid-day:not(.fc-day-other):focus-within {
-  background-color: rgba(212, 175, 55, 0.05);
+  background-color: color-mix(in srgb, var(--color-accent) 5%, transparent);
 }
 
 /* Faint "+" in the bottom-right corner of a hovered day cell */
@@ -211,12 +214,12 @@
   position: absolute;
   bottom: 4px;
   right: 6px;
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--type-caption-size);
+  font-weight: var(--font-weight-semibold);
   color: var(--color-accent);
   opacity: 0.45;
   pointer-events: none;
-  line-height: 1;
+  line-height: var(--font-line-height-none);
 }
 
 .fc .fc-daygrid-day-bg {
@@ -235,7 +238,7 @@
 }
 
 .fc .fc-daygrid-event {
-  margin: 1px 2px;
+  margin: var(--border-width-hairline) var(--space-0-5);
   border-radius: 4px;
 }
 
@@ -274,13 +277,13 @@
 
 .fc .fc-timegrid-slot-minor {
   border-top-style: dotted;
-  border-color: rgba(255, 255, 255, 0.04);
+  border-color: color-mix(in srgb, var(--color-surface-paper) 4%, transparent);
 }
 
 .fc .fc-timegrid-slot-label-cushion {
-  font-size: 0.7rem;
+  font-size: var(--type-caption-size);
   color: var(--color-muted);
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
 }
 
 /* Now indicator line */
@@ -305,17 +308,17 @@
   justify-content: flex-end;
   width: 100%;
   height: 2px;
-  background-color: var(--fc-now-indicator-color);
+  background-color: var(--color-accent);
 }
 
 .fc-sovereign-now-marker-time {
   flex-shrink: 0;
-  margin-left: 6px;
+  margin-left: var(--space-2);
   padding: 0 4px;
-  font-size: 0.65rem;
-  font-weight: 600;
-  line-height: 1;
-  color: var(--fc-now-indicator-color);
+  font-size: var(--type-caption-size);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--font-line-height-none);
+  color: var(--color-accent);
   background: var(--color-surface-0);
   white-space: nowrap;
 }
@@ -375,9 +378,9 @@
 .fc .fc-list-day th {
   background: var(--color-surface-2);
   color: var(--color-muted);
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: var(--type-utility-xs-size);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--font-letter-spacing-calendar-label);
   text-transform: uppercase;
   border-color: var(--color-border);
 }
@@ -393,11 +396,11 @@
 
 .fc .fc-list-event-time {
   color: var(--color-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-utility-xs-size);
 }
 
 .fc .fc-list-event:hover td {
-  background: var(--fc-list-event-hover-bg-color);
+  background: var(--color-surface-3);
   cursor: pointer;
 }
 
@@ -408,8 +411,8 @@
 
 .fc .fc-list-empty-cushion {
   color: var(--color-muted);
-  font-size: 0.875rem;
-  font-family: var(--font-body);
+  font-size: var(--type-body-compact-size);
+  font-family: var(--font-family-body);
 }
 
 /* ------------------------------------------------------------------ */
@@ -425,7 +428,7 @@
   background: var(--color-surface-2) !important;
   border: 1px solid var(--color-border) !important;
   border-radius: 6px !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5) !important;
+  box-shadow: var(--elevation-overlay) !important;
   z-index: 200;
 }
 
@@ -435,8 +438,8 @@
   border-radius: 6px 6px 0 0 !important;
   border-bottom: 1px solid var(--color-border) !important;
   padding: 4px 8px !important;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-utility-xs-size);
+  font-weight: var(--font-weight-semibold);
 }
 
 .fc .fc-popover-title {
@@ -454,33 +457,37 @@
 }
 
 .fc .fc-popover-body {
-  padding: 6px 8px !important;
+  padding: var(--space-2) var(--space-2) !important;
   background: var(--color-surface-2) !important;
   border-radius: 0 0 6px 6px !important;
 }
 
 /* Events inside the popover use the same chip renderer */
 .fc .fc-popover-body .fc-daygrid-event {
-  margin: 2px 0;
+  margin: var(--space-0-5) var(--space-0);
 }
 
 /* "more" link that opens the popover */
 .fc .fc-daygrid-more-link {
   color: var(--color-accent) !important;
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-caption-size);
+  font-weight: var(--font-weight-semibold);
 }
 
 .fc .fc-daygrid-more-link:hover {
-  color: var(--color-accent-hover, #c49e2f) !important;
+  color: var(--color-accent-hover) !important;
 }
 
 /* ------------------------------------------------------------------ */
 /* Selection highlight (dateClick / slot-select)                       */
 /* ------------------------------------------------------------------ */
 
+/* --fc-highlight-color (top of file) still carries the same tint for
+ * FullCalendar's own internal default styling elsewhere; this explicit
+ * override reads the registered token expression directly rather than
+ * through that unregistered custom-property alias. */
 .fc .fc-highlight {
-  background: var(--fc-highlight-color) !important;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
   border-radius: 4px;
 }
 
@@ -490,7 +497,7 @@
 
 .fc .fc-event.fc-event-mirror {
   opacity: 0.6;
-  background: rgba(212, 175, 55, 0.25) !important;
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent) !important;
   border: 1px dashed var(--color-accent) !important;
 }
 
@@ -543,20 +550,20 @@
 
 @media (max-width: 640px) {
   .fc .fc-col-header-cell-cushion {
-    font-size: 0.65rem;
-    letter-spacing: 0;
-    padding: 4px 2px;
+    font-size: var(--type-caption-size);
+    letter-spacing: var(--font-letter-spacing-normal);
+    padding: var(--space-1) var(--space-0-5);
   }
 
   .fc .fc-daygrid-day-number,
   .fc .fc-sovereign-day-number,
   .fc .fc-sovereign-today-pill {
-    font-size: 0.65rem;
+    font-size: var(--type-caption-size);
     min-width: 20px;
     min-height: 20px;
   }
 
   .fc-sovereign-chip span {
-    font-size: 0.6rem;
+    font-size: var(--type-caption-size);
   }
 }

@@ -1,0 +1,2960 @@
+{
+  "summary": {
+    "totalDistinctValues": 195,
+    "totalItems": 2171,
+    "totalFiles": 258,
+    "groupTotals": {
+      "byDistinctValue": {
+        "IDENTICAL": 12,
+        "NORMALIZED": 163,
+        "NEEDS-DECISION": 20
+      },
+      "byItemCount": {
+        "IDENTICAL": 20,
+        "NORMALIZED": 2111,
+        "NEEDS-DECISION": 40
+      }
+    },
+    "patternCounts": {
+      "tailwind-fraction-utility": 145,
+      "variant-prefixed-tailwind-fraction-utility": 11,
+      "raw-css-declaration": 11,
+      "safe-area-env-fallback": 7,
+      "arbitrary-bracket-px": 6,
+      "negative-tailwind-fraction-utility": 6,
+      "unregistered-custom-property-calc": 4,
+      "tailwind-px-suffix-utility": 3,
+      "negative-1px-utility (verify: no negative hairline)": 1,
+      "arbitrary-bracket-rem": 1
+    }
+  },
+  "rows": [
+    {
+      "value": "gap-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 160,
+      "fileCount": 160,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 110,
+      "fileCount": 110,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 105,
+      "fileCount": 105,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 93,
+      "fileCount": 93,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 73,
+      "fileCount": 73,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 73,
+      "fileCount": 73,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 70,
+      "fileCount": 70,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 65,
+      "fileCount": 65,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 59,
+      "fileCount": 59,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 55,
+      "fileCount": 55,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 50,
+      "fileCount": 50,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 46,
+      "fileCount": 46,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 44,
+      "fileCount": 44,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 38,
+      "fileCount": 38,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 37,
+      "fileCount": 37,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 36,
+      "fileCount": 36,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 36,
+      "fileCount": 36,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 34,
+      "fileCount": 34,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 33,
+      "fileCount": 33,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 32,
+      "fileCount": 32,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-2.5",
+      "currentPx": 8.75,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 31,
+      "fileCount": 31,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 31,
+      "fileCount": 31,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 31,
+      "fileCount": 31,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 31,
+      "fileCount": 31,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 27,
+      "fileCount": 27,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 27,
+      "fileCount": 27,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 24,
+      "fileCount": 24,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 23,
+      "fileCount": 23,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 21,
+      "fileCount": 21,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 21,
+      "fileCount": 21,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 21,
+      "fileCount": 21,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 19,
+      "fileCount": 19,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 18,
+      "fileCount": 18,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 18,
+      "fileCount": 18,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pt-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 16,
+      "fileCount": 16,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 16,
+      "fileCount": 16,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pt-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 15,
+      "fileCount": 15,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 15,
+      "fileCount": 15,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "ml-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "ml-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 15,
+      "fileCount": 15,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 15,
+      "fileCount": 15,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 14,
+      "fileCount": 14,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "ml-[3px]",
+      "currentPx": 3,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NEEDS-DECISION",
+      "replacement": "ml-[var(--space-0-5)]",
+      "pattern": "arbitrary-bracket-px",
+      "reason": "3px is exactly equidistant between two scale steps.",
+      "itemCount": 13,
+      "fileCount": 13,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "space-y-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 12,
+      "fileCount": 12,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-2.5",
+      "currentPx": 8.75,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 12,
+      "fileCount": 12,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 12,
+      "fileCount": 12,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-14",
+      "currentPx": 49,
+      "tokenPx": 48,
+      "token": "--space-7",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-7)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 12,
+      "fileCount": 12,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 11,
+      "fileCount": 11,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 10,
+      "fileCount": 10,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-2.5",
+      "currentPx": 8.75,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 10,
+      "fileCount": 10,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 10,
+      "fileCount": 10,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pb-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "pb-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 9,
+      "fileCount": 9,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "my-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "my-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 9,
+      "fileCount": 9,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pt-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 8,
+      "fileCount": 8,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 8,
+      "fileCount": 8,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 8,
+      "fileCount": 8,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 8,
+      "fileCount": 8,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pb-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "pb-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 7,
+      "fileCount": 7,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-px",
+      "currentPx": 1,
+      "tokenPx": 1,
+      "token": "--border-width-hairline",
+      "group": "IDENTICAL",
+      "replacement": "mt-[var(--border-width-hairline)]",
+      "pattern": "tailwind-px-suffix-utility",
+      "reason": "Renders 1px today; D10 hairline/1px-border exception applies verbatim — map onto the already-registered 1px token instead of the 4/8 scale.",
+      "itemCount": 7,
+      "fileCount": 7,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "mb-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 7,
+      "fileCount": 7,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "ml-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "ml-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 7,
+      "fileCount": 7,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "my-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "my-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 7,
+      "fileCount": 7,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "-mx-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "VERIFY FIRST — proposed `-mx-[var(--space-1)]` (Tailwind v4 negative-arbitrary-value var() support unconfirmed); fallback `mx-[calc(var(--space-1)*-1)]`",
+      "pattern": "negative-tailwind-fraction-utility",
+      "reason": "Negative-margin utility: numeric snap is sound, but the codemod must confirm Tailwind v4 compiles a negated var() arbitrary value before applying at scale.",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mr-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mr-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pb-[env(safe-area-inset-bottom)]",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "env(safe-area-inset-*, var(--space-N)) — pick the closed-scale fallback token per surface (central review).",
+      "pattern": "safe-area-env-fallback",
+      "reason": "No fallback at all today; needs a chosen closed-scale fallback value (design decision, not purely mechanical).",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/missing-safe-area-fallback"
+      ]
+    },
+    {
+      "value": "ml-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "ml-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-9",
+      "currentPx": 31.5,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "p-2.5",
+      "currentPx": 8.75,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "p-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "my-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "my-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 6,
+      "fileCount": 6,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pt-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 5,
+      "fileCount": 5,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 5,
+      "fileCount": 5,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pt-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 5,
+      "fileCount": 5,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "ml-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "ml-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 5,
+      "fileCount": 5,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 5,
+      "fileCount": 5,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-10",
+      "currentPx": 35,
+      "tokenPx": 40,
+      "token": "--space-6",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-6)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 4,
+      "fileCount": 4,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 4,
+      "fileCount": 4,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pb-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "pb-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 4,
+      "fileCount": 4,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 4,
+      "fileCount": 4,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-16",
+      "currentPx": 56,
+      "tokenPx": 64,
+      "token": "--space-8",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-8)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 4,
+      "fileCount": 4,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 4,
+      "fileCount": 4,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pt-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "max-sm:pointer-coarse:gap-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "max-sm:pointer-coarse:gap-[var(--space-4)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pb-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pb-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mr-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mr-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-2.5",
+      "currentPx": 8.75,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-9",
+      "currentPx": 31.5,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pt-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "ml-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "ml-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-y-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "gap-y-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "sm:space-x-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "sm:space-x-[var(--space-2)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-x-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "gap-x-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mr-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "mr-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 3,
+      "fileCount": 3,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pointer-coarse:px-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "pointer-coarse:px-[var(--space-2-5)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding-top: max(0.75rem, env(safe-area-inset-top))",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "VERIFY BEHAVIOR CHANGE — ledger suggests env(safe-area-inset-*, <token>), but this already uses max(<fixed>, env(...)) which enforces a floor even when the inset is 0; switching to env(prop, fallback) form would drop that floor on non-notch devices. Recommend keeping max(var(--space-N), env(...)) instead of following the ledger text literally.",
+      "pattern": "safe-area-env-fallback",
+      "reason": "Ledger replacement text (env(prop, fallback)) is not behavior-preserving here: max() guarantees a minimum on devices with zero inset; env()'s fallback only fires when env() itself is unsupported.",
+      "itemCount": 2,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/missing-safe-area-fallback",
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-[1px]",
+      "currentPx": 1,
+      "tokenPx": 1,
+      "token": "--border-width-hairline",
+      "group": "IDENTICAL",
+      "replacement": "mt-[var(--border-width-hairline)]",
+      "pattern": "arbitrary-bracket-px",
+      "reason": "Renders 1px today; D10 hairline exception applies verbatim.",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "mx-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mx-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-x-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "gap-x-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pb-[max(0.5rem,env(safe-area-inset-bottom))]",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "VERIFY BEHAVIOR CHANGE — ledger suggests env(safe-area-inset-*, <token>), but this already uses max(<fixed>, env(...)) which enforces a floor even when the inset is 0; switching to env(prop, fallback) form would drop that floor on non-notch devices. Recommend keeping max(var(--space-N), env(...)) instead of following the ledger text literally.",
+      "pattern": "safe-area-env-fallback",
+      "reason": "Ledger replacement text (env(prop, fallback)) is not behavior-preserving here: max() guarantees a minimum on devices with zero inset; env()'s fallback only fires when env() itself is unsupported.",
+      "itemCount": 2,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/missing-safe-area-fallback",
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-px",
+      "currentPx": 1,
+      "tokenPx": 1,
+      "token": "--border-width-hairline",
+      "group": "IDENTICAL",
+      "replacement": "py-[var(--border-width-hairline)]",
+      "pattern": "tailwind-px-suffix-utility",
+      "reason": "Renders 1px today; D10 hairline/1px-border exception applies verbatim — map onto the already-registered 1px token instead of the 4/8 scale.",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "pl-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-y-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "gap-y-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-2.5",
+      "currentPx": 8.75,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-x-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "gap-x-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "sm:px-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "sm:px-[var(--space-5)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-x-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "gap-x-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-10",
+      "currentPx": 35,
+      "tokenPx": 40,
+      "token": "--space-6",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-6)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mx-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "mx-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "ml-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "ml-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-y-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "gap-y-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "-m-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "VERIFY FIRST — proposed `-m-[var(--space-1)]` (Tailwind v4 negative-arbitrary-value var() support unconfirmed); fallback `m-[calc(var(--space-1)*-1)]`",
+      "pattern": "negative-tailwind-fraction-utility",
+      "reason": "Negative-margin utility: numeric snap is sound, but the codemod must confirm Tailwind v4 compiles a negated var() arbitrary value before applying at scale.",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-20",
+      "currentPx": 70,
+      "tokenPx": 64,
+      "token": "--space-8",
+      "group": "NEEDS-DECISION",
+      "replacement": "py-[var(--space-8)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "70px is 6px from the nearest token (--space-8 = 64px) — outside the 2px render-alike band; the token scale has no intermediate step here.",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "space-y-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 2,
+      "fileCount": 2,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-[18px]",
+      "currentPx": 18,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-3)]",
+      "pattern": "arbitrary-bracket-px",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "py-[1px]",
+      "currentPx": 1,
+      "tokenPx": 1,
+      "token": "--border-width-hairline",
+      "group": "IDENTICAL",
+      "replacement": "py-[var(--border-width-hairline)]",
+      "pattern": "arbitrary-bracket-px",
+      "reason": "Renders 1px today; D10 hairline exception applies verbatim.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "padding: 4px 2px",
+      "currentPx": "4/2",
+      "tokenPx": "4/2",
+      "token": "--space-1 + --space-0-5",
+      "group": "IDENTICAL",
+      "replacement": "padding: var(--space-1) var(--space-0-5)",
+      "pattern": "raw-css-declaration",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "mt-3.5",
+      "currentPx": 12.25,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-16",
+      "currentPx": 56,
+      "tokenPx": 64,
+      "token": "--space-8",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-8)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "-mt-1",
+      "currentPx": 3.5,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "VERIFY FIRST — proposed `-mt-[var(--space-1)]` (Tailwind v4 negative-arbitrary-value var() support unconfirmed); fallback `mt-[calc(var(--space-1)*-1)]`",
+      "pattern": "negative-tailwind-fraction-utility",
+      "reason": "Negative-margin utility: numeric snap is sound, but the codemod must confirm Tailwind v4 compiles a negated var() arbitrary value before applying at scale.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-10",
+      "currentPx": 35,
+      "tokenPx": 40,
+      "token": "--space-6",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-6)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding: 0 6px",
+      "currentPx": "0/6",
+      "tokenPx": "0/4",
+      "token": "--space-0 + --space-1",
+      "group": "NEEDS-DECISION",
+      "replacement": "padding: var(--space-0) var(--space-1)",
+      "pattern": "raw-css-declaration",
+      "reason": "Per-axis: 0px→--space-0(0px,Δ0); 6px→--space-1(4px,Δ2) — at least one axis is outside the 2px band or collapses to zero.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "padding-bottom: env(safe-area-inset-bottom)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "env(safe-area-inset-*, var(--space-N)) — pick the closed-scale fallback token per surface (central review).",
+      "pattern": "safe-area-env-fallback",
+      "reason": "No fallback at all today; needs a chosen closed-scale fallback value (design decision, not purely mechanical).",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/missing-safe-area-fallback"
+      ]
+    },
+    {
+      "value": "padding-left: calc(var(--file-tree-view-indent-depth-px) * 1px)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "NO SOUND TOKEN MAPPING — value is computed (depth * 1px), not a constant; the ledger replacement text (\"registered spacing token\" / \"closed-scale value\") cannot literally apply to a per-instance runtime multiplier.",
+      "pattern": "unregistered-custom-property-calc",
+      "reason": "This is a tree-depth indent multiplier (calc(var(--…-indent-depth-px) * 1px)), not a single spacing value — no constant token can replace it; needs either a registered indent-step token multiplied per depth, or an explicit scope exception.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/invalid-var"
+      ]
+    },
+    {
+      "value": "-space-x-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "VERIFY FIRST — proposed `-space-x-[var(--space-2)]` (Tailwind v4 negative-arbitrary-value var() support unconfirmed); fallback `space-x-[calc(var(--space-2)*-1)]`",
+      "pattern": "negative-tailwind-fraction-utility",
+      "reason": "Negative-margin utility: numeric snap is sound, but the codemod must confirm Tailwind v4 compiles a negated var() arbitrary value before applying at scale.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-12",
+      "currentPx": 42,
+      "tokenPx": 48,
+      "token": "--space-7",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-7)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "-mb-px",
+      "currentPx": 1,
+      "tokenPx": 1,
+      "token": "--border-width-hairline",
+      "group": "IDENTICAL",
+      "replacement": "NOT RECOMMENDED — keep as literal 1px (hairline exception); do not negate a hairline",
+      "pattern": "negative-1px-utility (verify: no negative hairline)",
+      "reason": "Renders 1px today; D10 hairline/1px-border exception applies verbatim — map onto the already-registered 1px token instead of the 4/8 scale.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "space-y-2.5",
+      "currentPx": 8.75,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "space-y-[var(--space-2)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding-left: calc(var(--knowledge-outline-indent-depth-px) * 1px)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "NO SOUND TOKEN MAPPING — value is computed (depth * 1px), not a constant; the ledger replacement text (\"registered spacing token\" / \"closed-scale value\") cannot literally apply to a per-instance runtime multiplier.",
+      "pattern": "unregistered-custom-property-calc",
+      "reason": "This is a tree-depth indent multiplier (calc(var(--…-indent-depth-px) * 1px)), not a single spacing value — no constant token can replace it; needs either a registered indent-step token multiplied per depth, or an explicit scope exception.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/invalid-var"
+      ]
+    },
+    {
+      "value": "mx-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "mx-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap: 3px",
+      "currentPx": "3",
+      "tokenPx": "2",
+      "token": "--space-0-5",
+      "group": "NEEDS-DECISION",
+      "replacement": "gap: var(--space-0-5)",
+      "pattern": "raw-css-declaration",
+      "reason": "Per-axis: 3px→--space-0-5(2px,Δ1) — at least one axis is outside the 2px band or collapses to zero.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "pl-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding-right: env(safe-area-inset-right)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "env(safe-area-inset-*, var(--space-N)) — pick the closed-scale fallback token per surface (central review).",
+      "pattern": "safe-area-env-fallback",
+      "reason": "No fallback at all today; needs a chosen closed-scale fallback value (design decision, not purely mechanical).",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/missing-safe-area-fallback"
+      ]
+    },
+    {
+      "value": "mt-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "[&:has(*)]:pb-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "[&:has(*)]:pb-[var(--space-2)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding-left: calc(var(--sidebar-indent-depth-px) * 1px)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "NO SOUND TOKEN MAPPING — value is computed (depth * 1px), not a constant; the ledger replacement text (\"registered spacing token\" / \"closed-scale value\") cannot literally apply to a per-instance runtime multiplier.",
+      "pattern": "unregistered-custom-property-calc",
+      "reason": "This is a tree-depth indent multiplier (calc(var(--…-indent-depth-px) * 1px)), not a single spacing value — no constant token can replace it; needs either a registered indent-step token multiplied per depth, or an explicit scope exception.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/invalid-var"
+      ]
+    },
+    {
+      "value": "pl-6",
+      "currentPx": 21,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-4)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding: 6px 4px",
+      "currentPx": "6/4",
+      "tokenPx": "4/4",
+      "token": "--space-1 + --space-1",
+      "group": "NEEDS-DECISION",
+      "replacement": "padding: var(--space-1) var(--space-1)",
+      "pattern": "raw-css-declaration",
+      "reason": "Per-axis: 6px→--space-1(4px,Δ2); 4px→--space-1(4px,Δ0) — at least one axis is outside the 2px band or collapses to zero.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "padding: 0.75rem 1rem",
+      "currentPx": "10.5/14",
+      "tokenPx": "12/12",
+      "token": "--space-2-5 + --space-2-5",
+      "group": "NEEDS-DECISION",
+      "replacement": "padding: var(--space-2-5) var(--space-2-5)",
+      "pattern": "raw-css-declaration",
+      "reason": "Per-axis: 10.5px→--space-2-5(12px,Δ1.5); 14px→--space-2-5(12px,Δ2) — at least one axis is outside the 2px band or collapses to zero.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "my-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "my-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-12",
+      "currentPx": 42,
+      "tokenPx": 48,
+      "token": "--space-7",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-7)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding-top: env(safe-area-inset-top)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "env(safe-area-inset-*, var(--space-N)) — pick the closed-scale fallback token per surface (central review).",
+      "pattern": "safe-area-env-fallback",
+      "reason": "No fallback at all today; needs a chosen closed-scale fallback value (design decision, not purely mechanical).",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/missing-safe-area-fallback"
+      ]
+    },
+    {
+      "value": "ml-[22px]",
+      "currentPx": 22,
+      "tokenPx": 24,
+      "token": "--space-4",
+      "group": "NORMALIZED",
+      "replacement": "ml-[var(--space-4)]",
+      "pattern": "arbitrary-bracket-px",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "gap-16",
+      "currentPx": 56,
+      "tokenPx": 64,
+      "token": "--space-8",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-8)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mx-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "mx-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-[11.75rem]",
+      "currentPx": 164.5,
+      "tokenPx": 64,
+      "token": "--space-8",
+      "group": "NEEDS-DECISION",
+      "replacement": "NO SOUND TOKEN MAPPING — needs design decision (see reason)",
+      "pattern": "arbitrary-bracket-rem",
+      "reason": "Arbitrary rem value (11.75rem = 164.5px at 14px root) is far off the 4/8 scale; no sound snap exists — this looks like an intentional bespoke measurement (indent/offset), not a spacing gap.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "py-3.5",
+      "currentPx": 12.25,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "py-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "focus:py-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "focus:py-[var(--space-2)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-[2px]",
+      "currentPx": 2,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "IDENTICAL",
+      "replacement": "mt-[var(--space-0-5)]",
+      "pattern": "arbitrary-bracket-px",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "margin: 2px 0",
+      "currentPx": "2/0",
+      "tokenPx": "2/0",
+      "token": "--space-0-5 + --space-0",
+      "group": "IDENTICAL",
+      "replacement": "margin: var(--space-0-5) var(--space-0)",
+      "pattern": "raw-css-declaration",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "pt-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "pt-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mt-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "mt-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "my-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "my-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pl-3.5",
+      "currentPx": 12.25,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "pl-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mb-5",
+      "currentPx": 17.5,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "mb-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pr-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "pr-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "margin: 1px 2px",
+      "currentPx": "1/2",
+      "tokenPx": "1/2",
+      "token": "--border-width-hairline + --space-0-5",
+      "group": "IDENTICAL",
+      "replacement": "margin: var(--border-width-hairline) var(--space-0-5)",
+      "pattern": "raw-css-declaration",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "focus:px-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "focus:px-[var(--space-2-5)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-x-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "gap-x-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding: 6px 8px",
+      "currentPx": "6/8",
+      "tokenPx": "4/8",
+      "token": "--space-1 + --space-2",
+      "group": "NEEDS-DECISION",
+      "replacement": "padding: var(--space-1) var(--space-2)",
+      "pattern": "raw-css-declaration",
+      "reason": "Per-axis: 6px→--space-1(4px,Δ2); 8px→--space-2(8px,Δ0) — at least one axis is outside the 2px band or collapses to zero.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "-ml-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "VERIFY FIRST — proposed `-ml-[var(--space-2)]` (Tailwind v4 negative-arbitrary-value var() support unconfirmed); fallback `ml-[calc(var(--space-2)*-1)]`",
+      "pattern": "negative-tailwind-fraction-utility",
+      "reason": "Negative-margin utility: numeric snap is sound, but the codemod must confirm Tailwind v4 compiles a negated var() arbitrary value before applying at scale.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding-left: env(safe-area-inset-left)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "env(safe-area-inset-*, var(--space-N)) — pick the closed-scale fallback token per surface (central review).",
+      "pattern": "safe-area-env-fallback",
+      "reason": "No fallback at all today; needs a chosen closed-scale fallback value (design decision, not purely mechanical).",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/missing-safe-area-fallback"
+      ]
+    },
+    {
+      "value": "gap-px",
+      "currentPx": 1,
+      "tokenPx": 1,
+      "token": "--border-width-hairline",
+      "group": "IDENTICAL",
+      "replacement": "gap-[var(--border-width-hairline)]",
+      "pattern": "tailwind-px-suffix-utility",
+      "reason": "Renders 1px today; D10 hairline/1px-border exception applies verbatim — map onto the already-registered 1px token instead of the 4/8 scale.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "gap-3.5",
+      "currentPx": 12.25,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "padding-left: calc(var(--search-modal-indent-depth-px) * 1px)",
+      "currentPx": null,
+      "tokenPx": null,
+      "token": null,
+      "group": "NEEDS-DECISION",
+      "replacement": "NO SOUND TOKEN MAPPING — value is computed (depth * 1px), not a constant; the ledger replacement text (\"registered spacing token\" / \"closed-scale value\") cannot literally apply to a per-instance runtime multiplier.",
+      "pattern": "unregistered-custom-property-calc",
+      "reason": "This is a tree-depth indent multiplier (calc(var(--…-indent-depth-px) * 1px)), not a single spacing value — no constant token can replace it; needs either a registered indent-step token multiplied per depth, or an explicit scope exception.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/invalid-var"
+      ]
+    },
+    {
+      "value": "padding: 1px 4px",
+      "currentPx": "1/4",
+      "tokenPx": "1/4",
+      "token": "--border-width-hairline + --space-1",
+      "group": "IDENTICAL",
+      "replacement": "padding: var(--border-width-hairline) var(--space-1)",
+      "pattern": "raw-css-declaration",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "padding: 2px 4px",
+      "currentPx": "2/4",
+      "tokenPx": "2/4",
+      "token": "--space-0-5 + --space-1",
+      "group": "IDENTICAL",
+      "replacement": "padding: var(--space-0-5) var(--space-1)",
+      "pattern": "raw-css-declaration",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "pb-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "pb-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "sm:ml-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "sm:ml-[var(--space-2)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "focus:p-2",
+      "currentPx": 7,
+      "tokenPx": 8,
+      "token": "--space-2",
+      "group": "NORMALIZED",
+      "replacement": "focus:p-[var(--space-2)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "px-3.5",
+      "currentPx": 12.25,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "px-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mx-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "mx-[var(--space-0-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-y-3",
+      "currentPx": 10.5,
+      "tokenPx": 12,
+      "token": "--space-2-5",
+      "group": "NORMALIZED",
+      "replacement": "gap-y-[var(--space-2-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "-mt-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "VERIFY FIRST — proposed `-mt-[var(--space-0-5)]` (Tailwind v4 negative-arbitrary-value var() support unconfirmed); fallback `mt-[calc(var(--space-0-5)*-1)]`",
+      "pattern": "negative-tailwind-fraction-utility",
+      "reason": "Negative-margin utility: numeric snap is sound, but the codemod must confirm Tailwind v4 compiles a negated var() arbitrary value before applying at scale.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mr-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "mr-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mx-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "mx-[var(--space-3)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "pointer-coarse:px-4",
+      "currentPx": 14,
+      "tokenPx": 16,
+      "token": "--space-3",
+      "group": "NORMALIZED",
+      "replacement": "pointer-coarse:px-[var(--space-3)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "gap-12",
+      "currentPx": 42,
+      "tokenPx": 48,
+      "token": "--space-7",
+      "group": "NORMALIZED",
+      "replacement": "gap-[var(--space-7)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "mx-8",
+      "currentPx": 28,
+      "tokenPx": 32,
+      "token": "--space-5",
+      "group": "NORMALIZED",
+      "replacement": "mx-[var(--space-5)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "margin-left: 6px",
+      "currentPx": "6",
+      "tokenPx": "4",
+      "token": "--space-1",
+      "group": "NEEDS-DECISION",
+      "replacement": "margin-left: var(--space-1)",
+      "pattern": "raw-css-declaration",
+      "reason": "Per-axis: 6px→--space-1(4px,Δ2) — at least one axis is outside the 2px band or collapses to zero.",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/off-scale"
+      ]
+    },
+    {
+      "value": "my-1.5",
+      "currentPx": 5.25,
+      "tokenPx": 4,
+      "token": "--space-1",
+      "group": "NORMALIZED",
+      "replacement": "my-[var(--space-1)]",
+      "pattern": "tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    },
+    {
+      "value": "[&_p]:my-0.5",
+      "currentPx": 1.75,
+      "tokenPx": 2,
+      "token": "--space-0-5",
+      "group": "NORMALIZED",
+      "replacement": "[&_p]:my-[var(--space-0-5)]",
+      "pattern": "variant-prefixed-tailwind-fraction-utility",
+      "reason": "",
+      "itemCount": 1,
+      "fileCount": 1,
+      "ruleIds": [
+        "spacing/root-dependent"
+      ]
+    }
+  ]
+}

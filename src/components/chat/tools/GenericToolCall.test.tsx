@@ -491,7 +491,7 @@ describe('GenericToolCall — flat text-line status dot', () => {
     expect(detail?.className).not.toContain('border-t')
   })
 
-  it('the truncated-result banner uses a left accent, not a bordered/backgrounded box (amber text kept)', () => {
+  it('the truncated-result banner uses a left accent, not a bordered/backgrounded box (warning text kept)', () => {
     render(
       <GenericToolCall
         toolName="fs.read"
@@ -504,7 +504,7 @@ describe('GenericToolCall — flat text-line status dot', () => {
     expect(banner.className).toContain('border-l-2')
     expect(banner.className).not.toContain('rounded')
     expect(banner.className).not.toContain('bg-amber-500/10')
-    expect(banner.className).toContain('text-amber-400')
+    expect(banner.className).toContain('text-[var(--color-warning)]')
   })
 
   it('the marshal-error banner uses a left accent, not a bordered/backgrounded box', () => {

@@ -71,12 +71,12 @@ export function PreviewToolHeader({
   )
 
   return (
-    <div data-testid={testId} className="flex items-center gap-2 py-1 font-mono text-xs">
+    <div data-testid={testId} className="flex items-center gap-[var(--space-2)] py-[var(--space-1)] font-mono text-[length:var(--type-utility-xs-size)]">
       {statusConfig.indicator}
       {icon}
       <span className="text-[var(--color-muted)] font-mono">{toolName}</span>
       {label && (
-        <code className="ml-1 text-[var(--color-accent)] font-mono text-[10px] truncate max-w-[280px]">
+        <code className="ml-[var(--space-1)] text-[var(--color-accent)] font-mono text-[length:var(--type-caption-size)] truncate max-w-[280px]">
           {label}
         </code>
       )}
@@ -86,7 +86,7 @@ export function PreviewToolHeader({
           statusConfig.label and discarded it, leaving PreviewToolHeader the
           only row with no status-differentiating text (dot color alone is
           not enough for colorblind users or screen readers — WCAG 1.4.1). */}
-      <span className={cn('shrink-0 text-[var(--color-muted)] font-mono text-[10px]', statusConfig.textClass)}>
+      <span className={cn('shrink-0 text-[var(--color-muted)] font-mono text-[length:var(--type-caption-size)]')}>
         {statusConfig.label}
       </span>
       {trailing && <span className="ml-auto shrink-0">{trailing}</span>}

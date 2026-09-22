@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Warning, Clock, X } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { IconButton } from '@/components/ui/icon-button'
 
 export interface RateLimitIndicatorProps {
   scope: 'agent' | 'channel' | 'global'
@@ -56,18 +57,18 @@ export function RateLimitIndicator({
   return (
     <div
       className={cn(
-        'flex items-start gap-2.5 px-3 py-2.5 rounded-lg border text-xs',
+        'flex items-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border text-[length:var(--type-utility-xs-size)]',
         canRetry
-          ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-400'
-          : 'border-amber-500/30 bg-amber-500/5 text-amber-400',
+          ? 'border-[color-mix(in_srgb,var(--color-success)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-success)_5%,transparent)] text-[var(--color-success)]'
+          : 'border-[color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_5%,transparent)] text-[var(--color-warning)]',
       )}
       role="status"
       aria-live="polite"
     >
       {canRetry ? (
-        <Clock size={13} className="mt-0.5 shrink-0 text-emerald-400" />
+        <Clock size={13} className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-success)]" />
       ) : (
-        <Warning size={13} className="mt-0.5 shrink-0 text-amber-400" weight="fill" />
+        <Warning size={13} className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]" weight="fill" />
       )}
 
       <div className="flex-1 min-w-0">
@@ -76,7 +77,7 @@ export function RateLimitIndicator({
         ) : (
           <>
             <span className="font-medium">{label}</span>
-            <span className="mx-1.5 text-[var(--color-muted)]">—</span>
+            <span className="mx-[var(--space-1)] text-[var(--color-muted)]">—</span>
             <span>
               Retry in{' '}
               <span className="font-mono font-semibold">{formatSeconds(remaining)}</span>
@@ -85,14 +86,15 @@ export function RateLimitIndicator({
         )}
       </div>
 
-      <button tabIndex={0}
-        type="button"
+      <IconButton
+        size="sm"
+        variant="ghost"
         onClick={onDismiss}
-        className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors mt-0.5"
+        className="shrink-0 mt-[var(--space-0-5)]"
         aria-label="Dismiss rate limit notice"
       >
         <X size={12} />
-      </button>
+      </IconButton>
     </div>
   )
 }

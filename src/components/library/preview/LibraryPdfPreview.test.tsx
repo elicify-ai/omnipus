@@ -24,6 +24,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type { PreviewHeaderSlotProvider as PreviewHeaderSlotProviderType } from './previewHeaderSlot'
 
 // Rebound fresh in beforeEach, from the SAME `vi.resetModules()` generation
@@ -1099,29 +1100,44 @@ describe('LibraryPdfPreview — Save', () => {
 
 
 // ── UAT 2026-09-13: D-37 zoom, D-63 signature page default, D-43 dialog width ─
+// Scope extension 2026-09-21 (docs/internal/design/components/
+// zoomable-view.md, D18): the D-37 zoom control now rides the shared
+// `ZoomPill` (`src/components/ui/zoomable-view.tsx`) and its 25%-400%
+// `clampZoomScale` range, in place of the old fixed 50%-200% six-step
+// ladder and its own bespoke pill JSX — both deleted. These assertions were
+// rewritten against `ZoomPill`'s own test ids (`zoomable-view-*`), never
+// against the deleted `library-pdf-zoom-*` ids or `nextPdfZoom`.
 describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
-  it('offers zoom out / reset / zoom in; steps through the fixed ladder; Ctrl+wheel zooms too', async () => {
-    const mod = await import('./LibraryPdfPreview')
-    expect(mod.nextPdfZoom(1, 'in')).toBe(1.25)
-    expect(mod.nextPdfZoom(1, 'out')).toBe(0.75)
-    expect(mod.nextPdfZoom(2, 'in')).toBe(2)
-    expect(mod.nextPdfZoom(0.5, 'out')).toBe(0.5)
-    expect(mod.nextPdfZoom(0.9, 'in')).toBe(1.25) // off-ladder value re-anchors at 100%
-
+  it('offers zoom out / percent menu / zoom in on the shared ZoomPill; Ctrl+wheel zooms too', async () => {
+    const user = userEvent.setup()
     await renderPreview()
     const pages = await screen.findByTestId('library-pdf-pages')
     expect(pages).toHaveAttribute('data-zoom', '1')
-    expect(screen.getByTestId('library-pdf-zoom-reset')).toHaveTextContent('100%')
+    expect(screen.getByTestId('zoomable-view-percent')).toHaveTextContent('100%')
 
-    fireEvent.click(screen.getByTestId('library-pdf-zoom-in'))
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
     expect(pages).toHaveAttribute('data-zoom', '1.25')
-    expect(screen.getByTestId('library-pdf-zoom-reset')).toHaveTextContent('125%')
+    expect(screen.getByTestId('zoomable-view-percent')).toHaveTextContent('125%')
 
-    fireEvent.click(screen.getByTestId('library-pdf-zoom-reset'))
+    // The percent trigger opens a menu offering Fit and 100% — both reset
+    // this reader zoom to 1, since it is a pure multiplier on top of the
+    // already-fitted per-page render (there is no separate "fit" scale to
+    // reach here). Opened with `userEvent`, per the shared ZoomPill's own
+    // precedent (zoomable-view.test.tsx) — Radix's DropdownMenuTrigger opens
+    // on a real pointer-event sequence, which a bare `fireEvent.click` does
+    // not reproduce.
+    await user.click(screen.getByTestId('zoomable-view-percent'))
+    await user.click(await screen.findByTestId('zoomable-view-menu-100'))
     expect(pages).toHaveAttribute('data-zoom', '1')
 
-    fireEvent.click(screen.getByTestId('library-pdf-zoom-out'))
-    expect(pages).toHaveAttribute('data-zoom', '0.75')
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    expect(pages).toHaveAttribute('data-zoom', '1.25')
+    await user.click(screen.getByTestId('zoomable-view-percent'))
+    await user.click(await screen.findByTestId('zoomable-view-menu-fit'))
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-out'))
+    expect(pages).toHaveAttribute('data-zoom', '0.8')
 
     // Ctrl+wheel up = in; a plain wheel is scrolling and must not zoom.
     fireEvent.wheel(pages, { deltaY: -100, ctrlKey: true })
@@ -1129,10 +1145,35 @@ describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
     fireEvent.wheel(pages, { deltaY: -100 })
     expect(pages).toHaveAttribute('data-zoom', '1')
 
-    // The ends of the ladder disable the corresponding button.
-    for (let i = 0; i < 6; i++) fireEvent.click(screen.getByTestId('library-pdf-zoom-in'))
-    expect(pages).toHaveAttribute('data-zoom', '2')
-    expect(screen.getByTestId('library-pdf-zoom-in')).toBeDisabled()
+    // The shared range's ceiling (400%) disables the zoom-in button.
+    for (let i = 0; i < 20; i++) fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    expect(pages).toHaveAttribute('data-zoom', '4')
+    expect(screen.getByTestId('zoomable-view-zoom-in')).toBeDisabled()
+
+    // The shared range's floor (25%) disables the zoom-out button.
+    for (let i = 0; i < 20; i++) fireEvent.click(screen.getByTestId('zoomable-view-zoom-out'))
+    expect(pages).toHaveAttribute('data-zoom', '0.25')
+    expect(screen.getByTestId('zoomable-view-zoom-out')).toBeDisabled()
+  })
+
+  it('binds the shared +, -, 0, 1 keyboard shortcuts to the pages container', async () => {
+    await renderPreview()
+    const pages = await screen.findByTestId('library-pdf-pages')
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.keyDown(pages, { key: '+' })
+    expect(pages).toHaveAttribute('data-zoom', '1.25')
+
+    fireEvent.keyDown(pages, { key: '-' })
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.keyDown(pages, { key: '+' })
+    fireEvent.keyDown(pages, { key: '0' })
+    expect(pages).toHaveAttribute('data-zoom', '1')
+
+    fireEvent.keyDown(pages, { key: '-' })
+    fireEvent.keyDown(pages, { key: '1' })
+    expect(pages).toHaveAttribute('data-zoom', '1')
   })
 
   // Claude review 2026-09-14, cut-list: the zoom gesture called preventDefault
@@ -1176,6 +1217,108 @@ describe('LibraryPdfPreview — D-37 the reader can magnify a page', () => {
     } finally {
       addEventListenerSpy.mockRestore()
     }
+  })
+})
+
+// ── Sharp zoom (2026-09-22): the canvas backing store follows the reader's
+// zoom, capped for memory ─────────────────────────────────────────────────
+// Before this, a page's canvas was drawn ONCE at fit-width x device pixel
+// ratio and the D-37 zoom above was pure CSS `zoom` on the already-drawn
+// bitmap — text softened progressively above 100%. `targetRasterScale` is
+// the pure function deciding how many device pixels per CSS pixel a page's
+// canvas should carry for a given zoom; these tests prove it (a) tracks
+// zoom 1:1 once zoom exceeds 100%, (b) is a no-op at/below 100% (zero
+// regression from the pre-existing baseline), (c) is capped, and (d) the
+// component actually applies it to a real canvas, not just computes it.
+describe('LibraryPdfPreview — sharp zoom: the canvas backing store follows zoom, capped', () => {
+  it('targetRasterScale is unchanged (deviceRatio) at and below 100% zoom, and grows 1:1 with zoom until the cap engages', async () => {
+    const { targetRasterScale } = await import('./LibraryPdfPreview')
+    // A representative fit-width viewport.
+    const fitW = 768
+    const fitH = 1024
+    expect(targetRasterScale(fitW, fitH, 1, 2)).toBe(2)
+    expect(targetRasterScale(fitW, fitH, 0.25, 2)).toBe(2)
+    // 200% is still comfortably under either cap: exact 1:1 tracking.
+    expect(targetRasterScale(fitW, fitH, 2, 2)).toBe(4)
+    // 400% on a 2x display is where the area cap engages even for this
+    // ordinary page size — less than the naive 8, but still sharper than
+    // the flat `deviceRatio` (2) every zoom level rendered at before this
+    // fix, and sharper again than the untouched 200% case above.
+    const at400 = targetRasterScale(fitW, fitH, 4, 2)
+    expect(at400).toBeLessThan(8)
+    expect(at400).toBeGreaterThan(4)
+  })
+
+  it('caps the backing store so a large page at 400% zoom on a 2x display never exceeds the dimension/area ceiling', async () => {
+    const { targetRasterScale, MAX_CANVAS_DIMENSION_PX, MAX_CANVAS_PIXELS } = await import('./LibraryPdfPreview')
+    // A wide pane on a large monitor. The NAIVE (uncapped) backing store
+    // here would be 1600*2*4 = 12800px wide and 2064*2*4 = 16512px tall —
+    // both already past MAX_CANVAS_DIMENSION_PX, at roughly 211 megapixels —
+    // far past MAX_CANVAS_PIXELS (4096 * 4096, Safari's canvas-area limit).
+    const fitW = 1600
+    const fitH = 2064
+    const deviceRatio = 2
+    const zoom = 4
+    const scale = targetRasterScale(fitW, fitH, zoom, deviceRatio)
+    const naive = deviceRatio * zoom
+    // The cap actually engaged — the result is well below the naive value —
+    // but never below the pre-existing, already-shipped baseline (deviceRatio
+    // alone): a capped page is still sharper than before the fix, never
+    // regressed by it.
+    expect(scale).toBeLessThan(naive)
+    expect(scale).toBeGreaterThanOrEqual(deviceRatio)
+    const backingWidth = fitW * scale
+    const backingHeight = fitH * scale
+    expect(backingWidth).toBeLessThanOrEqual(MAX_CANVAS_DIMENSION_PX + 1)
+    expect(backingHeight).toBeLessThanOrEqual(MAX_CANVAS_DIMENSION_PX + 1)
+    expect(backingWidth * backingHeight).toBeLessThanOrEqual(MAX_CANVAS_PIXELS * 1.001)
+  })
+
+  it('re-rasterises the visible page so its canvas backing-store width tracks the zoom level, not just the CSS box', async () => {
+    const { mod } = await renderPreview()
+    const pages = await screen.findByTestId('library-pdf-pages')
+    const pageEl = await screen.findByTestId('library-pdf-page')
+    const readCanvas = () => pageEl.querySelector('canvas') as HTMLCanvasElement
+    const widthAt100 = readCanvas().width
+    // The mock `page.getViewport` (top of this file) returns
+    // `600 * scale` / `800 * scale`; `measureRenderWidth`'s jsdom fallback
+    // (clientWidth is always 0 in jsdom) fits at `(800 - 32) / 600 = 1.28`,
+    // so the FIT viewport is 768 x 1024 CSS px — independently confirming
+    // the 100% baseline before asserting how it changes.
+    expect(widthAt100).toBe(Math.floor(768 * 1))
+
+    // Three 1.25x steps on the shared pill land above 100% without needing
+    // an exact 200% (the shared range steps multiplicatively, never lands on
+    // a round number) — the assertion below computes the RIGHT answer for
+    // whatever zoom is actually reached, from the same formula the module
+    // documents and exports, rather than assuming a specific value.
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    fireEvent.click(screen.getByTestId('zoomable-view-zoom-in'))
+    const zoomNow = Number(pages.getAttribute('data-zoom'))
+    expect(zoomNow).toBeGreaterThan(1)
+
+    // The redraw is debounced (RERASTER_DEBOUNCE_MS) and then async
+    // (page.render()'s mocked promise) — real time, no fake timers, matching
+    // every other timing test in this file.
+    await waitFor(
+      () => {
+        const expectedScale = mod.targetRasterScale(768, 1024, zoomNow, 1)
+        expect(readCanvas().width).toBe(Math.floor(768 * expectedScale))
+      },
+      { timeout: mod.RERASTER_DEBOUNCE_MS + 1000 },
+    )
+    // Directly against the acceptance criterion: the backing-store width
+    // grew in step with zoom, not by magnifying a fixed bitmap.
+    expect(readCanvas().width).toBeGreaterThan(widthAt100)
+    expect(readCanvas().width / widthAt100).toBeCloseTo(zoomNow, 1)
+
+    // The CSS box itself — what CSS `zoom` on the container multiplies — is
+    // UNCHANGED by the redraw: it is the thing that must stay put so the
+    // text layer, annotation layer and signature overlays keep lining up at
+    // every zoom level.
+    expect(readCanvas().style.width).toBe('768px')
+    expect(readCanvas().style.height).toBe('1024px')
   })
 })
 

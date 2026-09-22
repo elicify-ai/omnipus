@@ -225,8 +225,8 @@ export function RecurrenceEditor({
   const timeLabel = `${formatTimeOfDay(anchor)} (${timeZone})`
 
   return (
-    <div className={cn('flex flex-col gap-4', className)}>
-      <div className="flex flex-col gap-1.5">
+    <div className={cn('flex flex-col gap-[var(--space-3)]', className)}>
+      <div className="flex flex-col gap-[var(--space-2)]">
         <Label htmlFor="recurrence-preset">Repeat</Label>
         <Select value={selectedId} onValueChange={handlePresetChange} disabled={disabled}>
           <SelectTrigger id="recurrence-preset" aria-label="Repeat">
@@ -241,14 +241,14 @@ export function RecurrenceEditor({
           </SelectContent>
         </Select>
         {/* FR-021: read-only tz label beside the time — no tz picker in v1. */}
-        <p className="text-xs text-[var(--color-muted)]" data-testid="recurrence-time-label">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" data-testid="recurrence-time-label">
           Time: {timeLabel}
         </p>
       </div>
 
       {selectedId === 'custom' && (
-        <div className="flex flex-col gap-4 rounded-md border border-[var(--color-border)] p-3">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-[var(--space-3)] rounded-md border border-[var(--color-border)] p-[var(--space-2-5)]">
+          <div className="flex items-center gap-[var(--space-2)]">
             <Label htmlFor="recurrence-interval" className="shrink-0">
               Repeat every
             </Label>
@@ -281,9 +281,9 @@ export function RecurrenceEditor({
           </div>
 
           {state.frequency === 'weekly' && (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm text-[var(--color-secondary)]">On these days</span>
-              <div className="flex gap-1" role="group" aria-label="Days of the week">
+            <div className="flex flex-col gap-[var(--space-1)]">
+              <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">On these days</span>
+              <div className="flex gap-[var(--space-1)]" role="group" aria-label="Days of the week">
                 {WEEKDAY_ORDER.map((code) => {
                   const selected = state.weekdays.includes(code)
                   return (
@@ -307,9 +307,9 @@ export function RecurrenceEditor({
           )}
 
           {state.frequency === 'monthly' && (
-            <div className="flex flex-col gap-1.5">
-              <span className="text-sm text-[var(--color-secondary)]">Repeats on</span>
-              <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col gap-[var(--space-1)]">
+              <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Repeats on</span>
+              <div className="flex flex-wrap gap-[var(--space-2)]">
                 <Button
                   type="button"
                   size="sm"
@@ -330,14 +330,14 @@ export function RecurrenceEditor({
                 </Button>
               </div>
               {state.monthlyMode === 'day-of-month' && isMonthlyClampDay(state.monthlyDayOfMonth) && (
-                <p className="text-xs text-[var(--color-muted)]">Moved to the last day in shorter months.</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Moved to the last day in shorter months.</p>
               )}
             </div>
           )}
 
-          <div className="flex flex-col gap-1.5">
-            <span className="text-sm text-[var(--color-secondary)]">Ends</span>
-            <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-col gap-[var(--space-1)]">
+            <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Ends</span>
+            <div className="flex flex-wrap items-center gap-[var(--space-2)]">
               <Button
                 type="button"
                 size="sm"
@@ -382,7 +382,7 @@ export function RecurrenceEditor({
                 After
               </Button>
               {state.end.kind === 'after-count' && (
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-[var(--space-1)]">
                   <Input
                     type="number"
                     min={1}
@@ -396,7 +396,7 @@ export function RecurrenceEditor({
                     }
                     className="w-16"
                   />
-                  <span className="text-sm text-[var(--color-muted)]">occurrences</span>
+                  <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">occurrences</span>
                 </div>
               )}
             </div>
@@ -405,7 +405,7 @@ export function RecurrenceEditor({
       )}
 
       {/* FR-004: live plain-English summary at all times. */}
-      <p className="text-sm text-[var(--color-secondary)]" data-testid="recurrence-summary">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]" data-testid="recurrence-summary">
         {summary}
       </p>
     </div>

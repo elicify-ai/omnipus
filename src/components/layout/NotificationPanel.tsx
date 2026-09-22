@@ -7,6 +7,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/shared/ListStates'
 import { useUiStore } from '@/store/ui'
 import { useNotificationsStore, type NotifItem } from '@/store/notifications'
@@ -94,13 +95,14 @@ export function NotificationPanel() {
             Notifications
           </SheetTitle>
           {unreadCount > 0 && (
-            <button tabIndex={0}
+            <Button
               type="button"
+              variant="link"
               onClick={handleMarkAllRead}
-              className="text-xs text-[var(--color-accent)] hover:underline"
+              className="text-[length:var(--type-utility-xs-size)]"
             >
               Mark all read
-            </button>
+            </Button>
           )}
         </SheetHeader>
 
@@ -110,17 +112,18 @@ export function NotificationPanel() {
           <ul className="divide-y divide-[var(--color-border)]">
             {items.map((item) => (
               <li key={item.id}>
-                <button tabIndex={0}
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => handleClick(item)}
-                  className={`flex w-full items-start gap-2.5 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-2)] ${
+                  className={`h-auto w-full items-start justify-start gap-[var(--space-2)] whitespace-normal rounded-none px-[var(--space-3)] py-[var(--space-2-5)] text-left font-[var(--font-weight-regular)] transition-colors hover:bg-[var(--color-surface-2)] ${
                     item.read ? '' : 'bg-[var(--color-surface-2)]'
                   }`}
                 >
                   <Circle
                     size={10}
                     weight="fill"
-                    className="mt-1.5 shrink-0"
+                    className="mt-[var(--space-1)] shrink-0"
                     style={{
                       color: item.read
                         ? 'var(--color-border)'
@@ -128,9 +131,9 @@ export function NotificationPanel() {
                     }}
                   />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline justify-between gap-2">
+                    <div className="flex items-baseline justify-between gap-[var(--space-2)]">
                       <span
-                        className={`truncate text-sm ${
+                        className={`truncate text-[length:var(--type-body-compact-size)] ${
                           item.read
                             ? 'text-[var(--color-secondary)]'
                             : 'font-medium text-[var(--color-secondary)]'
@@ -141,17 +144,17 @@ export function NotificationPanel() {
                         {!item.read && <span className="sr-only">Unread: </span>}
                         {item.title}
                       </span>
-                      <span className="shrink-0 text-[10px] text-[var(--color-muted)]">
+                      <span className="shrink-0 text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                         {relativeTime(item.createdAtMs)}
                       </span>
                     </div>
                     {item.body && (
-                      <p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-muted)]">
+                      <p className="mt-[var(--space-0-5)] line-clamp-2 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
                         {item.body}
                       </p>
                     )}
                   </div>
-                </button>
+                </Button>
               </li>
             ))}
           </ul>

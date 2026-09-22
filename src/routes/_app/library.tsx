@@ -96,7 +96,7 @@ function LibraryRoute() {
   // and the editor clears the dirty flag as it goes, so the guard would find
   // nothing unsaved every time.
   useBlocker({
-    shouldBlockFn: () => !confirmDiscardLibraryEdits(),
+    shouldBlockFn: async () => !(await confirmDiscardLibraryEdits()),
     // unsavedGuard.ts registers its own `beforeunload` for tab close/reload;
     // a second one here would be a second native prompt for one event.
     enableBeforeUnload: false,

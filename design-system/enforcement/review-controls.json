@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "status": "draft-test-review",
+  "acceptance": false,
+  "subject": "tests/design-system-locks/controls.test.mjs",
+  "reviewBasis": [
+    "docs/internal/design/design-system-definition.md#e1-the-build-enforces-this-rulebook",
+    "docs/internal/design/design-system-definition.md#d5-named-ui-jobs-have-one-legal-component-path",
+    "design-system/enforcement/contract.json"
+  ],
+  "scope": "Fixture expectations and coverage only. This review does not assess the unfinished scanner implementation and does not modify worker-owned source or tests.",
+  "requirements": [
+    {
+      "id": "controls-review-01",
+      "priority": "blocking",
+      "requirement": "Scanners emit raw findings without embedding directory, file-kind, or caller-supplied policy exemptions; reviewed boundaries are applied centrally.",
+      "fixtures": [
+        "The same raw button violation under src/components/ui still reports controls/raw-button.",
+        "The same violation in a test path and a story path still reports.",
+        "Fake policy fields such as exclude, allowedPaths, or exceptions do not suppress findings.",
+        "A Radix import inside an otherwise approved-looking directory still reports the low-level-import finding."
+      ],
+      "risk": "A broad implicit exemption can make the enforcement gate green while governed source remains unscanned."
+    },
+    {
+      "id": "controls-review-02",
+      "priority": "blocking",
+      "requirement": "The scanner preserves every occurrence because audit mode counts occurrences for each stable fingerprint.",
+      "fixtures": [
+        "Two raw buttons in one file produce two findings with the same canonical syntax.",
+        "Optional display positions identify their separate lines without changing canonical syntax."
+      ],
+      "risk": "Deduplication inside a scanner hides increased debt from the central occurrence counter."
+    },
+    {
+      "id": "controls-review-03",
+      "priority": "high",
+      "requirement": "Raw button and dialog detection covers emitted React runtime forms and aliases without treating locally shadowed APIs as globals.",
+      "fixtures": [
+        "jsx, jsxs, and jsxDEV calls imported from react/jsx-runtime or react/jsx-dev-runtime are detected for intrinsic button and dialog tags.",
+        "Aliased named runtime imports and namespace runtime calls are detected.",
+        "Namespace, named, aliased, and destructured React.createElement calls are detected.",
+        "document.createElement and window.document.createElement detect both button and dialog.",
+        "Parameters or imports named React or document prevent a false global finding."
+      ],
+      "risk": "Coverage of only one private _jsx spelling misses common compiler output and alias forms."
+    },
+    {
+      "id": "controls-review-04",
+      "priority": "high",
+      "requirement": "Global confirm detection follows lexical scope and alias flow while allowing unrelated local symbols.",
+      "fixtures": [
+        "Local variables and local function declarations named confirm are allowed.",
+        "Parameters and imports named window or globalThis prevent false global findings.",
+        "Destructuring confirm from globalThis is detected.",
+        "Optional calls and element-access aliases of the browser global are detected.",
+        "Nested shadowing changes detection only within the shadowed lexical scope."
+      ],
+      "risk": "Name matching without scope analysis either misses aliases or flags application helpers that merely share the name confirm."
+    },
+    {
+      "id": "controls-review-05",
+      "priority": "high",
+      "requirement": "Checkbox-as-switch detection fails closed for governed attributes whose values cannot be resolved statically.",
+      "fixtures": [
+        "Expression-literal type={'checkbox'} with a switch role is detected.",
+        "Attribute value case handling is explicitly defined and tested.",
+        "A dynamic type paired with role='switch' produces an explicit unresolved finding.",
+        "JSX spreads on an imported Checkbox or relevant input produce an explicit unresolved finding when they can carry role or type.",
+        "Namespace and renamed Checkbox primitive usages are detected.",
+        "The policy for input role='switch' without an explicit type is decided and encoded rather than left to incidental parser behavior."
+      ],
+      "risk": "Dynamic attributes and spreads otherwise become a direct bypass of the one-legal-Switch path."
+    },
+    {
+      "id": "controls-review-06",
+      "priority": "high",
+      "requirement": "The low-level Radix boundary covers every dependency-introduction syntax and package subpath.",
+      "fixtures": [
+        "Dynamic import() and require() of a Radix package are detected.",
+        "TypeScript import-equals is detected.",
+        "Type-only imports and type re-exports are explicitly governed.",
+        "Deep paths below an @radix-ui/react-* package are detected."
+      ],
+      "risk": "Checking static value imports alone leaves equivalent low-level dependencies ungoverned."
+    },
+    {
+      "id": "controls-review-07",
+      "priority": "high",
+      "requirement": "Catalog enforcement distinguishes the curated public API from internal UI modules for imports and re-exports.",
+      "fixtures": [
+        "A namespace import from a module with only some public exports fails because it exposes internal names.",
+        "Default and side-effect imports have explicit expected outcomes.",
+        "Named re-exports and export-star from internal UI sources are checked.",
+        "import type allows only names listed in catalog publicTypes.",
+        "Alias, extension, index, and relative-path normalization resolve to the same catalog source.",
+        "An import from the curated @omnipus/ui entry point is allowed."
+      ],
+      "risk": "Import-only named-export fixtures do not protect the same boundary through namespaces, types, or re-exports."
+    },
+    {
+      "id": "controls-review-08",
+      "priority": "medium",
+      "requirement": "Finding paths are repository-relative POSIX paths before fingerprinting.",
+      "fixtures": [
+        "Absolute input paths are rejected or normalized according to one documented behavior.",
+        "Backslash paths are rejected or normalized to the same POSIX path and fingerprint."
+      ],
+      "risk": "Platform-dependent paths create unstable baselines and duplicate fingerprints."
+    },
+    {
+      "id": "controls-review-09",
+      "priority": "medium",
+      "requirement": "Generic member-expression JSX syntax is not mistaken for proof that a low-level dependency is approved.",
+      "fixtures": [
+        "A neutral locally declared member-expression tag is allowed.",
+        "The same JSX form backed by a Radix import still fails through the import-boundary rule."
+      ],
+      "risk": "A fixture named as Radix composition can be misread as a permanent third-party exemption even though no import exists in that fixture."
+    }
+  ],
+  "existingStrengths": [
+    "Canonical syntax is independent of source trivia and attribute formatting.",
+    "Comments and strings have negative fixtures.",
+    "Global confirm aliases and transitive aliases have initial coverage.",
+    "Dynamic Checkbox role handling already expects fail-closed behavior.",
+    "Catalog fixtures distinguish public and non-public named exports.",
+    "Parser failures are explicit blocking findings."
+  ],
+  "disposition": "Revise fixtures before treating the controls scanner as accepted. Passing the current red-stage suite alone is insufficient evidence for E1/D5 enforcement."
+}

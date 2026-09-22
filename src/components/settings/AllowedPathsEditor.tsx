@@ -1,16 +1,23 @@
 import { useState } from 'react'
 import { Trash, Plus } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 
-// Read-only badge with tooltip for allowed_paths rows
+// Read-only badge with tooltip for allowed_paths rows.
+// Deliberately a <span>, not a <button>: it performs no action (no onClick,
+// cursor-default) — it is a static label that discloses more text on
+// hover/focus, the same shape as a native `title` attribute. tabIndex={0}
+// keeps it reachable for keyboard users so the tooltip is not mouse-only;
+// it never claims the button/dialog/radio/switch/tab semantics the
+// design-system `controls/raw-button` lock exists to catch, so it isn't a
+// hand-built control under that rule.
 function ReadOnlyBadge() {
   const [tip, setTip] = useState(false)
   return (
     <span className="relative inline-block">
-      <button
-        type="button"
-        className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-mono border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] cursor-default"
+      <span
+        className="inline-flex items-center rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-mono border border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] cursor-default"
         onMouseEnter={() => setTip(true)}
         onMouseLeave={() => setTip(false)}
         onFocus={() => setTip(true)}
@@ -19,12 +26,12 @@ function ReadOnlyBadge() {
         aria-describedby={tip ? 'ro-tip' : undefined}
       >
         read-only
-      </button>
+      </span>
       {tip && (
         <span
           id="ro-tip"
           role="tooltip"
-          className="absolute bottom-full left-0 mb-1 z-50 w-64 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5 text-[10px] text-[var(--color-muted)] shadow-lg pointer-events-none"
+          className="absolute bottom-full left-0 mb-[var(--space-1)] z-50 w-64 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] shadow-lg pointer-events-none"
         >
           AllowedPaths entries grant read-only access. Write access is never available via this editor.
         </span>
@@ -55,51 +62,52 @@ export function AllowedPathsEditor({
   addError,
 }: AllowedPathsEditorProps) {
   return (
-    <div className="space-y-2">
-      <p className="text-xs font-semibold text-[var(--color-secondary)]">
+    <div className="space-y-[var(--space-2)]">
+      <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
         Filesystem paths the sandbox may read
       </p>
 
       {paths.length === 0 && (
-        <p className="text-xs text-[var(--color-muted)] italic">No allowed paths configured.</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] italic">No allowed paths configured.</p>
       )}
 
-      <div className="space-y-1">
+      <div className="space-y-[var(--space-1)]">
         {paths.map((p, i) => (
-          <div key={i} className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5">
-              <span className="flex-1 text-xs font-mono text-[var(--color-secondary)] break-all">
+          <div key={i} className="flex flex-col gap-[var(--space-0-5)]">
+            <div className="flex items-center gap-[var(--space-2)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)]">
+              <span className="flex-1 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] break-all">
                 {p}
               </span>
               <ReadOnlyBadge />
               {restartedRows.has(i) && (
-                <span className="inline-block rounded px-1.5 py-0.5 text-[10px] border border-yellow-500/40 bg-yellow-500/10 text-yellow-400">
+                <span className="inline-block rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[var(--color-warning)]">
                   restart required
                 </span>
               )}
-              <button tabIndex={0}
+              <IconButton
+                variant="ghost"
                 type="button"
                 aria-label={`Delete path ${p}`}
-                className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
+                className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                 onClick={() => onDelete(i)}
               >
                 <Trash size={12} />
-              </button>
+              </IconButton>
             </div>
             {rowErrors[i] && (
-              <p className="text-[10px] text-[var(--color-error)] pl-2">{rowErrors[i]}</p>
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-error)] pl-[var(--space-2)]">{rowErrors[i]}</p>
             )}
           </div>
         ))}
       </div>
 
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
+      <div className="space-y-[var(--space-1)]">
+        <div className="flex items-center gap-[var(--space-2)]">
           <Input
             value={newPath}
             onChange={(e) => onNewPathChange(e.target.value)}
             placeholder="/var/data/shared"
-            className="h-7 text-xs font-mono flex-1"
+            className="h-7 text-[length:var(--type-utility-xs-size)] font-mono flex-1"
             aria-label="New allowed path"
             onKeyDown={(e) => {
               if (e.key === 'Enter') { e.preventDefault(); onAdd() }
@@ -109,7 +117,7 @@ export function AllowedPathsEditor({
             type="button"
             size="sm"
             variant="outline"
-            className="h-7 px-2 gap-1 text-xs shrink-0"
+            className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] shrink-0"
             onClick={onAdd}
             aria-label="Add path"
           >
@@ -118,7 +126,7 @@ export function AllowedPathsEditor({
           </Button>
         </div>
         {addError && (
-          <p className="text-[10px] text-[var(--color-error)]">{addError}</p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">{addError}</p>
         )}
       </div>
     </div>

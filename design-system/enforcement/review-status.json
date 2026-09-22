@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "status": "draft-implementation-review",
+  "acceptance": false,
+  "subject": {
+    "source": "scripts/design-system-locks/status.mjs",
+    "tests": "tests/design-system-locks/status.test.mjs"
+  },
+  "reviewBasis": [
+    "docs/internal/design/design-system-definition.md#d4-status-is-a-complete-distinguishable-presentation-contract-amended-2026-09-17-after-adversarial-review",
+    "design-system/enforcement/contract.json"
+  ],
+  "scope": "Read-only review of stable semantic coverage and test-contract gaps. This is not acceptance and does not assess temporary syntax while the owner is editing.",
+  "confirmed": {
+    "d4Palette": {
+      "inbox": "#9CA3AF",
+      "next": "#3B82F6",
+      "in-progress": "#D4AF37",
+      "blocked": "#F97316",
+      "done": "#10B981",
+      "failed": "#EF4444",
+      "cancelled": "#EAB308"
+    },
+    "notes": [
+      "The seven canonical state values match D4 exactly.",
+      "Existing tests cover direct object maps, matching and mismatched tokens, literals, CSS selectors, direct JSX conditions, switch cases, spreads, computed keys, parse errors, SVG attributes, and one non-exempt graph path."
+    ]
+  },
+  "findings": [
+    {
+      "id": "status-review-01",
+      "priority": "high",
+      "finding": "Two property names that happen to be D4 words make an unrelated object a status map, even when neither the binding nor its context denotes status.",
+      "impact": "Ordinary navigation, workflow copy, visualization, or domain data with keys such as next and done can receive status-mismatch findings. This is a semantic false positive and can pressure callers to add improper exceptions.",
+      "reproducer": "export const paginationColors = { next: '#111111', done: '#222222' }",
+      "observed": [
+        "design-system/status-mismatch for next",
+        "design-system/status-mismatch for done"
+      ],
+      "required": "Require a status-bearing binding, discriminant, selector, component property, or another explicit status context before treating a multi-key object as D4 chrome. Add negative fixtures using unrelated next/done objects and positive fixtures proving a real status map still reports."
+    },
+    {
+      "id": "status-review-02",
+      "priority": "high",
+      "finding": "Shorthand properties bypass status-map value classification.",
+      "impact": "A copied or wrong literal can be assigned through a local alias and then inserted into STATUS_COLORS without a finding.",
+      "reproducer": "const done = '#EF4444'; export const STATUS_COLORS = { done }",
+      "observed": [],
+      "required": "Resolve statically bound shorthand properties and aliases, or report status-unsupported when their value cannot be proven. Add matching-literal, mismatched-literal, matching-token, and unresolved/imported alias fixtures."
+    },
+    {
+      "id": "status-review-03",
+      "priority": "high",
+      "finding": "JSX status chrome silently accepts identifier-based style and className objects because classification handles inline literals but neither resolves nor rejects the alias.",
+      "impact": "The common pattern of defining a style object or class constant outside JSX bypasses D4 correlation even though the JSX exposes a literal status.",
+      "reproducer": "const doneStyle = { backgroundColor: '#EF4444' }; export const X = () => <div status=\"done\" style={doneStyle} />",
+      "observed": [],
+      "required": "Resolve local const aliases for style and className values. Emit status-unsupported for imported, mutable, parameter, or otherwise unresolved aliases. Cover nested aliases and lexical shadowing so resolution does not bind to a same-named declaration in another scope."
+    },
+    {
+      "id": "status-review-04",
+      "priority": "high",
+      "finding": "CSS status correlation covers only a narrow property-name allowlist and misses D4-governed border and state treatments.",
+      "impact": "D4 explicitly governs borders and hover/focus treatments, but status selectors can use a second palette through side-specific borders, text decoration, caret, shadows, or other color-bearing properties without a status finding.",
+      "reproducer": "[data-status=\"done\"] { border-left-color: #EF4444; text-decoration-color: #EF4444; }",
+      "observed": [],
+      "required": "Use parsed CSS property semantics or a complete reviewed color-bearing property set instead of the current partial regular expression. Add fixtures for border side colors, outline, box-shadow, text-decoration-color, caret-color, gradients, hover/focus selectors, and custom-property indirection. Unknown dynamic color-bearing status declarations must report unsupported rather than pass."
+    },
+    {
+      "id": "status-review-05",
+      "priority": "high",
+      "finding": "The scanner accepts resolved token IDs that are absent from policy.tokenCssNames.",
+      "impact": "A caller can place an arbitrary entry in resolvedTokens and make an unregistered CSS variable look constitutional, bypassing the generated-token registry boundary.",
+      "reproducer": {
+        "source": "export const STATUS_COLORS = { done: 'var(--color-fake)' }",
+        "policy": {
+          "tokenCssNames": [
+            "--color-status-done"
+          ],
+          "resolvedTokens": {
+            "color.status.done": "#10B981",
+            "color.fake": "#10B981"
+          }
+        }
+      },
+      "observed": [],
+      "required": "Require every accepted CSS token reference to exist in tokenCssNames as well as resolve to the correct value. Treat absent or inconsistent registry entries as status-unsupported. Add negative fixtures for an unregistered matching-value token and a registered token missing a resolved value."
+    },
+    {
+      "id": "status-review-06",
+      "priority": "high",
+      "finding": "A valid SVG style element is fed through the TSX parser and becomes a status parse error instead of being analyzed as CSS.",
+      "impact": "Legitimate SVGs with embedded style sheets are blocked regardless of whether their D4 paint is correct, while the declarations themselves never receive status correlation.",
+      "reproducer": "<svg><style>.status-done { fill: #EF4444; }</style><circle class=\"status-done\" /></svg>",
+      "observed": [
+        "design-system/status-parse-error with an unparseable-typescript syntax"
+      ],
+      "required": "Parse SVG style element contents through the CSS status path, preserving the enclosing file path and fail-closed behavior. Add matching-token, wrong-color, matching-literal, malformed-style, and CSS-variable fixtures."
+    },
+    {
+      "id": "status-review-07",
+      "priority": "medium",
+      "finding": "The aliases draft→inbox, approved→next, planning→next, and running→in-progress are asserted as D4 facts, but the cited D4 definition does not declare those equivalences.",
+      "impact": "Plan or release lifecycle states can be forced into task semantics without a ratified equivalence, creating both false positives and an undocumented second semantic contract.",
+      "reproducer": "export const RELEASE_COLORS = { draft: '#9CA3AF', approved: '#60A5FA' }",
+      "required": "Either cite a ratified product-state mapping that declares each equivalence and add it to the review basis, or remove the aliases from the scanner and tests. Do not infer semantic equivalence from a coincidentally similar lifecycle word."
+    },
+    {
+      "id": "status-review-08",
+      "priority": "medium",
+      "finding": "Centralized-exception behavior is stated in the shared contract but is only indirectly tested by one production-like graph path.",
+      "impact": "A future scanner-local skip for tests, stories, generated files, visualization paths, or fake policy exception fields could pass the current suite.",
+      "required": "Add path-invariance fixtures that run the same D4 violation in feature, UI, graph, story, test, and generated-looking paths, and pass fake policy exclusion fields. Every scan must return the same raw finding; exact reviewed boundaries and exceptions remain solely the audit orchestrator's responsibility."
+    }
+  ],
+  "coverageRequests": [
+    {
+      "area": "maps-and-aliases",
+      "fixtures": [
+        "Shorthand properties",
+        "Local const aliases",
+        "Nested aliases",
+        "Imported or mutable aliases report unsupported",
+        "Object.assign and Object.fromEntries status maps report unsupported when not statically provable"
+      ]
+    },
+    {
+      "area": "jsx-and-svg",
+      "fixtures": [
+        "Identifier style aliases",
+        "Identifier className aliases",
+        "JSX spreads carrying status or paint report unsupported",
+        "SVG style elements",
+        "SVG presentation attributes and inline style retain existing coverage"
+      ]
+    },
+    {
+      "area": "css",
+      "fixtures": [
+        "Side-specific borders",
+        "Hover and focus selectors",
+        "Shadows and gradients",
+        "Custom-property alias chains",
+        "Malformed or dynamically unprovable status paint fails closed"
+      ]
+    }
+  ],
+  "disposition": "Not accepted. Preserve the exact seven-state D4 map, narrow semantic context to prevent unrelated-word false positives, and close alias/style/CSS/SVG/token-registry bypasses before activation."
+}

@@ -498,7 +498,7 @@ describe('SecuritySection — global tool-policy save', () => {
     })
     // One argument only — the consent-token parameter is gone.
     expect(vi.mocked(updateGlobalToolPolicies).mock.calls[0]).toHaveLength(1)
-    expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })
 
@@ -523,15 +523,15 @@ describe('SecuritySection — credential vault confirmations', () => {
   it('set: the confirmation has exactly Cancel and one confirm, and no input', async () => {
     await openAddCredentialForm()
 
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Store this credential?')
-    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Store credential')
-    expect(within(dialog).getAllByRole('button')).toHaveLength(3) // Cancel, confirm, Radix close
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(within(dialog).getByRole('button', { name: 'Store credential' })).toHaveTextContent('Store credential')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(2) // Cancel, confirm
     // No input of any kind — this is a decision, not a credential prompt.
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
     // FR-OB-042: never the destructive variant.
-    expect(within(dialog).getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(within(dialog).getByRole('button', { name: 'Store credential' }).className).not.toMatch(/color-error/)
     expect(addCredential).not.toHaveBeenCalled()
   })
 
@@ -539,7 +539,7 @@ describe('SecuritySection — credential vault confirmations', () => {
     vi.mocked(addCredential).mockResolvedValue(undefined as never)
 
     await openAddCredentialForm()
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Store credential' }))
 
     await waitFor(() => {
       expect(vi.mocked(addCredential).mock.calls).toEqual([['MY_KEY', 'sk-secret', undefined]])
@@ -548,10 +548,10 @@ describe('SecuritySection — credential vault confirmations', () => {
 
   it('set: cancelling performs nothing', async () => {
     await openAddCredentialForm()
-    fireEvent.click(await screen.findByTestId('confirm-cancel'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
     expect(addCredential).not.toHaveBeenCalled()
   })
@@ -565,13 +565,13 @@ describe('SecuritySection — credential vault confirmations', () => {
   it('delete: the confirmation has exactly Cancel and one confirm, and no input', async () => {
     await openDeleteConfirmation()
 
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Remove this credential?')
-    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Remove credential')
-    expect(within(dialog).getAllByRole('button')).toHaveLength(3)
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(within(dialog).getByRole('button', { name: 'Remove credential' })).toHaveTextContent('Remove credential')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(2)
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(within(dialog).getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(within(dialog).getByRole('button', { name: 'Remove credential' }).className).not.toMatch(/color-error/)
     expect(deleteCredential).not.toHaveBeenCalled()
   })
 
@@ -579,7 +579,7 @@ describe('SecuritySection — credential vault confirmations', () => {
     vi.mocked(deleteCredential).mockResolvedValue(undefined as never)
 
     await openDeleteConfirmation()
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove credential' }))
 
     await waitFor(() => {
       expect(vi.mocked(deleteCredential).mock.calls).toEqual([['MY_KEY', undefined]])
@@ -588,10 +588,10 @@ describe('SecuritySection — credential vault confirmations', () => {
 
   it('delete: cancelling performs nothing', async () => {
     await openDeleteConfirmation()
-    fireEvent.click(await screen.findByTestId('confirm-cancel'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
     expect(deleteCredential).not.toHaveBeenCalled()
   })
@@ -608,13 +608,13 @@ describe('SecuritySection — credential vault confirmations', () => {
   it('rotate: the confirmation has exactly Cancel and one confirm, and no input', async () => {
     await openRotateConfirmation()
 
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Rotate the master key?')
-    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Rotate master key')
-    expect(within(dialog).getAllByRole('button')).toHaveLength(3)
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(within(dialog).getByRole('button', { name: 'Rotate master key' })).toHaveTextContent('Rotate master key')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(2)
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(within(dialog).getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(within(dialog).getByRole('button', { name: 'Rotate master key' }).className).not.toMatch(/color-error/)
     expect(rotateCredentials).not.toHaveBeenCalled()
   })
 
@@ -622,7 +622,7 @@ describe('SecuritySection — credential vault confirmations', () => {
     vi.mocked(rotateCredentials).mockResolvedValue(undefined as never)
 
     await openRotateConfirmation()
-    fireEvent.click(await screen.findByTestId('confirm-accept'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Rotate master key' }))
 
     await waitFor(() => {
       expect(vi.mocked(rotateCredentials).mock.calls).toEqual([['new-pass-phrase', undefined]])
@@ -631,10 +631,10 @@ describe('SecuritySection — credential vault confirmations', () => {
 
   it('rotate: cancelling performs nothing', async () => {
     await openRotateConfirmation()
-    fireEvent.click(await screen.findByTestId('confirm-cancel'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
     expect(rotateCredentials).not.toHaveBeenCalled()
   })

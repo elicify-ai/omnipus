@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchAppState } from '@/lib/api'
-import { ConfirmDialog } from './ConfirmDialog'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { ReAuthDialog } from './ReAuthDialog'
 import { REAUTH_CANCELLED_MESSAGE } from './useReAuthGate'
 
@@ -210,10 +210,10 @@ export function useStepUp(): StepUpResult {
         open={confirmOpen}
         onOpenChange={handleConfirmOpenChange}
         title={confirmDescribe?.title ?? ''}
-        body={confirmDescribe?.body ?? ''}
+        description={confirmDescribe?.body ?? ''}
         confirmLabel={confirmDescribe?.confirmLabel ?? 'Confirm'}
         onConfirm={handleConfirmAccept}
-        busy={busy}
+        pending={busy}
       />
     </>
   )

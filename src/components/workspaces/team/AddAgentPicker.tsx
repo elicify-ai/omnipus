@@ -88,7 +88,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
           size="sm"
           variant="outline"
           data-testid="team-add-agent"
-          className="gap-1.5 border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-secondary)] hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-surface-2)]"
+          className="gap-[var(--space-1)] border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-secondary)] hover:border-[var(--color-accent)]/50 hover:bg-[var(--color-surface-2)]"
         >
           <Plus size={14} weight="bold" />
           Add agent
@@ -104,16 +104,16 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
         <div
           role="note"
           data-testid="team-add-agent-disclosure"
-          className="flex items-start gap-2 border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-2.5 py-2 text-[11px] leading-snug text-[var(--color-warning)]"
+          className="flex items-start gap-[var(--space-2)] border-b border-[var(--color-border)] bg-[var(--color-warning)]/10 px-[var(--space-2)] py-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
         >
-          <Warning size={13} weight="fill" className="mt-px shrink-0" aria-hidden="true" />
+          <Warning size={13} weight="fill" className="mt-[var(--border-width-hairline)] shrink-0" aria-hidden="true" />
           <span>
             An agent you add here can use this workspace&rsquo;s browser, which stays signed in to
             every site you have logged into on it. It can act as whoever this workspace is signed
             in as &mdash; including on scheduled and background turns nobody is watching.
           </span>
         </div>
-        <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-2.5 py-2">
+        <div className="flex items-center gap-[var(--space-2)] border-b border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-2)]">
           <MagnifyingGlass size={14} className="text-[var(--color-muted)]" />
           <input tabIndex={0}
             autoFocus
@@ -122,21 +122,21 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
             placeholder="Search agents…"
             aria-label="Search agents"
             data-testid="team-add-agent-search"
-            className="w-full bg-transparent text-sm text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none"
+            className="w-full bg-transparent text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none"
           />
         </div>
-        <div className="max-h-64 overflow-y-auto py-1">
+        <div className="max-h-64 overflow-y-auto py-[var(--space-1)]">
           {candidates.length === 0 ? (
-            <p className="px-3 py-4 text-center text-xs text-[var(--color-muted)]">
+            <p className="px-[var(--space-2-5)] py-[var(--space-3)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               {query.trim()
                 ? 'No matching agents.'
                 : 'Every agent is already on this team.'}
             </p>
           ) : (
             candidates.map((a) => (
-              <button tabIndex={0}
+              <Button
                 key={a.id}
-                type="button"
+                variant="ghost"
                 data-testid={`team-add-agent-option-${a.id}`}
                 onClick={() => {
                   onAdd(a.id)
@@ -144,12 +144,12 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                   setQuery('')
                 }}
                 className={cn(
-                  'flex w-full items-center gap-2.5 px-2.5 py-2 text-left transition-colors',
+                  'flex h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-none px-[var(--space-2)] py-[var(--space-2)] text-left transition-colors',
                   'hover:bg-[var(--color-surface-2)] focus-visible:bg-[var(--color-surface-2)]',
                 )}
               >
                 <div
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-bold text-[var(--color-secondary)]"
+                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[length:var(--type-caption-size)] font-bold text-[var(--color-secondary)]"
                   style={{ backgroundColor: a.color ?? 'var(--color-surface-3)' }}
                   aria-hidden="true"
                 >
@@ -160,21 +160,21 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
                   )}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1">
-                    <span className="truncate text-sm font-medium text-[var(--color-secondary)]">
+                  <div className="flex items-center gap-[var(--space-1)]">
+                    <span className="truncate text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">
                       {a.name}
                     </span>
                     {a.default && (
                       <Star size={10} weight="fill" className="shrink-0 text-[var(--color-accent)]" />
                     )}
                   </div>
-                  <span className="block truncate text-[11px] text-[var(--color-muted)]">
+                  <span className="block truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                     {roleLabel(a)}
                     {isWorker(a) ? ' · leaf' : ''}
                   </span>
                 </div>
                 <Plus size={13} className="shrink-0 text-[var(--color-muted)]" />
-              </button>
+              </Button>
             ))
           )}
         </div>

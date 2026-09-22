@@ -8,39 +8,48 @@
 @import '@fontsource/jetbrains-mono/400.css';
 @import '@fontsource/jetbrains-mono/500.css';
 
-@import 'tailwindcss';
+/* Supply component tokens now; the later theme keeps existing app values
+   until the C1 foundation conversion. This does not activate spacing utilities. */
+@import './tokens.generated.css' layer(theme);
+@import 'tailwindcss' source(none);
+@source '../';
+@source not '../**/*.stories.*';
+@source not '../**/*.test.*';
 
 /* ------------------------------------------------------------------ */
 /* US-1: Tailwind v4 @theme — all Sovereign Deep brand tokens          */
 /* ------------------------------------------------------------------ */
 @theme {
   /* Colors */
-  --color-primary: #0a0a0b;
-  --color-secondary: #e2e8f0;
-  --color-accent: #d4af37;
-  --color-success: #10b981;
-  --color-error: #ef4444;
-  --color-warning: #EAB308;
-  --color-info: #3B82F6;
-  --color-cancelled: #F97316;
-  --color-accent-hover: #c49e2f;
-  --color-error-hover: #dc2626;
+  --color-primary: var(--primitive-color-surface-0);
+  --color-secondary: var(--primitive-color-silver);
+  --color-accent: var(--primitive-color-gold);
+  --color-success: var(--primitive-color-green);
+  --color-error: var(--primitive-color-red);
+  --color-warning: var(--primitive-color-amber);
+  --color-info: var(--primitive-color-blue);
+  /* Was #F97316, which is Blocked-orange, not Cancelled. The registered
+     cancelled colour is amber; the orange here silently made every
+     cancelled chip read as blocked. Corrected to the registered token. */
+  --color-cancelled: var(--primitive-color-amber);
+  --color-accent-hover: var(--primitive-color-gold-hover);
+  --color-error-hover: var(--primitive-color-red-hover);
 
   /* Library icon system (icon-consistency pass, 2026-09-07): MountFolderIcon's
      colour. Liquid-Silver pewter — distinct from --color-info (used for the
      mount BADGE/target text in LibraryEntryRow) so the icon reads as its own
      kind rather than borrowing an unrelated semantic-info blue. */
-  --color-mount: #8ea3bd;
+  --color-mount: var(--primitive-color-mount);
 
   /* Surface elevations (dark-first).
      surface-2 was darkened #1a1a1e → #141416 (operator request, composer
      redesign follow-up): raised panels should sit closer to the black
      shell — less contrast, flatter look. Applies everywhere the token is
      used (composer card, chips, panel fills, hover tints). */
-  --color-surface-0: #0a0a0b;
-  --color-surface-1: #111113;
-  --color-surface-2: #141416;
-  --color-surface-3: #222228;
+  --color-surface-0: var(--primitive-color-surface-0);
+  --color-surface-1: var(--primitive-color-surface-1);
+  --color-surface-2: var(--primitive-color-surface-2);
+  --color-surface-3: var(--primitive-color-surface-3);
 
   /* Muted text / borders.
      W6-C4 / C1 (WCAG 1.4.3 AA contrast, normal text):
@@ -49,8 +58,8 @@
      strings across the /agents surface. `#9ca3af` (Tailwind gray-400)
      measures ~7.5:1 against #111113 — comfortably AA and AAA for normal
      text. Brand-guidelines Tier-2/3 muted text now uses this token. */
-  --color-muted: #9ca3af;
-  --color-border: #2d3748;
+  --color-muted: var(--primitive-color-grey);
+  --color-border: var(--primitive-color-border);
 
   /* Typography */
   --font-headline: 'Outfit', system-ui, -apple-system, sans-serif;
@@ -138,7 +147,7 @@ html {
   /* FR-108: root font-size driven by user preference (12–20px, clamped).
      When --user-font-size is unset the fallback is 14px (product default).
      This rescales the entire rem scale — Tailwind v4 spacing/sizing/text. */
-  font-size: clamp(12px, var(--user-font-size, 14px), 20px);
+  font-size: clamp(var(--font-root-minimum), var(--user-font-size, var(--font-root-default)), var(--font-root-maximum));
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   /* iOS/Safari scroll fix: lock the document to the viewport so the
@@ -174,8 +183,8 @@ html {
   outline-color: var(--color-accent) !important;
   outline-offset: 2px;
   /* No shadows on focus — neutralise Tailwind ring utilities (scoped). */
-  --tw-ring-shadow: 0 0 #0000 !important;
-  --tw-ring-offset-shadow: 0 0 #0000 !important;
+  --tw-ring-shadow: 0 0 transparent !important;
+  --tw-ring-offset-shadow: 0 0 transparent !important;
 }
 /* Opt-out for composite widgets whose focus is shown by a parent surface
    (e.g. the chat textarea inside the composer card). */
@@ -187,8 +196,8 @@ body {
   margin: 0;
   background-color: var(--color-primary);
   color: var(--color-secondary);
-  font-family: var(--font-body);
-  line-height: 1.6;
+  font-family: var(--font-family-body);
+  line-height: var(--font-line-height-body);
   /* THE iOS scroll lock (stable version). overflow:hidden alone does not
      stop iPad/iOS Safari from PANNING THE VISUAL VIEWPORT when a scroll
      gesture lands on non-scrollable chrome (sidebar whitespace, the top
@@ -212,13 +221,13 @@ body {
 
 /* Typography utilities */
 .font-headline {
-  font-family: var(--font-headline);
+  font-family: var(--font-family-heading);
 }
 .font-body {
-  font-family: var(--font-body);
+  font-family: var(--font-family-body);
 }
 .font-mono {
-  font-family: var(--font-mono);
+  font-family: var(--font-family-mono);
 }
 
 /* Scrollbar styling */
@@ -241,14 +250,17 @@ body {
 /* Safe-area handling (viewport-fit=cover)                             */
 /* With viewport-fit=cover the app shell extends edge-to-edge under    */
 /* notches and home indicators. Pad the shell chrome with             */
-/* env(safe-area-inset-*) so content is never hidden. The sidebar      */
+/* env(safe-area-inset-*, var(--space-0)) so content is never hidden,  */
+/* the explicit fallback being what keeps the whole declaration valid  */
+/* on a browser without safe-area support. The sidebar                 */
 /* applies its own insets inline (see Sidebar.tsx). Rules are scoped   */
 /* to the app-shell root via the [data-app-shell] marker (see          */
 /* AppShell.tsx) so a future nested <header>/<main> can never inherit  */
 /* notch padding from a fragile global descendant match.              */
 /*                                                                     */
 /* The bottom home-indicator inset is applied directly to each screen's*/
-/* scroll container (pb-[env(safe-area-inset-bottom)]), NOT to <main>: */
+/* scroll container (pb-[env(safe-area-inset-bottom,var(--space-0))]), */
+/* NOT to <main>:                                                      */
 /* every screen body is `absolute inset-0 overflow-y-auto`, sized to   */
 /* <main>'s padding box, so padding on <main> is overlapped by the     */
 /* child and is a no-op. The scroll container is the real fix.         */
@@ -256,11 +268,42 @@ body {
 
 /* App-shell root reserves the right notch inset for the whole shell. */
 [data-app-shell] {
-  padding-right: env(safe-area-inset-right);
+  padding-right: env(safe-area-inset-right,var(--space-0));
 }
 
 /* Top bar — clear the top notch (max() keeps the existing py-3 when
    there is no notch). */
 [data-app-shell] > div > header {
-  padding-top: max(0.75rem, env(safe-area-inset-top));
+  padding-top: max(var(--space-2-5), env(safe-area-inset-top,var(--space-0)));
+}
+
+/* ------------------------------------------------------------------ */
+/* Skeleton shimmer                                                    */
+/* Replaces Tailwind's `animate-pulse`, which throbs opacity 1 -> .5    */
+/* -> 1 on the whole block. That reads as blinking rather than          */
+/* loading, and at 2s it feels sluggish. A gradient sweeping across a   */
+/* static surface reads as "content on its way" and keeps the block's   */
+/* silhouette stable, so the layout does not appear to breathe.         */
+/* Motion-reduce drops to a flat surface with no animation at all.      */
+@keyframes ds-skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to   { background-position: -200% 0; }
+}
+@utility skeleton-shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-surface-2) 0%,
+    var(--color-surface-2) 35%,
+    var(--color-surface-3) 50%,
+    var(--color-surface-2) 65%,
+    var(--color-surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: ds-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    background-image: none;
+    animation: none;
+  }
 }

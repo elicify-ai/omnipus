@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "component": "Dialog",
+  "exports": [
+    "Dialog",
+    "DialogPortal",
+    "DialogOverlay",
+    "DialogTrigger",
+    "DialogClose",
+    "DialogContent",
+    "DialogHeader",
+    "DialogFooter",
+    "DialogTitle",
+    "DialogDescription"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/dialog.tsx",
+  "documentation": "docs/internal/design/components/dialog.md",
+  "owner": "design-system",
+  "themes": [
+    "sovereign-deep"
+  ],
+  "variants": [
+    "default"
+  ],
+  "sizes": [],
+  "states": [
+    "default",
+    "open",
+    "disabled",
+    "focus",
+    "reduced-motion"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/overlays.stories.tsx",
+      "exports": [
+        "DialogContract",
+        "DialogKeyboard",
+        "DialogFooterTargets"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "dialog-unit",
+      "kind": "unit",
+      "applicable": true,
+      "file": "src/components/ui/overlays.test.tsx",
+      "test": "overlay contracts traps dialog focus, dismisses with Escape, and restores its trigger"
+    },
+    {
+      "id": "dialog-interaction",
+      "kind": "interaction",
+      "applicable": true,
+      "file": "src/components/ui/overlays.stories.tsx",
+      "test": "Dialog Contract",
+      "story": "DialogContract"
+    },
+    {
+      "id": "dialog-axe",
+      "kind": "axe",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-axe] axe",
+      "story": "DialogContract"
+    },
+    {
+      "id": "dialog-keyboard",
+      "kind": "keyboard",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-keyboard] keyboard",
+      "story": "DialogKeyboard"
+    },
+    {
+      "id": "dialog-browser",
+      "kind": "browser",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-browser] browser",
+      "story": "DialogContract"
+    },
+    {
+      "id": "dialog-pointer",
+      "kind": "pointer",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-pointer] pointer",
+      "story": "DialogFooterTargets"
+    },
+    {
+      "id": "dialog-reduced-motion",
+      "kind": "reduced-motion",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-reduced-motion] reduced-motion",
+      "story": "DialogContract"
+    },
+    {
+      "id": "dialog-forced-colors",
+      "kind": "forced-colors",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-forced-colors] forced-colors",
+      "story": "DialogContract"
+    },
+    {
+      "id": "dialog-root-size",
+      "kind": "root-size",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-root-size] root-size",
+      "story": "DialogContract"
+    },
+    {
+      "id": "dialog-zoom",
+      "kind": "zoom",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-zoom] zoom",
+      "story": "DialogContract"
+    },
+    {
+      "id": "dialog-reflow",
+      "kind": "reflow",
+      "applicable": true,
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Dialog [check:dialog-reflow] reflow",
+      "story": "DialogContract"
+    }
+  ]
+}

@@ -137,14 +137,14 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '30' } })
 
     // Before the debounce fires, no PUT and no dialog yet.
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
 
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('confirm-accept'))
-    fireEvent.click(screen.getByTestId('confirm-accept'))
+    await waitFor(() => screen.getByRole('button', { name: 'Change performance settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       // Load-bearing: the body carries ONLY goal_max_rounds. If the max
@@ -174,7 +174,7 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
         message: 'Tries per goal must be a whole number of at least 1.',
       })
     })
-    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
@@ -226,8 +226,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('confirm-accept'))
-    fireEvent.click(screen.getByTestId('confirm-accept'))
+    await waitFor(() => screen.getByRole('button', { name: 'Change performance settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
@@ -254,8 +254,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('confirm-accept'))
-    fireEvent.click(screen.getByTestId('confirm-accept'))
+    await waitFor(() => screen.getByRole('button', { name: 'Change performance settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       const call = vi.mocked(api.updatePerformanceSettings).mock.calls[0]
@@ -278,13 +278,13 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('confirm-accept'))
+    await waitFor(() => screen.getByRole('button', { name: 'Change performance settings' }))
     expect(screen.getByLabelText('Tries per goal')).toHaveValue(99)
 
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
     await waitFor(() => {
       expect(screen.getByLabelText('Tries per goal')).toHaveValue(20)
@@ -325,8 +325,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(1000) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('confirm-accept'))
-    fireEvent.click(screen.getByTestId('confirm-accept'))
+    await waitFor(() => screen.getByRole('button', { name: 'Change performance settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => expect(api.updatePerformanceSettings).toHaveBeenCalled())
 
@@ -365,8 +365,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(1000) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('confirm-accept'))
-    fireEvent.click(screen.getByTestId('confirm-accept'))
+    await waitFor(() => screen.getByRole('button', { name: 'Change performance settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => expect(api.updatePerformanceSettings).toHaveBeenCalled())
 

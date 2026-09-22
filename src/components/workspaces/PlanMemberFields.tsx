@@ -63,16 +63,16 @@ export function WriteSetField({
   labelStyle?: 'form' | 'section'
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-[var(--space-1)]">
       {labelStyle === 'section' ? (
-        <label
+        <Label
           htmlFor={id}
-          className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]"
+          className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]"
         >
           {WRITE_SET_LABEL}
-        </label>
+        </Label>
       ) : (
-        <Label htmlFor={id} className="text-[var(--color-secondary)]">
+        <Label htmlFor={id}>
           {WRITE_SET_LABEL}
         </Label>
       )}
@@ -110,7 +110,7 @@ export function WriteSetField({
         testId="write-set-input"
         chipTestId="write-set-chip"
       />
-      <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">{WRITE_SET_HELP}</p>
     </div>
   )
 }
@@ -132,20 +132,20 @@ export function JoinMemberCheckbox({
   onCheckedChange: (checked: boolean) => void
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-start gap-2">
+    <div className="flex flex-col gap-[var(--space-1)]">
+      <div className="flex items-start gap-[var(--space-2)]">
         <Checkbox
           id={id}
           data-testid="plan-member-join-checkbox"
           checked={checked}
           onCheckedChange={(v) => onCheckedChange(v === true)}
-          className="mt-[1px]"
+          className="mt-[var(--border-width-hairline)]"
         />
-        <label htmlFor={id} className="text-xs text-[var(--color-secondary)] cursor-pointer">
+        <Label htmlFor={id} className="cursor-pointer">
           {JOIN_LABEL}
-        </label>
+        </Label>
       </div>
-      <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">{JOIN_HELP}</p>
+      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">{JOIN_HELP}</p>
     </div>
   )
 }

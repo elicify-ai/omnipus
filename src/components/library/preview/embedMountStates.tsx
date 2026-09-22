@@ -18,13 +18,14 @@
 // this kind-agnostic chrome.
 
 import { SpinnerGap, Warning } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
 
 export function EmbedMountPlaceholder() {
   return (
     <div
       data-testid="kb-embed-mount-loading"
       aria-hidden="true"
-      className="flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-6 text-xs text-[var(--color-muted)]"
+      className="flex items-center justify-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-4)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]"
     >
       <SpinnerGap size={14} className="animate-spin" /> Loading…
     </div>
@@ -41,13 +42,13 @@ export function EmbedMountMissing({ workspacePath, parentDir }: { workspacePath:
   return (
     <div
       data-testid="kb-embed-mount-missing"
-      className="flex flex-col items-center gap-1 rounded-md border border-dashed border-[var(--color-warning)]/50 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+      className="flex flex-col items-center gap-[var(--space-1)] rounded-md border border-dashed border-[var(--color-warning)]/50 px-[var(--space-2-5)] py-[var(--space-4)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <Warning size={16} />
       <span>
         “{name}” is no longer in {parentDir === '' ? 'this workspace’s root folder' : parentDir}.
       </span>
-      <span className="text-[11px] text-[var(--color-muted)]">The embed’s link needs updating.</span>
+      <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">The embed’s link needs updating.</span>
     </div>
   )
 }
@@ -56,19 +57,18 @@ export function EmbedMountError({ message, onRetry }: { message: string; onRetry
   return (
     <div
       data-testid="kb-embed-mount-error"
-      className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+      className="flex flex-col items-center gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-4)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
     >
       <Warning size={16} />
       <span>{message}</span>
       {onRetry && (
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="link"
           onClick={onRetry}
-          className="text-[11px] underline underline-offset-2"
+          className="text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] underline underline-offset-2 hover:text-[var(--color-warning)]"
         >
           Retry
-        </button>
+        </Button>
       )}
     </div>
   )

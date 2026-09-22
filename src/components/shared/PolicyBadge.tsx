@@ -1,11 +1,13 @@
 import { ShieldCheck, ShieldWarning, Prohibit } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 export type ToolPolicy = 'allow' | 'ask' | 'deny'
 
 const POLICY_CONFIGS: Record<ToolPolicy, { icon: typeof ShieldCheck; label: string; color: string; activeColor: string }> = {
-  allow: { icon: ShieldCheck, label: 'Allow', color: 'text-[var(--color-muted)]', activeColor: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40' },
-  ask: { icon: ShieldWarning, label: 'Ask', color: 'text-[var(--color-muted)]', activeColor: 'bg-amber-500/20 text-amber-400 border-amber-500/40' },
-  deny: { icon: Prohibit, label: 'Deny', color: 'text-[var(--color-muted)]', activeColor: 'bg-red-500/20 text-red-400 border-red-500/40' },
+  allow: { icon: ShieldCheck, label: 'Allow', color: 'text-[var(--color-muted)]', activeColor: 'bg-[var(--color-status-done)]/20 text-[var(--color-status-done)] border-[var(--color-status-done)]/40' },
+  ask: { icon: ShieldWarning, label: 'Ask', color: 'text-[var(--color-muted)]', activeColor: 'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/40' },
+  deny: { icon: Prohibit, label: 'Deny', color: 'text-[var(--color-muted)]', activeColor: 'bg-[var(--color-status-failed)]/20 text-[var(--color-status-failed)] border-[var(--color-status-failed)]/40' },
 }
 
 interface PolicyBadgeProps {
@@ -21,18 +23,20 @@ export function PolicyBadge({ policy, onClick, active, disabled, title }: Policy
   const cfg = POLICY_CONFIGS[policy]
   const Icon = cfg.icon
   return (
-    <button tabIndex={0}
+    <Button
       type="button"
+      variant="ghost"
       onClick={onClick}
       disabled={disabled}
       title={title}
       aria-pressed={active}
-      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-        active ? cfg.activeColor : `border-transparent ${cfg.color} hover:bg-[var(--color-surface-2)]`
-      }`}
+      className={cn(
+        'h-auto items-center gap-[var(--space-1)] rounded px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-medium border hover:bg-[var(--color-surface-2)]',
+        active ? cfg.activeColor : `border-transparent ${cfg.color}`,
+      )}
     >
       <Icon size={11} weight="bold" />
       {cfg.label}
-    </button>
+    </Button>
   )
 }

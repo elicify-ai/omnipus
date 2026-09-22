@@ -33,6 +33,9 @@
 
 import * as React from 'react'
 import { Key, SignIn } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 
 /** The closed auth-method set (contract `Provider.auth_method`, X-25). */
 export type AuthMethod = 'api_key' | 'sign_in'
@@ -158,59 +161,45 @@ export function AuthMethodControl({
   const radioGroupLabelId = `${testId}-signin-label`
 
   return (
-    <div data-testid={testId} className="flex flex-col gap-2">
+    <div data-testid={testId} className="flex flex-col gap-[var(--space-2)]">
       {/* The segment exists only when there is a real choice: one method needs
           no control, and a single-button "segmented control" is a lie about
           what the operator can do. */}
       {signInOffered && apiKeyOffered && (
-        <div
-          role="group"
+        <SegmentedControl
           aria-label="Authentication method"
+          value={method}
+          onValueChange={(next) => chooseMethod(next as AuthMethod)}
           data-testid={`${testId}-segment`}
-          className="flex items-center gap-1 rounded-md border p-1"
-          style={{ borderColor: 'var(--color-border)' }}
+          className="flex w-full gap-[var(--space-1)] p-[var(--space-1)]"
         >
-          <button
-            type="button"
-            tabIndex={0}
+          <SegmentedControlItem
+            value="sign_in"
             data-testid={`${testId}-segment-sign_in`}
-            aria-pressed={method === 'sign_in'}
-            onClick={() => chooseMethod('sign_in')}
-            className="flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded px-3 text-sm"
-            style={{
-              color: 'var(--color-secondary)',
-              background: method === 'sign_in' ? 'var(--color-surface-2)' : 'transparent',
-            }}
+            className="h-auto min-h-[32px] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <SignIn size={14} aria-hidden="true" />
             {signInLabel}
-          </button>
-          <button
-            type="button"
-            tabIndex={0}
+          </SegmentedControlItem>
+          <SegmentedControlItem
+            value="api_key"
             data-testid={`${testId}-segment-api_key`}
-            aria-pressed={method === 'api_key'}
-            onClick={() => chooseMethod('api_key')}
-            className="flex min-h-[32px] flex-1 items-center justify-center gap-1 rounded px-3 text-sm"
-            style={{
-              color: 'var(--color-secondary)',
-              background: method === 'api_key' ? 'var(--color-surface-2)' : 'transparent',
-            }}
+            className="h-auto min-h-[32px] min-w-0 flex-1 gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <Key size={14} aria-hidden="true" />
             API key
-          </button>
-        </div>
+          </SegmentedControlItem>
+        </SegmentedControl>
       )}
 
       {signInOffered && method === 'sign_in' && (
-        <div data-testid={`${testId}-signin`} className="flex flex-col gap-2">
+        <div data-testid={`${testId}-signin`} className="flex flex-col gap-[var(--space-2)]">
           {/* One sign-in provider needs no radio group — the choice is made. */}
           {options.length > 1 && (
             <>
               <span
                 id={radioGroupLabelId}
-                className="text-xs uppercase"
+                className="text-[length:var(--type-utility-xs-size)] uppercase"
                 style={{ color: 'var(--color-muted)' }}
               >
                 Sign-in method
@@ -219,18 +208,18 @@ export function AuthMethodControl({
                 role="radiogroup"
                 aria-labelledby={radioGroupLabelId}
                 data-testid={`${testId}-signin-options`}
-                className="flex flex-col gap-1"
+                className="flex flex-col gap-[var(--space-1)]"
               >
                 {options.map((option) => {
                   const helper = option.helper ?? signInHelperCopy(option.providerId)
                   const inputId = `${testId}-signin-${option.providerId}`
                   const helperId = helper ? `${inputId}-helper` : undefined
                   return (
-                    <label
+                    <Label
                       key={option.providerId}
                       htmlFor={inputId}
                       data-testid={`${testId}-signin-option-${option.providerId}`}
-                      className="flex cursor-pointer items-start gap-2 rounded border p-2 text-sm"
+                      className="flex cursor-pointer items-start gap-[var(--space-2)] rounded border p-[var(--space-2)]"
                       style={{ borderColor: 'var(--color-border)' }}
                     >
                       <input
@@ -242,21 +231,21 @@ export function AuthMethodControl({
                         checked={providerId === option.providerId}
                         aria-describedby={helperId}
                         onChange={() => chooseProvider(option.providerId)}
-                        className="mt-1"
+                        className="mt-[var(--space-1)]"
                       />
                       <span className="flex flex-col">
                         <span style={{ color: 'var(--color-secondary)' }}>{option.label}</span>
                         {helper && (
                           <span
                             id={helperId}
-                            className="text-xs"
+                            className="text-[length:var(--type-utility-xs-size)]"
                             style={{ color: 'var(--color-muted)' }}
                           >
                             {helper}
                           </span>
                         )}
                       </span>
-                    </label>
+                    </Label>
                   )
                 })}
               </div>
@@ -264,22 +253,21 @@ export function AuthMethodControl({
           )}
 
           {options.length === 1 && options[0] && (
-            <span className="text-xs" style={{ color: 'var(--color-muted)' }}>
+            <span className="text-[length:var(--type-utility-xs-size)]" style={{ color: 'var(--color-muted)' }}>
               {options[0].helper ?? signInHelperCopy(options[0].providerId) ?? options[0].label}
             </span>
           )}
 
-          <button
+          <Button
             type="button"
-            tabIndex={0}
+            variant="outline"
             data-testid={`${testId}-signin-start`}
             onClick={() => onSignIn?.(providerId)}
-            className="flex min-h-[32px] items-center justify-center gap-1 rounded border px-3 text-sm"
-            style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+            className="h-auto min-h-[32px] gap-[var(--space-1)] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             <SignIn size={14} aria-hidden="true" />
             Sign in
-          </button>
+          </Button>
         </div>
       )}
 

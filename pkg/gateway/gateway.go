@@ -1024,6 +1024,13 @@ func (rc *runContextWithOptions) validateAndApplySandbox() (error, bool) {
 	// deps use the true runtime enforcement level (not the config file value).
 	rc.agentLoop.SetAppliedSandboxMode(rc.sandboxResult.Mode)
 
+	// Thread the actually-applied backend into the agent loop. On the degrade
+	// path (sandbox_apply.go::degradeAfterLandlockFailure) applySandbox returns
+	// a fresh FallbackBackend that differs from the construction-time selection
+	// seeded above; this call keeps the sandbox-status handler and each agent's
+	// system preamble reporting that fallback, not the stale kernel backend.
+	rc.agentLoop.SetSandboxBackend(rc.sandboxResult.Backend)
+
 	fmt.Println("\n📦 Agent Status:")
 	startupInfo := rc.agentLoop.GetStartupInfo()
 	toolsInfo, _ := startupInfo["tools"].(map[string]any)

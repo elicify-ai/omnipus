@@ -6,6 +6,12 @@ Board/list (the "work" module's task/plan UI: `BoardView`, `CreateTaskSlideOver`
 `CreatePlanSlideOver`, `AcceptanceCriteriaEditor`, `DefinitionOfDoneEditor`)
 lives here; Calendar has its own module folder with its own file.
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## Tests
 
 CI group `components-workspaces` (pattern `src/components/workspaces/` — the

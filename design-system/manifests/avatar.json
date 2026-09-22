@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "component": "Avatar",
+  "exports": [
+    "Avatar",
+    "AvatarImage",
+    "AvatarFallback"
+  ],
+  "category": "primitive",
+  "source": "src/components/ui/avatar.tsx",
+  "documentation": "docs/internal/design/components/avatar.md",
+  "owner": "design-system",
+  "themes": [
+    "dark"
+  ],
+  "variants": [
+    "fallback",
+    "image"
+  ],
+  "sizes": [
+    "sm",
+    "md",
+    "lg"
+  ],
+  "states": [
+    "default"
+  ],
+  "stories": [
+    {
+      "file": "src/components/ui/avatar.stories.tsx",
+      "exports": [
+        "Default",
+        "Small",
+        "Large",
+        "Image",
+        "Dense",
+        "NarrowViewport"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "avatar-unit",
+      "kind": "unit",
+      "file": "src/components/ui/avatar.test.tsx",
+      "test": "Avatar presentation contract preserves the image accessible name",
+      "applicable": true
+    },
+    {
+      "id": "avatar-axe",
+      "kind": "axe",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Avatar [check:avatar-axe] axe",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "avatar-browser",
+      "kind": "browser",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Avatar [check:avatar-browser] browser",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "avatar-forced-colors",
+      "kind": "forced-colors",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Avatar [check:avatar-forced-colors] forced-colors",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "avatar-root-size",
+      "kind": "root-size",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Avatar [check:avatar-root-size] root-size",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "avatar-zoom",
+      "kind": "zoom",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Avatar [check:avatar-zoom] zoom",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "avatar-reflow",
+      "kind": "reflow",
+      "file": "tests/design-system/browser.spec.ts",
+      "test": "Avatar [check:avatar-reflow] reflow",
+      "story": "Default",
+      "applicable": true
+    },
+    {
+      "id": "avatar-interaction-not-applicable",
+      "kind": "interaction",
+      "applicable": false,
+      "reason": "Avatar has no interaction behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "avatar-keyboard-not-applicable",
+      "kind": "keyboard",
+      "applicable": false,
+      "reason": "Avatar has no keyboard behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "avatar-pointer-not-applicable",
+      "kind": "pointer",
+      "applicable": false,
+      "reason": "Avatar has no pointer behavior beyond its covered presentation contract."
+    },
+    {
+      "id": "avatar-reduced-motion-not-applicable",
+      "kind": "reduced-motion",
+      "applicable": false,
+      "reason": "Avatar has no reduced-motion behavior beyond its covered presentation contract."
+    }
+  ]
+}

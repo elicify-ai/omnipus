@@ -19,6 +19,7 @@ export function emptySessionState(): SessionChatState {
     isStreaming: false,
     isReplaying: false,
     replayCompletedForSession: null,
+    terminalCatchUpPending: false,
     sessionTokens: 0,
     sessionCost: 0,
     rateLimitEvent: null,

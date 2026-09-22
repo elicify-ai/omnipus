@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Plus, Trash } from '@phosphor-icons/react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import {
   Select,
   SelectContent,
@@ -214,26 +215,26 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-[var(--space-2)]">
       {criteria.length === 0 && emptyHint && (
-        <p className="text-xs text-[var(--color-muted)]">{emptyHint}</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{emptyHint}</p>
       )}
 
       {criteria.length > 0 && (
-        <ul className="space-y-1.5">
+        <ul className="space-y-[var(--space-1)]">
           {criteria.map((c, idx) => {
             const verifiesVia = formatVerifiesVia(c)
             return (
               <li
                 key={c.id ?? idx}
-                className="flex items-start gap-2 px-2 py-1.5 rounded-md bg-[var(--color-surface-2)] text-xs"
+                className="flex items-start gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-1)] rounded-md bg-[var(--color-surface-2)] text-[length:var(--type-utility-xs-size)]"
               >
-                <div className="flex-1 min-w-0 space-y-0.5">
-                  <div className="flex items-start gap-1.5">
+                <div className="flex-1 min-w-0 space-y-[var(--space-0-5)]">
+                  <div className="flex items-start gap-[var(--space-1)]">
                     {c.judgment && (
                       <span
                         data-testid="criterion-judgment-badge"
-                        className="mt-[1px] shrink-0 rounded border border-[var(--color-border)] px-1 py-[1px] text-[9px] uppercase tracking-wide text-[var(--color-muted)]"
+                        className="mt-[var(--border-width-hairline)] shrink-0 rounded border border-[var(--color-border)] px-[var(--space-1)] py-[var(--border-width-hairline)] text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-muted)]"
                       >
                         {c.judgment}
                       </span>
@@ -241,56 +242,57 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
                     <p className="text-[var(--color-secondary)] flex-1 min-w-0">{c.text}</p>
                   </div>
                   {verifiesVia && (
-                    <p className="inline-flex max-w-full items-baseline gap-1 rounded bg-[var(--color-surface-1)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-muted)]">
+                    <p className="inline-flex max-w-full items-baseline gap-[var(--space-1)] rounded bg-[var(--color-surface-1)] px-[var(--space-1)] py-[var(--space-0-5)] font-mono text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                       <span className="shrink-0">verifies via:</span>
                       <span className="truncate">{verifiesVia}</span>
                     </p>
                   )}
-                  <p className="text-[10px] text-[var(--color-muted)]">
+                  <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                     by {c.author.kind}:{c.author.id}
                   </p>
                 </div>
-                <button tabIndex={0}
-                  type="button"
+                <IconButton
                   onClick={() => removeCriterion(idx)}
                   aria-label={`Remove criterion ${c.text}`}
-                  className="shrink-0 text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors"
+                  variant="ghost"
+                  size="sm"
+                  className="h-auto w-auto shrink-0 p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                 >
                   <Trash size={12} />
-                </button>
+                </IconButton>
               </li>
             )
           })}
         </ul>
       )}
 
-      <div className="flex flex-col gap-1.5 rounded-md border border-dashed border-[var(--color-border)] p-2">
+      <div className="flex flex-col gap-[var(--space-1)] rounded-md border border-dashed border-[var(--color-border)] p-[var(--space-2)]">
         <Input
           aria-label={inputAriaLabel ?? DEFAULT_INPUT_ARIA_LABEL}
           value={text}
           onChange={(e) => { setText(e.target.value); setError('') }}
           placeholder="What must be true when this is done?"
           maxLength={1000}
-          className="text-xs"
+          className="text-[length:var(--type-utility-xs-size)]"
         />
 
-        <div className="flex items-center gap-3">
-          <button tabIndex={0}
-            type="button"
+        <div className="flex items-center gap-[var(--space-2-5)]">
+          <Button
+            variant="ghost"
             aria-expanded={expander === 'check'}
             onClick={() => toggleExpander('check')}
-            className="text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto p-0 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             + Add technical check
-          </button>
-          <button tabIndex={0}
-            type="button"
+          </Button>
+          <Button
+            variant="ghost"
             aria-expanded={expander === 'behavior'}
             onClick={() => toggleExpander('behavior')}
-            className="text-[11px] text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto p-0 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
           >
             + Add action-count check
-          </button>
+          </Button>
         </div>
 
         {/* ADR-080 D-TYPES — judgment selector. Every criterion carries a
@@ -300,66 +302,66 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
             Locked + disabled while a technical-check or action-count
             expander is open — task.InferJudgment hard-rejects any other
             pairing, so the mismatch can never be built in the first place. */}
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-[var(--color-muted)]">Judgment</span>
+        <div className="flex items-center gap-[var(--space-2)]">
+          <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Judgment</span>
           <Select
             value={effectiveJudgment}
             disabled={lockedJudgment !== null}
             onValueChange={(v) => { setJudgment(v as Judgment); setError('') }}
           >
-            <SelectTrigger aria-label="Judgment" className="h-8 text-xs w-40 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
+            <SelectTrigger aria-label="Judgment" className="h-8 text-[length:var(--type-utility-xs-size)] w-40 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="boolean" className="text-xs">Boolean (yes/no)</SelectItem>
-              <SelectItem value="quantitative" className="text-xs">Quantitative (value vs. threshold)</SelectItem>
-              <SelectItem value="artifact" className="text-xs">Artifact (a thing exists)</SelectItem>
+              <SelectItem value="boolean" className="text-[length:var(--type-utility-xs-size)]">Boolean (yes/no)</SelectItem>
+              <SelectItem value="quantitative" className="text-[length:var(--type-utility-xs-size)]">Quantitative (value vs. threshold)</SelectItem>
+              <SelectItem value="artifact" className="text-[length:var(--type-utility-xs-size)]">Artifact (a thing exists)</SelectItem>
             </SelectContent>
           </Select>
           {lockedJudgment === 'boolean' && (
-            <span className="text-[10px] italic text-[var(--color-muted)]">checks are always boolean</span>
+            <span className="text-[length:var(--type-caption-size)] italic text-[var(--color-muted)]">checks are always boolean</span>
           )}
           {lockedJudgment === 'quantitative' && (
-            <span className="text-[10px] italic text-[var(--color-muted)]">action-count checks are always quantitative</span>
+            <span className="text-[length:var(--type-caption-size)] italic text-[var(--color-muted)]">action-count checks are always quantitative</span>
           )}
         </div>
 
         {expander === 'check' && (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-[var(--space-2)]">
             <Input
               aria-label="Command"
               value={command}
               onChange={(e) => { setCommand(e.target.value); setError('') }}
               placeholder="go test ./... -run TestX"
               maxLength={2000}
-              className="text-xs font-mono flex-1"
+              className="text-[length:var(--type-utility-xs-size)] font-mono flex-1"
             />
             <Input
               aria-label="Expected exit code"
               type="number"
               value={exitCode}
               onChange={(e) => { setExitCode(e.target.value); setError('') }}
-              className="text-xs w-24"
+              className="text-[length:var(--type-utility-xs-size)] w-24"
             />
           </div>
         )}
 
         {expander === 'behavior' && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-[var(--space-2)]">
             <Input
               aria-label="Tool name"
               value={tool}
               onChange={(e) => { setTool(e.target.value); setError('') }}
               placeholder="search_web"
               maxLength={200}
-              className="text-xs font-mono flex-1 min-w-32"
+              className="text-[length:var(--type-utility-xs-size)] font-mono flex-1 min-w-32"
             />
             <Input
               aria-label="Min count"
               type="number"
               value={minCount}
               onChange={(e) => { setMinCount(e.target.value); setError('') }}
-              className="text-xs w-20"
+              className="text-[length:var(--type-utility-xs-size)] w-20"
             />
             <Input
               aria-label="Max count"
@@ -367,26 +369,26 @@ export function AcceptanceCriteriaEditor({ criteria, onChange, currentAuthor, em
               value={maxCount}
               onChange={(e) => { setMaxCount(e.target.value); setError('') }}
               placeholder="no max"
-              className="text-xs w-20"
+              className="text-[length:var(--type-utility-xs-size)] w-20"
             />
             <Select value={scope} onValueChange={(v) => { setScope(v as BehaviorScope); setError('') }}>
-              <SelectTrigger aria-label="Count scope" className="h-8 text-xs w-32 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
+              <SelectTrigger aria-label="Count scope" className="h-8 text-[length:var(--type-utility-xs-size)] w-32 bg-[var(--color-surface-1)] border-[var(--color-border)] text-[var(--color-secondary)]">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="task_session" className="text-xs">Whole session</SelectItem>
-                <SelectItem value="attempt" className="text-xs">Per attempt</SelectItem>
+                <SelectItem value="task_session" className="text-[length:var(--type-utility-xs-size)]">Whole session</SelectItem>
+                <SelectItem value="attempt" className="text-[length:var(--type-utility-xs-size)]">Per attempt</SelectItem>
               </SelectContent>
             </Select>
           </div>
         )}
 
-        {error && <p className="text-xs text-[var(--color-error)]">{error}</p>}
+        {error && <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{error}</p>}
         <Button
           type="button"
           variant="outline"
           size="sm"
-          className="h-8 gap-1 self-start"
+          className="h-8 gap-[var(--space-1)] self-start"
           onClick={addCriterion}
         >
           <Plus size={12} /> Add criterion

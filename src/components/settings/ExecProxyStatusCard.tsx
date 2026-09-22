@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Globe, ArrowsClockwise, Warning, CheckCircle, XCircle, ArrowCounterClockwise } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { fetchExecProxyStatus, updateConfig, getErrorMessage } from '@/lib/api'
 import { RestartConfirmDialog } from '@/components/ui/RestartConfirmDialog'
@@ -104,16 +105,16 @@ export function ExecProxyStatusCard(): React.ReactElement {
   const switchChecked = pendingEnabled !== null ? pendingEnabled : (data?.enabled ?? false)
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
           <Globe size={14} className="text-[var(--color-muted)]" />
           Bash HTTP Proxy
         </h3>
         <Button
           size="sm"
           variant="outline"
-          className="h-7 px-2 gap-1 text-xs"
+          className="h-7 px-[var(--space-2)] gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)]"
           aria-label="Refresh exec proxy status"
           onClick={() => { void refetch() }}
           disabled={isFetching}
@@ -125,13 +126,13 @@ export function ExecProxyStatusCard(): React.ReactElement {
         </Button>
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {/* Enable toggle row */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-[var(--color-secondary)]">Enable SSRF Proxy</span>
+          <div className="flex items-center gap-[var(--space-2)]">
+            <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Enable SSRF Proxy</span>
             {restartPending && (
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/20 text-amber-400 border border-amber-500/40">
+              <span className="inline-flex items-center gap-[var(--space-1)] px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-medium bg-[color-mix(in_srgb,var(--color-warning)_20%,transparent)] text-[var(--color-warning)] border border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)]">
                 <ArrowCounterClockwise size={10} weight="bold" />
                 Gateway restart required
               </span>
@@ -145,28 +146,28 @@ export function ExecProxyStatusCard(): React.ReactElement {
         </div>
 
         {isLoading ? (
-          <p className="text-sm text-[var(--color-muted)]">Checking...</p>
+          <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Checking...</p>
         ) : isError ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-[var(--space-2)]">
             <XCircle size={14} style={{ color: 'var(--color-error)' }} />
-            <p className="text-sm text-[var(--color-error)]">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
               Failed to reach backend
             </p>
           </div>
         ) : data && cfg ? (
           <>
             {/* Status row */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-[var(--space-2)]">
               <span
                 className="inline-block w-2 h-2 rounded-full flex-shrink-0"
                 style={{ backgroundColor: cfg.dotColor }}
                 aria-hidden="true"
               />
-              <span className="text-sm font-medium" style={{ color: cfg.textColor }}>
+              <span className="text-[length:var(--type-body-compact-size)] font-medium" style={{ color: cfg.textColor }}>
                 {cfg.label}
               </span>
               {data.running && data.address && (
-                <span className="font-mono text-xs text-[var(--color-muted)] ml-1">
+                <span className="font-mono text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] ml-[var(--space-1)]">
                   {data.address}
                 </span>
               )}
@@ -174,14 +175,14 @@ export function ExecProxyStatusCard(): React.ReactElement {
 
             {/* Contextual message */}
             {status === 'stopped' && (
-              <div className="flex items-start gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/8 p-2.5">
+              <div className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/8 p-[var(--space-2)]">
                 <Warning
                   size={13}
                   weight="fill"
-                  className="flex-shrink-0 mt-0.5"
+                  className="flex-shrink-0 mt-[var(--space-0-5)]"
                   style={{ color: 'var(--color-warning)' }}
                 />
-                <p className="text-xs leading-relaxed" style={{ color: 'var(--color-warning)' }}>
+                <p className="text-[length:var(--type-utility-xs-size)] leading-relaxed" style={{ color: 'var(--color-warning)' }}>
                   Proxy failed to start — bash commands are not SSRF-protected.
                 </p>
               </div>
@@ -190,10 +191,10 @@ export function ExecProxyStatusCard(): React.ReactElement {
         ) : null}
 
         {/* Description */}
-        <p className="text-[10px] text-[var(--color-muted)] leading-relaxed border-t border-[var(--color-border)] pt-2">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed border-t border-[var(--color-border)] pt-[var(--space-2)]">
           Routes bash tool child process HTTP/HTTPS traffic through an SSRF-protected loopback proxy (SEC-28).
         </p>
-      </div>
+      </Card>
 
       <RestartConfirmDialog
         open={pendingEnabled !== null}

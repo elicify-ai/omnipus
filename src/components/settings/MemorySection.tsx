@@ -2,8 +2,12 @@ import { useState, useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Brain, ArrowUp, ArrowDown, X, Warning } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ModelSelector } from '@/components/ui/model-selector'
+import { Switch } from '@/components/ui/switch'
 import { fetchMemorySettings, updateMemorySettings, fetchProviders, getErrorMessage } from '@/lib/api'
 import type { MemorySettings, FallbackModel } from '@/lib/api'
 import { useModelToProvider } from '@/lib/agents/modelToProvider'
@@ -14,12 +18,12 @@ import { SaveStatus, useSaveStatus } from './SaveStatus'
 
 function Skeleton() {
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3 animate-pulse">
+    <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)] animate-pulse">
       <div className="h-4 w-40 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-full rounded bg-[var(--color-border)]" />
       <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
       <div className="h-3 w-3/4 rounded bg-[var(--color-border)]" />
-    </div>
+    </Card>
   )
 }
 
@@ -35,35 +39,21 @@ interface ToggleRowProps {
 
 function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps) {
   return (
-    <div className="flex items-start justify-between gap-4">
+    <div className="flex items-start justify-between gap-[var(--space-3)]">
       <div className="flex-1 min-w-0">
-        <label htmlFor={id} className="text-sm font-medium text-[var(--color-secondary)] cursor-pointer">
+        <Label htmlFor={id} className="cursor-pointer">
           {label}
-        </label>
+        </Label>
         {description && (
-          <p className="text-xs text-[var(--color-muted)] mt-0.5 leading-relaxed">{description}</p>
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)] leading-relaxed">{description}</p>
         )}
       </div>
-      <button tabIndex={0}
+      <Switch
         id={id}
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        onClick={() => onChange(!checked)}
-        className={[
-          'relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none',
-          checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]',
-        ].join(' ')}
+        checked={checked}
+        onCheckedChange={onChange}
         aria-label={label}
-      >
-        <span
-          className={[
-            'pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform',
-            checked ? 'translate-x-4' : 'translate-x-0',
-          ].join(' ')}
-          aria-hidden="true"
-        />
-      </button>
+      />
     </div>
   )
 }
@@ -83,14 +73,14 @@ interface NumberRowProps {
 
 function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onChange }: NumberRowProps) {
   return (
-    <div className="space-y-1">
-      <label htmlFor={id} className="text-sm font-medium text-[var(--color-secondary)]">
+    <div className="space-y-[var(--space-2)]">
+      <Label htmlFor={id}>
         {label}
-      </label>
+      </Label>
       {description && (
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">{description}</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">{description}</p>
       )}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-[var(--space-2)]">
         <Input
           id={id}
           type="number"
@@ -105,9 +95,9 @@ function NumberRow({ id, label, description, value, min = 0, step = 1, unit, onC
             const v = parseFloat(e.target.value)
             onChange(isNaN(v) ? min : v)
           }}
-          className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-sm text-[var(--color-secondary)] focus:outline-none"
+          className="w-28 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] focus:outline-none"
         />
-        {unit && <span className="text-xs text-[var(--color-muted)]">{unit}</span>}
+        {unit && <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{unit}</span>}
       </div>
     </div>
   )
@@ -337,7 +327,7 @@ export function MemorySection(): React.ReactElement {
 
   if (isError) {
     return (
-      <p className="text-sm" style={{ color: 'var(--color-error)' }}>
+      <p className="text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-error)' }}>
         Failed to load memory settings:{' '}
         {error instanceof Error ? error.message : 'Unknown error'}
       </p>
@@ -345,17 +335,17 @@ export function MemorySection(): React.ReactElement {
   }
 
   return (
-    <section className="space-y-3">
+    <section className="space-y-[var(--space-2-5)]">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-[var(--color-secondary)] flex items-center gap-1.5">
+        <h3 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] flex items-center gap-[var(--space-1)]">
           <Brain size={14} className="text-[var(--color-muted)]" />
           Memory &amp; Recap
         </h3>
         <SaveStatus state={saveState} errorMessage={errorMessage} />
       </div>
 
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-5">
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           Global settings for automatic session recap (context compaction) and memory retention.
           These settings apply across all workspaces and agents.
         </p>
@@ -381,7 +371,7 @@ export function MemorySection(): React.ReactElement {
           />
         )}
 
-        <div className="border-t border-[var(--color-border)] pt-4 space-y-4">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
           {/* Bootstrap recap */}
           <ToggleRow
             id="bootstrap-recap-enabled"
@@ -405,24 +395,24 @@ export function MemorySection(): React.ReactElement {
         </div>
 
         {/* Summarization model */}
-        <div className="border-t border-[var(--color-border)] pt-4 space-y-4">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-[var(--color-secondary)]">Summarization model</p>
-            <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
+          <div className="space-y-[var(--space-1)]">
+            <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Summarization model</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
               Recap runs a background summarization call — a fast, cheap model is recommended.
               Leave empty to use the default model.
             </p>
           </div>
 
           {providersError && (
-            <p className="text-xs text-[var(--color-warning)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]">
               Could not load providers. You can still enter a model slug manually.
             </p>
           )}
 
           {/* Primary model */}
-          <div className="space-y-1">
-            <p className="text-xs text-[var(--color-muted)]">Primary model</p>
+          <div className="space-y-[var(--space-1)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Primary model</p>
             <ModelSelector
               models={availableModels}
               value={form.recap_model}
@@ -437,14 +427,14 @@ export function MemorySection(): React.ReactElement {
           </div>
 
           {/* Fallback chain */}
-          <div className="space-y-2">
-            <p className="text-xs text-[var(--color-muted)]">Fallback models</p>
-            <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+          <div className="space-y-[var(--space-2)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Fallback models</p>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
               Tried in order if the primary model fails.
             </p>
 
             {form.recap_fallback_models.length > 0 && (
-              <div className="space-y-1" data-testid="recap-fallback-list">
+              <div className="space-y-[var(--space-1)]" data-testid="recap-fallback-list">
                 {form.recap_fallback_models.map((entry, idx) => {
                   const providerMissing = !entry.provider
                   const providerLabel = providerMissing
@@ -457,12 +447,12 @@ export function MemorySection(): React.ReactElement {
                     <div
                       key={entry.model}
                       data-testid={`recap-fallback-row-${entry.model}`}
-                      className="flex items-center gap-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1.5"
+                      className="flex items-center gap-[var(--space-2)] rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2)] py-[var(--space-1)]"
                     >
-                      <span className="text-xs text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
+                      <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] w-4 shrink-0 text-right">{idx + 1}.</span>
                       <span
                         data-testid={`recap-fallback-provider-${entry.model}`}
-                        className="inline-flex items-center px-1.5 rounded text-[10px] font-semibold shrink-0"
+                        className="inline-flex items-center px-[var(--space-1)] rounded text-[length:var(--type-caption-size)] font-semibold shrink-0"
                         style={{
                           backgroundColor: 'color-mix(in srgb, var(--color-accent) 15%, transparent)',
                           color: 'var(--color-accent)',
@@ -473,7 +463,7 @@ export function MemorySection(): React.ReactElement {
                       </span>
                       <span
                         data-testid={`recap-fallback-model-${entry.model}`}
-                        className="flex-1 text-xs font-mono text-[var(--color-secondary)] truncate"
+                        className="flex-1 text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] truncate"
                       >
                         {entry.model}
                       </span>
@@ -483,43 +473,46 @@ export function MemorySection(): React.ReactElement {
                           role="img"
                           aria-label="Provider not connected — fallback may not work at runtime"
                           title="Provider not connected — fallback may not work at runtime"
-                          className="inline-flex items-center text-amber-400 shrink-0"
+                          className="inline-flex items-center text-[var(--color-warning)] shrink-0"
                         >
                           <Warning size={12} weight="fill" />
                         </span>
                       )}
-                      <button tabIndex={0}
+                      <IconButton
+                        variant="ghost"
                         ref={(el) => setFallbackControlRef(entry.model, 'up', el)}
                         type="button"
                         data-testid={`recap-fallback-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
                         disabled={idx === 0}
                         onClick={() => handleMoveFallback(entry.model, -1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <ArrowUp size={12} />
-                      </button>
-                      <button tabIndex={0}
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
                         ref={(el) => setFallbackControlRef(entry.model, 'down', el)}
                         type="button"
                         data-testid={`recap-fallback-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
                         disabled={idx === form.recap_fallback_models.length - 1}
                         onClick={() => handleMoveFallback(entry.model, 1)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed focus:outline-none rounded"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <ArrowDown size={12} />
-                      </button>
-                      <button tabIndex={0}
+                      </IconButton>
+                      <IconButton
+                        variant="ghost"
                         ref={(el) => setFallbackControlRef(entry.model, 'remove', el)}
                         type="button"
                         data-testid={`recap-fallback-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
                         onClick={() => handleRemoveFallback(entry.model)}
-                        className="text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors focus:outline-none rounded"
+                        className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)]"
                       >
                         <X size={12} />
-                      </button>
+                      </IconButton>
                     </div>
                   )
                 })}
@@ -542,8 +535,8 @@ export function MemorySection(): React.ReactElement {
           </div>
         </div>
 
-        <div className="border-t border-[var(--color-border)] pt-4 space-y-4">
-          <p className="text-xs font-semibold text-[var(--color-secondary)]">Retention</p>
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] space-y-[var(--space-3)]">
+          <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Retention</p>
 
           <NumberRow
             id="session-days"
@@ -566,7 +559,7 @@ export function MemorySection(): React.ReactElement {
           />
         </div>
 
-        <div className="border-t border-[var(--color-border)] pt-4 flex justify-end">
+        <div className="border-t border-[var(--color-border)] pt-[var(--space-3)] flex justify-end">
           <Button
             size="sm"
             onClick={handleSave}
@@ -576,7 +569,7 @@ export function MemorySection(): React.ReactElement {
             {isSaving ? 'Saving...' : 'Save'}
           </Button>
         </div>
-      </div>
+      </Card>
     </section>
   )
 }

@@ -25,6 +25,7 @@ import { useMemo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Shield } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { fetchWorkspaces, workspacesQueryKeys } from '@/lib/api'
@@ -67,17 +68,17 @@ export function CrossWorkspaceApprovalBanner() {
   return (
     <div role="status" aria-live="polite" className="shrink-0">
       {summary && (
-        <button
+        <Button
           type="button"
-          tabIndex={0}
+          variant="ghost"
           data-testid="cross-workspace-approval-banner"
           onClick={() => goToWorkspace(summary.targetWorkspaceId)}
-          className="flex w-full items-center gap-2 px-4 py-2 bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 transition-colors text-left"
+          className="h-auto w-full items-center justify-start gap-[var(--space-2)] rounded-none px-[var(--space-3)] py-[var(--space-2)] bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 hover:text-[var(--color-accent)] text-left"
         >
           <Shield size={14} weight="bold" className="shrink-0" aria-hidden="true" />
           <span className="flex-1 truncate">{summary.label}</span>
           <span className="shrink-0 underline underline-offset-2">Go there</span>
-        </button>
+        </Button>
       )}
     </div>
   )

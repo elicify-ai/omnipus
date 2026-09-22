@@ -40,17 +40,17 @@ export function ProviderValidationBanner({
   const icon = (() => {
     switch (outcome) {
       case 'invalid_key':
-        return <XCircle size={14} weight="fill" className="shrink-0 mt-0.5" data-testid="banner-icon-x-circle" />
+        return <XCircle size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" data-testid="banner-icon-x-circle" />
       case 'no_credit':
-        return <Wallet size={14} weight="fill" className="shrink-0 mt-0.5" data-testid="banner-icon-wallet" />
+        return <Wallet size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" data-testid="banner-icon-wallet" />
       case 'unreachable':
-        return <WifiSlash size={14} weight="fill" className="shrink-0 mt-0.5" data-testid="banner-icon-wifi-slash" />
+        return <WifiSlash size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" data-testid="banner-icon-wifi-slash" />
       case 'restricted':
-        return <Lock size={14} weight="fill" className="shrink-0 mt-0.5" data-testid="banner-icon-lock" />
+        return <Lock size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" data-testid="banner-icon-lock" />
       default:
         // Never return null for a present, non-valid outcome — a new contract
         // outcome must still render its server message rather than vanishing.
-        return <Warning size={14} weight="fill" className="shrink-0 mt-0.5" data-testid="banner-icon-warning" />
+        return <Warning size={14} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" data-testid="banner-icon-warning" />
     }
   })()
 
@@ -62,8 +62,8 @@ export function ProviderValidationBanner({
       data-outcome={outcome}
       className={
         isBlocking
-          ? 'flex items-start gap-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-sm text-red-300'
-          : 'flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-sm text-amber-300'
+          ? 'flex items-start gap-[var(--space-2)] rounded-lg border border-[color-mix(in_srgb,var(--color-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-error)_10%,transparent)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]'
+          : 'flex items-start gap-[var(--space-2)] rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]'
       }
     >
       {icon}

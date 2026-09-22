@@ -47,7 +47,7 @@ export function ManageSignInDialog({
         </DialogHeader>
 
         <div
-          className="flex items-center gap-2 text-sm text-[var(--color-success)]"
+          className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-success)]"
           role="status"
           data-testid="manage-sign-in-status"
         >
@@ -55,12 +55,12 @@ export function ManageSignInDialog({
           {accountLabel ? `Signed in as ${accountLabel}` : 'Signed in'}
         </div>
 
-        <DialogFooter className="sm:justify-between gap-2">
+        <DialogFooter className="sm:justify-between gap-[var(--space-2)]">
           <Button
             variant="outline"
             onClick={onSignOut}
             disabled={signingOut}
-            className="gap-2"
+            className="gap-[var(--space-2)]"
             data-testid="manage-sign-out-btn"
           >
             {signingOut ? <SpinnerGap size={14} className="animate-spin" /> : null}

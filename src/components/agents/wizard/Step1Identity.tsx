@@ -16,7 +16,10 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { SegmentedControl, SegmentedControlItem } from '@/components/ui/segmented-control'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import {
   Select,
@@ -110,10 +113,10 @@ export function Step1Identity({
 
   return (
     <>
-      <div className="space-y-2">
-        <label htmlFor="wizard-name" className="text-sm font-medium">
+      <div className="space-y-[var(--space-2)]">
+        <Label htmlFor="wizard-name">
           Name <span className="text-[var(--color-error)]" aria-label="required">*</span>
-        </label>
+        </Label>
         <Input
           id="wizard-name"
           data-testid="wizard-name"
@@ -124,13 +127,13 @@ export function Step1Identity({
         />
       </div>
 
-      <div className="space-y-2">
-        <label htmlFor="wizard-description" className="text-sm font-medium">
+      <div className="space-y-[var(--space-2)]">
+        <Label htmlFor="wizard-description">
           Description
           {isWorker && (
-            <span className="text-[var(--color-error)] ml-1" aria-label="required">*</span>
+            <span className="text-[var(--color-error)] ml-[var(--space-1)]" aria-label="required">*</span>
           )}
-        </label>
+        </Label>
         <Textarea
           id="wizard-description"
           data-testid="wizard-description"
@@ -147,8 +150,8 @@ export function Step1Identity({
         />
       </div>
 
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Avatar color</label>
+      <div className="space-y-[var(--space-2)]">
+        <Label>Avatar color</Label>
         <AvatarColorPicker
           value={payload.color}
           onChange={(c) => setField('color', c)}
@@ -156,8 +159,8 @@ export function Step1Identity({
         />
       </div>
 
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Icon</label>
+      <div className="space-y-[var(--space-2)]">
+        <Label>Icon</Label>
         <IconPicker
           value={payload.icon as IconName}
           onChange={(icon) => setField('icon', icon)}
@@ -177,10 +180,10 @@ export function Step1Identity({
       )}
 
       {!inheritModel && (
-      <div className="space-y-2">
-        <label htmlFor="wizard-model" className="text-sm font-medium">
+      <div className="space-y-[var(--space-2)]">
+        <Label htmlFor="wizard-model">
           Model <span className="text-[var(--color-error)]" aria-label="required">*</span>
-        </label>
+        </Label>
         {/* subagent_3p: free-text slug only — passed verbatim to the CLI
             invocation (`claude --model <slug>`). The picker would lie about
             which providers are reachable from an external CLI runner. */}
@@ -189,7 +192,7 @@ export function Step1Identity({
             {initialCli && (
               <div
                 data-testid="wizard-cli-chip"
-                className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-xs font-mono"
+                className="flex items-center gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono"
               >
                 <span className="text-[var(--color-muted)]">CLI:</span>
                 <span className="font-medium text-[var(--color-secondary)]">
@@ -299,9 +302,9 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-[var(--space-2)]">
       <div className="flex items-center justify-between">
-        <label className="text-sm font-medium">Fallback models (max {MAX_FALLBACKS})</label>
+        <Label>Fallback models (max {MAX_FALLBACKS})</Label>
         <Button
           type="button"
           variant="ghost"
@@ -314,23 +317,23 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
               : undefined
           }
           data-testid="wizard-add-fallback"
-          className="h-7 text-xs"
+          className="h-7 text-[length:var(--type-utility-xs-size)]"
         >
           + Add fallback
         </Button>
       </div>
-      <p className="text-xs text-[var(--color-muted)]">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
         Each fallback is a {`{model, provider}`} pair. Server rejects more
         than {MAX_FALLBACKS} with 400.
       </p>
       {fallbacks.length === 0 && (
-        <p className="text-xs text-[var(--color-muted)]">No fallbacks configured.</p>
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">No fallbacks configured.</p>
       )}
-      <div className="space-y-1.5">
+      <div className="space-y-[var(--space-1)]">
         {fallbacks.map((entry, idx) => (
           <div
             key={idx}
-            className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1.5"
+            className="flex items-center gap-[var(--space-1)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2)] py-[var(--space-1)]"
             data-testid={`wizard-fallback-${idx}`}
           >
             <Input
@@ -346,7 +349,7 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
                 })
               }}
               placeholder="model slug"
-              className="font-mono text-xs h-7 flex-1"
+              className="font-mono text-[length:var(--type-utility-xs-size)] h-7 flex-1"
               data-testid={`wizard-fallback-model-${idx}`}
             />
             <Select
@@ -354,7 +357,7 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
               onValueChange={(v) => updateFallback(idx, { provider: v === '__auto__' ? '' : v })}
             >
               <SelectTrigger
-                className="h-7 px-2 text-xs"
+                className="h-7 px-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
                 data-testid={`wizard-fallback-provider-${idx}`}
               >
                 <SelectValue />
@@ -368,15 +371,16 @@ function FallbackEditor({ payload, setField, providers }: FallbackEditorProps) {
                 ))}
               </SelectContent>
             </Select>
-            <button tabIndex={0}
-              type="button"
+            <IconButton
+              variant="ghost"
+              size="sm"
               onClick={() => removeFallback(idx)}
-              className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] p-1 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+              className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
               aria-label={`Remove fallback ${idx + 1}`}
               data-testid={`wizard-fallback-remove-${idx}`}
             >
               <X size={12} />
-            </button>
+            </IconButton>
           </div>
         ))}
       </div>
@@ -550,53 +554,57 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
   }, [cliValidation.status])
 
   return (
-    <div className="space-y-4 pt-4 border-t border-[var(--color-border)]">
+    <div className="space-y-[var(--space-3)] pt-[var(--space-3)] border-t border-[var(--color-border)]">
       {/* CLI chooser — only when the roster did NOT pre-lock one. */}
       {!lockedCli && (
-        <div className="space-y-2">
-          <label className="text-sm font-medium">CLI runtime</label>
-          <div className="flex gap-2 flex-wrap" data-testid="wizard-cli-chooser">
+        <div className="space-y-[var(--space-2)]">
+          <Label id="wizard-cli-chooser-label">CLI runtime</Label>
+          <SegmentedControl
+            aria-labelledby="wizard-cli-chooser-label"
+            value={payload.cli ?? ''}
+            onValueChange={(cli) => {
+              // Switching CLI invalidates any verdict validated
+              // against the previous CLI at this path. Clear both the
+              // local hook (for THIS mount's hint) and the payload
+              // field directly (the result-only sync effect above
+              // deliberately does not clear on idle — see its
+              // comment — so this explicit clear is what actually
+              // lifts a stale block, FR-019).
+              cliValidation.reset()
+              setField('executor_cli_validation_reason', undefined)
+              setField('cli', cli as WizardCli)
+            }}
+            className="flex-wrap gap-[var(--space-2)] border-transparent bg-transparent p-0"
+            data-testid="wizard-cli-chooser"
+          >
             {(SUPPORTED_CLIS as readonly WizardCli[]).map((cli) => {
               const selected = payload.cli === cli
               return (
-                <button tabIndex={0}
+                <SegmentedControlItem
                   key={cli}
-                  type="button"
-                  onClick={() => {
-                    // Switching CLI invalidates any verdict validated
-                    // against the previous CLI at this path. Clear both the
-                    // local hook (for THIS mount's hint) and the payload
-                    // field directly (the result-only sync effect above
-                    // deliberately does not clear on idle — see its
-                    // comment — so this explicit clear is what actually
-                    // lifts a stale block, FR-019).
-                    cliValidation.reset()
-                    setField('executor_cli_validation_reason', undefined)
-                    setField('cli', cli)
-                  }}
+                  value={cli}
                   className={
                     selected
-                      ? 'px-3 py-1.5 rounded-md text-xs font-medium border bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
-                      : 'px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)] transition-colors'
+                      ? 'h-auto min-w-0 rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium shadow-none bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40 hover:bg-[var(--color-accent)]/20 hover:text-[var(--color-accent)]'
+                      : 'h-auto min-w-0 rounded-md border px-[var(--space-2-5)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium shadow-none border-[var(--color-border)] bg-transparent text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]'
                   }
                   data-testid={`wizard-cli-${cli}`}
-                  aria-pressed={selected}
                 >
                   {CLI_LABEL[cli]}
-                </button>
+                </SegmentedControlItem>
               )
             })}
-          </div>
-          <p className="text-[11px] text-[var(--color-muted)]">
+          </SegmentedControl>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             Selects the external runner that will execute this agent.
           </p>
         </div>
       )}
 
-      <div className="space-y-2">
-        <label htmlFor="wizard-cli-path" className="text-sm font-medium">
+      <div className="space-y-[var(--space-2)]">
+        <Label htmlFor="wizard-cli-path">
           CLI path
-        </label>
+        </Label>
         <Input
           id="wizard-cli-path"
           data-testid="wizard-cli-path"
@@ -616,47 +624,48 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
             cliValidation.validate(payload.cli, e.target.value)
           }}
           placeholder="/usr/local/bin/claude-code"
-          className="font-mono text-xs"
+          className="font-mono text-[length:var(--type-utility-xs-size)]"
         />
         <CliPathValidationHint
           validation={cliValidation.status}
           detectHint={detectHint}
           testId="wizard-cli-path-status"
         />
-        <p className="text-[11px] text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           Path to the CLI executable on the host.
         </p>
       </div>
 
-      <div className="space-y-2" data-testid="wizard-env-overrides">
+      <div className="space-y-[var(--space-2)]" data-testid="wizard-env-overrides">
         <div className="flex items-center justify-between">
-          <label className="text-sm font-medium">Environment overrides</label>
-          <button tabIndex={0}
+          <Label>Environment overrides</Label>
+          <Button
             type="button"
+            variant="link"
             onClick={addEnvRow}
-            className="text-[11px] text-[var(--color-accent)] hover:underline"
+            className="text-[length:var(--type-caption-size)]"
             data-testid="wizard-env-overrides-add"
           >
             + Add env var
-          </button>
+          </Button>
         </div>
         {envRows.length === 0 && (
-          <p className="text-[11px] text-[var(--color-muted)]">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             No env overrides. Add KEY=VALUE pairs passed to the CLI process.
           </p>
         )}
-        <div className="space-y-1.5">
+        <div className="space-y-[var(--space-1)]">
           {envRows.map((row) => {
             const isDuplicate = row.key !== '' && envDuplicateKeys.has(row.key)
             return (
-              <div key={row.id} className="space-y-1">
-                <div className="flex items-center gap-1.5">
+              <div key={row.id} className="space-y-[var(--space-1)]">
+                <div className="flex items-center gap-[var(--space-1)]">
                   <Input
                     value={row.key}
                     onChange={(e) => updateEnvKeyDraft(row.id, e.target.value)}
                     onBlur={commitEnvKey}
                     placeholder="KEY"
-                    className="font-mono text-xs flex-1"
+                    className="font-mono text-[length:var(--type-utility-xs-size)] flex-1"
                     aria-label="Environment variable name"
                     aria-invalid={isDuplicate || undefined}
                     data-testid={`wizard-env-key-${row.id}`}
@@ -665,22 +674,23 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
                     value={row.value}
                     onChange={(e) => updateEnvValue(row.id, e.target.value)}
                     placeholder="VALUE"
-                    className="font-mono text-xs flex-1"
+                    className="font-mono text-[length:var(--type-utility-xs-size)] flex-1"
                     aria-label="Environment variable value"
                     data-testid={`wizard-env-value-${row.id}`}
                   />
-                  <button tabIndex={0}
-                    type="button"
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
                     onClick={() => removeEnvRow(row.id)}
-                    className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] text-xs px-2 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+                    className="h-auto w-auto px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                     aria-label={`Remove ${row.key || 'env var'}`}
                   >
                     ×
-                  </button>
+                  </IconButton>
                 </div>
                 {isDuplicate && (
                   <p
-                    className="text-[10px] text-[var(--color-error)]"
+                    className="text-[length:var(--type-caption-size)] text-[var(--color-error)]"
                     data-testid={`wizard-env-duplicate-${row.id}`}
                   >
                     Duplicate key "{row.key}" — rename it before this change is saved.
@@ -692,19 +702,19 @@ export function ExecutorInputs({ payload, setField, lockedCli }: ExecutorInputsP
         </div>
       </div>
 
-      <div className="space-y-2">
-        <label htmlFor="wizard-cli-args" className="text-sm font-medium">
+      <div className="space-y-[var(--space-2)]">
+        <Label htmlFor="wizard-cli-args">
           Additional CLI arguments
-        </label>
+        </Label>
         <Input
           id="wizard-cli-args"
           data-testid="wizard-cli-args"
           value={payload.executor_cli_args ?? ''}
           onChange={(e) => setField('executor_cli_args', e.target.value)}
           placeholder="e.g. --add-dir /extra/path"
-          className="font-mono text-xs"
+          className="font-mono text-[length:var(--type-utility-xs-size)]"
         />
-        <p className="text-[11px] text-[var(--color-muted)]">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
           Space-separated args passed before the user prompt, in addition to the flags Omnipus applies automatically when this agent runs — see the live command preview below. Any argument that would be silently ignored is called out there before you create the agent.
         </p>
       </div>

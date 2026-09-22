@@ -154,6 +154,9 @@ func (h *WSHandler) GetStreamer(_ context.Context, channel, chatID, sessionID st
 	}
 	h.liveStreamers[sid] = streamer
 	h.mu.Unlock()
+	if pending, ok := h.takePendingMessageStatus(sid); ok {
+		sendPendingMessageWorking(sid, pending)
+	}
 
 	return streamer, true
 }

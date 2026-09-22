@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { fireEvent, render } from '@testing-library/react'
 import { Input } from './input'
 
 // test_input_focus_ring
@@ -39,5 +39,20 @@ describe('Input — Forge Gold focus ring', () => {
   it('is disabled when disabled prop is set', () => {
     const { container } = render(<Input disabled />)
     expect(container.querySelector('input')).toBeDisabled()
+  })
+
+  it('preserves native form identity, controlled changes, read-only and invalid state', () => {
+    const onChange = vi.fn()
+    const { rerender } = render(<Input id="title" name="title" value="Alpha" onChange={onChange} readOnly required aria-invalid />)
+    const input = document.querySelector('input')!
+    expect(input).toHaveAttribute('id', 'title')
+    expect(input).toHaveAttribute('name', 'title')
+    expect(input).toBeRequired()
+    expect(input).toHaveAttribute('readonly')
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+    rerender(<Input value="Beta" onChange={onChange} />)
+    expect(input).toHaveValue('Beta')
+    fireEvent.change(input, { target: { value: 'Gamma' } })
+    expect(onChange).toHaveBeenCalledOnce()
   })
 })

@@ -10,7 +10,7 @@
 # and drives the real gate against them via its --root/--budget flags:
 #
 #   (a) a 3,156-line file NOT on the budget list          -> must FAIL
-#       (one line over the 3,155 FAIL limit)
+#       (one line over the 3,000 FAIL limit)
 #   (b) a listed file one line UNDER its listed number    -> must pass (exit 0)
 #   (c) a listed file one line OVER its listed number     -> must FAIL
 #   (d) a 2,001-line file NOT on the list                 -> exactly one WARN,
@@ -18,8 +18,16 @@
 #   (e) a 4,001-line file under an exempt generated/ dir  -> ignored entirely
 #                                                             (exit 0, no
 #                                                             WARN/FAIL lines)
-#   (f) a file at exactly the 3,155 FAIL limit            -> WARN only, exit 0
+#   (f) a file at exactly the 3,000 FAIL limit            -> WARN only, exit 0
 #       (the gate fails OVER the limit, never AT it)
+#   (g) a 3,001-line .mjs file under scripts/ NOT on the list -> must FAIL,
+#       proving the .mjs/.js/.cjs scripts/+tests/ roots are actually wired,
+#       not just documented
+#   (h) a 3,001-line .cjs file under tests/ NOT on the list   -> must FAIL,
+#       same proof for the tests/ root and the .cjs extension
+#   (i) a 3,001-line .mjs file OUTSIDE scripts/ and tests/    -> ignored
+#       entirely (exit 0, no WARN/FAIL), proving the scope decision (not
+#       docs/, not spikes/) is enforced, not accidental
 #
 # Exit: 0 all cases behave, 1 a case misbehaves, 2 harness could not run.
 
@@ -76,7 +84,7 @@ expect_exit() { # expect_exit <label> <want-exit>
   return 0
 }
 
-# (a) 3,001-line unlisted file must FAIL (one line over the 3,155 limit).
+# (a) 3,001-line unlisted file must FAIL (one line over the 3,000 limit).
 reset_tree
 make_file "pkg/a.go" 3001
 write_budget
@@ -141,7 +149,7 @@ if expect_exit "generated/ file is ignored" 0; then
   fi
 fi
 
-# (f) a file at exactly the 3,155 FAIL limit warns only — the gate fails
+# (f) a file at exactly the 3,000 FAIL limit warns only — the gate fails
 # OVER the limit, never AT it.
 reset_tree
 make_file "pkg/f.go" 3000
@@ -150,6 +158,47 @@ run_gate
 if expect_exit "file at exactly the FAIL limit warns only" 0; then
   if ! printf '%s\n' "$OUT" | grep -qE '^WARN pkg/f\.go 3000 > 2000$'; then
     echo "selfcheck FAIL: at-limit file — expected WARN line not found" >&2
+    printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
+    FAIL=1
+  fi
+fi
+
+# (g) a 3,001-line .mjs file under scripts/ not on the list must FAIL.
+reset_tree
+make_file "scripts/g.mjs" 3001
+write_budget
+run_gate
+if expect_exit "3,001-line unlisted scripts/*.mjs file fails" 1; then
+  if ! printf '%s\n' "$OUT" | grep -qE '^FAIL scripts/g\.mjs 3001 > 3000 \(not grandfathered\)$'; then
+    echo "selfcheck FAIL: 3,001-line scripts/*.mjs file — expected FAIL line not found" >&2
+    printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
+    FAIL=1
+  fi
+fi
+
+# (h) a 3,001-line .cjs file under tests/ not on the list must FAIL.
+reset_tree
+make_file "tests/h.cjs" 3001
+write_budget
+run_gate
+if expect_exit "3,001-line unlisted tests/*.cjs file fails" 1; then
+  if ! printf '%s\n' "$OUT" | grep -qE '^FAIL tests/h\.cjs 3001 > 3000 \(not grandfathered\)$'; then
+    echo "selfcheck FAIL: 3,001-line tests/*.cjs file — expected FAIL line not found" >&2
+    printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
+    FAIL=1
+  fi
+fi
+
+# (i) a 3,001-line .mjs file outside scripts/ and tests/ (e.g. docs/) is out
+# of scope entirely — ignored, not scanned, not warned, not failed.
+reset_tree
+make_file "docs/i.mjs" 3001
+write_budget
+run_gate
+if expect_exit "scripts/tests-outside .mjs file is out of scope" 0; then
+  finding_count="$(printf '%s\n' "$OUT" | grep -cE '^(WARN|FAIL) ' || true)"
+  if [ "$finding_count" -ne 0 ]; then
+    echo "selfcheck FAIL: docs/*.mjs file — expected no WARN/FAIL output, got $finding_count line(s)" >&2
     printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
     FAIL=1
   fi

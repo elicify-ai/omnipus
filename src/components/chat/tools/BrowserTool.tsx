@@ -8,8 +8,10 @@
 
 import { useState } from 'react'
 import { makeAssistantToolUI } from '@assistant-ui/react'
-import { CaretDown, CaretUp, Camera, Broadcast } from '@phosphor-icons/react'
+import { Camera, Broadcast } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
@@ -169,64 +171,54 @@ export function BrowserToolBlock({
     // Flat text-line design (ticket "Tool components in chat", P2): no
     // border, no surface fill, no rounded frame, no overflow-hidden — the
     // row is transparent on the thread.
-    <div className="mt-2 text-xs font-mono">
+    <div className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] font-mono">
       {/* Header — a row of composed controls (mirrors GenericToolCall.tsx):
           the expand/collapse toggle is its own button so "Watch live" can be a
           separate, independently clickable sibling rather than nested inside it. */}
-      <div className="flex w-full items-center gap-2">
-        <button tabIndex={0}
-          type="button"
-          onClick={() => hasDetail && setExpanded((e) => !e)}
-          className={cn(
-            'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
-            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            !hasDetail && 'cursor-default'
-          )}
-          aria-expanded={hasDetail ? expanded : undefined}
-          disabled={!hasDetail}
+      <div className="flex w-full items-center gap-[var(--space-2)]">
+        <DisclosureRow
+          expanded={expanded}
+          onExpandedChange={setExpanded}
+          expandable={hasDetail}
+          data-testid="browser-tool-toggle"
         >
           {statusConfig.indicator}
           <span className="text-[var(--color-muted)] shrink-0">{toolName}</span>
-          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[10px]">
+          <span className="font-mono text-[var(--color-accent)] truncate flex-1 min-w-0 text-[length:var(--type-caption-size)]">
             {summary}
           </span>
-          <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}>
+          <span className={cn('text-[var(--color-muted)] shrink-0')}>
             {statusConfig.label}
           </span>
-        </button>
+        </DisclosureRow>
 
         {/* "Watch live" is shown on every browser tool-call row, not only while
             the call is running: browser tools complete in well under a second,
             but the agent's browser session persists afterwards, so the viewer
             can open the live panel to watch/continue at any point. */}
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="link"
           onClick={handleWatchLive}
           aria-label="Watch live"
           title="Watch this agent's browser live"
-          className="shrink-0 flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:underline transition-colors"
+          className="rounded-none shrink-0 flex items-center gap-[var(--space-1)] text-[length:var(--type-caption-size)]"
         >
           <Broadcast size={13} />
           <span>Watch live</span>
-        </button>
-
-        {hasDetail && (
-          <span className="ml-auto shrink-0 text-[var(--color-muted)]">
-            {expanded ? <CaretUp size={12} /> : <CaretDown size={12} />}
-          </span>
-        )}
+        </Button>
       </div>
 
       {/* Detail panel — indented left-accent block instead of the old
           bordered/backgrounded panel; each section keeps its own spacing
           via space-y-2 rather than individual borders/fills. */}
       {expanded && hasDetail && (
-        <div className="ml-[3px] border-l-2 border-[var(--color-border)] pl-3 py-1 space-y-2">
+        <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)] space-y-[var(--space-2)]">
           {/* Args row */}
           {Object.keys(args).length > 0 && (
             <div>
-              <p className="text-[10px] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Args</p>
-              <pre className="text-[10px] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mb-[var(--space-1)] uppercase tracking-wider">Args</p>
+              <pre className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all">
                 {JSON.stringify(args, null, 2)}
               </pre>
             </div>
@@ -234,15 +226,15 @@ export function BrowserToolBlock({
 
           {/* Screenshot indicator (image itself renders in the assistant reply bubble via the media frame). */}
           {parsed.screenshot && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-[var(--space-1)]">
               <Camera size={11} className="text-[var(--color-muted)]" />
-              <span className="text-[10px] text-[var(--color-muted)]">Screenshot captured</span>
+              <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Screenshot captured</span>
             </div>
           )}
 
           {/* Text output (browser.get_text) */}
           {parsed.text && !parsed.screenshot && (
-            <pre className="text-[10px] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
+            <pre className="text-[length:var(--type-caption-size)] leading-5 text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-48 overflow-auto">
               {String(parsed.text).slice(0, 4000)}
               {String(parsed.text).length > 4000 && (
                 <span className="text-[var(--color-muted)] italic">
@@ -255,8 +247,8 @@ export function BrowserToolBlock({
           {/* JS evaluate result (browser.evaluate) */}
           {parsed.result !== undefined && (
             <div>
-              <p className="text-[10px] text-[var(--color-muted)] mb-1 uppercase tracking-wider">Result</p>
-              <pre className="text-[10px] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-40 overflow-auto">
+              <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mb-[var(--space-1)] uppercase tracking-wider">Result</p>
+              <pre className="text-[length:var(--type-caption-size)] font-mono text-[var(--color-secondary)] whitespace-pre-wrap break-all max-h-40 overflow-auto">
                 {JSON.stringify(parsed.result, null, 2)}
               </pre>
             </div>
@@ -264,12 +256,12 @@ export function BrowserToolBlock({
 
           {/* Error */}
           {parsed.error && (
-            <div className="text-[var(--color-error)] text-[10px]">{parsed.error}</div>
+            <div className="text-[var(--color-error)] text-[length:var(--type-caption-size)]">{parsed.error}</div>
           )}
 
           {/* Simple OK for click/type/wait when no rich payload */}
           {!parsed.screenshot && !parsed.text && parsed.result === undefined && !parsed.error && (
-            <div className="text-[10px] text-[var(--color-muted)]">
+            <div className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               {isCancelled ? 'Cancelled' : isError ? 'Failed' : 'OK'}
             </div>
           )}

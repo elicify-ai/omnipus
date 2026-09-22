@@ -8,6 +8,7 @@ import {
   SheetFooter,
 } from '@/components/ui/sheet'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -98,16 +99,16 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
   return (
     <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-md flex flex-col p-0">
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>
             New workspace
           </SheetTitle>
         </SheetHeader>
 
-        <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-5 px-6 py-4">
+        <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-[var(--space-3)] px-[var(--space-4)] py-[var(--space-3)]">
           {/* Name */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-workspace-name" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="new-workspace-name">
               Name <span className="text-[var(--color-error)]">*</span>
             </Label>
             <Input
@@ -121,15 +122,15 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
               aria-describedby={fieldErrors.name ? 'new-workspace-name-error' : undefined}
             />
             {fieldErrors.name && (
-              <p id="new-workspace-name-error" className="text-xs text-[var(--color-error)]">
+              <p id="new-workspace-name-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                 {fieldErrors.name}
               </p>
             )}
           </div>
 
           {/* Description */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-workspace-desc" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="new-workspace-desc">
               Description
             </Label>
             <Textarea
@@ -143,36 +144,37 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
               aria-describedby={fieldErrors.description ? 'new-workspace-desc-error' : undefined}
             />
             {fieldErrors.description && (
-              <p id="new-workspace-desc-error" className="text-xs text-[var(--color-error)]">
+              <p id="new-workspace-desc-error" className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                 {fieldErrors.description}
               </p>
             )}
           </div>
 
           {/* Core team — agent multi-select (US-10 AC #5) */}
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="new-workspace-core-team" className="text-[var(--color-secondary)]">
+          <div className="flex flex-col gap-[var(--space-2)]">
+            <Label htmlFor="new-workspace-core-team">
               Core team
             </Label>
             {/* Selected agent chips */}
             {form.core_team.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-[var(--space-1)]">
                 {form.core_team.map((agentId) => {
                   const agent = agents.find((a) => a.id === agentId)
                   return (
                     <span
                       key={agentId}
-                      className="flex items-center gap-1 rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-2 py-0.5 text-xs text-[var(--color-secondary)]"
+                      className="flex items-center gap-[var(--space-1)] rounded-full bg-[var(--color-surface-2)] border border-[var(--color-border)] px-[var(--space-2)] py-[var(--space-0-5)] text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)]"
                     >
                       {agent?.name ?? agentId}
-                      <button tabIndex={0}
-                        type="button"
+                      <IconButton
                         onClick={() => setForm((s) => ({ ...s, core_team: s.core_team.filter((id) => id !== agentId) }))}
                         aria-label={`Remove ${agent?.name ?? agentId} from core team`}
-                        className="rounded-full text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors"
+                        variant="ghost"
+                        size="sm"
+                        className="h-auto w-auto rounded-full p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)]"
                       >
                         <X size={10} />
-                      </button>
+                      </IconButton>
                     </span>
                   )
                 })}
@@ -180,7 +182,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
             )}
             {agentsError ? (
               <>
-                <p className="text-xs text-[var(--color-error)]">
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
                   Could not load agents — enter agent IDs manually
                 </p>
                 <Input
@@ -241,7 +243,7 @@ export function NewWorkspaceSlideOver({ open, onOpenChange }: NewWorkspaceSlideO
 
           <div className="flex-1" />
 
-          <SheetFooter className="flex-row gap-2 px-0 py-2">
+          <SheetFooter className="flex-row gap-[var(--space-2)] px-0 py-[var(--space-2)]">
             <Button
               type="button"
               variant="ghost"

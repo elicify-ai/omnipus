@@ -1,0 +1,9 @@
+# DateTimePicker
+
+DateTimePicker is a controlled local date-and-time composite. Day changes preserve an existing time, and a first day defaults to midnight. Time-first entry deliberately retains the established behavior of using the current local date and current untouched time fields; changing that interaction belongs to later usability work. `minuteStep` must be a finite integer from 1 through 60, and a non-null value must be a valid `Date`; invalid input throws `RangeError` before options are generated, while an existing off-grid minute remains available. Disabled triggers reject activation. Read-only triggers remain focusable for inspection, expose `aria-disabled`, and do not open. If disabled or read-only becomes active while open, the popover closes immediately and stale calendar/time handlers reject changes. Done closes the popover without changing value ownership.
+
+The automated CSS-zoom proxy covers the closed, in-flow trigger. It cannot provide valid geometry evidence for the open portalled calendar because CSS zoom gives the Radix portal different layout and visual coordinate spaces. The open calendar therefore remains explicitly pending native browser 200% zoom acceptance; its automated 320px reflow check remains applicable.
+
+The popover is bounded to the viewport. At narrow coarse-pointer widths, Calendar owns any necessary horizontal scrolling inside its date grid while the time controls remain inside the popover, preventing page-level horizontal overflow.
+
+Field control metadata (`id`, `aria-describedby`, and `aria-invalid`) is forwarded to the trigger. Required state is announced through a merged hidden description because the trigger remains a button, where `aria-required` is invalid. Read-only remains focusable and `aria-disabled`, with full-opacity local styling that distinguishes it from native disabled state.

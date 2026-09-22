@@ -70,10 +70,10 @@ export function GoalSetupFailureLine({ toolName, result, error }: GoalSetupFailu
   const detail = detailText(result, error)
   const summaryText = goalSetupFailureLineText(toolName)
   return (
-    <details data-testid="goal-setup-failure-line" className="my-1 text-xs font-mono">
+    <details data-testid="goal-setup-failure-line" className="my-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-mono">
       <summary
         tabIndex={0}
-        className="flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[var(--color-muted)]"
+        className="flex cursor-pointer list-none items-center gap-[var(--space-1)] py-[var(--space-0-5)] text-[var(--color-muted)]"
         title={detail || summaryText}
       >
         <Warning size={12} weight="fill" className="shrink-0 text-[var(--color-error)]" aria-hidden="true" />
@@ -82,7 +82,7 @@ export function GoalSetupFailureLine({ toolName, result, error }: GoalSetupFailu
       {detail && (
         <pre
           data-testid="goal-setup-failure-line-detail"
-          className="ml-[3px] mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all border-l-2 border-[var(--color-border)] py-1 pl-3 text-[10px] text-[var(--color-secondary)]"
+          className="ml-[var(--space-1)] mt-[var(--space-1)] max-h-48 overflow-auto whitespace-pre-wrap break-all border-l-2 border-[var(--color-border)] py-[var(--space-1)] pl-[var(--space-2-5)] text-[length:var(--type-caption-size)] text-[var(--color-secondary)]"
         >
           {detail}
         </pre>

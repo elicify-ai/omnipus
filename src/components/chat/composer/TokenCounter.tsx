@@ -16,18 +16,18 @@ export function TokenCounter({ className }: { className?: string }) {
 
   return (
     <div
-      className={cn('flex items-center gap-1 text-xs text-[var(--color-muted)] shrink-0', className)}
+      className={cn('flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] shrink-0', className)}
       data-testid="session-token-counter"
       aria-label={`${sessionTokens} tokens used`}
       role="status"
     >
       <ArrowsClockwise
         size={11}
-        className={cn(isStreaming && 'animate-spin text-[var(--color-accent)]')}
+        className={cn(isStreaming ? 'animate-spin text-[var(--color-accent)]' : undefined)}
         aria-hidden="true"
       />
       <span
-        className={cn('font-mono tabular-nums', isStreaming && 'text-[var(--color-secondary)]')}
+        className={cn('font-mono tabular-nums', isStreaming ? 'text-[var(--color-secondary)]' : undefined)}
         data-testid="session-token-value"
       >
         {formatTokens(sessionTokens)} tokens

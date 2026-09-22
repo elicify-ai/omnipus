@@ -45,11 +45,13 @@
 // readers without stealing focus.
 
 import { useEffect, useRef, useState } from 'react'
-import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
+import { Target, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
 import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { cn } from '@/lib/utils'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
+import { Card } from '@/components/ui/card'
 
 // ── Display cap for the goal condition (grapheme-safe, mirrors GoalIndicator) ─
 const CONDITION_DISPLAY_CAP = 80
@@ -166,7 +168,6 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
   if (frame.state === 'queued') return null
 
   const config = describePillState(frame.state)
-  const { Icon } = config
 
   // UAT E-14: the Judge can retry in the background after the chat turn has
   // already ended, and its retry reason (e.g. "…did not answer in time.
@@ -178,23 +179,23 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
 
   return (
     <div className="flex flex-col items-end" data-testid="goal-pill-wrapper">
-      <button
-        type="button"
-        tabIndex={0}
+      <DisclosureRow
+        expanded={expanded}
+        onExpandedChange={setExpanded}
+        expandable
+        caretSize={11}
         data-testid={config.testId}
         data-goal-id={goalId}
-        onClick={() => setExpanded((v) => !v)}
-        aria-expanded={expanded}
         aria-label={`Goal: ${truncateCondition(frame.condition)}, state ${config.label}. Click to ${expanded ? 'collapse' : 'expand'}.`}
         className={cn(
-          'flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-xs shadow-md transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer',
+          'rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[var(--space-2-5)] py-[var(--space-1)] shadow-md hover:bg-[var(--color-surface-2)]',
           config.accentClass,
         )}
       >
-        <Icon
+        <config.Icon
           size={13}
           weight="fill"
-          className={cn('shrink-0', config.pulse && 'animate-pulse')}
+          className={cn('shrink-0', config.pulse === true ? 'animate-pulse' : undefined)}
           aria-hidden="true"
         />
         <span className="font-medium max-w-[220px] truncate">
@@ -203,32 +204,31 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         <span className="shrink-0 tabular-nums opacity-80">
           {frame.round}/{frame.max_rounds}
         </span>
-        {expanded ? <CaretUp size={11} aria-hidden="true" /> : <CaretDown size={11} aria-hidden="true" />}
-      </button>
+      </DisclosureRow>
 
       {showSubtitle && (
         <p
           data-testid="goal-pill-subtitle"
           title={frame.latest_reason}
-          className="mt-0.5 max-w-[260px] truncate text-[10px] text-[var(--color-muted)]"
+          className="mt-[var(--space-0-5)] max-w-[260px] truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
         >
           {frame.latest_reason}
         </p>
       )}
 
       {expanded && (
-        <div
+        <Card
           data-testid="goal-pill-expanded"
-          className="mt-1 w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 text-xs shadow-lg"
+          className="mt-[var(--space-1)] w-[320px] max-w-[calc(100vw-2rem)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)] shadow-lg"
         >
           {/* Condition (full, not truncated) */}
-          <div className="flex items-start gap-2">
-            <Target size={12} weight="fill" className="mt-0.5 shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
+          <div className="flex items-start gap-[var(--space-2)]">
+            <Target size={12} weight="fill" className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
             <div className="flex-1 min-w-0">
               <p className="text-[var(--color-secondary)] break-words" data-testid="goal-pill-condition">
                 {frame.condition}
               </p>
-              <p className="text-[var(--color-muted)] mt-1 tabular-nums" data-testid="goal-pill-round">
+              <p className="text-[var(--color-muted)] mt-[var(--space-1)] tabular-nums" data-testid="goal-pill-round">
                 round {frame.round}/{frame.max_rounds} · active loops {frame.active_loops}/{frame.cap}
               </p>
             </div>
@@ -236,24 +236,24 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
 
           {/* Latest judge reason */}
           {frame.latest_reason && (
-            <p className="text-[var(--color-muted)] mt-1.5 italic break-words" title={frame.latest_reason}>
+            <p className="text-[var(--color-muted)] mt-[var(--space-1)] italic break-words" title={frame.latest_reason}>
               {frame.latest_reason}
             </p>
           )}
 
           {/* Latest per-criterion verdict (from judgeActivity, goal-scoped) */}
           {latestVerdict && (
-            <div className="mt-2 border-t border-[var(--color-border)] pt-2">
-              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[10px] font-sans mb-1">
+            <div className="mt-[var(--space-2)] border-t border-[var(--color-border)] pt-[var(--space-2)]">
+              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[length:var(--type-caption-size)] font-body mb-[var(--space-1)]">
                 Latest verdict — {latestVerdict.met ? 'met' : 'not met'} (round {latestVerdict.round})
               </p>
-              <ul className="space-y-0.5" data-testid="goal-pill-verdict-criteria">
+              <ul className="space-y-[var(--space-0-5)]" data-testid="goal-pill-verdict-criteria">
                 {latestVerdict.per_criterion.map((c) => (
-                  <li key={c.criterion_id} className="flex items-start gap-1.5 text-[11px]">
+                  <li key={c.criterion_id} className="flex items-start gap-[var(--space-1)] text-[length:var(--type-caption-size)]">
                     {c.met ? (
-                      <CheckCircle size={11} className="mt-0.5 shrink-0 text-[color:var(--color-success)]" aria-hidden="true" />
+                      <CheckCircle size={11} className="mt-[var(--space-0-5)] shrink-0 text-[color:var(--color-success)]" aria-hidden="true" />
                     ) : (
-                      <XCircle size={11} className="mt-0.5 shrink-0 text-[color:var(--color-error)]" aria-hidden="true" />
+                      <XCircle size={11} className="mt-[var(--space-0-5)] shrink-0 text-[color:var(--color-error)]" aria-hidden="true" />
                     )}
                     <span className="text-[var(--color-secondary)] break-words">{c.reason}</span>
                   </li>
@@ -261,7 +261,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
               </ul>
             </div>
           )}
-        </div>
+        </Card>
       )}
     </div>
   )
@@ -379,7 +379,7 @@ export function GoalPillTray() {
       data-testid="goal-pill-tray"
       role="status"
       aria-live="polite"
-      className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] right-4 z-20 flex flex-col items-end gap-1.5"
+      className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] right-4 z-20 flex flex-col items-end gap-[var(--space-1)]"
     >
       {entries.map(([goalId, frame]) => (
         <div key={goalId} className="pointer-events-auto">

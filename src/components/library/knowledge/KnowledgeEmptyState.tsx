@@ -47,6 +47,7 @@ import {
 import type { ReactNode } from 'react'
 
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
 
 /**
  * One resolved answer about a folder, ready to render.
@@ -147,7 +148,7 @@ function Shell({
       // The one genuine failure state overrides this — see DetectionError.
       role="status"
       className={cn(
-        'flex items-start gap-3 rounded-lg border px-4 py-3',
+        'flex items-start gap-[var(--space-2-5)] rounded-lg border px-[var(--space-3)] py-[var(--space-2-5)]',
         tone === 'error'
           ? 'border-[var(--color-error)]/40 bg-[var(--color-error)]/10'
           : tone === 'notice'
@@ -158,7 +159,7 @@ function Shell({
     >
       <span
         className={cn(
-          'mt-0.5 shrink-0',
+          'mt-[var(--space-0-5)] shrink-0',
           tone === 'error' ? 'text-[var(--color-error)]' : 'text-[var(--color-accent)]',
         )}
         aria-hidden="true"
@@ -168,13 +169,13 @@ function Shell({
       <div className="min-w-0 flex-1">
         <h3
           className={cn(
-            'text-sm font-semibold',
+            'text-[length:var(--type-body-compact-size)] font-semibold',
             tone === 'error' ? 'text-[var(--color-error)]' : 'text-[var(--color-secondary)]',
           )}
         >
           {title}
         </h3>
-        <div className="mt-1 space-y-2 text-xs leading-relaxed text-[var(--color-muted)]">
+        <div className="mt-[var(--space-1)] space-y-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-muted)]">
           {children}
         </div>
       </div>
@@ -221,7 +222,7 @@ export function KnowledgeEmptyState({
           // though it were ordinary.
           role="alert"
           className={cn(
-            'flex items-start gap-3 rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-4 py-3',
+            'flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]',
             className,
           )}
         >
@@ -229,13 +230,13 @@ export function KnowledgeEmptyState({
             size={18}
             weight="fill"
             aria-hidden="true"
-            className="mt-0.5 shrink-0 text-[var(--color-error)]"
+            className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-error)]"
           />
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold text-[var(--color-error)]">
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">
               Omnipus could not check this folder
             </h3>
-            <div className="mt-1 space-y-2 text-xs leading-relaxed text-[var(--color-error)]/90">
+            <div className="mt-[var(--space-1)] space-y-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-error)]/90">
               <p>{DETECTION_ERROR_REASON[state.code]}</p>
               <p data-testid="knowledge-detection-error-message" className="font-mono break-all">
                 {state.message}
@@ -283,16 +284,14 @@ export function KnowledgeEmptyState({
             this workspace. Omnipus never creates an{' '}
             <span className="font-mono">.obsidian</span> folder, and never changes one it finds.
           </p>
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
             data-testid="knowledge-create-collection"
             onClick={onCreateCollection}
-            className="inline-flex h-8 items-center gap-2 rounded-md bg-[var(--color-accent)] px-3 text-xs font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
+            className="h-8 gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
           >
             <Books size={14} weight="fill" aria-hidden="true" />
             Create a collection here
-          </button>
+          </Button>
         </Shell>
       )
 
@@ -370,7 +369,7 @@ export function KnowledgeEmptyState({
           data-testid="knowledge-state-index-failed"
           role="alert"
           className={cn(
-            'flex items-start gap-3 rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-4 py-3',
+            'flex items-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 px-[var(--space-3)] py-[var(--space-2-5)]',
             className,
           )}
         >
@@ -378,13 +377,13 @@ export function KnowledgeEmptyState({
             size={18}
             weight="fill"
             aria-hidden="true"
-            className="mt-0.5 shrink-0 text-[var(--color-error)]"
+            className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-error)]"
           />
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold text-[var(--color-error)]">
+            <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-error)]">
               Indexing {state.name} stopped
             </h3>
-            <div className="mt-1 space-y-2 text-xs leading-relaxed text-[var(--color-error)]/90">
+            <div className="mt-[var(--space-1)] space-y-[var(--space-2)] text-[length:var(--type-utility-xs-size)] leading-relaxed text-[var(--color-error)]/90">
               <p data-testid="knowledge-index-failed-message" className="font-mono break-all">
                 {state.message}
               </p>
@@ -429,16 +428,14 @@ export function KnowledgeEmptyState({
             nothing to read or search until a note exists.
           </p>
           {onCreateNote ? (
-            <button
-              type="button"
-              tabIndex={0}
+            <Button
               data-testid="knowledge-create-note"
               onClick={onCreateNote}
-              className="inline-flex h-8 items-center gap-2 rounded-md bg-[var(--color-accent)] px-3 text-xs font-semibold text-[var(--color-primary)] transition-colors hover:bg-[var(--color-accent-hover)]"
+              className="h-8 gap-[var(--space-2)] rounded-md px-[var(--space-2-5)] text-[length:var(--type-utility-xs-size)]"
             >
               <FileText size={14} weight="fill" aria-hidden="true" />
               Write the first note
-            </button>
+            </Button>
           ) : (
             <p data-testid="knowledge-create-note-unavailable">
               Add or upload a markdown file to this folder and Omnipus will index it automatically.

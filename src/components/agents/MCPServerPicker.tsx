@@ -1,4 +1,8 @@
 import { Switch } from '@/components/ui/switch'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
 import type { McpServer, AgentToolsCfg } from '@/lib/api'
 
 type McpBinding = NonNullable<NonNullable<AgentToolsCfg['mcp']>['servers']>[number]
@@ -45,7 +49,7 @@ export function MCPServerPicker({
 }: MCPServerPickerProps) {
   if (servers.length === 0) {
     return (
-      <p className="text-xs text-[var(--color-muted)] py-2">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] py-[var(--space-2)]">
         No MCP servers configured. Add servers on the Skills &amp; Tools screen.
       </p>
     )
@@ -62,7 +66,7 @@ export function MCPServerPicker({
   }
 
   return (
-    <div className="space-y-2" data-testid="mcp-server-picker">
+    <div className="space-y-[var(--space-2)]" data-testid="mcp-server-picker">
       {servers.map((server) => {
         const binding = bindingFor(mcpConfig, server.id)
         const mode = modeOf(binding)
@@ -75,15 +79,15 @@ export function MCPServerPicker({
         return (
           <div
             key={server.id}
-            className="rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)] px-3 py-2.5 space-y-2"
+            className="rounded-md bg-[var(--color-surface-1)] border border-[var(--color-border)] px-[var(--space-2-5)] py-[var(--space-2)] space-y-[var(--space-2)]"
             data-testid={`mcp-binding-${server.id}`}
           >
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-[var(--space-2-5)]">
               <div className="min-w-0 flex-1">
-                <p className="text-sm text-[var(--color-secondary)] font-medium truncate">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] font-medium truncate">
                   {server.name}
                 </p>
-                <p className="text-[10px] text-[var(--color-muted)]">
+                <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                   {server.tool_count} tool{server.tool_count !== 1 ? 's' : ''}
                   {server.transport === 'stdio' ? ' — local program' : ' — network'}
                 </p>
@@ -96,60 +100,75 @@ export function MCPServerPicker({
               />
             </div>
             {isEnabled && (
-              <fieldset className="space-y-1" disabled={disabled}>
+              <fieldset className="space-y-[var(--space-1)]" disabled={disabled}>
                 <legend className="sr-only">Tools from {server.name}</legend>
-                {([
-                  ['all', 'All tools', false],
-                  ['selected', 'Selected tools', selectedDisabled],
-                  ['none', 'No tools', false],
-                ] as const).map(([value, label, optionDisabled]) => (
-                  <label
-                    key={value}
-                    className="flex items-center gap-2 text-[11px] text-[var(--color-secondary)]"
-                  >
-                    <input tabIndex={0}
-                      type="radio"
-                      name={`mcp-mode-${server.id}`}
-                      value={value}
-                      checked={mode === value}
-                      disabled={optionDisabled}
-                      data-testid={`mcp-mode-${server.id}-${value}`}
-                      onChange={() => {
-                        if (value === 'all') setBinding(server.id, { id: server.id })
-                        else if (value === 'none') setBinding(server.id, { id: server.id, tools: [] })
-                        else {
-                          const names = (binding?.tools && binding.tools.length > 0)
-                            ? binding.tools
-                            : catalog
-                          setBinding(server.id, { id: server.id, tools: [...names] })
-                        }
-                      }}
-                    />
-                    {label}
-                  </label>
-                ))}
+                <RadioGroup
+                  value={mode}
+                  onValueChange={(value) => {
+                    if (value === 'all') setBinding(server.id, { id: server.id })
+                    else if (value === 'none') setBinding(server.id, { id: server.id, tools: [] })
+                    else {
+                      const names = (binding?.tools && binding.tools.length > 0)
+                        ? binding.tools
+                        : catalog
+                      setBinding(server.id, { id: server.id, tools: [...names] })
+                    }
+                  }}
+                  aria-label={`Tools from ${server.name}`}
+                  orientation="vertical"
+                  className="gap-[var(--space-1)]"
+                >
+                  {([
+                    ['all', 'All tools', false],
+                    ['selected', 'Selected tools', selectedDisabled],
+                    ['none', 'No tools', false],
+                  ] as const).map(([value, label, optionDisabled]) => {
+                    const checked = mode === value
+                    return (
+                      <RadioGroupItem
+                        key={value}
+                        value={value}
+                        disabled={optionDisabled}
+                        data-testid={`mcp-mode-${server.id}-${value}`}
+                        className="h-auto w-auto justify-start gap-[var(--space-2)] border-0 bg-transparent p-0 text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
+                      >
+                        <span
+                          className={cn(
+                            'inline-block h-[9px] w-[9px] shrink-0 rounded-full border-2 transition-colors',
+                            checked ? 'border-[var(--color-accent)] bg-[var(--color-accent)]' : 'border-[var(--color-border)]',
+                          )}
+                          aria-hidden="true"
+                        />
+                        {label}
+                      </RadioGroupItem>
+                    )
+                  })}
+                </RadioGroup>
                 {mode === 'selected' && (
-                  <div className="pl-5 space-y-1" data-testid={`mcp-selected-${server.id}`}>
+                  <div className="ml-[var(--space-4)] space-y-[var(--space-1)]" data-testid={`mcp-selected-${server.id}`}>
                     {catalog.length === 0 ? (
-                      <p className="text-[10px] text-[var(--color-muted)]">No catalog tools listed for this server.</p>
+                      <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">No catalog tools listed for this server.</p>
                     ) : catalog.map((toolName) => {
                       const checked = (binding?.tools ?? []).includes(toolName)
+                      const toolCheckboxId = `mcp-tool-${server.id}-${toolName}`
                       return (
-                        <label key={toolName} className="flex items-center gap-2 text-[11px] font-mono text-[var(--color-muted)]">
-                          <input tabIndex={0}
-                            type="checkbox"
+                        <div key={toolName} className="flex items-center gap-[var(--space-2)]">
+                          <Checkbox
+                            id={toolCheckboxId}
                             checked={checked}
-                            data-testid={`mcp-tool-${server.id}-${toolName}`}
-                            onChange={(event) => {
+                            data-testid={toolCheckboxId}
+                            onCheckedChange={(next) => {
                               const current = binding?.tools ?? []
-                              const nextTools = event.target.checked
+                              const nextTools = next === true
                                 ? uniqueNames([...current, toolName])
                                 : current.filter((name) => name !== toolName)
                               setBinding(server.id, { id: server.id, tools: nextTools })
                             }}
                           />
-                          {toolName}
-                        </label>
+                          <Label htmlFor={toolCheckboxId} className="cursor-pointer text-[length:var(--type-caption-size)] font-mono font-[var(--font-weight-regular)] text-[var(--color-muted)]">
+                            {toolName}
+                          </Label>
+                        </div>
                       )
                     })}
                   </div>

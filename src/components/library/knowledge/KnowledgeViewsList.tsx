@@ -44,6 +44,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
 import { collectionPathToWorkspacePath, libraryNoteHref } from './KnowledgeBacklinks'
@@ -108,7 +109,7 @@ export function KnowledgeViewsList({
   const views = viewsQuery.data?.views ?? []
   if (viewsQuery.isError) {
     return (
-      <div data-testid="knowledge-views-error" className="flex flex-col gap-2">
+      <div data-testid="knowledge-views-error" className="flex flex-col gap-[var(--space-2)]">
         <LibraryErrorBanner
           message={
             viewsQuery.error instanceof Error
@@ -117,15 +118,14 @@ export function KnowledgeViewsList({
           }
           testId="knowledge-views-error-banner"
         />
-        <button
-          type="button"
-          tabIndex={0}
+        <Button
+          variant="outline"
           onClick={() => void viewsQuery.refetch()}
           data-testid="knowledge-views-retry"
-          className="self-start rounded border border-[var(--color-border)] px-2 py-1 text-xs text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+          className="h-auto self-start rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-[var(--font-weight-regular)]"
         >
           Try again
-        </button>
+        </Button>
       </div>
     )
   }
@@ -141,36 +141,35 @@ export function KnowledgeViewsList({
     // keeps every view reachable by scrolling the list, never the page.
     <div
       data-testid="knowledge-views-list"
-      className="flex max-h-[min(384px,45vh)] flex-col gap-1 overflow-y-auto"
+      className="flex max-h-[min(384px,45vh)] flex-col gap-[var(--space-1)] overflow-y-auto"
     >
-      <p className="px-2 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
+      <p className="px-[var(--space-2)] text-[length:var(--type-caption-size)] font-medium uppercase tracking-wide text-[var(--color-muted)]">
         Saved views
       </p>
-      <ul className="flex flex-col gap-1">
+      <ul className="flex flex-col gap-[var(--space-1)]">
         {views.map((v) => {
           const unservable = v.unservable === true
           return (
             <li key={v.name}>
-              <button
-                type="button"
-                tabIndex={0}
+              <Button
+                variant="ghost"
                 disabled={unservable}
                 aria-disabled={unservable || undefined}
                 data-testid="knowledge-views-item"
                 data-view={v.name}
                 onClick={() => setOpenView({ name: v.name, label: v.label })}
                 className={cn(
-                  'flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors',
+                  'h-auto w-full flex-col items-start gap-[var(--space-0-5)] whitespace-normal rounded-md px-[var(--space-2)] py-[var(--space-1)] text-left font-[var(--font-weight-regular)] disabled:opacity-60',
                   unservable
-                    ? 'cursor-default opacity-60'
+                    ? 'cursor-default hover:bg-transparent'
                     : 'hover:bg-[var(--color-surface-2)]',
                 )}
               >
-                <span className="flex w-full items-center gap-1.5 text-sm text-[var(--color-secondary)]">
+                <span className="flex w-full items-center gap-[var(--space-1)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
                   <SquaresFour size={13} aria-hidden="true" className="shrink-0 text-[var(--color-muted)]" />
                   <span className="flex-1 truncate">{v.label}</span>
                   {v.kind !== undefined && (
-                    <Badge variant="outline" className="px-1.5 py-0 text-[10px] leading-4">
+                    <Badge variant="outline" className="px-[var(--space-1)] py-0 text-[length:var(--type-caption-size)] leading-4">
                       {v.kind}
                     </Badge>
                   )}
@@ -178,18 +177,18 @@ export function KnowledgeViewsList({
                 {/* Provenance, when there is any: an imported view names the
                     `.base` it came from; an authored view belongs to the
                     collection itself (D-13's whole point). */}
-                <span className="w-full truncate text-[11px] text-[var(--color-muted)]">
+                <span className="w-full truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                   {v.source !== undefined ? `from ${v.source}` : 'authored in this knowledge base'}
                 </span>
                 {unservable && (
                   <span
                     data-testid="knowledge-views-unservable"
-                    className="text-left text-[11px] leading-snug text-[var(--color-warning)]"
+                    className="text-left text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
                   >
                     {v.unservable_reason ?? "This view can't be served."}
                   </span>
                 )}
-              </button>
+              </Button>
             </li>
           )
         })}
@@ -197,9 +196,9 @@ export function KnowledgeViewsList({
       {(viewsQuery.data?.unloadable_count ?? 0) > 0 && viewsQuery.data?.unloadable && (
         <p
           data-testid="knowledge-views-unloadable"
-          className="flex items-start gap-1.5 px-2 text-[11px] leading-snug text-[var(--color-warning)]"
+          className="flex items-start gap-[var(--space-1)] px-[var(--space-2)] text-[length:var(--type-caption-size)] leading-snug text-[var(--color-warning)]"
         >
-          <Warning size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
+          <Warning size={13} aria-hidden="true" className="mt-[var(--space-0-5)] shrink-0" />
           <span>
             {viewsQuery.data.unloadable_count === 1
               ? '1 view file could not be loaded and is not shown.'
@@ -280,7 +279,7 @@ function KnowledgeViewDialog({
           <DialogDescription>Saved view</DialogDescription>
         </DialogHeader>
         {viewResultQuery.isPending && (
-          <div role="status" className="flex items-center gap-2 py-6 text-sm text-[var(--color-muted)]">
+          <div role="status" className="flex items-center gap-[var(--space-2)] py-[var(--space-4)] text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             <CircleNotch size={16} aria-hidden="true" className="animate-spin" />
             Loading view…
           </div>

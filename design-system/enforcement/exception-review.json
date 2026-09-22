@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "status": "review-only-not-active-policy",
+  "candidateFile": "design-system/enforcement/exception-candidates.json",
+  "activationRule": "No candidate is an approved exemption. Lead must register exact scanner rule/path/syntax after verifying the stated conditions.",
+  "findings": [
+    {
+      "category": "dataVisualization",
+      "target": "MermaidDiagramImpl",
+      "decision": "narrow-before-approval",
+      "requirement": "Replace blanket sanitized SVG paint boundary with exact governed theme keys and typed palette references; verify categorical series have a second non-color cue. User-supplied diagram paint needs its own explicit policy."
+    },
+    {
+      "category": "dataVisualization",
+      "target": "ChartPart.SERIES_COLORS",
+      "decision": "migration-required",
+      "requirement": "Encode preserved series hues as dedicated visualization tokens and provide a second per-series distinction. No permanent exception for current hue-only output."
+    },
+    {
+      "category": "userAuthoredColors",
+      "target": "AgentCard, WorkerCard, ActivityAvatar, MessageItem, SearchModal AgentHeader, TaskNode",
+      "decision": "migration-required",
+      "requirement": "Verify contrast-aware foreground and boundary treatment for arbitrary persisted colors; only dynamic background/derived tint can be excepted, never surrounding state or control chrome."
+    },
+    {
+      "category": "userAuthoredColors",
+      "target": "AVATAR_COLORS and AvatarColorPicker",
+      "decision": "reclassify",
+      "requirement": "Fixed application-authored palette choices become typed identity palette tokens. Persisted dynamic user values remain a separate rendering-boundary candidate."
+    },
+    {
+      "category": "qrCodes",
+      "target": "WhatsAppPairingBody",
+      "decision": "evidence-required",
+      "requirement": "Verify actual QR module and quiet-zone colors and contrast; candidate currently relies on third-party defaults. Register only module paint and quiet zone."
+    },
+    {
+      "category": "syntaxHighlighting",
+      "target": "LibraryCodeEditor",
+      "decision": "evidence-required",
+      "requirement": "Prove CodeMirror oneDark grammar colors are isolated from panels, tooltips, matching brackets and other editor chrome before approving a token-span boundary."
+    },
+    {
+      "category": "dataVisualization",
+      "target": "fileTypeMeta",
+      "decision": "migration-required",
+      "requirement": "Preserve categorical hues in typed file-type palette tokens; do not exempt raw application-authored palette definitions."
+    },
+    {
+      "category": "documentSurfaces",
+      "target": "PDF and signature canvas pixels",
+      "decision": "eligible-for-exact-boundary-review",
+      "requirement": "Keep canvas pixel content separate from annotation, toolbar, loading, focus and placement chrome."
+    }
+  ]
+}

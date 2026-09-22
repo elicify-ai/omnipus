@@ -561,7 +561,7 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
   })
 
   it('no descendant carries a card-frame class (rounded-md/overflow-hidden/bg-surface-1) — border-l-2 accent survives', () => {
-    render(
+    const { container } = render(
       <BrowserToolBlock
         toolName="browser.evaluate"
         args={{ expression: 'document.title' }}
@@ -572,7 +572,11 @@ describe('BrowserToolBlock — flat text-line status dot', () => {
       />
     )
     fireEvent.click(screen.getByRole('button', { name: /browser\.evaluate/ }))
-    const root = screen.getByText('browser.evaluate').closest('div.mt-2') as HTMLElement
+    // Anchored on the render root, as the sibling test does, rather than on a
+    // spacing class: spacing is expressed as design-system tokens now, and an
+    // arbitrary-value class is not a valid CSS selector in jsdom either. The
+    // render root is a superset of the old anchor, so this checks more, not less.
+    const root = container.firstElementChild as HTMLElement
     expect(
       root.querySelector('[class*="rounded-md"], [class*="overflow-hidden"], [class*="bg-[var(--color-surface-1)]"]')
     ).toBeNull()

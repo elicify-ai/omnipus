@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
@@ -197,11 +198,11 @@ export function ProfileSection() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-[var(--space-4)]">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Profile & Preferences</h2>
-          <p className="text-xs text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             Personal preferences stored in this browser.
           </p>
         </div>
@@ -209,11 +210,11 @@ export function ProfileSection() {
       </div>
 
       {/* Identity */}
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Identity</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-          <div className="flex items-center justify-between gap-4">
-            <Label htmlFor="pref-name" className="text-sm text-[var(--color-secondary)] shrink-0">
+      <section className="space-y-[var(--space-2-5)]">
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Identity</h3>
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
+          <div className="flex items-center justify-between gap-[var(--space-3)]">
+            <Label htmlFor="pref-name" className="shrink-0">
               Display name
             </Label>
             <Input
@@ -221,19 +222,19 @@ export function ProfileSection() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Your name"
-              className="h-8 text-xs max-w-xs"
+              className="h-8 text-[length:var(--type-utility-xs-size)] max-w-xs"
             />
           </div>
-        </div>
+        </Card>
       </section>
 
       {/* Locale */}
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Locale</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+      <section className="space-y-[var(--space-2-5)]">
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Locale</h3>
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-[var(--color-secondary)]">Timezone</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Timezone</p>
             </div>
             <SmartSelect
               value={timezone}
@@ -244,29 +245,29 @@ export function ProfileSection() {
             />
           </div>
 
-        </div>
+        </Card>
       </section>
 
       {/* Appearance */}
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Appearance</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
+      <section className="space-y-[var(--space-2-5)]">
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Appearance</h3>
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-[var(--color-secondary)]">Theme</p>
-              <p className="text-xs text-[var(--color-muted)]">Omnipus uses the Sovereign Deep dark theme.</p>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Theme</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Omnipus uses the Sovereign Deep dark theme.</p>
             </div>
-            <span className="text-sm text-[var(--color-secondary)]">
-              Dark <span className="text-xs text-[var(--color-muted)]">(only dark theme is supported)</span>
+            <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
+              Dark <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">(only dark theme is supported)</span>
             </span>
           </div>
 
           <Separator />
 
-          <div className="space-y-3">
+          <div className="space-y-[var(--space-2-5)]">
             <div className="flex items-center justify-between">
-              <p className="text-sm text-[var(--color-secondary)]">Font size</p>
-              <span className="text-xs font-mono text-[var(--color-muted)]">{fontSize}px</span>
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Font size</p>
+              <span className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-muted)]">{fontSize}px</span>
             </div>
             <Slider
               min={12}
@@ -277,32 +278,32 @@ export function ProfileSection() {
               className="w-full"
               aria-label="Font size"
             />
-            <div className="flex justify-between text-[10px] text-[var(--color-muted)]">
+            <div className="flex justify-between text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
               <span>12px</span>
               <span>20px</span>
             </div>
           </div>
-        </div>
+        </Card>
       </section>
 
       {/* Change Password */}
-      <section className="space-y-3">
-        <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Security</h3>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-          <div className="space-y-1">
-            <h4 className="text-sm font-medium text-[var(--color-secondary)]">Change Password</h4>
-            <p className="text-xs text-[var(--color-muted)]">Update your login password. Must be at least 8 characters.</p>
+      <section className="space-y-[var(--space-2-5)]">
+        <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider">Security</h3>
+        <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
+          <div className="space-y-[var(--space-1)]">
+            <h4 className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Change Password</h4>
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Update your login password. Must be at least 8 characters.</p>
           </div>
 
           <form
-            className="space-y-3"
+            className="space-y-[var(--space-2-5)]"
             onSubmit={(e) => {
               e.preventDefault()
               handlePasswordChange()
             }}
           >
-            <div className="space-y-1.5">
-              <Label htmlFor="current-password" className="text-xs text-[var(--color-secondary)]">
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="current-password">
                 Current password
               </Label>
               <Input
@@ -311,13 +312,13 @@ export function ProfileSection() {
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="Current password"
-                className="h-8 text-xs"
+                className="h-8 text-[length:var(--type-utility-xs-size)]"
                 autoComplete="current-password"
               />
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="new-password" className="text-xs text-[var(--color-secondary)]">
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="new-password">
                 New password
               </Label>
               <Input
@@ -326,13 +327,13 @@ export function ProfileSection() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="New password (min 8 chars)"
-                className="h-8 text-xs"
+                className="h-8 text-[length:var(--type-utility-xs-size)]"
                 autoComplete="new-password"
               />
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="confirm-password" className="text-xs text-[var(--color-secondary)]">
+            <div className="space-y-[var(--space-2)]">
+              <Label htmlFor="confirm-password">
                 Confirm new password
               </Label>
               <Input
@@ -341,50 +342,50 @@ export function ProfileSection() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Confirm new password"
-                className="h-8 text-xs"
+                className="h-8 text-[length:var(--type-utility-xs-size)]"
                 autoComplete="new-password"
               />
             </div>
 
             {passwordError && (
-              <p className="text-xs text-[var(--color-error)]" role="alert">{passwordError}</p>
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]" role="alert">{passwordError}</p>
             )}
 
             <Button
               type="submit"
               size="sm"
               disabled={isChangingPassword}
-              className="gap-1.5"
+              className="gap-[var(--space-1)]"
             >
               <LockKey size={13} weight="bold" />
               {isChangingPassword ? 'Changing...' : 'Change Password'}
             </Button>
           </form>
-        </div>
+        </Card>
       </section>
 
       {/* Workspace Context (USER.md) */}
-      <section className="space-y-3">
+      <section className="space-y-[var(--space-2-5)]">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider" id="workspace-context-heading">
+          <h3 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider" id="workspace-context-heading">
             Workspace Context
           </h3>
           {!userContextError && (
             <AutoSaveIndicator status={contextSaveStatus} error={contextSaveError} />
           )}
         </div>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
-          <p className="text-xs text-[var(--color-muted)]" id="workspace-context-desc">
+        <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]" id="workspace-context-desc">
             Shared context available to all agents — your role, preferences, and workspace information.
           </p>
           {userContextError ? (
-            <div className="flex flex-col items-center gap-3 py-4 text-center">
-              <p className="text-sm text-[var(--color-error)]">Could not load workspace context.</p>
+            <div className="flex flex-col items-center gap-[var(--space-2-5)] py-[var(--space-3)] text-center">
+              <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load workspace context.</p>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => refetchUserContext()}
-                className="gap-1.5"
+                className="gap-[var(--space-1)]"
               >
                 <ArrowsClockwise size={13} />
                 Retry
@@ -399,13 +400,13 @@ export function ProfileSection() {
               onChange={(e) => { markContextDirty(); setUserContent(e.target.value) }}
               placeholder={"# About Me\n\nDescribe your role, expertise, and preferences..."}
               rows={8}
-              className="text-xs font-mono resize-none"
+              className="text-[length:var(--type-utility-xs-size)] font-mono resize-none"
               // D3 fix: inert until hydrated — see `contextHydrated`'s doc
               // comment above.
               disabled={!contextHydrated}
             />
           )}
-        </div>
+        </Card>
       </section>
     </div>
   )

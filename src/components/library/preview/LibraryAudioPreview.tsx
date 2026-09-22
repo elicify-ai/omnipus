@@ -34,7 +34,7 @@ import { useState } from 'react'
 import { libraryDownloadUrl } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
-import { MediaUnplayableNotice, mediaPreviewContainerClass } from './mediaPreviewStates'
+import { MediaUnplayableNotice } from './mediaPreviewStates'
 
 interface LibraryAudioPreviewProps {
   workspaceId: string
@@ -54,7 +54,12 @@ export function LibraryAudioPreview({ workspaceId, entry, variant = 'pane' }: Li
   const [failed, setFailed] = useState(false)
   return (
     <div
-      className={mediaPreviewContainerClass(variant)}
+      // Same container as LibraryVideoPreview — keep both literal strings in sync by hand.
+      className={
+        variant === 'inline'
+          ? 'flex items-center justify-center'
+          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]'
+      }
       data-testid="library-audio-preview"
       data-variant={variant}
     >

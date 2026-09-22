@@ -18,6 +18,7 @@ import { useUiStore } from '@/store/ui'
 import { Copy } from '@phosphor-icons/react'
 import type { Task } from '@/lib/api'
 import { hasVisibleResult, type TaskRunOccurrenceContext } from '@/lib/taskRuns'
+import { Button } from '@/components/ui/button'
 
 export interface TaskResultFieldProps {
   task: Task
@@ -47,23 +48,23 @@ export function TaskResultField({ task, occurrence }: TaskResultFieldProps) {
   if (!showResult || !result) return null
 
   return (
-    <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Result</p>
-      <div className={cn('relative', isFailed && 'ring-1 ring-[var(--color-error)]/30 rounded-md')}>
+    <div className="space-y-[var(--space-1)]">
+      <p className="text-[length:var(--type-caption-size)] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Result</p>
+      <div className={cn('relative', isFailed ? 'ring-1 ring-[var(--color-error)]/30 rounded-md' : undefined)}>
         <pre
           data-testid="task-result-text"
-          className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed"
+          className="text-[length:var(--type-utility-xs-size)] font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-[var(--space-2-5)] max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed"
         >
           {result}
         </pre>
-        <button tabIndex={0}
-          type="button"
+        <Button
+          variant="ghost"
           onClick={handleCopyResult}
-          className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)] transition-colors"
+          className="absolute top-2 right-2 h-auto gap-[var(--space-1)] rounded px-[var(--space-1)] py-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)]"
           aria-label="Copy result"
         >
           <Copy size={11} /> Copy
-        </button>
+        </Button>
       </div>
     </div>
   )

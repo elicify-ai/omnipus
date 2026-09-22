@@ -1,15 +1,15 @@
 // Presentation-state helpers for BrowserLiveView: drive/visual buckets,
 // chrome constants, and the tab-label / first-frame / viewport pacers.
 // Extracted so the live-view component can shrink without changing behaviour.
+//
+// The chip-shaped `resolveDriveChip` (icon + label + colour classes) lives in
+// BrowserLiveToolbar.tsx instead of here, LOCAL to its one JSX consumer — the
+// design-system spacing/colour locks (scripts/design-system-locks/spacing.mjs,
+// ts-colors.mjs) resolve a dispatcher function's literal-object returns only
+// within the SAME file as the member read (`driveChip.textClass` etc.); a
+// cross-file import of the pre-computed object reads as an opaque,
+// unverifiable value and is flagged `*/unsupported`.
 
-import {
-  ChatCircleDots,
-  Cursor,
-  Eye,
-  Robot,
-  SpinnerGap,
-  WarningCircle,
-} from '@phosphor-icons/react'
 import { DEFAULT_FIRST_ANSWER_TIMEOUT_MS } from '@/lib/browserWebRTC'
 import type { BrowserStatusFrame, BrowserTabsFrame } from '@/lib/api/generated/asyncapi-types'
 
@@ -34,19 +34,6 @@ export function computeDriveMode(state: {
   return 'idle'
 }
 
-// Toolbar icon buttons share ONE shape (operator direction, 2026-08-04: "the
-// buttons should be icons ... it needs to be flatter"). Back, refresh, annotate,
-// mute and the degraded-retry all render as a bare 32px glyph with no border and
-// no fill — the frames and pill backgrounds made a row of five controls read as
-// five competing objects. Hover is the only chrome; active state is carried by
-// COLOUR PLUS `aria-pressed`, never colour alone. The coarse-pointer floor keeps
-// the WCAG 2.5.8 target even though the visual box shrank.
-export const TOOLBAR_ICON_BTN =
-  'shrink-0 flex h-8 w-8 items-center justify-center rounded-md transition-colors ' +
-  'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] ' +
-  'disabled:cursor-not-allowed disabled:opacity-40 ' +
-  'pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]'
-
 // Local-only pill states layered on top of the wire `BrowserStatusFrame.state`
 // enum: 'connecting' (never attached yet) and 'disconnected' (was attached,
 // the WS transport dropped, a reconnect is in flight) both describe SPA
@@ -54,14 +41,6 @@ export const TOOLBAR_ICON_BTN =
 export type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 
 export type BrowserTabStripState = { tabs: BrowserTabsFrame['tabs']; activeIndex: number }
-
-export type DriveChip = {
-  label: string
-  Icon: typeof Robot
-  textClass: string
-  dotClass: string
-  pulse: boolean
-}
 
 // FIRST_FRAME_TIMEOUT_MS bounds how long the panel shows "Waiting for the first
 // frame…" before admitting failure. Generous on purpose: a cold Chrome launch
@@ -137,53 +116,4 @@ export function tabLabel(tab: BrowserTabsFrame['tabs'][number]): string {
     }
   }
   return 'New tab'
-}
-
-// ── ADR-040 D6 — header chip config (icon + text label + colour), derived
-// from `visualState`. Words + icon back up the colour for accessibility
-// (never colour alone). The 'idle' bucket further distinguishes connection
-// lifecycle (connecting/reconnecting) from a genuinely idle, ready-to-drive
-// frame — the old corner pill's connecting/disconnected states still need
-// SOME visible home now that the pill itself is gone.
-export function resolveDriveChip(state: {
-  visualState: VisualState
-  visualDriveMode: DriveMode
-  agentDisplayName: string
-  statusState: LiveStatus
-}): DriveChip {
-  if (state.visualState === 'agent-working') {
-    return { label: `${state.agentDisplayName} is browsing…`, Icon: Robot, textClass: 'text-[var(--color-info)]', dotClass: 'bg-[var(--color-info)]', pulse: true }
-  }
-  if (state.visualState === 'you-driving') {
-    return { label: "You're driving", Icon: Cursor, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: true }
-  }
-  if (state.visualState === 'annotating') {
-    return { label: "You're annotating", Icon: ChatCircleDots, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: false }
-  }
-  if (state.visualState === 'error') {
-    return { label: 'Error', Icon: WarningCircle, textClass: 'text-[var(--color-error)]', dotClass: 'bg-[var(--color-error)]', pulse: false }
-  }
-  // 'idle' visualState — visualDriveMode further distinguishes
-  // disconnected/other-driving/genuinely-idle, reading the SAME display
-  // source of truth `visualState` itself derives from, instead of
-  // re-deriving `!connected`/`controlledByOther` here too.
-  if (state.visualDriveMode === 'disconnected') {
-    return {
-      label: state.statusState === 'disconnected' ? 'Reconnecting…' : 'Connecting…',
-      Icon: SpinnerGap,
-      textClass: 'text-[var(--color-muted)]',
-      dotClass: 'bg-[var(--color-muted)]',
-      pulse: false,
-    }
-  }
-  if (state.visualDriveMode === 'other-driving') {
-    // Informational, NOT a lock-out. Control is shared — this viewer's mouse,
-    // keyboard and omnibox all still work while someone else is also active
-    // (operator directive, 2026-08-03). The old label read "Someone else is
-    // driving", which told the user their input would be ignored — and it
-    // was, because the client and server both gated on the lock. Both gates
-    // are gone; the chip now just says who else is here.
-    return { label: 'Also viewing', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
-  }
-  return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
 }

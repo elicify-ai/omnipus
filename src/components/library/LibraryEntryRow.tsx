@@ -31,6 +31,8 @@ import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
 import { MountFolderIcon } from './icons'
+import { IconButton } from '@/components/ui/icon-button'
+import { Button } from '@/components/ui/button'
 
 /** Format a byte count as a compact human-readable size. */
 export function formatLibrarySize(bytes: number): string {
@@ -123,28 +125,43 @@ export function LibraryEntryRow({
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      data-testid={`library-row-${entry.path}`}
-      onClick={handleActivate}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault()
-          handleActivate()
-        }
-      }}
-      aria-current={selected ? 'true' : undefined}
       className={cn(
-        'flex items-center gap-3 rounded-lg px-3 py-2 cursor-pointer transition-colors border border-transparent',
+        'flex items-center gap-[var(--space-2-5)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] transition-colors border border-transparent',
         selected
           ? 'bg-[var(--color-surface-2)] border-[var(--color-accent)]/40'
           : 'hover:bg-[var(--color-surface-2)]',
         // D-8: hidden entries must read as visually distinct even when the
         // Show Hidden toggle reveals them — dimmed, in addition to the
         // "hidden" badge below.
-        entry.is_hidden && 'opacity-60',
+        entry.is_hidden ? 'opacity-60' : undefined,
       )}
     >
+      {/* The row's own activation target — everything except the action
+          menu below. A real `Button`, not the menu's ancestor: the row's
+          Actions button (IconButton, further down) is itself a real
+          `<button>`, and a `<button>` cannot legally nest inside another
+          `<button>` — the exact "sibling-not-nested" convention
+          `DisclosureRow`'s own doc comment states for this same shape
+          (a toggle/activation control that shares a row with an
+          independent action). So this Button wraps only the
+          thumbnail/name/metadata; the Actions menu is a SIBLING of it
+          below, inside this same outer row. The row's background/border
+          (selected/hover, above) stays on this outer div so the highlight
+          still spans the full row, including behind the Actions menu. */}
+      <Button
+        type="button"
+        variant="ghost"
+        data-testid={`library-row-${entry.path}`}
+        onClick={handleActivate}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            handleActivate()
+          }
+        }}
+        aria-current={selected ? 'true' : undefined}
+        className="h-auto min-w-0 flex-1 cursor-pointer items-center justify-start gap-[var(--space-2-5)] p-0 text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-2)]"
+      >
       {/* Inline media preview (operator direction, 2026-08-04: "images and
           videos should be previewed also inline in the file list itself").
           The real frame replaces the generic type glyph IN PLACE, so rows keep
@@ -162,7 +179,7 @@ export function LibraryEntryRow({
           // no rounding, just the glyph on the row's own background. The box
           // itself (w-8 h-8 flex centring) stays in BOTH cases so row text
           // stays aligned whether this cell holds a thumbnail or a glyph.
-          showThumb && 'rounded-md overflow-hidden',
+          showThumb ? 'rounded-md overflow-hidden' : undefined,
         )}
         style={
           showThumb
@@ -208,13 +225,13 @@ export function LibraryEntryRow({
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <p className="truncate text-sm text-[var(--color-secondary)]" title={entry.name}>
+        <div className="flex items-center gap-[var(--space-1)] min-w-0">
+          <p className="truncate text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]" title={entry.name}>
             {entry.name}
           </p>
           {entry.is_hidden && (
             <span
-              className="shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded bg-[var(--color-surface-3)] text-[var(--color-muted)]"
+              className="shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-[var(--space-1)] py-[var(--space-0-5)] rounded bg-[var(--color-surface-3)] text-[var(--color-muted)]"
               data-testid={`library-hidden-badge-${entry.path}`}
             >
               hidden
@@ -223,7 +240,7 @@ export function LibraryEntryRow({
           {mount && (
             <span
               data-testid={`library-mount-badge-${entry.path}`}
-              className={`shrink-0 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ${
+              className={`shrink-0 text-[length:var(--type-caption-size)] uppercase tracking-wide px-[var(--space-1)] py-[var(--space-0-5)] rounded border ${
                 mount.broad
                   ? 'border-[var(--color-warning)] text-[var(--color-warning)]'
                   : 'border-[var(--color-info)] text-[var(--color-info)]'
@@ -239,48 +256,53 @@ export function LibraryEntryRow({
         {mount ? (
           <p
             data-testid={`library-mount-target-${entry.path}`}
-            className="truncate mt-0.5 text-[11px] font-mono text-[var(--color-muted)]"
+            className="truncate mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] font-mono text-[var(--color-muted)]"
             title={mount.host_path}
           >
             {mount.host_path}
             {mount.broad && ' — covers your entire home folder'}
           </p>
         ) : (
-          <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-[var(--color-muted)]">
+          <div className="flex items-center gap-[var(--space-1)] mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             <span>{entry.is_dir ? '—' : formatLibrarySize(entry.size)}</span>
             <span aria-hidden="true">·</span>
             <span title={entry.modified_at}>{formatRelative(entry.modified_at)}</span>
           </div>
         )}
       </div>
+      </Button>
 
-      {/* Row action menu — stop propagation so opening it doesn't also
-          trigger the row's own onClick (navigate/select).
+      {/* Row action menu — a SIBLING of the row's own Button above, not a
+          child of it (a `<button>` cannot nest inside another `<button>`;
+          see the Button's own doc comment above). stopPropagation is kept
+          as defense-in-depth even though the two are no longer ancestor and
+          descendant: it costs nothing and, unlike relying on DOM structure
+          staying exactly this shape forever, keeps working even if a future
+          change nests this menu inside a click handler again.
 
-          KEYDOWN IS STOPPED TOO (UAT D-100, 2026-09-13). The row above opens
-          on Enter/Space from its own onKeyDown, and only `click` used to be
-          stopped here — so Enter on this button bubbled to the row and, on a
-          folder, NAVIGATED INTO IT instead of opening the menu: Rename / Move
-          / Copy / Delete were unreachable by keyboard on any folder, and on a
-          file one Enter opened the menu AND the preview. The menu's content
-          is portalled, but React synthetic events still bubble through the
-          React tree, so Enter on a menu ITEM reached the row the same way;
-          it is stopped on the content as well. Radix's own key handling is
-          composed with these handlers, not replaced by them, so Enter/Space
-          still open the menu and still activate an item. */}
+          KEYDOWN IS STOPPED TOO (UAT D-100, 2026-09-13). Originally the row
+          above opened on Enter/Space from its own onKeyDown, and only
+          `click` used to be stopped here — so Enter on this button bubbled
+          to the row and, on a folder, NAVIGATED INTO IT instead of opening
+          the menu: Rename / Move / Copy / Delete were unreachable by
+          keyboard on any folder, and on a file one Enter opened the menu
+          AND the preview. The menu's content is portalled, but React
+          synthetic events still bubble through the React tree, so Enter on
+          a menu ITEM reached the row the same way; it is stopped on the
+          content as well. Radix's own key handling is composed with these
+          handlers, not replaced by them, so Enter/Space still open the menu
+          and still activate an item. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            tabIndex={0}
+          <IconButton
             aria-label={`Actions for ${entry.name}`}
             data-testid={`library-row-menu-${entry.path}`}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={(e) => e.stopPropagation()}
-            className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)] transition-colors"
+            className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)]"
           >
             <DotsThree size={18} weight="bold" />
-          </button>
+          </IconButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="end"
@@ -288,12 +310,12 @@ export function LibraryEntryRow({
           onKeyDown={(e) => e.stopPropagation()}
         >
           {!entry.is_dir && (
-            <DropdownMenuItem onSelect={() => onSelectFile(entry)} className="flex items-center gap-2">
+            <DropdownMenuItem onSelect={() => onSelectFile(entry)} className="flex items-center gap-[var(--space-2)]">
               <Eye size={14} /> Details
             </DropdownMenuItem>
           )}
           {!entry.is_dir && (
-            <DropdownMenuItem onSelect={() => onDownload(entry)} className="flex items-center gap-2">
+            <DropdownMenuItem onSelect={() => onDownload(entry)} className="flex items-center gap-[var(--space-2)]">
               <DownloadSimple size={14} /> Download
             </DropdownMenuItem>
           )}
@@ -306,27 +328,27 @@ export function LibraryEntryRow({
             <DropdownMenuItem
               onSelect={() => onUnmount?.(entry)}
               data-testid={`library-row-unmount-${entry.path}`}
-              className="flex items-center gap-2 text-[var(--color-info)]"
+              className="flex items-center gap-[var(--space-2)] text-[var(--color-info)]"
             >
               <LinkBreak size={14} /> Unmount
-              <span className="ml-auto text-[11px] text-[var(--color-muted)]">files stay</span>
+              <span className="ml-auto text-[length:var(--type-caption-size)] text-[var(--color-muted)]">files stay</span>
             </DropdownMenuItem>
           ) : (
             <>
-              <DropdownMenuItem onSelect={() => onRename(entry)} className="flex items-center gap-2">
+              <DropdownMenuItem onSelect={() => onRename(entry)} className="flex items-center gap-[var(--space-2)]">
                 <PencilSimple size={14} /> Rename
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onTransfer(entry, 'move')} className="flex items-center gap-2">
+              <DropdownMenuItem onSelect={() => onTransfer(entry, 'move')} className="flex items-center gap-[var(--space-2)]">
                 <ArrowsLeftRight size={14} /> Move…
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => onTransfer(entry, 'copy')} className="flex items-center gap-2">
+              <DropdownMenuItem onSelect={() => onTransfer(entry, 'copy')} className="flex items-center gap-[var(--space-2)]">
                 <ArrowsLeftRight size={14} /> Copy…
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onSelect={() => onDelete(entry)}
                 data-testid={`library-row-delete-${entry.path}`}
-                className="flex items-center gap-2 text-[var(--color-error)]"
+                className="flex items-center gap-[var(--space-2)] text-[var(--color-error)]"
               >
                 <Trash size={14} /> Delete
               </DropdownMenuItem>

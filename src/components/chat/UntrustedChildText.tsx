@@ -47,8 +47,8 @@ export function UntrustedOriginBadge({
       data-testid={testId}
       title={`Text originated from a ${label} — rendered as sanitized text; links are non-clickable.`}
       className={cn(
-        'inline-flex items-center gap-0.5 px-1 py-px rounded text-[9px] font-mono uppercase tracking-wide',
-        'text-[var(--color-warning,#D4AF37)] bg-[var(--color-surface-2)] border border-[var(--color-warning,#D4AF37)]/40',
+        'inline-flex items-center gap-[var(--space-0-5)] px-[var(--space-1)] py-[var(--border-width-hairline)] rounded text-[length:var(--type-caption-size)] font-mono uppercase tracking-wide',
+        'text-[var(--color-warning)] bg-[var(--color-surface-2)] border border-[var(--color-warning)]/40',
         'shrink-0 select-none',
         className,
       )}
@@ -123,54 +123,54 @@ const CHILD_MARKDOWN_COMPONENTS = {
   img: ({ alt }: { alt?: string }) =>
     alt ? <span className="text-[var(--color-muted)] italic">[image: {alt}]</span> : null,
   p: ({ children }: { children?: React.ReactNode }) => (
-    <p className="whitespace-pre-wrap my-0.5">{children}</p>
+    <p className="whitespace-pre-wrap my-[var(--space-0-5)]">{children}</p>
   ),
   strong: ({ children }: { children?: React.ReactNode }) => (
     <strong className="font-semibold">{children}</strong>
   ),
   em: ({ children }: { children?: React.ReactNode }) => <em className="italic">{children}</em>,
   code: ({ children }: { children?: React.ReactNode }) => (
-    <code className="font-mono text-[10px] px-1 py-px rounded bg-[var(--color-surface-2)] text-[var(--color-accent)]">
+    <code className="font-mono text-[length:var(--type-caption-size)] px-[var(--space-1)] py-[var(--border-width-hairline)] rounded bg-[var(--color-surface-2)] text-[var(--color-accent)]">
       {children}
     </code>
   ),
   pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="font-mono text-[10px] whitespace-pre-wrap break-all bg-[var(--color-surface-2)] p-1.5 rounded my-1">
+    <pre className="font-mono text-[length:var(--type-caption-size)] whitespace-pre-wrap break-all bg-[var(--color-surface-2)] p-[var(--space-1)] rounded my-[var(--space-1)]">
       {children}
     </pre>
   ),
   ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul style={{ listStyleType: 'disc' }} className="pl-5 my-0.5 space-y-0.5">{children}</ul>
+    <ul style={{ listStyleType: 'disc' }} className="pl-[var(--space-3)] my-[var(--space-0-5)] space-y-[var(--space-0-5)]">{children}</ul>
   ),
   ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol style={{ listStyleType: 'decimal' }} className="pl-5 my-0.5 space-y-0.5">{children}</ol>
+    <ol style={{ listStyleType: 'decimal' }} className="pl-[var(--space-3)] my-[var(--space-0-5)] space-y-[var(--space-0-5)]">{children}</ol>
   ),
   li: ({ children }: { children?: React.ReactNode }) => <li>{children}</li>,
   blockquote: ({ children }: { children?: React.ReactNode }) => (
-    <blockquote className="border-l-2 border-[var(--color-accent)]/40 pl-2 my-0.5 italic text-[var(--color-muted)]">
+    <blockquote className="border-l-2 border-[var(--color-accent)]/40 pl-[var(--space-2)] my-[var(--space-0-5)] italic text-[var(--color-muted)]">
       {children}
     </blockquote>
   ),
   // Headings kept minimal — child text is rarely structured, but sanctioned.
   h1: ({ children }: { children?: React.ReactNode }) => (
-    <p className="font-semibold my-0.5">{children}</p>
+    <p className="font-semibold my-[var(--space-0-5)]">{children}</p>
   ),
   h2: ({ children }: { children?: React.ReactNode }) => (
-    <p className="font-semibold my-0.5">{children}</p>
+    <p className="font-semibold my-[var(--space-0-5)]">{children}</p>
   ),
   h3: ({ children }: { children?: React.ReactNode }) => (
-    <p className="font-semibold my-0.5">{children}</p>
+    <p className="font-semibold my-[var(--space-0-5)]">{children}</p>
   ),
   h4: ({ children }: { children?: React.ReactNode }) => (
-    <p className="font-semibold my-0.5">{children}</p>
+    <p className="font-semibold my-[var(--space-0-5)]">{children}</p>
   ),
   h5: ({ children }: { children?: React.ReactNode }) => (
-    <p className="font-semibold my-0.5">{children}</p>
+    <p className="font-semibold my-[var(--space-0-5)]">{children}</p>
   ),
   h6: ({ children }: { children?: React.ReactNode }) => (
-    <p className="font-semibold my-0.5">{children}</p>
+    <p className="font-semibold my-[var(--space-0-5)]">{children}</p>
   ),
-  hr: () => <hr className="my-1 border-[var(--color-border)]" />,
+  hr: () => <hr className="my-[var(--space-1)] border-[var(--color-border)]" />,
 } as const
 
 /**
@@ -189,7 +189,7 @@ export const UntrustedChildText = memo(function UntrustedChildText({
   const sanitized = sanitizeChildText(text ?? '')
   if (sanitized.length === 0) return null
 
-  const textSize = density === 'compact' ? 'text-[10px]' : 'text-xs'
+  const textSize = density === 'compact' ? 'text-[length:var(--type-caption-size)]' : 'text-[length:var(--type-utility-xs-size)]'
 
   // Always render through react-markdown — it handles plain prose (wraps it
   // in a <p>) AND sanctioned markdown identically, and a plain-text fast
@@ -200,13 +200,13 @@ export const UntrustedChildText = memo(function UntrustedChildText({
     <span
       data-testid={testId}
       className={cn(
-        'inline flex flex-col gap-0.5 text-[var(--color-secondary)]',
+        'inline flex flex-col gap-[var(--space-0-5)] text-[var(--color-secondary)]',
         textSize,
         className,
       )}
     >
       {untrustedOrigin && <UntrustedOriginBadge label={originLabel} />}
-      <span className="break-words [&_p]:my-0.5">
+      <span className="break-words [&_p]:my-[var(--space-0-5)]">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={CHILD_MARKDOWN_COMPONENTS}

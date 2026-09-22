@@ -89,9 +89,11 @@ describe('TestDiagnostics_ScoreDisplay_HigherIsBetter', () => {
       expect(screen.getAllByText('Excellent').length).toBeGreaterThan(0)
     })
 
-    const label = screen.getByText('Excellent', {
-      selector: 'span.text-xs',
-    })
+    // Selected by element and colour, not by class name: the size class is a
+    // design-system token that the migration rewrites, and an arbitrary-value
+    // Tailwind class is not a valid CSS selector in jsdom either.
+    const label = screen.getAllByText('Excellent').find((node) => node.tagName === 'SPAN')
+    expect(label).toBeDefined()
     expect(label).toHaveStyle({ color: 'var(--color-success)' })
   })
 })

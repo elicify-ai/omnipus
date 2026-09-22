@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Gear, Envelope, Plus, Trash, Warning } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { IconButton } from '@/components/ui/icon-button'
 import { Label } from '@/components/ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet'
 import {
@@ -177,84 +179,88 @@ function ChannelInstanceRow({
   const isDegraded = connectionStatus === 'degraded'
 
   return (
-    <div
+    <Card
       data-testid={`channel-card-${instanceId}`}
-      className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+      className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
     >
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-[var(--space-2)] flex-wrap">
           {routingIsError ? (
             <span
-              className="font-medium text-sm text-[var(--color-error)]"
+              className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-error)]"
               data-testid={`channel-binding-${instanceId}`}
             >
               Couldn&apos;t load binding
             </span>
           ) : routingLoading ? (
-            <span className="text-sm text-[var(--color-muted)]" data-testid={`channel-binding-${instanceId}`}>
+            <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]" data-testid={`channel-binding-${instanceId}`}>
               Loading binding…
             </span>
           ) : workspaceName ? (
             <span
-              className="font-medium text-sm text-[var(--color-secondary)]"
+              className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]"
               data-testid={`channel-binding-${instanceId}`}
             >
               {workspaceName} → {agentName ?? 'unassigned agent'}
             </span>
           ) : (
             <span
-              className="font-medium text-sm text-[var(--color-muted)] italic"
+              className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] italic"
               data-testid={`channel-binding-${instanceId}`}
             >
               No workspace bound
             </span>
           )}
-          <Badge variant="outline" className="text-[10px] font-mono">
+          <Badge variant="outline" className="text-[length:var(--type-caption-size)] font-mono">
             {instanceId}
           </Badge>
           <Badge
             variant={STATUS_BADGE[connectionStatus].variant}
-            className="text-[10px]"
+            className="text-[length:var(--type-caption-size)]"
           >
             {STATUS_BADGE[connectionStatus].label}
           </Badge>
         </div>
         {isDegraded && channel.degraded_reason && (
-          <p className="mt-0.5 text-[10px] text-[var(--color-muted)] truncate max-w-xs">
+          <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] truncate max-w-xs">
             {channel.degraded_reason}
           </p>
         )}
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <button tabIndex={0}
+      <div className="flex items-center gap-[var(--space-2)] shrink-0">
+        <Button
           type="button"
+          variant="ghost"
           onClick={onConfigure}
-          className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
+          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors font-medium"
           aria-label={`Configure ${instanceId}`}
         >
           <Gear size={13} />
           Configure
-        </button>
-        <button tabIndex={0}
+        </Button>
+        <Button
           type="button"
+          variant="link"
           onClick={onToggle}
-          className="text-xs text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors font-medium"
+          className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors font-medium no-underline hover:no-underline"
           aria-label={`${channel.enabled ? 'Disable' : 'Enable'} ${instanceId}`}
           data-testid={`channel-toggle-${instanceId}`}
         >
           {channel.enabled ? 'Disable' : 'Enable'}
-        </button>
-        <button tabIndex={0}
+        </Button>
+        <IconButton
           type="button"
+          size="sm"
+          variant="ghost"
           onClick={onDelete}
-          className="flex items-center gap-0.5 text-xs text-[var(--color-muted)] hover:text-red-400 transition-colors"
+          className="h-auto w-auto p-0 text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] transition-colors"
           aria-label={`Delete ${instanceId} instance`}
           data-testid={`channel-delete-btn-${instanceId}`}
         >
           <Trash size={13} />
-        </button>
+        </IconButton>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -285,22 +291,23 @@ function ChannelTypeGroup({
 }: ChannelTypeGroupProps) {
   return (
     <div data-testid={`channel-type-group-${baseType}`}>
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-[var(--space-2)] mb-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)]">
           <BrandIcon slug={channelSlug(baseType)} size={18} decorative />
-          <h3 className="text-sm font-semibold text-[var(--color-secondary)]">{displayName}</h3>
+          <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">{displayName}</h3>
         </div>
-        <button tabIndex={0}
+        <Button
           type="button"
+          variant="ghost"
           onClick={() => onAddAnother(baseType)}
           data-testid={`channel-type-add-another-${baseType}`}
-          className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors font-medium"
+          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]/80 transition-colors font-medium"
         >
           <Plus size={12} />
           Add another…
-        </button>
+        </Button>
       </div>
-      <div className="space-y-2">
+      <div className="space-y-[var(--space-2)]">
         {instances.map((channel) => {
           const instanceId = channel.instance_id
           return (
@@ -338,24 +345,25 @@ interface ChannelRosterProps {
 
 function ChannelRoster({ types, onConfigureType }: ChannelRosterProps) {
   return (
-    <div data-testid="channel-roster" className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+    <div data-testid="channel-roster" className="space-y-[var(--space-3)]">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-[var(--space-2)]">
         {types.map((channel) => {
           const baseType = deriveBaseType(channel)
           return (
-            <button tabIndex={0}
+            <Button
               key={baseType}
               type="button"
+              variant="ghost"
               onClick={() => onConfigureType(channel)}
               data-testid={`channel-roster-connect-${baseType}`}
-              className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors text-left"
+              className="h-auto items-center justify-start gap-[var(--space-2-5)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-[var(--space-3)] text-left font-[var(--font-weight-regular)] hover:bg-[var(--color-surface-1)] hover:border-[var(--color-accent)]/50 transition-colors"
             >
               <BrandIcon slug={channelSlug(baseType)} size={22} decorative />
-              <span className="flex-1 min-w-0 font-medium text-sm text-[var(--color-secondary)] truncate">
+              <span className="flex-1 min-w-0 font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {channel.name}
               </span>
-              <span className="text-xs text-[var(--color-accent)] font-medium shrink-0">Configure</span>
-            </button>
+              <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] font-medium shrink-0">Configure</span>
+            </Button>
           )
         })}
       </div>
@@ -538,29 +546,29 @@ function CreateChannelSheet({
         className="sm:w-[420px] bg-[var(--color-surface-0)] border-[var(--color-border)] overflow-y-auto p-0"
         data-testid="create-channel-sheet"
       >
-        <SheetHeader className="px-6 pr-14">
+        <SheetHeader className="px-[var(--space-4)] pr-[var(--space-7)]">
           <SheetTitle>
             Add a channel
           </SheetTitle>
         </SheetHeader>
-        <SheetDescription className="text-xs text-[var(--color-muted)] leading-relaxed px-6 pt-3">
+        <SheetDescription className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed px-[var(--space-4)] pt-[var(--space-2-5)]">
           Pick the channel, the workspace it serves, and the agent that answers.
           It goes live once you configure its credentials.
         </SheetDescription>
 
-        <form onSubmit={handleSubmit} className="px-6 pt-4 space-y-4">
+        <form onSubmit={handleSubmit} className="px-[var(--space-4)] pt-[var(--space-3)] space-y-[var(--space-3)]">
           {/* Channel type — locked when opened from a group's "Add another…" */}
-          <div className="space-y-1.5">
-            <Label htmlFor="channel-type-select" className="text-xs font-medium text-[var(--color-secondary)]">
+          <div className="space-y-[var(--space-2)]">
+            <Label htmlFor="channel-type-select">
               Channel
             </Label>
             {selection.mode === 'locked' ? (
               <div
-                className="flex items-center gap-2 p-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]"
+                className="flex items-center gap-[var(--space-2)] p-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)]"
                 data-testid="create-channel-type-locked"
               >
                 <BrandIcon slug={channelSlug(selection.baseType)} size={18} label={lockedTypeName ?? selection.baseType} />
-                <span className="text-sm text-[var(--color-secondary)]">{lockedTypeName}</span>
+                <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">{lockedTypeName}</span>
               </div>
             ) : (
               <Select
@@ -570,7 +578,7 @@ function CreateChannelSheet({
                 <SelectTrigger
                   id="channel-type-select"
                   data-testid="create-channel-type-select"
-                  className="w-full text-sm"
+                  className="w-full text-[length:var(--type-body-compact-size)]"
                 >
                   <SelectValue placeholder="Select a channel" />
                 </SelectTrigger>
@@ -586,8 +594,8 @@ function CreateChannelSheet({
           </div>
 
           {/* Workspace (ADR-029: an instance serves exactly one workspace) */}
-          <div className="space-y-1.5">
-            <Label htmlFor="channel-workspace-select" className="text-xs font-medium text-[var(--color-secondary)]">
+          <div className="space-y-[var(--space-2)]">
+            <Label htmlFor="channel-workspace-select">
               Workspace
             </Label>
             <Select
@@ -597,7 +605,7 @@ function CreateChannelSheet({
               <SelectTrigger
                 id="channel-workspace-select"
                 data-testid="create-channel-workspace-select"
-                className="w-full text-sm"
+                className="w-full text-[length:var(--type-body-compact-size)]"
               >
                 <SelectValue placeholder="Select a workspace" />
               </SelectTrigger>
@@ -612,8 +620,8 @@ function CreateChannelSheet({
           </div>
 
           {/* Agent (member of the chosen workspace) */}
-          <div className="space-y-1.5">
-            <Label htmlFor="channel-agent-select" className="text-xs font-medium text-[var(--color-secondary)]">
+          <div className="space-y-[var(--space-2)]">
+            <Label htmlFor="channel-agent-select">
               Agent
             </Label>
             <Select
@@ -623,7 +631,7 @@ function CreateChannelSheet({
               <SelectTrigger
                 id="channel-agent-select"
                 data-testid="create-channel-agent-select"
-                className="w-full text-sm"
+                className="w-full text-[length:var(--type-body-compact-size)]"
               >
                 <SelectValue placeholder={selectedWorkspaceId ? 'Select an agent' : 'Pick a workspace first'} />
               </SelectTrigger>
@@ -635,7 +643,7 @@ function CreateChannelSheet({
                 ))}
               </SelectContent>
             </Select>
-            <p className="text-xs text-[var(--color-muted)]">
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
               Messages on this channel go to this agent in this workspace.
             </p>
           </div>
@@ -643,16 +651,16 @@ function CreateChannelSheet({
           {/* Server error */}
           {serverError && (
             <div
-              className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2"
+              className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
               data-testid="create-channel-server-error"
               role="alert"
             >
-              <Warning size={14} className="text-red-400 mt-0.5 shrink-0" />
-              <p className="text-xs text-red-400">{serverError}</p>
+              <Warning size={14} className="text-[var(--color-error)] mt-[var(--space-0-5)] shrink-0" />
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{serverError}</p>
             </div>
           )}
 
-          <div className="flex gap-2 pt-2 border-t border-[var(--color-border)]">
+          <div className="flex gap-[var(--space-2)] pt-[var(--space-2)] border-t border-[var(--color-border)]">
             <Button
               type="button"
               variant="outline"
@@ -728,15 +736,15 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
           <AlertDialogTitle className="font-headline text-[var(--color-secondary)]">
             Delete channel instance
           </AlertDialogTitle>
-          <AlertDialogDescription className="text-sm text-[var(--color-muted)]">
+          <AlertDialogDescription className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">
             This will permanently remove{' '}
-            <span className="font-mono text-xs font-semibold text-[var(--color-secondary)]">
+            <span className="font-mono text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">
               {instanceId}
             </span>{' '}
             including its configuration, credentials, and per-instance state. This cannot be undone.
           </AlertDialogDescription>
           {isEnabled && (
-            <p className="mt-2 text-xs text-amber-400" data-testid="delete-instance-enabled-warning">
+            <p className="mt-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]" data-testid="delete-instance-enabled-warning">
               This channel is enabled; deleting will stop it and remove its credentials and state.
             </p>
           )}
@@ -745,12 +753,12 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
         {/* Inline error — keep dialog open on failure so the user knows the delete did not succeed */}
         {deleteError && (
           <div
-            className="flex items-start gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2"
+            className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-[var(--space-2-5)] py-[var(--space-2)]"
             data-testid="delete-instance-error"
             role="alert"
           >
-            <Warning size={14} className="text-red-400 mt-0.5 shrink-0" />
-            <p className="text-xs text-red-400">{deleteError}</p>
+            <Warning size={14} className="text-[var(--color-error)] mt-[var(--space-0-5)] shrink-0" />
+            <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">{deleteError}</p>
           </div>
         )}
 
@@ -765,7 +773,7 @@ function DeleteConfirmDialog({ channel, onClose }: DeleteConfirmDialogProps) {
           <AlertDialogAction
             disabled={isPending}
             onClick={() => { setDeleteError(null); doDelete() }}
-            className="bg-red-600 hover:bg-red-700 text-white"
+            className="bg-[var(--color-error)] hover:bg-[var(--color-destructive-action-hover)] text-[var(--color-primary)]"
             data-testid="delete-instance-confirm-btn"
           >
             {isPending ? 'Deleting…' : 'Delete'}
@@ -815,47 +823,48 @@ function MailboxRow({ mailbox, agentNameById, workspaceNameById, onConfigure }: 
   const pairKey = mailboxPairKey(mailbox)
 
   return (
-    <div
+    <Card
       data-testid={`mailbox-row-${pairKey}`}
-      className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+      className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
     >
       <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-medium text-sm text-[var(--color-secondary)]">
+        <div className="flex items-center gap-[var(--space-2)] flex-wrap">
+          <span className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
             {agentName}
           </span>
-          <Badge variant="outline" className="text-[10px] font-mono">
+          <Badge variant="outline" className="text-[length:var(--type-caption-size)] font-mono">
             imap + smtp
           </Badge>
           {isActive ? (
-            <Badge variant="success" className="text-[10px]">
+            <Badge variant="success" className="text-[length:var(--type-caption-size)]">
               Active
             </Badge>
           ) : (
-            <Badge variant="muted" className="text-[10px]">
+            <Badge variant="muted" className="text-[length:var(--type-caption-size)]">
               Not configured
             </Badge>
           )}
         </div>
-        <p className="mt-0.5 text-[10px] text-[var(--color-muted)] truncate">
+        <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)] truncate">
           {mailbox.username || 'No address set'}
           {workspaceName ? ` · ${workspaceName}` : ''}
         </p>
       </div>
-      <div className="flex items-center gap-2 shrink-0">
-        <button tabIndex={0}
+      <div className="flex items-center gap-[var(--space-2)] shrink-0">
+        <Button
           type="button"
+          variant="ghost"
           onClick={onConfigure}
-          className="flex items-center gap-1 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors font-medium"
+          className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-secondary)] transition-colors font-medium"
           aria-label={`Configure ${agentName} mailbox${workspaceName ? ` (${workspaceName})` : ''}`}
           data-testid={`mailbox-configure-btn-${pairKey}`}
         >
           <Gear size={13} />
           Configure
-        </button>
+        </Button>
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -1028,7 +1037,7 @@ export function ConnectorsScreen() {
       return <ChannelRoster types={unconfiguredChannels} onConfigureType={configureType} />
     }
     return (
-      <div className="space-y-6">
+      <div className="space-y-[var(--space-4)]">
         {groupedTypeOrder.map((baseType) => (
           <ChannelTypeGroup
             key={baseType}
@@ -1060,13 +1069,13 @@ export function ConnectorsScreen() {
   return (
     <div className="absolute inset-0 flex flex-col">
       <ScreenHeader title="Connectors" />
-      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom,var(--space-0))]">
+      <div className="max-w-4xl mx-auto px-[var(--space-3)] py-[var(--space-4)]">
         {/* Header */}
-        <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="mb-[var(--space-4)] flex items-start justify-between gap-[var(--space-3)]">
           <div>
             <h1 className="font-headline text-2xl font-bold text-[var(--color-secondary)]">Connectors</h1>
-            <p className="text-sm text-[var(--color-muted)] mt-0.5">
+            <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
               Connect Telegram, Discord, Slack and more, and choose which agent answers each.
             </p>
           </div>
@@ -1076,7 +1085,7 @@ export function ConnectorsScreen() {
               type="button"
               size="sm"
               variant="outline"
-              className="shrink-0 gap-1.5"
+              className="shrink-0 gap-[var(--space-1)]"
               onClick={() => openCreateFor(undefined)}
               data-testid="add-channel-instance-btn"
               aria-label="Add channel"
@@ -1100,49 +1109,50 @@ export function ConnectorsScreen() {
             {/* ── Email Mailboxes (M11, multi-mailbox follow-up — email is a
                 tool, not a channel; every (agent, workspace) pair may own
                 its own mailbox) ── */}
-            <div className="mb-8">
-              <div className="flex items-center justify-between gap-2 mb-3">
-                <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+            <div className="mb-[var(--space-5)]">
+              <div className="flex items-center justify-between gap-[var(--space-2)] mb-[var(--space-2-5)]">
+                <h2 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                   Email
                 </h2>
-                <button tabIndex={0}
+                <Button
                   type="button"
+                  variant="ghost"
                   onClick={() => setMailboxPanel({ open: true, target: null })}
                   data-testid="email-mailbox-add-btn"
-                  className="flex items-center gap-1 text-xs text-[var(--color-accent)] hover:text-[var(--color-accent)]/80 transition-colors font-medium"
+                  className="h-auto gap-[var(--space-1)] p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent)]/80 transition-colors font-medium"
                 >
                   <Plus size={12} />
                   Add mailbox
-                </button>
+                </Button>
               </div>
-              <div data-testid="email-mailbox-card" className="space-y-2">
+              <div data-testid="email-mailbox-card" className="space-y-[var(--space-2)]">
                 {mailboxesLoading ? (
-                  <div className="h-16 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] animate-pulse" />
+                  <Card className="h-16 animate-pulse" />
                 ) : mailboxesError ? (
-                  <div className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]">
+                  <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]">
                     <Envelope size={20} weight="duotone" className="text-[var(--color-muted)] shrink-0" />
-                    <span className="text-sm text-[var(--color-error)]">Could not load mailboxes.</span>
-                  </div>
+                    <span className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Could not load mailboxes.</span>
+                  </Card>
                 ) : mailboxes.length === 0 ? (
-                  <div className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]">
+                  <Card className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]">
                     <Envelope size={20} weight="duotone" className="text-[var(--color-accent)] shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-sm text-[var(--color-secondary)]">
+                      <div className="flex items-center gap-[var(--space-2)] flex-wrap">
+                        <span className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
                           Email Mailbox
                         </span>
-                        <Badge variant="outline" className="text-[10px] font-mono">
+                        <Badge variant="outline" className="text-[length:var(--type-caption-size)] font-mono">
                           imap + smtp
                         </Badge>
-                        <Badge variant="muted" className="text-[10px]">
+                        <Badge variant="muted" className="text-[length:var(--type-caption-size)]">
                           Not configured
                         </Badge>
                       </div>
-                      <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
+                      <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                         Give an agent its own inbox. It reads mail on heartbeat; unhandled mail becomes Board tasks.
                       </p>
                     </div>
-                  </div>
+                  </Card>
                 ) : (
                   mailboxes.map((mb) => (
                     <MailboxRow
@@ -1159,37 +1169,37 @@ export function ConnectorsScreen() {
 
             {/* ── Web Chat (built-in, singleton, always on — no ADR-029 binding) ── */}
             {webchatChannel && (
-              <div className="mb-8">
-                <div className="flex items-center gap-2 mb-3">
-                  <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+              <div className="mb-[var(--space-5)]">
+                <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-2-5)]">
+                  <h2 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                     Built-in
                   </h2>
                 </div>
-                <div
+                <Card
                   data-testid={`channel-card-${webchatChannel.id}`}
-                  className="flex items-center gap-3 p-4 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)]"
+                  className="flex items-center gap-[var(--space-2-5)] p-[var(--space-3)]"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm text-[var(--color-secondary)]">
+                    <div className="flex items-center gap-[var(--space-2)] flex-wrap">
+                      <span className="font-medium text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">
                         {webchatChannel.name}
                       </span>
-                      <Badge variant="success" className="text-[10px]">
+                      <Badge variant="success" className="text-[length:var(--type-caption-size)]">
                         Always on
                       </Badge>
                     </div>
-                    <p className="mt-0.5 text-[10px] text-[var(--color-muted)]">
+                    <p className="mt-[var(--space-0-5)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
                       Built into every Omnipus install. No configuration needed.
                     </p>
                   </div>
-                </div>
+                </Card>
               </div>
             )}
 
             {/* ── Channels (conversational, type-grouped instances) ── */}
             <div>
-              <div className="flex items-center gap-2 mb-3">
-                <h2 className="text-xs font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
+              <div className="flex items-center gap-[var(--space-2)] mb-[var(--space-2-5)]">
+                <h2 className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)] uppercase tracking-wider">
                   Channels
                 </h2>
               </div>
@@ -1198,7 +1208,7 @@ export function ConnectorsScreen() {
                   row's binding to raw ids; surface it once, near the heading. */}
               {(workspacesError || agentsListError) && (
                 <p
-                  className="text-xs text-[var(--color-error)] mb-2"
+                  className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] mb-[var(--space-2)]"
                   data-testid="channel-names-error-notice"
                 >
                   Couldn&apos;t load workspace/agent names — showing raw IDs

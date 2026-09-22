@@ -14,7 +14,7 @@
  */
 
 import { useState } from 'react'
-import { CaretDown, CaretUp } from '@phosphor-icons/react'
+import { DisclosureRow } from '@/components/ui/disclosure-row'
 
 export interface AdvancedDisclosureProps {
   /** Button label; defaults to "Advanced". */
@@ -23,6 +23,8 @@ export interface AdvancedDisclosureProps {
   summary?: string
   /** Whether the disclosure starts open. Defaults to false. */
   defaultOpen?: boolean
+  /** Optional class override for the title text itself (e.g. a caller that wants a section-heading weight/size instead of the default label styling). */
+  titleClassName?: string
   children: React.ReactNode
 }
 
@@ -30,6 +32,7 @@ export function AdvancedDisclosure({
   title = 'Advanced',
   summary,
   defaultOpen = false,
+  titleClassName,
   children,
 }: AdvancedDisclosureProps) {
   const [open, setOpen] = useState(defaultOpen)
@@ -39,25 +42,25 @@ export function AdvancedDisclosure({
       className="rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] overflow-hidden"
       data-testid="advanced-disclosure"
     >
-      <button tabIndex={0}
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="flex items-center justify-between w-full px-3 py-2.5 text-sm font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
+      <DisclosureRow
+        expanded={open}
+        onExpandedChange={setOpen}
+        expandable
+        caretSize={13}
         data-testid="advanced-disclosure-trigger"
+        className="w-full rounded-none px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)] hover:text-[var(--color-accent)] transition-colors"
       >
-        <span className="flex flex-col items-start gap-0.5 text-left">
-          <span>{title}</span>
+        <span className="flex flex-col items-start gap-[var(--space-0-5)] text-left">
+          <span className={titleClassName}>{title}</span>
           {summary && !open && (
-            <span className="text-[11px] font-normal text-[var(--color-muted)]">{summary}</span>
+            <span className="text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] text-[var(--color-muted)]">{summary}</span>
           )}
         </span>
-        {open ? <CaretUp size={13} /> : <CaretDown size={13} />}
-      </button>
+      </DisclosureRow>
 
       {open && (
         <div
-          className="px-3 pb-3 border-t border-[var(--color-border)] pt-3"
+          className="px-[var(--space-2-5)] pb-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-2-5)]"
           data-testid="advanced-disclosure-content"
         >
           {children}

@@ -49,6 +49,7 @@ import * as React from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ArrowClockwise, CircleNotch, Plus, Prohibit, WarningCircle } from '@phosphor-icons/react'
 import { Command, CommandInput, CommandList } from '@/components/ui/command'
+import { Button } from '@/components/ui/button'
 import type { CatalogProvider, Provider, ProvidersCatalog } from '@/lib/api/generated/openapi-types'
 import {
   buildPickerModel,
@@ -350,7 +351,7 @@ export function ProviderPicker({
   const showList = model.expanded && status === 'ready'
 
   return (
-    <div data-testid={testId} className="flex flex-col gap-3">
+    <div data-testid={testId} className="flex flex-col gap-[var(--space-2-5)]">
       {/*
        * The capture-phase handler below owns Home/End/Arrow/Enter for the
        * picker's OWN rows (FR-026, MAJ-013 — see the file header). It must
@@ -379,24 +380,24 @@ export function ProviderPicker({
         role="group"
         aria-label="Popular providers"
         data-testid="picker-popular"
-        className="grid grid-cols-4 gap-2"
+        className="grid grid-cols-4 gap-[var(--space-2)]"
       >
         {model.popular.map((row) => {
           const key = refKey({ kind: 'popular', key: row.company })
           return (
-            <button
+            <Button
               key={row.company}
               type="button"
+              variant="outline"
               ref={(el) => registerRow(key, el)}
               data-testid={`picker-popular-${row.primary.id}`}
               tabIndex={-1}
               aria-disabled={row.disabled || undefined}
               onClick={() => select({ kind: 'popular', key: row.company })}
-              className="flex min-h-[44px] items-center justify-center rounded-md border px-3 py-2 text-sm"
-              style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
+              className="h-auto min-h-[44px] justify-center rounded-md px-[var(--space-2-5)] py-[var(--space-2)] font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] hover:bg-transparent"
             >
               {row.company}
-            </button>
+            </Button>
           )
         })}
       </div>
@@ -405,7 +406,7 @@ export function ProviderPicker({
         shouldFilter={PICKER_CMDK_SHOULD_FILTER}
         label="Providers"
         data-testid="picker-command"
-        className="gap-2"
+        className="gap-[var(--space-2)]"
       >
         {/* ── Recent (FR-022: between the Popular band and the search field) ── */}
         {model.recent.length > 0 && (
@@ -417,7 +418,7 @@ export function ProviderPicker({
           <div data-testid="picker-recent" className="flex flex-col">
             <span
               id={`${testId}-recent-label`}
-              className="px-2 py-1 text-xs uppercase"
+              className="px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-utility-xs-size)] uppercase"
               style={{ color: 'var(--color-muted)' }}
             >
               Recent
@@ -434,7 +435,7 @@ export function ProviderPicker({
                     ref={(el) => registerRow(key, el)}
                     data-testid={`picker-recent-${recent.provider.id}`}
                     onClick={() => select({ kind: 'recent', key: recent.provider.id })}
-                    className="flex min-h-[32px] cursor-pointer items-center rounded px-2 py-1 text-sm"
+                    className="flex min-h-[32px] cursor-pointer items-center rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
                     style={{ color: 'var(--color-secondary)' }}
                   >
                     {recent.label}
@@ -457,21 +458,20 @@ export function ProviderPicker({
           aria-label="Search providers"
         />
 
-        <button
+        <Button
           type="button"
+          variant="ghost"
           data-testid="picker-all-toggle"
-          tabIndex={0}
           aria-expanded={model.expanded}
           aria-controls={listId}
           onClick={() => setExpandedByOperator((v) => !v)}
-          className="flex min-h-[32px] items-center justify-between rounded px-2 text-sm"
-          style={{ color: 'var(--color-secondary)' }}
+          className="h-auto min-h-[32px] w-full justify-between gap-0 rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] hover:bg-transparent hover:text-[var(--color-secondary)]"
         >
           All providers ({model.allProvidersCount})
-        </button>
+        </Button>
 
         {status === 'loading' && (
-          <div data-testid="picker-catalog-loading" className="flex items-center gap-2 px-2 py-3 text-sm">
+          <div data-testid="picker-catalog-loading" className="flex items-center gap-[var(--space-2)] px-[var(--space-2)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]">
             <CircleNotch size={14} className="animate-spin" aria-hidden="true" />
             Loading providers…
           </div>
@@ -484,22 +484,21 @@ export function ProviderPicker({
             role="alert"
             aria-live="assertive"
             data-testid="picker-catalog-error"
-            className="flex items-center gap-2 rounded border px-2 py-3 text-sm"
+            className="flex items-center gap-[var(--space-2)] rounded border px-[var(--space-2)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
             style={{ borderColor: 'var(--color-border)', color: 'var(--color-secondary)' }}
           >
             <WarningCircle size={14} weight="fill" aria-hidden="true" />
             <span>Provider catalog unavailable. You can still add a custom endpoint.</span>
-            <button
+            <Button
               type="button"
+              variant="outline"
               data-testid="picker-catalog-retry"
-              tabIndex={0}
               onClick={() => onRetry?.()}
-              className="ml-auto flex min-h-[24px] items-center gap-1 rounded border px-2"
-              style={{ borderColor: 'var(--color-border)' }}
+              className="ml-auto h-auto min-h-[24px] gap-[var(--space-1)] rounded px-[var(--space-2)] py-0 font-[var(--font-weight-regular)] hover:bg-transparent"
             >
               <ArrowClockwise size={12} aria-hidden="true" />
               Retry
-            </button>
+            </Button>
           </div>
         )}
 
@@ -526,22 +525,22 @@ export function ProviderPicker({
               {virtualItems.map((item) => {
                 const entry = entries[item.index]
                 if (!entry) return null
-                const common: React.CSSProperties = {
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: item.size,
-                  transform: `translateY(${item.start}px)`,
-                }
                 if (entry.kind === 'header') {
                   return (
                     <div
                       key={`h-${entry.letter}`}
                       role="presentation"
                       data-testid={`picker-letter-${entry.letter}`}
-                      style={{ ...common, color: 'var(--color-muted)' }}
-                      className="flex items-center px-2 text-xs uppercase"
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: item.size,
+                        transform: `translateY(${item.start}px)`,
+                        color: 'var(--color-muted)',
+                      }}
+                      className="flex items-center px-[var(--space-2)] text-[length:var(--type-utility-xs-size)] uppercase"
                     >
                       {entry.letter}
                     </div>
@@ -562,13 +561,21 @@ export function ProviderPicker({
                     aria-setsize={rowCount}
                     aria-posinset={entry.position}
                     onClick={() => select({ kind: 'company', key: row.company })}
-                    style={{ ...common, color: 'var(--color-secondary)' }}
-                    className="flex cursor-pointer items-center gap-2 px-2 text-sm"
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: item.size,
+                      transform: `translateY(${item.start}px)`,
+                      color: 'var(--color-secondary)',
+                    }}
+                    className="flex cursor-pointer items-center gap-[var(--space-2)] px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
                   >
                     {row.disabled && <Prohibit size={14} aria-hidden="true" />}
                     <span>{row.company}</span>
                     {reason && (
-                      <span style={{ color: 'var(--color-muted)' }} className="text-xs">
+                      <span style={{ color: 'var(--color-muted)' }} className="text-[length:var(--type-utility-xs-size)]">
                         {reason}
                       </span>
                     )}
@@ -581,7 +588,7 @@ export function ProviderPicker({
         </div>
 
         {model.expanded && !model.hasMatches && model.emptyMessage && (
-          <div data-testid="picker-empty" className="px-2 py-3 text-sm" style={{ color: 'var(--color-muted)' }}>
+          <div data-testid="picker-empty" className="px-[var(--space-2)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-muted)' }}>
             {model.emptyMessage}
           </div>
         )}
@@ -596,7 +603,7 @@ export function ProviderPicker({
             data-testid="picker-custom-endpoint"
             aria-selected={activeKey === `custom:${CUSTOM_ENDPOINT_ROW_ID}`}
             onClick={() => select({ kind: 'custom', key: CUSTOM_ENDPOINT_ROW_ID })}
-            className="flex min-h-[32px] cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm"
+            className="flex min-h-[32px] cursor-pointer items-center gap-[var(--space-2)] rounded px-[var(--space-2)] py-[var(--space-1)] text-[length:var(--type-body-compact-size)]"
             style={{ color: 'var(--color-secondary)' }}
           >
             <Plus size={14} aria-hidden="true" />

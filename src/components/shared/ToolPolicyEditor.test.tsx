@@ -1055,7 +1055,7 @@ async function expandExecutePlanRow() {
 describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 FR-021/F6)', () => {
   it('no modal renders until an execute_plan-allow-resolving edit is made', () => {
     render(<ToolPolicyEditor tools={PLAN_TOOLS} value={PLAN_TOOLS_ASK_VALUE} onChange={vi.fn()} />)
-    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('clicking Allow on execute_plan (global ceiling editor — no globalPolicies prop) opens a confirm modal instead of writing immediately', async () => {
@@ -1065,7 +1065,7 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
 
     await user.click(within(row).getByRole('button', { name: /allow/i }))
 
-    const dialog = await screen.findByTestId('execute-plan-grant-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent(/autonomous multi-task execution without an approval prompt/i)
     // The edit must not land until the operator explicitly confirms.
     expect(onChange).not.toHaveBeenCalled()
@@ -1077,10 +1077,10 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     const { user, row } = await expandExecutePlanRow()
 
     await user.click(within(row).getByRole('button', { name: /allow/i }))
-    await screen.findByTestId('execute-plan-grant-dialog')
-    await user.click(screen.getByTestId('execute-plan-grant-cancel'))
+    await screen.findByRole('alertdialog')
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
 
-    await waitFor(() => expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
     expect(onChange).not.toHaveBeenCalled()
   })
 
@@ -1090,13 +1090,13 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     const { user, row } = await expandExecutePlanRow()
 
     await user.click(within(row).getByRole('button', { name: /allow/i }))
-    await screen.findByTestId('execute-plan-grant-dialog')
-    await user.click(screen.getByTestId('execute-plan-grant-confirm'))
+    await screen.findByRole('alertdialog')
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Allow autonomous execution' }))
 
     expect(onChange).toHaveBeenCalledWith({
       policies: { ...PLAN_TOOLS_ASK_VALUE.policies, execute_plan: 'allow' },
     })
-    await waitFor(() => expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
   })
 
   it('a non-sensitive tool (read_file) allow write applies immediately with no modal', async () => {
@@ -1112,7 +1112,7 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     expect(onChange).toHaveBeenCalledWith({
       policies: { ...PLAN_TOOLS_ASK_VALUE.policies, read_file: 'allow' },
     })
-    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('setting execute_plan to Ask or Deny never opens the modal', async () => {
@@ -1124,7 +1124,7 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     await user.click(within(row).getByRole('button', { name: /deny/i }))
 
     expect(onChange).toHaveBeenCalledWith({ policies: { ...allowValue.policies, execute_plan: 'deny' } })
-    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('per-agent editor: execute_plan Allow is disabled (locked) under a stricter global "ask" ceiling — no modal reachable', async () => {
@@ -1138,7 +1138,7 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     )
     const { row } = await expandExecutePlanRow()
     expect(within(row).getByRole('button', { name: /allow/i })).toBeDisabled()
-    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('per-agent editor: execute_plan Allow still requires confirmation when the global ceiling already resolves allow (not locked)', async () => {
@@ -1156,10 +1156,10 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
 
     await user.click(within(row).getByRole('button', { name: /allow/i }))
 
-    await screen.findByTestId('execute-plan-grant-dialog')
+    await screen.findByRole('alertdialog')
     expect(onChange).not.toHaveBeenCalled()
 
-    await user.click(screen.getByTestId('execute-plan-grant-confirm'))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Allow autonomous execution' }))
     expect(onChange).toHaveBeenCalledWith({
       policies: { ...PLAN_TOOLS_ASK_VALUE.policies, execute_plan: 'allow' },
     })
@@ -1172,12 +1172,12 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
 
     await user.click(screen.getByTestId('preset-full_access'))
 
-    const dialog = await screen.findByTestId('execute-plan-grant-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent(/full access/i)
     expect(dialog).toHaveTextContent(/autonomous multi-task execution without an approval prompt/i)
     expect(onChange).not.toHaveBeenCalled()
 
-    await user.click(screen.getByTestId('execute-plan-grant-confirm'))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Allow autonomous execution' }))
     expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', PLAN_TOOLS) })
   })
 
@@ -1189,7 +1189,7 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     await user.click(screen.getByTestId('preset-cautious'))
 
     expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('cautious', PLAN_TOOLS) })
-    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 
   it('a role-preset click is applied immediately (no modal) when execute_plan is not in the tool registry', async () => {
@@ -1200,6 +1200,6 @@ describe('ToolPolicyEditor — execute_plan grant security affordance (ADR-052 F
     await user.click(screen.getByTestId('preset-full_access'))
 
     expect(onChange).toHaveBeenCalledWith({ policies: expectedPresetMap('full_access', FILE_TOOLS) })
-    expect(screen.queryByTestId('execute-plan-grant-dialog')).toBeNull()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
   })
 })

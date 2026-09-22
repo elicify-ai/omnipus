@@ -12,6 +12,8 @@
 
 import * as React from 'react'
 import { Plug } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
 
 /** The wire protocols a custom endpoint may declare (generated enum subset). */
 export const CUSTOM_ENDPOINT_PROTOCOLS = ['openai-compatible', 'anthropic'] as const
@@ -53,7 +55,7 @@ export function CustomEndpointPanel({
     <form
       data-testid={testId}
       aria-label="Custom endpoint"
-      className="flex flex-col gap-3 rounded-md border p-3"
+      className="flex flex-col gap-[var(--space-2-5)] rounded-md border p-[var(--space-2-5)]"
       style={{ borderColor: 'var(--color-border)' }}
       onSubmit={(event) => {
         event.preventDefault()
@@ -66,12 +68,12 @@ export function CustomEndpointPanel({
         })
       }}
     >
-      <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-secondary)' }}>
+      <div className="flex items-center gap-[var(--space-2)] text-[length:var(--type-body-compact-size)]" style={{ color: 'var(--color-secondary)' }}>
         <Plug size={14} aria-hidden="true" />
         Custom endpoint
       </div>
 
-      <label className="flex flex-col gap-1 text-xs" htmlFor={`${testId}-id`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-id`}>
         Provider id
         <input
           id={`${testId}-id`}
@@ -79,12 +81,12 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-id"
           value={id}
           onChange={(e) => setId(e.target.value)}
-          className="min-h-[32px] rounded border px-2 text-sm"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
-      </label>
+      </Label>
 
-      <label className="flex flex-col gap-1 text-xs" htmlFor={`${testId}-api-base`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-api-base`}>
         API base URL
         <input
           id={`${testId}-api-base`}
@@ -92,12 +94,12 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-api-base"
           value={apiBase}
           onChange={(e) => setApiBase(e.target.value)}
-          className="min-h-[32px] rounded border px-2 text-sm"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
-      </label>
+      </Label>
 
-      <label className="flex flex-col gap-1 text-xs" htmlFor={`${testId}-protocol`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-protocol`}>
         Protocol
         <select
           id={`${testId}-protocol`}
@@ -105,7 +107,7 @@ export function CustomEndpointPanel({
           data-testid="custom-endpoint-protocol"
           value={protocol}
           onChange={(e) => setProtocol(e.target.value as CustomEndpointProtocol)}
-          className="min-h-[32px] rounded border px-2 text-sm"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         >
           {CUSTOM_ENDPOINT_PROTOCOLS.map((value) => (
@@ -114,9 +116,9 @@ export function CustomEndpointPanel({
             </option>
           ))}
         </select>
-      </label>
+      </Label>
 
-      <label className="flex flex-col gap-1 text-xs" htmlFor={`${testId}-api-key`}>
+      <Label className="flex flex-col gap-[var(--space-2)]" htmlFor={`${testId}-api-key`}>
         API key
         <input
           id={`${testId}-api-key`}
@@ -125,38 +127,37 @@ export function CustomEndpointPanel({
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          className="min-h-[32px] rounded border px-2 text-sm"
+          className="min-h-[32px] rounded border px-[var(--space-2)] text-[length:var(--type-body-compact-size)]"
           style={{ borderColor: 'var(--color-border)' }}
         />
-      </label>
+      </Label>
 
       {error && (
-        <div role="alert" aria-live="assertive" data-testid="custom-endpoint-error" className="text-xs">
+        <div role="alert" aria-live="assertive" data-testid="custom-endpoint-error" className="text-[length:var(--type-utility-xs-size)]">
           {error}
         </div>
       )}
 
-      <div className="flex items-center gap-2">
-        <button
+      <div className="flex items-center gap-[var(--space-2)]">
+        <Button
           type="submit"
-          tabIndex={0}
+          variant="default"
           data-testid="custom-endpoint-submit"
           disabled={!complete || submitting}
-          className="min-h-[32px] rounded border px-3 text-sm disabled:opacity-50"
-          style={{ borderColor: 'var(--color-border)' }}
+          className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
         >
           Add endpoint
-        </button>
+        </Button>
         {onCancel && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
             data-testid="custom-endpoint-cancel"
-            tabIndex={0}
             onClick={onCancel}
-            className="min-h-[32px] rounded px-3 text-sm"
+            className="h-auto min-h-[32px] rounded px-[var(--space-2-5)] text-[length:var(--type-body-compact-size)]"
           >
             Cancel
-          </button>
+          </Button>
         )}
       </div>
     </form>

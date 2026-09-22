@@ -19,7 +19,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Cpu, Info, Warning, Target } from '@phosphor-icons/react'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import {
   fetchPerformanceSettings,
@@ -44,19 +47,19 @@ import { useStepUp } from './useStepUp'
 // ~7 seconds before any error surfaced).
 function Skeleton() {
   return (
-    <div
+    <Card
       role="status"
       aria-live="polite"
       data-testid="performance-loading"
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3"
+      className="p-[var(--space-3)] space-y-[var(--space-2-5)]"
     >
-      <p className="text-xs text-[var(--color-muted)]">Loading performance settings…</p>
-      <div className="space-y-3 animate-pulse" aria-hidden="true">
+      <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">Loading performance settings…</p>
+      <div className="space-y-[var(--space-2-5)] animate-pulse" aria-hidden="true">
         <div className="h-4 w-48 rounded bg-[var(--color-border)]" />
         <div className="h-3 w-full rounded bg-[var(--color-border)]" />
         <div className="h-3 w-2/3 rounded bg-[var(--color-border)]" />
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -443,24 +446,24 @@ export function PerformanceSection(): React.ReactElement {
       <div
         role="alert"
         data-testid="performance-load-error"
-        className="rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 p-4 space-y-2"
+        className="rounded-lg border border-[var(--color-error)]/40 bg-[var(--color-error)]/10 p-[var(--space-3)] space-y-[var(--space-2)]"
       >
-        <div className="flex items-start gap-2 text-sm text-[var(--color-error)]">
-          <Warning size={16} className="mt-0.5 shrink-0" />
+        <div className="flex items-start gap-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">
+          <Warning size={16} className="mt-[var(--space-0-5)] shrink-0" />
           <span>
             Failed to load performance settings: {getErrorMessage(error, 'Unknown error')}
           </span>
         </div>
-        <button
+        <Button
+          variant="link"
           type="button"
-          tabIndex={0}
           data-testid="performance-retry-btn"
           onClick={() => void refetch()}
           disabled={isFetching}
-          className="text-xs font-medium underline text-[var(--color-secondary)] disabled:opacity-50"
+          className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)] underline hover:text-[var(--color-secondary)]"
         >
           {isFetching ? 'Retrying…' : 'Retry'}
-        </button>
+        </Button>
       </div>
     )
   }
@@ -504,39 +507,39 @@ export function PerformanceSection(): React.ReactElement {
       : 'automatic \u2014 bounded by available memory'
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-[var(--space-3)]">
       {/* Header */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-[var(--space-2)]">
+        <div className="flex items-center gap-[var(--space-2)]">
           <Cpu size={18} className="text-[var(--color-secondary)]" />
-          <h2 className="text-sm font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
+          <h2 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Agent Concurrency</h2>
         </div>
         <AutoSaveIndicator status={saveStatus} />
       </div>
 
       {/* Live concurrency card — shown above the input */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-2)] p-3 flex items-start gap-2">
-        <Info size={14} className="text-[var(--color-accent)] mt-0.5 shrink-0" />
+      <Card variant="inset" className="p-[var(--space-2-5)] flex items-start gap-[var(--space-2)]">
+        <Info size={14} className="text-[var(--color-accent)] mt-[var(--space-0-5)] shrink-0" />
         <div className="flex-1 min-w-0">
-          <p className="text-xs text-[var(--color-secondary)] leading-relaxed">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] leading-relaxed">
             {recommendationText}
           </p>
-          <p className="text-[11px] text-[var(--color-muted)] mt-0.5">
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
             {isConfigured
               ? 'An explicit value has no ceiling — it is always honored exactly as set. Agent turns are still admitted only while the host has memory to spare.'
               : 'Nothing is configured, so concurrency is bounded by this host\u2019s available memory at the moment each agent turn starts. Set a value below to cap it explicitly instead.'}
           </p>
         </div>
-      </div>
+      </Card>
 
       {/* Concurrency card */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-4">
-        <div className="space-y-1">
-          <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-3)]">
+        <div className="space-y-[var(--space-1)]">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
             Controls how many tasks and subagents may run concurrently across all agents.
             Leave blank for no explicit cap — concurrency is then bounded by available memory. Changes apply once you confirm them.
           </p>
-          <div className="flex items-center gap-1 text-xs text-[var(--color-muted)]">
+          <div className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             <Info size={12} />
             <span>
               Effective value in use:{' '}
@@ -547,17 +550,21 @@ export function PerformanceSection(): React.ReactElement {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-[var(--color-secondary)] w-44 shrink-0">
+        <div className="flex items-center gap-[var(--space-2-5)]">
+          <Label
+            htmlFor="performance-max-agents"
+            className="text-[length:var(--type-utility-xs-size)] font-medium leading-[var(--font-line-height-body)] text-[var(--color-secondary)] w-44 shrink-0"
+          >
             Max parallel agents
-          </label>
+          </Label>
           <Input
+            id="performance-max-agents"
             type="number"
             min={0}
             placeholder="auto"
             value={inputValue}
             onChange={(e) => handleInputChange(e.target.value)}
-            className="w-24 h-7 text-sm"
+            className="w-24 h-7 text-[length:var(--type-body-compact-size)]"
             aria-label="Max parallel agents"
             data-testid="performance-max-agents-input"
           />
@@ -572,9 +579,9 @@ export function PerformanceSection(): React.ReactElement {
         {exceedsPhysicalCeiling && (
           <div
             data-testid="performance-high-value-warning"
-            className="flex items-start gap-2 p-2.5 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-xs text-[var(--color-warning)]"
+            className="flex items-start gap-[var(--space-2)] p-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
           >
-            <Warning size={14} className="mt-0.5 shrink-0" />
+            <Warning size={14} className="mt-[var(--space-0-5)] shrink-0" />
             <span>
               {inputValueNum} will be honored exactly as set — there is no ceiling — but values
               this high risk Go runtime thread exhaustion, which aborts the process. The
@@ -583,29 +590,29 @@ export function PerformanceSection(): React.ReactElement {
             </span>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Tool loading card */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
         {/* Section heading */}
-        <div className="flex items-center gap-2">
-          <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Tool loading</h3>
+        <div className="flex items-center gap-[var(--space-2)]">
+          <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Tool loading</h3>
         </div>
 
         {/* Toggle row */}
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start justify-between gap-[var(--space-3)]">
           <div className="flex-1 min-w-0">
             {toolsOnDemand ? (
               <>
-                <p className="text-sm text-[var(--color-secondary)]">Load tools on demand</p>
-                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Load tools on demand</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                   Smaller messages, lower token use. Recommended.
                 </p>
               </>
             ) : (
               <>
-                <p className="text-sm text-[var(--color-secondary)]">Keep all tools loaded</p>
-                <p className="text-xs text-[var(--color-muted)] mt-0.5">
+                <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)]">Keep all tools loaded</p>
+                <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
                   Every tool is always available — no loading step, but larger messages.
                 </p>
               </>
@@ -621,71 +628,75 @@ export function PerformanceSection(): React.ReactElement {
         </div>
 
         {/* Helper text */}
-        <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Applies to all agents. Takes effect on the next message — no restart required.
           Changes apply once you confirm them.
         </p>
-      </div>
+      </Card>
 
       {/* Goal completion budget card (GOAL-FR-024/FR-045, D-D/D-E) — the ONE
           global goal-tries setting in the product. There is no per-goal
           override anywhere: not on the task detail panel, not in chat, not
           on the wire, not in the store. This single control governs task
           goals and chat goals identically. */}
-      <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4 space-y-3">
-        <div className="flex items-center gap-2">
+      <Card className="p-[var(--space-3)] space-y-[var(--space-2-5)]">
+        <div className="flex items-center gap-[var(--space-2)]">
           <Target size={16} className="text-[var(--color-secondary)]" />
-          <h3 className="text-sm font-semibold text-[var(--color-secondary)]">Goal completion budget</h3>
+          <h3 className="text-[length:var(--type-body-compact-size)] font-semibold text-[var(--color-secondary)]">Goal completion budget</h3>
         </div>
 
-        <p className="text-xs text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
           How many times an agent may try to finish a goal before it stops and reports the
           goal as not met. This applies to goals set in chat and to goals on tasks.
         </p>
 
-        <div className="flex items-center gap-3">
-          <label className="text-xs font-medium text-[var(--color-secondary)] w-44 shrink-0">
+        <div className="flex items-center gap-[var(--space-2-5)]">
+          <Label
+            htmlFor="performance-goal-max-rounds"
+            className="text-[length:var(--type-utility-xs-size)] font-medium leading-[var(--font-line-height-body)] text-[var(--color-secondary)] w-44 shrink-0"
+          >
             Tries per goal
-          </label>
+          </Label>
           <Input
+            id="performance-goal-max-rounds"
             type="number"
             min={1}
             value={goalMaxRoundsInput}
             onChange={(e) => handleGoalInputChange(e.target.value)}
-            className="w-24 h-7 text-sm"
+            className="w-24 h-7 text-[length:var(--type-body-compact-size)]"
             aria-label="Tries per goal"
             data-testid="performance-goal-max-rounds-input"
           />
         </div>
 
-        <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
+        <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Goals already running keep the limit they started with. Saving asks you to
           confirm the change.
         </p>
-      </div>
+      </Card>
 
       {stepUp.dialogs}
 
       {/* Escape hatch: manual trigger exposed for keyboard users / edge cases */}
       {dirty && !stepUp.open && (
-        <button tabIndex={0}
+        <Button
           type="button"
           data-testid="performance-save-btn"
           onClick={triggerSave}
-          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-xs text-[var(--color-secondary)]"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50"
         >
           Save changes
-        </button>
+        </Button>
       )}
       {goalDirty && !stepUp.open && (
-        <button tabIndex={0}
+        <Button
           type="button"
           data-testid="performance-goal-save-btn"
           onClick={triggerGoalSave}
-          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:p-2 focus:bg-[var(--color-surface-1)] focus:rounded text-xs text-[var(--color-secondary)]"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50"
         >
           Save changes
-        </button>
+        </Button>
       )}
     </div>
   )

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeAll } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import * as React from 'react'
-import { ModelSelector, type ModelGroup, type ModelCatalogGroup } from './model-selector'
+import { ModelSelector, type ModelGroup } from './model-selector'
+import type { ModelCatalogGroup } from '@/lib/providerModelGroups'
 import type { CatalogModel } from '@/lib/api/generated/openapi-types'
 
 // cmdk (used by Command) uses ResizeObserver and scrollIntoView which are not
@@ -833,12 +834,20 @@ describe('ModelSelector — variant="ghost"', () => {
       />,
     )
     const trigger = screen.getByTestId('ghost-trigger')
-    // Ghost trigger must NOT carry the form-field border class.
-    expect(trigger.className).not.toContain('border')
+    // Ghost trigger must NOT carry the form-field border class. Matched as a
+    // whole class token, not a substring: the trigger is now the catalogued
+    // Button primitive, whose base classes legitimately include
+    // `forced-colors:border` / `forced-colors:border-[ButtonText]` (Windows
+    // High Contrast Mode support — a real border only under forced-colors,
+    // not in normal rendering). A plain substring match on "border" would
+    // false-fail on that accessibility class the same way an earlier assert
+    // false-failed on Button's link variant containing "underline" inside
+    // `underline-offset-4`/`hover:no-underline` (see the C2 wave 1 commit).
+    expect(trigger.className.split(/\s+/)).not.toContain('border')
     // Ghost trigger must carry the compact height class (composer context-row h-7).
     expect(trigger.className).toContain('h-7')
     // Ghost trigger must carry the compact padding class.
-    expect(trigger.className).toContain('px-1.5')
+    expect(trigger.className).toContain('px-[var(--space-1)]')
   })
 
   it('still renders the selected value and caret in ghost mode', () => {

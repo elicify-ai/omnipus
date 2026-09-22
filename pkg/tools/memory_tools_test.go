@@ -36,7 +36,7 @@ func newSimpleMemStore(dir string) *simpleMemStore {
 }
 
 func (s *simpleMemStore) memoryFile() string {
-	return filepath.Join(s.dir, "MEMORY.md")
+	return filepath.Join(s.dir, "test-memory-entries.md")
 }
 
 func (s *simpleMemStore) AppendLongTerm(content, category string) error {
@@ -164,22 +164,22 @@ func TestRememberTool_BasicFlow(t *testing.T) {
 	}
 
 	// File must exist and contain the content.
-	raw, err := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
+	raw, err := os.ReadFile(filepath.Join(dir, "test-memory-entries.md"))
 	if err != nil {
-		t.Fatalf("reading MEMORY.md: %v", err)
+		t.Fatalf("reading test memory entries: %v", err)
 	}
 	if !strings.Contains(string(raw), "always use atomic writes") {
-		t.Errorf("MEMORY.md missing expected content; got:\n%s", string(raw))
+		t.Errorf("test memory entries missing expected content; got:\n%s", string(raw))
 	}
 	if !strings.Contains(string(raw), "cat=lesson_learned") {
-		t.Errorf("MEMORY.md missing category; got:\n%s", string(raw))
+		t.Errorf("test memory entries missing category; got:\n%s", string(raw))
 	}
 }
 
 // ---------------------------------------------------------------------------
 // #14 — TestRecallMemoryTool_BasicFlow
 // Traces to: env-awareness-and-memory-spec.md FR-014
-// Seed MEMORY.md with 2 entries; query matches; returns entries newest-first.
+// Seed the test store with 2 entries; query matches; returns entries newest-first.
 // ---------------------------------------------------------------------------
 
 func TestRecallMemoryTool_BasicFlow(t *testing.T) {
@@ -426,7 +426,7 @@ func TestRetrospectiveTool_AppendsRetro(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // TestRememberTool_Differentiation
-// Two different remember calls produce two different MEMORY.md states.
+// Two different remember calls produce two different test-store states.
 // ---------------------------------------------------------------------------
 
 func TestRememberTool_Differentiation(t *testing.T) {
@@ -439,16 +439,16 @@ func TestRememberTool_Differentiation(t *testing.T) {
 		"content":  "first distinct fact",
 		"category": "reference",
 	})
-	raw1, _ := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
+	raw1, _ := os.ReadFile(filepath.Join(dir, "test-memory-entries.md"))
 
 	_ = tool.Execute(ctx, map[string]any{
 		"content":  "second distinct fact",
 		"category": "key_decision",
 	})
-	raw2, _ := os.ReadFile(filepath.Join(dir, "MEMORY.md"))
+	raw2, _ := os.ReadFile(filepath.Join(dir, "test-memory-entries.md"))
 
 	if string(raw1) == string(raw2) {
-		t.Error("MEMORY.md identical before and after second remember — AppendLongTerm may not be persisting")
+		t.Error("test memory entries identical before and after second remember — AppendLongTerm may not be persisting")
 	}
 	if !strings.Contains(string(raw2), "first distinct fact") {
 		t.Error("second write erased first entry — should append, not overwrite")

@@ -21,7 +21,7 @@
   //   - "types": ["node"] instead of ["node", "vite/client"] — tests run under
   //     Node/Playwright, not inside a Vite-served page, so import.meta.env and
   //     the asset-module declarations do not apply here.
-  //   - "jsx" is omitted — there is no TSX under tests/.
+  //   - "jsx" supports the Storybook preview and browser-verification fixtures.
   //   - "lib" keeps DOM/DOM.Iterable, which IS needed: Playwright
   //     page.evaluate() callbacks are authored inline and execute in the
   //     browser, so document/window/Element must resolve.
@@ -49,7 +49,8 @@
     "paths": {
       "@/*": ["./src/*"]
     },
-    "types": ["node"]
+    "types": ["node"],
+    "jsx": "react-jsx"
   },
-  "include": ["tests", "playwright.config.ts"]
+  "include": ["tests", "playwright.config.ts", "playwright.design-system.config.ts", "playwright.touch-in-context.config.ts", ".storybook"]
 }

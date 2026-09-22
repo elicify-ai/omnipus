@@ -22,7 +22,6 @@ import type { EventInput } from '@fullcalendar/core'
 import type { Task } from '@/lib/api'
 import type { TaskOccurrenceSet, DayBucket, TaskRun } from '@/lib/api/generated/openapi-types'
 import {
-  CHIP_TEXT_COLOR,
   STATUS_STYLE,
   STATUS_STYLE_FALLBACK,
   SCHEDULED_STYLE,
@@ -33,6 +32,12 @@ import {
   type OccurrenceChipStatus,
   type RunDerivedChipStatus,
 } from '@/components/calendar/types'
+
+// Near-black chip text — clears WCAG AAA (>=7:1) on every chip background
+// (SC-006b). Same value as `CHIP_TEXT_COLOR` in `@/components/calendar/
+// types`, declared locally so it is literal at its use site below. Keep both
+// in sync if this ever changes.
+const CHIP_TEXT_COLOR = 'var(--color-primary)'
 
 /** One entry of `TaskOccurrenceSet.occurrence_runs[]` — the per-instant run overlay. */
 type OccurrenceRunEntry = NonNullable<TaskOccurrenceSet['occurrence_runs']>[number]
@@ -226,7 +231,7 @@ function resolveOccurrenceChipState(
   nowMs: number,
 ): {
   status: RunDerivedChipStatus
-  style: ChipStyle
+  chipStyle: ChipStyle
   runId?: string
   sessionId?: string
   hasResult?: boolean
@@ -242,18 +247,18 @@ function resolveOccurrenceChipState(
     const style = run.status === 'skipped' ? SKIPPED_STYLE : (STATUS_STYLE[run.status] ?? STATUS_STYLE_FALLBACK)
     return {
       status: run.status,
-      style,
+      chipStyle: style,
       runId: run.run_id,
       sessionId: run.session_id,
       hasResult: run.has_result,
     }
   }
   if (occurrenceMs >= nowMs) {
-    return { status: 'scheduled', style: SCHEDULED_STYLE }
+    return { status: 'scheduled', chipStyle: SCHEDULED_STYLE }
   }
   return {
     status: 'no_record',
-    style: NO_RECORD_STYLE,
+    chipStyle: NO_RECORD_STYLE,
     tooltip: 'Run history unavailable — retention expired or the schedule changed since this ran.',
   }
 }
@@ -329,12 +334,12 @@ export function buildRunCountsTooltip(counts: RunCounts): string {
  * active `failed` run — so it's ranked directly below `failed` and above
  * `in_progress`/`done`/`scheduled`.
  */
-function resolveBucketWorstWins(counts: RunCounts): { status: OccurrenceChipStatus; style: ChipStyle } {
-  if (counts.failed > 0) return { status: 'failed', style: STATUS_STYLE.failed }
-  if (counts.skipped > 0) return { status: 'skipped', style: SKIPPED_STYLE }
-  if (counts.in_progress > 0) return { status: 'in_progress', style: STATUS_STYLE.in_progress }
-  if (counts.done > 0) return { status: 'done', style: STATUS_STYLE.done }
-  return { status: 'scheduled', style: SCHEDULED_STYLE }
+function resolveBucketWorstWins(counts: RunCounts): { status: OccurrenceChipStatus; chipStyle: ChipStyle } {
+  if (counts.failed > 0) return { status: 'failed', chipStyle: STATUS_STYLE.failed }
+  if (counts.skipped > 0) return { status: 'skipped', chipStyle: SKIPPED_STYLE }
+  if (counts.in_progress > 0) return { status: 'in_progress', chipStyle: STATUS_STYLE.in_progress }
+  if (counts.done > 0) return { status: 'done', chipStyle: STATUS_STYLE.done }
+  return { status: 'scheduled', chipStyle: SCHEDULED_STYLE }
 }
 
 /**
@@ -358,18 +363,18 @@ function resolveBucketWorstWins(counts: RunCounts): { status: OccurrenceChipStat
 function resolveBucketChip(
   bucket: DayBucket,
   nowMs: number,
-): { status: OccurrenceChipStatus; style: ChipStyle; tooltip: string } {
+): { status: OccurrenceChipStatus; chipStyle: ChipStyle; tooltip: string } {
   if (!bucket.run_counts) {
     if (bucket.day_start_ms >= nowMs) {
       return {
         status: 'scheduled',
-        style: SCHEDULED_STYLE,
+        chipStyle: SCHEDULED_STYLE,
         tooltip: `first at ${formatTimeOfDay(bucket.first_ms)}`,
       }
     }
     return {
       status: 'no_record',
-      style: NO_RECORD_STYLE,
+      chipStyle: NO_RECORD_STYLE,
       tooltip: 'Run history unavailable — retention expired or the schedule changed since this ran.',
     }
   }
@@ -514,13 +519,13 @@ export function mapToCalendarEvents(
             `task:${task.id}:occurrence:${ms}`,
             instant,
             task.title,
-            chip.style.bg,
+            chip.chipStyle.bg,
             false,
             {
               kind: 'task-occurrence',
               taskId: task.id,
               status: chip.status,
-              icon: chip.style.icon,
+              icon: chip.chipStyle.icon,
               occurrenceMs: ms,
               runId: chip.runId,
               sessionId: chip.sessionId,
@@ -544,13 +549,13 @@ export function mapToCalendarEvents(
             `task:${task.id}:occurrence-agg:${bucket.day_start_ms}`,
             dayStart,
             `${task.title} ${formatBucketLabel(bucket)}`,
-            chip.style.bg,
+            chip.chipStyle.bg,
             true,
             {
               kind: 'task-occurrence-agg',
               taskId: task.id,
               status: chip.status,
-              icon: chip.style.icon,
+              icon: chip.chipStyle.icon,
               tooltip: chip.tooltip,
               dayStartMs: bucket.day_start_ms,
               dayEndMs: bucket.day_end_ms,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { createSession } from '@/lib/api'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { Button } from '@/components/ui/button'
 
 function AdminChatRoute() {
   const navigate = useNavigate()
@@ -35,26 +36,28 @@ function AdminChatRoute() {
 
   if (error) {
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center">
-        <p className="text-sm font-medium text-[var(--color-secondary)]">Could not start Admin chat.</p>
-        <p className="max-w-sm text-xs text-[var(--color-muted)]">{error}</p>
-        <button tabIndex={0}
+      <div className="flex h-full flex-col items-center justify-center gap-[var(--space-2-5)] px-[var(--space-3)] text-center">
+        <p className="text-[length:var(--type-body-compact-size)] font-medium text-[var(--color-secondary)]">Could not start Admin chat.</p>
+        <p className="max-w-sm text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">{error}</p>
+        <Button
           type="button"
+          variant="link"
+          size="sm"
           onClick={() => {
             startedRef.current = false
             void start()
           }}
-          className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+          className="text-[length:var(--type-utility-xs-size)]"
         >
           Try again
-        </button>
+        </Button>
       </div>
     )
   }
 
   return (
     <div className="flex h-full items-center justify-center" aria-live="polite">
-      <p className="text-sm text-[var(--color-muted)]">Starting Admin chat…</p>
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Starting Admin chat…</p>
     </div>
   )
 }

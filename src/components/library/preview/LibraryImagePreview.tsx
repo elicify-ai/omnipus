@@ -1,8 +1,12 @@
 // LibraryImagePreview — plain <img> for the Library preview pane
-// (library-spec.md section 4). Deliberately simple: no lightbox, no
-// annotate/crop — those belong to the chat attachment surface
-// (chat/ChatImage.tsx), which this pane must NOT reach into (file
-// ownership boundary). Sensible max sizing + a dark canvas + real alt text.
+// (library-spec.md section 4), plus a full-screen action that opens the SAME
+// zoomable media viewer chat images use (D18 scope extension,
+// docs/internal/design/components/zoomable-view.md: "Library image preview
+// gets a new full-screen button that opens the same media viewer ... already
+// used for chat images"). No annotate/crop — those belong to the chat
+// attachment surface (chat/ChatImage.tsx), which this pane must NOT reach
+// into (file ownership boundary). Sensible max sizing + a dark canvas + real
+// alt text.
 //
 // Also the "image" kind's inline embed renderer (ADR-083 spec, US-3 /
 // EMB-025..EMB-031) — the SAME component the pane uses, per EMB-027. Only
@@ -13,13 +17,20 @@
 // applies to pictures only) — the resolver that parses that notation is out
 // of this file's scope; this component only ever applies a width it is
 // handed, and never on the `pane` variant, where the pane's own bounds — not
-// the embed notation — decide size.
+// the embed notation — decide size. The full-screen action is `pane`-only —
+// portalled into the Library preview pane's single header row
+// (previewHeaderSlot), which an inline note embed never provides, so it
+// renders nothing there rather than a stray button per embedded picture.
 
 import { useEffect, useState } from 'react'
-import { ArrowClockwise, WarningCircle } from '@phosphor-icons/react'
+import { ArrowClockwise, ArrowsOutSimple, WarningCircle } from '@phosphor-icons/react'
 import { libraryDownloadUrl } from '@/lib/api'
 import type { LibraryEntry } from '@/lib/api'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
+import { PreviewHeaderPortal } from './previewHeaderSlot'
+import { useUiStore } from '@/store/ui'
 
 interface LibraryImagePreviewProps {
   workspaceId: string
@@ -33,6 +44,7 @@ interface LibraryImagePreviewProps {
 
 export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', width }: LibraryImagePreviewProps) {
   const inline = variant === 'inline'
+  const openMediaLightbox = useUiStore((s) => s.openMediaLightbox)
   // UAT D-107 (2026-09-13): a row for a file another tab had deleted opened
   // to the BROWSER'S OWN broken-image glyph beside the alt text — no message,
   // no placeholder. Row thumbnails already had an onError fallback; the pane
@@ -52,7 +64,7 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
         className={
           inline
             ? 'flex items-center justify-center'
-            : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4'
+            : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]'
         }
         data-testid="library-image-preview"
         data-variant={variant}
@@ -60,25 +72,24 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
         <div
           role="status"
           data-testid="library-image-unavailable"
-          className="flex flex-col items-center gap-2 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-3 py-6 text-center text-xs text-[var(--color-warning)]"
+          className="flex flex-col items-center gap-[var(--space-2)] rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5 px-[var(--space-2-5)] py-[var(--space-4)] text-center text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]"
         >
           <WarningCircle size={16} weight="fill" />
           <span>
             “{entry.name}” could not be loaded. It may have been deleted or moved since this list
             was read, or your session may have expired.
           </span>
-          <button
-            type="button"
-            tabIndex={0}
+          <Button
+            variant="outline"
             onClick={() => {
               setFailed(false)
               setAttempt((n) => n + 1)
             }}
             data-testid="library-image-retry"
-            className="inline-flex items-center gap-1 rounded border border-[var(--color-warning)]/60 px-2 py-0.5 text-[11px] font-medium hover:bg-[var(--color-warning)]/10"
+            className="h-auto gap-[var(--space-1)] rounded border-[var(--color-warning)]/60 px-[var(--space-2)] py-[var(--space-0-5)] text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-medium hover:bg-[var(--color-warning)]/10"
           >
             <ArrowClockwise size={12} /> Try again
-          </button>
+          </Button>
         </div>
       </div>
     )
@@ -88,11 +99,27 @@ export function LibraryImagePreview({ workspaceId, entry, variant = 'pane', widt
       className={
         inline
           ? 'flex items-center justify-center'
-          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-4'
+          : 'flex flex-1 min-h-0 items-center justify-center overflow-auto bg-[var(--color-surface-0)] p-[var(--space-3)]'
       }
       data-testid="library-image-preview"
       data-variant={variant}
     >
+      {/* pane-only: portals into the Library preview pane's single header
+          row (previewHeaderSlot). No-ops for the inline embed variant,
+          which has no such slot to portal into. */}
+      {!inline && (
+        <PreviewHeaderPortal>
+          <IconButton
+            onClick={() => openMediaLightbox({ kind: 'image', src, alt: entry.name, filename: entry.name })}
+            aria-label="Open full screen"
+            title="Open full screen"
+            data-testid="library-image-preview-fullscreen"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40 pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
+          >
+            <ArrowsOutSimple size={15} />
+          </IconButton>
+        </PreviewHeaderPortal>
+      )}
       <img
         src={src}
         alt={entry.name}

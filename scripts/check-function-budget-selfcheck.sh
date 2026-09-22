@@ -20,8 +20,20 @@
 #      "WARN ... component" line, exit 0 (components never fail)
 #   f. the identical 241-line body renamed to a hook (useThing) -> must FAIL
 #      (proves the component classifier is load-bearing, not just present)
+#   g. a listed function moved to a sibling file in the same package
+#      (what a file split does) keeps its entry -> must pass
+#   h. the same function moved to another package is not grandfathered
+#      -> must FAIL
+#   i. a 241-line unlisted .mjs function under scripts/          -> must
+#      FAIL, proving the scripts/+tests/ MJS/JS/CJS scope is wired, not
+#      just documented
+#   j. a 241-line unlisted .cjs function under tests/            -> must
+#      FAIL, same proof for the tests/ root and the .cjs extension
+#   k. a 241-line .mjs function OUTSIDE scripts/ and tests/ (docs/) -> out
+#      of scope entirely: exit 0, no WARN/FAIL, proving the scope decision
+#      (not docs/, not spikes/) is enforced, not accidental
 #
-# Exit: 0 all six behave, 1 one or more misbehaved, 2 the harness itself
+# Exit: 0 all cases behave, 1 one or more misbehaved, 2 the harness itself
 # could not run (missing gate script).
 
 set -uo pipefail
@@ -35,7 +47,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 fresh_tree() {
   rm -rf "$TMP/tree" "$TMP/budget.txt"
-  mkdir -p "$TMP/tree/pkg" "$TMP/tree/src/components"
+  mkdir -p "$TMP/tree/pkg" "$TMP/tree/src/components" "$TMP/tree/scripts" "$TMP/tree/tests" "$TMP/tree/docs"
   printf '# fixture budget\n# file\tname\tlines\n' > "$TMP/budget.txt"
 }
 
@@ -55,6 +67,16 @@ gen_tsx_func() {
   printf 'function %s() {\n' "$name" > "$out"
   while [ "$i" -lt "$filler" ]; do printf '  const v%d = %d;\n' "$i" "$i" >> "$out"; i=$((i + 1)); done
   { echo "  return (<div>ok</div>);"; echo "}"; } >> "$out"
+}
+
+# gen_mjs_func <out> <func-name> <total-lines>: a plain .mjs/.js/.cjs file
+# (no JSX, never a "component") whose one function spans exactly
+# <total-lines>, same shape as gen_go_func.
+gen_mjs_func() {
+  local out="$1" name="$2" body=$(( $3 - 2 )) i=0
+  printf 'function %s() {\n' "$name" > "$out"
+  while [ "$i" -lt "$body" ]; do printf '  const v%d = %d;\n' "$i" "$i" >> "$out"; i=$((i + 1)); done
+  echo "}" >> "$out"
 }
 
 FAIL=0
@@ -145,6 +167,28 @@ printf 'pkg/fixture_h.go\tMovedFunc\t300\n' >> "$TMP/budget.txt"
 gen_go_func "$TMP/tree/pkg/other/fixture_h.go" "MovedFunc" 299
 if expect "(h) listed function moved to another package" 1; then
   grep -q "not grandfathered" "$TMP/out" || { echo "selfcheck FAIL: (h) missing 'not grandfathered' FAIL line" >&2; FAIL=1; }
+fi
+
+# (i) a 241-line unlisted .mjs function under scripts/ must FAIL.
+fresh_tree
+gen_mjs_func "$TMP/tree/scripts/fixture_i.mjs" "overLimitMjs" 241
+if expect "(i) 241-line unlisted scripts/*.mjs function" 1; then
+  grep -q "not grandfathered" "$TMP/out" || { echo "selfcheck FAIL: (i) missing 'not grandfathered' FAIL line" >&2; FAIL=1; }
+fi
+
+# (j) a 241-line unlisted .cjs function under tests/ must FAIL.
+fresh_tree
+gen_mjs_func "$TMP/tree/tests/fixture_j.cjs" "overLimitCjs" 241
+if expect "(j) 241-line unlisted tests/*.cjs function" 1; then
+  grep -q "not grandfathered" "$TMP/out" || { echo "selfcheck FAIL: (j) missing 'not grandfathered' FAIL line" >&2; FAIL=1; }
+fi
+
+# (k) a 241-line .mjs function outside scripts/ and tests/ (docs/) is out of
+# scope entirely — ignored, not scanned, not warned, not failed.
+fresh_tree
+gen_mjs_func "$TMP/tree/docs/fixture_k.mjs" "outOfScopeMjs" 241
+if expect "(k) scripts/tests-outside .mjs function is out of scope" 0; then
+  grep -qE '^(WARN|FAIL)' "$TMP/out" && { echo "selfcheck FAIL: (k) unexpected WARN/FAIL line for out-of-scope docs/*.mjs" >&2; FAIL=1; }
 fi
 
 if [ "$FAIL" -ne 0 ]; then

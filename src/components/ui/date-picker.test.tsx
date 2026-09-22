@@ -10,6 +10,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { DatePicker } from './date-picker'
+import { Field } from './field'
 
 function clickDay(isoDate: string) {
   const btn = document.querySelector(`[data-day="${isoDate}"] button`)
@@ -55,6 +56,56 @@ describe('DatePicker — trigger render', () => {
   it('is disabled when disabled=true', () => {
     render(<DatePicker value={null} onChange={vi.fn()} disabled aria-label="Due date" />)
     expect(screen.getByRole('button', { name: 'Due date' })).toBeDisabled()
+  })
+
+  it('remains focusable but does not open when read-only', () => {
+    render(<DatePicker value={new Date(2026, 5, 22)} onChange={vi.fn()} readOnly aria-label="Due date" />)
+    const trigger = screen.getByRole('button', { name: 'Due date' })
+    expect(trigger).toHaveAttribute('aria-disabled', 'true')
+    expect(trigger).not.toBeDisabled()
+    fireEvent.click(trigger)
+    expect(trigger).toHaveAttribute('aria-expanded', 'false')
+    expect(trigger).toHaveClass('data-[readonly=true]:!opacity-100')
+  })
+
+  it('forwards Field metadata and describes required without invalid button ARIA', () => {
+    render(
+      <Field label="Due date" description="Used for reminders" error="Choose a future date" required>
+        <DatePicker value={null} onChange={vi.fn()} aria-label="Explicit due date" />
+      </Field>,
+    )
+    const trigger = screen.getByRole('button', { name: 'Explicit due date' })
+    expect(trigger.id).not.toBe('')
+    expect(trigger).toHaveAttribute('aria-invalid', 'true')
+    expect(trigger).not.toHaveAttribute('aria-required')
+    expect(trigger).not.toHaveAttribute('required')
+    const descriptions = (trigger.getAttribute('aria-describedby') ?? '').split(/\s+/).map((id) => document.getElementById(id)?.textContent)
+    expect(descriptions).toEqual(expect.arrayContaining(['Used for reminders', 'Choose a future date', 'Required']))
+  })
+
+  it('rejects an invalid Date instead of rendering corrupted calendar state', () => {
+    expect(() => render(<DatePicker value={new Date(Number.NaN)} onChange={vi.fn()} aria-label="Due date" />))
+      .toThrow('value must be a valid Date or null')
+  })
+
+  it('bounds the open calendar popover to the narrow viewport', () => {
+    render(<DatePicker value={null} onChange={vi.fn()} aria-label="Due date" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Due date' }))
+
+    expect(screen.getByRole('dialog')).toHaveClass('max-w-[calc(100vw-var(--space-3))]')
+  })
+
+  it.each(['readOnly', 'disabled'] as const)('closes immediately when %s becomes true while open', (mode) => {
+    const onChange = vi.fn()
+    const value = new Date(2026, 5, 15)
+    const { rerender } = render(<DatePicker value={value} onChange={onChange} aria-label="Due date" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Due date' }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    rerender(<DatePicker value={value} onChange={onChange} aria-label="Due date" {...{ [mode]: true }} />)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    rerender(<DatePicker value={value} onChange={onChange} aria-label="Due date" />)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(onChange).not.toHaveBeenCalled()
   })
 })
 

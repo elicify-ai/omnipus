@@ -1,0 +1,857 @@
+{
+  "version": 1,
+  "classifications": [
+    "foundations",
+    "primitive",
+    "composite",
+    "domain",
+    "application"
+  ],
+  "entries": [
+    {
+      "source": "src/components/ui/accordion.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Accordion",
+        "AccordionItem",
+        "AccordionTrigger",
+        "AccordionContent"
+      ],
+      "publicExports": [
+        "Accordion",
+        "AccordionItem",
+        "AccordionTrigger",
+        "AccordionContent"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/alert-dialog.tsx",
+      "classification": "primitive",
+      "exports": [
+        "AlertDialog",
+        "AlertDialogPortal",
+        "AlertDialogOverlay",
+        "AlertDialogTrigger",
+        "AlertDialogContent",
+        "AlertDialogHeader",
+        "AlertDialogFooter",
+        "AlertDialogTitle",
+        "AlertDialogDescription",
+        "AlertDialogCancel",
+        "AlertDialogAction"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/AutoSaveIndicator.tsx",
+      "classification": "domain",
+      "exports": [
+        "AutoSaveIndicator"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/avatar.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Avatar",
+        "AvatarImage",
+        "AvatarFallback",
+        "AvatarImageProps"
+      ],
+      "publicExports": [
+        "Avatar",
+        "AvatarImage",
+        "AvatarFallback"
+      ],
+      "publicTypes": [
+        "AvatarImageProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/badge.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Badge",
+        "badgeVariants",
+        "BadgeProps"
+      ],
+      "publicExports": [
+        "Badge",
+        "badgeVariants"
+      ],
+      "publicTypes": [
+        "BadgeProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/brand-disclaimer.tsx",
+      "classification": "foundations",
+      "exports": [
+        "BRAND_DISCLAIMER_TEXT",
+        "BrandDisclaimer"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/brand-icon.tsx",
+      "classification": "foundations",
+      "exports": [
+        "BrandIcon"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/button.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Button",
+        "buttonVariants",
+        "ButtonProps"
+      ],
+      "publicExports": [
+        "Button",
+        "buttonVariants"
+      ],
+      "publicTypes": [
+        "ButtonProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/calendar.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Calendar",
+        "CalendarProps"
+      ],
+      "publicExports": [
+        "Calendar"
+      ],
+      "publicTypes": [
+        "CalendarProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/card.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Card",
+        "CardHeader",
+        "CardFooter",
+        "CardTitle",
+        "CardDescription",
+        "CardContent",
+        "cardVariants",
+        "CardProps"
+      ],
+      "publicExports": [
+        "Card",
+        "CardHeader",
+        "CardFooter",
+        "CardTitle",
+        "CardDescription",
+        "CardContent",
+        "cardVariants"
+      ],
+      "publicTypes": [
+        "CardProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/channel-logo.ts",
+      "classification": "foundations",
+      "exports": [
+        "VENDORED_CHANNEL_SLUGS",
+        "LETTERMARK_ONLY_CHANNEL_TYPES",
+        "channelSlug"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/checkbox.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Checkbox"
+      ],
+      "publicExports": [
+        "Checkbox"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/collection-state.tsx",
+      "classification": "composite",
+      "exports": [
+        "CollectionStatus",
+        "CollectionStateProps",
+        "CollectionState"
+      ],
+      "publicExports": [
+        "CollectionState"
+      ],
+      "publicTypes": [
+        "CollectionStatus",
+        "CollectionStateProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/command.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Command",
+        "CommandInput",
+        "CommandList",
+        "CommandEmpty",
+        "CommandGroup",
+        "CommandItem",
+        "CommandSeparator"
+      ],
+      "publicExports": [
+        "Command",
+        "CommandInput",
+        "CommandList",
+        "CommandEmpty",
+        "CommandGroup",
+        "CommandItem",
+        "CommandSeparator"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/confirm-dialog.tsx",
+      "classification": "composite",
+      "exports": [
+        "ConfirmDialog",
+        "ConfirmDialogProps"
+      ],
+      "publicExports": [
+        "ConfirmDialog"
+      ],
+      "publicTypes": [
+        "ConfirmDialogProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/date-picker.tsx",
+      "classification": "primitive",
+      "exports": [
+        "DatePicker",
+        "DATE_TRIGGER_CLASSNAME",
+        "DateTriggerButtonProps",
+        "DateTriggerButton",
+        "DatePickerProps"
+      ],
+      "publicExports": [
+        "DatePicker"
+      ],
+      "publicTypes": [
+        "DatePickerProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/date-time-picker.tsx",
+      "classification": "composite",
+      "exports": [
+        "DateTimePicker",
+        "DateTimePickerProps"
+      ],
+      "publicExports": [
+        "DateTimePicker"
+      ],
+      "publicTypes": [
+        "DateTimePickerProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/dialog.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Dialog",
+        "DialogPortal",
+        "DialogOverlay",
+        "DialogTrigger",
+        "DialogClose",
+        "DialogContent",
+        "DialogHeader",
+        "DialogFooter",
+        "DialogTitle",
+        "DialogDescription"
+      ],
+      "publicExports": [
+        "Dialog",
+        "DialogPortal",
+        "DialogOverlay",
+        "DialogTrigger",
+        "DialogClose",
+        "DialogContent",
+        "DialogHeader",
+        "DialogFooter",
+        "DialogTitle",
+        "DialogDescription"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/disclosure-row.tsx",
+      "classification": "primitive",
+      "exports": [
+        "DisclosureRow",
+        "DisclosureRowProps"
+      ],
+      "publicExports": [
+        "DisclosureRow"
+      ],
+      "publicTypes": [
+        "DisclosureRowProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/zoomable-view.tsx",
+      "classification": "composite",
+      "exports": [
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "effectiveMinScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX",
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
+      ],
+      "publicExports": [
+        "ZoomPill",
+        "ZoomableMediaSurface",
+        "clampZoomScale",
+        "effectiveMinScale",
+        "computeFittedScale",
+        "computeOpeningScale",
+        "resolveSvgIntrinsicSize",
+        "useZoomableViewKeyboard",
+        "useZoomableMedia",
+        "ZOOMABLE_VIEW_MIN_SCALE",
+        "ZOOMABLE_VIEW_MAX_SCALE",
+        "ZOOMABLE_VIEW_LABEL_FLOOR_PX"
+      ],
+      "publicTypes": [
+        "ZoomableSize",
+        "OpeningScaleParams",
+        "ZoomableViewKeyboardHandlers",
+        "ZoomPillProps",
+        "ZoomableMediaController",
+        "UseZoomableMediaOptions",
+        "ZoomableMediaSurfaceProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/dropdown-menu.tsx",
+      "classification": "primitive",
+      "exports": [
+        "DropdownMenu",
+        "DropdownMenuTrigger",
+        "DropdownMenuContent",
+        "DropdownMenuItem",
+        "DropdownMenuCheckboxItem",
+        "DropdownMenuRadioItem",
+        "DropdownMenuLabel",
+        "DropdownMenuSeparator",
+        "DropdownMenuShortcut",
+        "DropdownMenuGroup",
+        "DropdownMenuPortal",
+        "DropdownMenuSub",
+        "DropdownMenuSubContent",
+        "DropdownMenuSubTrigger",
+        "DropdownMenuRadioGroup"
+      ],
+      "publicExports": [
+        "DropdownMenu",
+        "DropdownMenuTrigger",
+        "DropdownMenuContent",
+        "DropdownMenuItem",
+        "DropdownMenuCheckboxItem",
+        "DropdownMenuRadioItem",
+        "DropdownMenuLabel",
+        "DropdownMenuSeparator",
+        "DropdownMenuShortcut",
+        "DropdownMenuGroup",
+        "DropdownMenuPortal",
+        "DropdownMenuSub",
+        "DropdownMenuSubContent",
+        "DropdownMenuSubTrigger",
+        "DropdownMenuRadioGroup"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/empty-state.tsx",
+      "classification": "composite",
+      "exports": [
+        "EmptyStateProps",
+        "EmptyState"
+      ],
+      "publicExports": [
+        "EmptyState"
+      ],
+      "publicTypes": [
+        "EmptyStateProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/error-boundary.tsx",
+      "classification": "application",
+      "exports": [
+        "ErrorBoundary"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/error-state.tsx",
+      "classification": "composite",
+      "exports": [
+        "ErrorStateProps",
+        "ErrorState"
+      ],
+      "publicExports": [
+        "ErrorState"
+      ],
+      "publicTypes": [
+        "ErrorStateProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/field.tsx",
+      "classification": "composite",
+      "exports": [
+        "Field",
+        "FieldControlProps",
+        "FieldProps"
+      ],
+      "publicExports": [
+        "Field"
+      ],
+      "publicTypes": [
+        "FieldProps",
+        "FieldControlProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/FormError.tsx",
+      "classification": "domain",
+      "exports": [
+        "FormErrorProps",
+        "FormError"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/icon-button.tsx",
+      "classification": "primitive",
+      "exports": [
+        "IconButton",
+        "IconButtonProps"
+      ],
+      "publicExports": [
+        "IconButton"
+      ],
+      "publicTypes": [
+        "IconButtonProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/input.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Input"
+      ],
+      "publicExports": [
+        "Input"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/job-status.tsx",
+      "classification": "composite",
+      "exports": [
+        "JobState",
+        "JobStatusProps",
+        "JobStatus"
+      ],
+      "publicExports": [
+        "JobStatus"
+      ],
+      "publicTypes": [
+        "JobState",
+        "JobStatusProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/label.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Label"
+      ],
+      "publicExports": [
+        "Label"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/model-selector.tsx",
+      "classification": "domain",
+      "exports": [
+        "ProviderStatus",
+        "ModelGroup",
+        "ModelPair",
+        "ModelSelectorProviderFilter",
+        "ModelSelector"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/popover.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Popover",
+        "PopoverTrigger",
+        "PopoverContent",
+        "PopoverAnchor"
+      ],
+      "publicExports": [
+        "Popover",
+        "PopoverTrigger",
+        "PopoverContent",
+        "PopoverAnchor"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/progress.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Progress",
+        "ProgressProps"
+      ],
+      "publicExports": [
+        "Progress"
+      ],
+      "publicTypes": [
+        "ProgressProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/query-error-state.tsx",
+      "classification": "composite",
+      "exports": [
+        "QueryErrorStateProps",
+        "QueryErrorState"
+      ],
+      "publicExports": [
+        "QueryErrorState"
+      ],
+      "publicTypes": [
+        "QueryErrorStateProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/radio-group.tsx",
+      "classification": "composite",
+      "exports": [
+        "RadioGroup",
+        "RadioGroupItem",
+        "RadioGroupProps",
+        "RadioGroupItemProps"
+      ],
+      "publicExports": [
+        "RadioGroup",
+        "RadioGroupItem"
+      ],
+      "publicTypes": [
+        "RadioGroupProps",
+        "RadioGroupItemProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/RestartConfirmDialog.tsx",
+      "classification": "domain",
+      "exports": [
+        "RestartConfirmDialog"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/segmented-control.tsx",
+      "classification": "composite",
+      "exports": [
+        "SegmentedControl",
+        "SegmentedControlItem",
+        "SegmentedControlProps",
+        "SegmentedControlItemProps"
+      ],
+      "publicExports": [
+        "SegmentedControl",
+        "SegmentedControlItem"
+      ],
+      "publicTypes": [
+        "SegmentedControlProps",
+        "SegmentedControlItemProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/select.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Select",
+        "SelectGroup",
+        "SelectValue",
+        "SelectTrigger",
+        "SelectContent",
+        "SelectLabel",
+        "SelectItem",
+        "SelectSeparator",
+        "SelectScrollUpButton",
+        "SelectScrollDownButton"
+      ],
+      "publicExports": [
+        "Select",
+        "SelectGroup",
+        "SelectValue",
+        "SelectTrigger",
+        "SelectContent",
+        "SelectLabel",
+        "SelectItem",
+        "SelectSeparator",
+        "SelectScrollUpButton",
+        "SelectScrollDownButton"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/separator.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Separator"
+      ],
+      "publicExports": [
+        "Separator"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/sheet.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Sheet",
+        "SheetPortal",
+        "SheetOverlay",
+        "SheetTrigger",
+        "SheetClose",
+        "SheetContent",
+        "SheetHeader",
+        "SheetFooter",
+        "SheetTitle",
+        "SheetDescription"
+      ],
+      "publicExports": [
+        "Sheet",
+        "SheetPortal",
+        "SheetOverlay",
+        "SheetTrigger",
+        "SheetClose",
+        "SheetContent",
+        "SheetHeader",
+        "SheetFooter",
+        "SheetTitle",
+        "SheetDescription"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/skeleton.tsx",
+      "classification": "primitive",
+      "exports": [
+        "SkeletonProps",
+        "Skeleton"
+      ],
+      "publicExports": [
+        "Skeleton"
+      ],
+      "publicTypes": [
+        "SkeletonProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/slider.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Slider",
+        "SliderProps"
+      ],
+      "publicExports": [
+        "Slider"
+      ],
+      "publicTypes": [
+        "SliderProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/smart-select.tsx",
+      "classification": "composite",
+      "exports": [
+        "SmartSelect"
+      ],
+      "publicExports": [
+        "SmartSelect"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/switch.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Switch"
+      ],
+      "publicExports": [
+        "Switch"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/table.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Table",
+        "TableHeader",
+        "TableBody",
+        "TableRow",
+        "TableHead",
+        "TableCell",
+        "TableProps"
+      ],
+      "publicExports": [
+        "Table",
+        "TableHeader",
+        "TableBody",
+        "TableRow",
+        "TableHead",
+        "TableCell"
+      ],
+      "publicTypes": [
+        "TableProps"
+      ]
+    },
+    {
+      "source": "src/components/ui/tabs.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Tabs",
+        "TabsList",
+        "TabsTrigger",
+        "TabsContent"
+      ],
+      "publicExports": [
+        "Tabs",
+        "TabsList",
+        "TabsTrigger",
+        "TabsContent"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/textarea.tsx",
+      "classification": "primitive",
+      "exports": [
+        "Textarea"
+      ],
+      "publicExports": [
+        "Textarea"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/components/ui/toast-container.tsx",
+      "classification": "application",
+      "exports": [
+        "ToastContainer"
+      ],
+      "publicExports": [],
+      "publicTypes": []
+    },
+    {
+      "source": "src/design-system/status.ts",
+      "classification": "foundations",
+      "exports": [
+        "StatusPresentation",
+        "statusContract",
+        "contrastRatio",
+        "simulateColorVision",
+        "findColorVisionAmbiguities",
+        "validateStatusContract"
+      ],
+      "publicExports": [
+        "statusContract"
+      ],
+      "publicTypes": [
+        "StatusPresentation"
+      ]
+    },
+    {
+      "source": "src/design-system/tokens.ts",
+      "classification": "foundations",
+      "exports": [
+        "tokens",
+        "resolvedTokens",
+        "TokenId"
+      ],
+      "publicExports": [
+        "tokens",
+        "resolvedTokens"
+      ],
+      "publicTypes": [
+        "TokenId"
+      ]
+    },
+    {
+      "source": "src/design-system/use-loading-visibility.ts",
+      "classification": "foundations",
+      "exports": [
+        "useLoadingVisibility"
+      ],
+      "publicExports": [
+        "useLoadingVisibility"
+      ],
+      "publicTypes": []
+    },
+    {
+      "source": "src/lib/utils.ts",
+      "classification": "foundations",
+      "exports": [
+        "cn",
+        "initialOf"
+      ],
+      "publicExports": [
+        "cn"
+      ],
+      "publicTypes": []
+    }
+  ]
+}

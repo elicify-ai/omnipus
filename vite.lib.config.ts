@@ -4,12 +4,13 @@ import tailwindcss from '@tailwindcss/vite'
 import dts from 'vite-plugin-dts'
 import { fileURLToPath, URL } from 'url'
 
-// Library build — produces @omnipus/ui npm package (ESM + types)
+// Library build: ESM, CommonJS, declarations, and standalone component CSS.
 export default defineConfig({
+  publicDir: false,
   plugins: [
     tailwindcss(),
     react(),
-    dts({ include: ['src'], outDirs: ['dist/lib'] }),
+    dts({ tsconfigPath: './tsconfig.lib.json', include: ['src/**'], entryRoot: 'src', outDirs: ['dist/lib'] }),
   ],
   resolve: {
     alias: {
@@ -20,6 +21,7 @@ export default defineConfig({
     lib: {
       entry: fileURLToPath(new URL('src/index.ts', import.meta.url)),
       name: 'OmnipusUI',
+      cssFileName: 'styles',
       formats: ['es', 'cjs'],
       fileName: (format) => `index.${format === 'es' ? 'js' : 'cjs'}`,
     },

@@ -46,6 +46,8 @@ import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { PlayCircle, Prohibit, SpinnerGap, VideoCameraSlash, Warning } from '@phosphor-icons/react'
 import { fetchAppState } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 
 /** YouTube (and youtube-nocookie.com) video identifiers are always exactly
  *  11 characters of this alphabet. This is the WHOLE filter — there is no
@@ -130,7 +132,7 @@ export interface VideoEmbedProps {
 }
 
 const PANEL_BASE =
-  'flex w-full flex-col items-center justify-center gap-2 rounded-md border p-6 text-center text-xs'
+  'flex w-full flex-col items-center justify-center gap-2 rounded-md border p-6 text-center text-[length:var(--type-utility-xs-size)]'
 
 /** UAT D-41: the plain link an author wrote, restored when its host is not
  *  permitted for playback here — with the reason beside it, never hidden. */
@@ -147,7 +149,7 @@ function RefusedLinkFallback({ url, title, note }: { url: string; title?: string
       >
         {title && title.trim() !== '' ? title : url}
       </a>
-      <span className="ml-1 text-[11px] text-[var(--color-muted)]">({note})</span>
+      <span className="ml-[var(--space-1)] text-[length:var(--type-caption-size)] text-[var(--color-muted)]">({note})</span>
     </span>
   )
 }
@@ -188,14 +190,13 @@ export function VideoEmbed({ url, title, authoredAsLink = false }: VideoEmbedPro
       >
         <Warning size={16} />
         <span>Could not check which video hosts are allowed.</span>
-        <button
-          tabIndex={0}
-          type="button"
+        <Button
+          variant="link"
           onClick={() => void appStateQuery.refetch()}
-          className="text-[11px] underline underline-offset-2"
+          className="text-[color:var(--color-warning)] text-[length:var(--type-caption-size)] font-[var(--font-weight-regular)] underline underline-offset-2 hover:text-[var(--color-warning)]"
         >
           Retry
-        </button>
+        </Button>
       </div>
     )
   }
@@ -284,18 +285,16 @@ export function VideoEmbed({ url, title, authoredAsLink = false }: VideoEmbedPro
         data-state="placeholder"
         className="relative flex aspect-video w-full items-center justify-center overflow-hidden rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
       >
-        <button
-          tabIndex={0}
-          type="button"
+        <IconButton
           data-testid="video-embed-play"
           aria-label={title ? `Play video: ${title}` : 'Play video'}
           onClick={() => setPlaying(true)}
-          className="flex items-center justify-center text-[var(--color-accent)] transition-colors hover:text-[var(--color-accent-hover)]"
+          className="h-auto w-auto rounded-full p-0 text-[var(--color-accent)] hover:bg-transparent hover:text-[var(--color-accent-hover)]"
         >
           <PlayCircle size={56} weight="fill" />
-        </button>
+        </IconButton>
         {title !== undefined && title !== '' && (
-          <span className="absolute bottom-2 left-1/2 max-w-[90%] -translate-x-1/2 truncate text-[11px] text-[var(--color-muted)]">
+          <span className="absolute bottom-2 left-1/2 max-w-[90%] -translate-x-1/2 truncate text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
             {title}
           </span>
         )}

@@ -15,6 +15,7 @@ enum:
   - ask_user_answer
   # ── Server → client ─────────────────────────────────────────────────────────
   - session_started
+  - message_status
   - token
   - done
   - error

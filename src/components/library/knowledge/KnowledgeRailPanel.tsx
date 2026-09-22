@@ -26,6 +26,7 @@
 
 import type { ReactNode } from "react";
 import { CaretDown, CaretRight } from "@phosphor-icons/react";
+import { Button } from "@/components/ui/button";
 
 /** A caveat that must remain visible while the panel is collapsed. */
 export interface KnowledgeRailQualifier {
@@ -78,7 +79,7 @@ export function KnowledgeRailPanelHeader({
           key={q.label}
           data-testid={`${testId}-qualifier`}
           data-qualifier={q.label}
-          className="text-[10px] uppercase tracking-wide text-[var(--color-warning)]"
+          className="text-[length:var(--type-caption-size)] uppercase tracking-wide text-[var(--color-warning)]"
         >
           {q.label}
           <span className="sr-only"> — {q.detail}</span>
@@ -88,22 +89,21 @@ export function KnowledgeRailPanelHeader({
   );
 
   const className =
-    "flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-[var(--color-secondary)]";
+    "flex w-full items-center gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] text-left text-[length:var(--type-caption-size)] text-[var(--color-secondary)]";
 
   if (!collapsible) return <h3 className={className}>{body}</h3>;
 
   return (
     <h3>
-      <button
-        type="button"
-        tabIndex={0}
+      <Button
+        variant="ghost"
         data-testid={testId}
         aria-expanded={expanded}
         onClick={onToggle}
-        className={`${className} hover:bg-[var(--color-surface-2)] transition-colors`}
+        className={`h-auto justify-start rounded-none font-[var(--font-weight-regular)] ${className} hover:bg-[var(--color-surface-2)]`}
       >
         {body}
-      </button>
+      </Button>
     </h3>
   );
 }

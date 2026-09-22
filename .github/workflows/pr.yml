@@ -43,7 +43,8 @@ jobs:
     # `code` is the broad gate. Conservative by design: it is only 'false'
     # when EVERY changed file in a pull_request is a doc/markdown/license
     # file (docs/**, **/*.md, LICENSE, NOTICE) — none of
-    # which any job in this workflow reads (see
+    # which ordinary jobs read. Design-system contracts/evidence are
+    # explicitly SPA inputs and override this documentation-only shortcut (see
     # docs/internal/false-green-patterns.md and CLAUDE.md's record of
     # file-scoped changes breaking a DIFFERENT package's tests, which rules
     # out any narrower, package-level filter — see that doc for the two
@@ -168,6 +169,10 @@ jobs:
               - 'scripts/**'
             spa:
               - 'src/**'
+              - 'design-system/**'
+              - 'docs/internal/design/**'
+              - '.storybook/**'
+              - 'playwright.design-system.config.ts'
               # tests/** is SPA source too: eslint.config.js lints src/ AND
               # tests/ (tests/ is not in its `ignores` list), and
               # vite.config.ts's vitest `include` is
@@ -209,7 +214,9 @@ jobs:
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ] \
              && [ "${{ steps.filter.outcome }}" = "success" ] \
-             && [ "${{ steps.filter.outputs.non_docs }}" = "false" ]; then
+             && [ "${{ steps.filter.outputs.non_docs }}" = "false" ] \
+             && [ "${{ steps.lang_filter.outcome }}" = "success" ] \
+             && [ "${{ steps.lang_filter.outputs.spa }}" = "false" ]; then
             echo "code=false" >> "$GITHUB_OUTPUT"
           else
             echo "code=true" >> "$GITHUB_OUTPUT"
@@ -707,7 +714,7 @@ jobs:
           # *.test.ts only, so the sibling *.spec.ts Playwright files are not
           # picked up by this pattern. It ran in NO shard until 2026-08-23.
           - group: lib-store
-            patterns: "src/lib/ src/store/ src/routes/ src/test/ tests/e2e/fixtures/"
+            patterns: "src/lib/ src/store/ src/routes/ src/test/ src/design-system/ tests/e2e/fixtures/ tests/design-system/"
           # Group B: chat components — heaviest component group
           - group: components-chat
             patterns: "src/components/chat/"
@@ -794,6 +801,98 @@ jobs:
             input-fixture-results.json
             test-results/
           retention-days: 7
+
+  design-system:
+    name: Design system contracts and browser evidence
+    runs-on: ubuntu-latest
+    needs: [changes, setup]
+    if: success() && needs.changes.outputs.code == 'true' && needs.changes.outputs.spa == 'true'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@v7
+        with:
+          name: node-modules-${{ github.run_id }}
+      - run: tar -xf node_modules.tar
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - run: npm run tokens:check
+      - run: npm run test:design-system:unit
+      # Stage B lock fixture suite (design-system/enforcement/contract.json):
+      # six-scanner fixture/adversarial tests live under tests/design-system-locks/,
+      # which test:design-system:unit's tests/design-system/*.test.mjs glob does not
+      # reach. A scanner change that ships without its fixture suite green is
+      # exactly the fail-closed gap the contract's failClosed clause exists for.
+      - run: npm run test:design-system:locks
+      - run: npm run test:design-system:application-styles
+      - run: npm run test:design-system:components
+      - run: npm run build:storybook
+      - run: npm run test:storybook
+      - run: npm run test:design-system:browser
+      # Appearance gate (issue #753): pixel screenshots of the static
+      # Storybook build, diffed against tests/design-system/screenshot.spec.ts-snapshots/.
+      # Must run after build:storybook, and must never fall back to the dev
+      # server (rule 11 / this suite's own header comment: 16-of-18 vs
+      # 18-of-18 evidence). STORYBOOK_STATIC_DIR makes
+      # playwright.design-system.config.ts serve dist/storybook itself, with
+      # Playwright's own webServer managing start/stop for this one step --
+      # no separate long-running process to coordinate across steps.
+      #
+      # Blocking: pixel diff of every catalogued component story against the
+      # committed darwin and linux baselines (maxDiffPixels: 50).
+      - run: npm run test:design-system:screenshot
+        env:
+          STORYBOOK_STATIC_DIR: dist/storybook
+      - name: Upload appearance-gate diff evidence
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: design-system-appearance-diffs
+          path: test-results/design-system-browser-artifacts/screenshot-*
+          if-no-files-found: ignore
+      - run: npm run verify:design-system
+      # Enforcement audit (design-system/enforcement/contract.json): complete
+      # six-scanner audit at the checkpoint recorded in contract.json's
+      # currentCheckpoint (read by scripts/design-system-locks/current-checkpoint.mjs
+      # -- never hardcoded here) with the live token policy, canonical
+      # baseline/ledger (composed ONLY from lead-approved fragments), and composed
+      # public export→manifest→story→executed-check coverage. Intentionally a hard,
+      # blocking step with NO continue-on-error: unapproved existing debt and
+      # unsupported governed syntax are real gate failures today — suppressing the
+      # exit would manufacture a green the contract's failClosed clause forbids.
+      # Must run AFTER build:storybook/test:storybook/test:design-system:browser so
+      # --index dist/storybook/index.json and the --evidence executed-check files
+      # exist; coverage composition reads them.
+      - run: npm run audit:design-system
+      - run: npm run test:design-system:package
+      # Build both revisions on this runner; a macOS baseline is not a Linux budget oracle.
+      - name: Checkout immutable production baseline
+        uses: actions/checkout@v7
+        with:
+          ref: 92aeb4d5dcb0d545e2370ddd1c57c099a03392ba
+          path: dist/design-system-ci-baseline
+      - name: Build baseline with its original dependency lock
+        working-directory: dist/design-system-ci-baseline
+        run: |
+          npm ci
+          npm run build
+      - name: Measure baseline
+        run: node scripts/design-system/bundle-measure.mjs --dist dist/design-system-ci-baseline/dist/spa --output test-results/design-system-ci-baseline.json
+      - run: npm run build
+      - run: npm run measure:design-system-bundle
+      - name: Enforce production budget and Storybook exclusion
+        run: node scripts/design-system/bundle-audit.mjs --baseline test-results/design-system-ci-baseline.json --candidate test-results/design-system-production-candidate.json --provenance docs/internal/design/evidence/design-system-production-provenance.json --output test-results/design-system-production-budget.json
+      - name: Upload execution evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: design-system-evidence
+          path: |
+            test-results/design-system*.json
+            docs/internal/design/evidence/design-system-production-provenance.json
+          if-no-files-found: error
 
   wire-types-lint:
     name: Wire-Types Lint
@@ -2887,6 +2986,7 @@ jobs:
       - typecheck
       - lint-spa
       - vitest
+      - design-system
       - wire-types-lint
       - tool-error-status-lint
       - verify-contracts

@@ -31,25 +31,89 @@ export function isLibraryEditorDirty(): boolean {
   return dirty
 }
 
+// ── In-app discard-confirmation dialog ─────────────────────────────────────
+// A raw `window.confirm()` is a blocking browser dialog and a lock finding
+// (controls/global-confirm, scripts/design-system-locks/controls.mjs) — the
+// design system requires the catalogued `ConfirmDialog`
+// (src/components/ui/confirm-dialog.tsx) instead. But `ConfirmDialog` is a
+// React component, and this module is called from plain functions, not
+// components, so it cannot render one itself. Instead it exposes a tiny
+// external store (the same `subscribe`/`getSnapshot` shape
+// src/lib/library-attachment.ts and LazyEmbedMount.tsx already use for a
+// module-level value a React tree needs to read via `useSyncExternalStore`):
+// flip `open` true, and let whichever `LibraryExplorer` instance is mounted
+// render the dialog and report the user's choice back via
+// `resolveDiscardConfirmDialog`. Both Library entry points (the docked panel
+// via LibraryPanel.tsx, and the /library pop-out route) always keep a
+// LibraryExplorer mounted for the whole time a navigation guard could fire —
+// including the pop-out's `useBlocker`, which runs before the route (and so
+// before LibraryExplorer) ever unmounts — so hosting the dialog inside
+// LibraryExplorer covers every caller.
+let open = false
+const listeners = new Set<() => void>()
+// FIFO of every caller currently waiting on the ONE dialog that is open.
+// confirmDiscardLibraryEdits() can be called more than once before the user
+// answers (e.g. a click storm, or one caller triggered programmatically while
+// another is mid-click) — every one of them gets the SAME answer, from the
+// same dialog, rather than stacking a second dialog per call.
+let pendingResolvers: Array<(result: boolean) => void> = []
+
+function emit(): void {
+  for (const listener of listeners) listener()
+}
+
+export function subscribeDiscardConfirmDialog(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
+export function getDiscardConfirmDialogOpen(): boolean {
+  return open
+}
+
 /**
- * Returns true if it's safe to proceed with navigation (nothing unsaved, or
- * the user confirmed discarding it) — and in that case also clears the flag,
- * since the caller is about to unmount/replace whatever was dirty. Returns
- * false if the user chose to stay.
+ * Returns a Promise that resolves true if it's safe to proceed with
+ * navigation (nothing unsaved, or the user confirmed discarding it) — and in
+ * that case also clears the flag, since the caller is about to
+ * unmount/replace whatever was dirty. Resolves false if the user chose to
+ * stay (Cancel, Escape, or clicking outside the dialog).
+ *
+ * Every caller MUST `await` this — a Promise used directly in `!expr` is
+ * always truthy, so an un-awaited call makes the guard permanently
+ * a no-op with no compiler error.
  */
-export function confirmDiscardLibraryEdits(): boolean {
-  if (!dirty) return true
-  const proceed = window.confirm(
-    'You have unsaved changes in the Library editor. Leaving now will discard them. Continue?',
-  )
-  if (proceed) dirty = false
-  return proceed
+export function confirmDiscardLibraryEdits(): Promise<boolean> {
+  if (!dirty) return Promise.resolve(true)
+  const promise = new Promise<boolean>((resolve) => {
+    pendingResolvers.push(resolve)
+  })
+  if (!open) {
+    open = true
+    emit()
+  }
+  return promise
+}
+
+/**
+ * Called by the dialog host (LibraryExplorer) once the user answers —
+ * Discard (`true`), or Cancel/Escape/outside-click (`false`). Answers every
+ * pending `confirmDiscardLibraryEdits()` call with the same result.
+ */
+export function resolveDiscardConfirmDialog(result: boolean): void {
+  if (result) dirty = false
+  open = false
+  const resolvers = pendingResolvers
+  pendingResolvers = []
+  emit()
+  for (const resolve of resolvers) resolve(result)
 }
 
 // beforeunload (tab close / reload / browser back-forward-cache navigation):
 // registered once at module load — this module is only ever imported by the
 // Library preview/editor code path, so the listener existing is itself a
 // no-op cost until an edit is actually made (guarded on `dirty` internally).
+// This is NOT `window.confirm()` and stays exactly as it was: browsers only
+// allow their own native prompt at this event, never an in-app dialog.
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', (e) => {
     if (!dirty) return

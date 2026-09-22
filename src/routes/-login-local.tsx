@@ -9,16 +9,21 @@
 // 404s if it is ever reached on a desktop/hosted build; that cannot happen
 // through the dispatcher, only through a direct, unsupported import.
 //
-// Content below is upstream's own screen, byte-for-byte except the export
-// shape (a plain component instead of a route — this file is not itself a
-// TanStack Router route; login.tsx's dispatcher renders it).
+// Content below is upstream's own screen — same markup and behavior, with
+// the export shape changed (a plain component instead of a route — this
+// file is not itself a TanStack Router route; login.tsx's dispatcher
+// renders it) and every raw control/color/label onto the design-system
+// catalog (Label, IconButton, --color-accent/-error tokens), matching the
+// same screen's admin-account steps in onboarding.tsx.
 
 import { useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { motion } from 'framer-motion'
 import { Eye, EyeSlash, SpinnerGap, ArrowRight, User, Key, Info } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
+import { IconButton } from '@/components/ui/icon-button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Wordmark } from '@/components/shared/Wordmark'
 import { login, fetchAppState, isApiError } from '@/lib/api'
 import { useAuthStore } from '@/store/auth'
@@ -130,7 +135,7 @@ export function LoginLocal() {
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden"
+      className="min-h-screen flex flex-col items-center justify-center p-[var(--space-4)] relative overflow-hidden"
       style={{ backgroundColor: 'var(--color-primary)', color: 'var(--color-secondary)' }}
     >
       {/* Atmospheric depth */}
@@ -138,7 +143,7 @@ export function LoginLocal() {
         aria-hidden
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'radial-gradient(ellipse 65% 55% at 50% 50%, rgba(212,175,55,0.055) 0%, transparent 68%)',
+          background: 'radial-gradient(ellipse 65% 55% at 50% 50%, color-mix(in srgb, var(--color-accent) 5.5%, transparent) 0%, transparent 68%)',
         }}
       />
 
@@ -146,12 +151,12 @@ export function LoginLocal() {
         initial={{ scale: 0.75, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
         transition={{ duration: 0.5, ease: [0.34, 1.56, 0.64, 1] }}
-        className="relative mb-8"
+        className="relative mb-[var(--space-5)]"
       >
         <div
           aria-hidden
           className="absolute rounded-full blur-3xl pointer-events-none"
-          style={{ inset: '-40%', background: 'rgba(212,175,55,0.14)' }}
+          style={{ inset: '-40%', background: 'color-mix(in srgb, var(--color-accent) 14%, transparent)' }}
         />
         <img
           src={OmnipusAvatar}
@@ -166,11 +171,11 @@ export function LoginLocal() {
         transition={{ delay: 0.18, duration: 0.38 }}
         className="w-full max-w-sm z-10"
       >
-        <h1 className="font-headline text-3xl font-bold text-center mb-2"
+        <h1 className="font-headline text-3xl font-bold text-center mb-[var(--space-2)]"
           style={{ color: 'var(--color-secondary)' }}>
           Sign in to <Wordmark />
         </h1>
-        <p className="text-sm text-center mb-8" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-[length:var(--type-body-compact-size)] text-center mb-[var(--space-5)]" style={{ color: 'var(--color-muted)' }}>
           Enter your username and password
         </p>
 
@@ -179,26 +184,25 @@ export function LoginLocal() {
             data-testid="logout-notice"
             role="status"
             aria-live="polite"
-            className="mb-6 flex items-start gap-2 rounded-lg px-3 py-2.5 text-xs"
+            className="mb-[var(--space-4)] flex items-start gap-[var(--space-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-utility-xs-size)]"
             style={{
-              backgroundColor: 'rgba(212,175,55,0.08)',
-              border: '1px solid rgba(212,175,55,0.25)',
+              backgroundColor: 'color-mix(in srgb, var(--color-accent) 8%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--color-accent) 25%, transparent)',
               color: 'var(--color-secondary)',
             }}
           >
-            <Info size={14} weight="bold" className="mt-0.5 shrink-0" style={{ color: 'var(--color-accent)' }} />
+            <Info size={14} weight="bold" className="mt-[var(--space-0-5)] shrink-0" style={{ color: 'var(--color-accent)' }} />
             <span>{logoutNotice}</span>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-[var(--space-3)]">
           <div>
-            <label htmlFor="login-username" className="text-xs font-medium mb-1.5 block"
-              style={{ color: 'var(--color-muted)' }}>
+            <Label htmlFor="login-username" className="mb-[var(--space-2)] block">
               Username
-            </label>
+            </Label>
             <div className="relative">
-              <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-muted)' }} />
+              <User size={14} className="absolute left-[var(--space-2-5)] top-1/2 -translate-y-1/2" style={{ color: 'var(--color-muted)' }} />
               <Input
                 id="login-username"
                 type="text"
@@ -206,19 +210,18 @@ export function LoginLocal() {
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="admin"
                 autoComplete="username"
-                className="pl-9"
+                className="pl-[var(--space-5)]"
                 autoFocus
               />
             </div>
           </div>
 
           <div>
-            <label htmlFor="login-password" className="text-xs font-medium mb-1.5 block"
-              style={{ color: 'var(--color-muted)' }}>
+            <Label htmlFor="login-password" className="mb-[var(--space-2)] block">
               Password
-            </label>
+            </Label>
             <div className="relative">
-              <Key size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'var(--color-muted)' }} />
+              <Key size={14} className="absolute left-[var(--space-2-5)] top-1/2 -translate-y-1/2" style={{ color: 'var(--color-muted)' }} />
               <Input
                 id="login-password"
                 type={showPassword ? 'text' : 'password'}
@@ -226,18 +229,18 @@ export function LoginLocal() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Password"
                 autoComplete="current-password"
-                className="pl-9 pr-9"
+                className="pl-[var(--space-5)] pr-[var(--space-5)]"
               />
-              <button tabIndex={0}
+              <IconButton
                 type="button"
                 onClick={() => setShowPassword((v) => !v)}
                 // Padded 44x44 mobile tap target without enlarging the 14px icon.
-                className="absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 transition-colors"
+                className="absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 transition-colors hover:bg-transparent"
                 style={{ color: 'var(--color-muted)' }}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
               >
                 {showPassword ? <EyeSlash size={14} /> : <Eye size={14} />}
-              </button>
+              </IconButton>
             </div>
           </div>
 
@@ -246,7 +249,7 @@ export function LoginLocal() {
               data-testid="login-error"
               role="alert"
               aria-live="assertive"
-              className="text-sm text-center"
+              className="text-[length:var(--type-body-compact-size)] text-center"
               style={{ color: 'var(--color-error)' }}
             >
               {error}
@@ -255,7 +258,7 @@ export function LoginLocal() {
 
           <Button
             type="submit"
-            className="w-full h-11 gap-2 font-headline font-bold"
+            className="w-full h-11 gap-[var(--space-2)] font-headline font-bold"
             disabled={!username.trim() || !password || status === 'loading'}
           >
             {status === 'loading' ? (

@@ -1,19 +1,19 @@
 import { useEffect } from 'react'
 import { createFileRoute, Outlet } from '@tanstack/react-router'
+import { Button } from '@/components/ui/button'
 import { AgentProfile } from '@/components/agents/AgentProfile'
 import { useUiStore } from '@/store/ui'
 
 function AgentsError() {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-4">
-      <p className="text-sm text-[var(--color-error)]">Failed to load agents.</p>
-      <button tabIndex={0}
-        type="button"
+    <div className="flex flex-col items-center justify-center h-full gap-[var(--space-2-5)] text-center px-[var(--space-3)]">
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-error)]">Failed to load agents.</p>
+      <Button variant="ghost" tabIndex={0}
         onClick={() => window.location.reload()}
-        className="text-xs text-[var(--color-accent)] underline underline-offset-2"
+        className="h-auto px-0 hover:bg-transparent text-[length:var(--type-utility-xs-size)] text-[var(--color-accent)] underline underline-offset-2"
       >
         Reload page
-      </button>
+      </Button>
     </div>
   )
 }
@@ -21,7 +21,7 @@ function AgentsError() {
 function AgentsNotFound() {
   return (
     <div className="flex items-center justify-center h-full">
-      <p className="text-sm text-[var(--color-muted)]">Agent not found.</p>
+      <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)]">Agent not found.</p>
     </div>
   )
 }

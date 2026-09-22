@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -36,7 +36,12 @@ const PLATFORM_APP_STATE = {
 // confirmation naming the change, staged BEFORE the request. Click through it
 // so the save actually fires.
 async function confirmSandboxChange() {
-  fireEvent.click(await screen.findByTestId('confirm-accept'))
+  const dialog = await screen.findByRole('alertdialog')
+  // The confirm/action button is always the second of the two footer
+  // buttons (Cancel, then Action) — the confirm LABEL differs per setting
+  // (deny patterns / sandbox config / filesystem model / file limit /
+  // sandbox mode), so this helper matches by position, not text.
+  fireEvent.click(within(dialog).getAllByRole('button')[1])
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -697,12 +702,12 @@ describe('sandbox-config confirmation', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
 
-    const dialog = await screen.findByTestId('confirm-dialog')
+    const dialog = await screen.findByRole('alertdialog')
     expect(dialog).toHaveTextContent('Save the sandbox configuration?')
-    expect(screen.getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
-    expect(screen.getByTestId('confirm-accept')).toHaveTextContent('Save sandbox configuration')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(screen.getByRole('button', { name: 'Save sandbox configuration' })).toHaveTextContent('Save sandbox configuration')
     expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
-    expect(screen.getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(screen.getByRole('button', { name: 'Save sandbox configuration' }).className).not.toMatch(/color-error/)
     // Nothing was sent yet.
     expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
@@ -768,14 +773,14 @@ describe('cancelling the confirmation reverts optimistic state', () => {
 
     // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
     // User cancels instead of confirming.
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic "off" selection must revert to the saved mode
@@ -823,13 +828,13 @@ describe('cancelling the confirmation reverts optimistic state', () => {
 
     // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic '/valid' row must be reverted — it was never persisted.
@@ -862,15 +867,15 @@ describe('cancelling the confirmation reverts optimistic state', () => {
     // Debounced autosave (400ms) stages the save; the confirmation opens.
     await waitFor(
       () => {
-        expect(screen.getByTestId('confirm-cancel')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
       },
       { timeout: 3000 },
     )
 
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic '^wget\s' line must be reverted to the saved patterns.
@@ -915,14 +920,14 @@ describe('cancelling the confirmation reverts optimistic state', () => {
 
     // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
     // User cancels instead of confirming.
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic '10.0.0.0/8' entry must be reverted — it was never
@@ -965,24 +970,40 @@ describe('cancelling the confirmation reverts optimistic state', () => {
     fireEvent.click(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i }))
 
     // Optimistic UI: RFC1918 preset shows pressed immediately, before the PUT
-    // settles. `hidden: true` because the open confirmation aria-hides the
-    // tree behind it.
+    // settles. The confirmation is open at this point, and Radix's AlertDialog
+    // marks every OTHER element in the tree `aria-hidden="true"` (via the
+    // `aria-hidden` package's `hideOthers`, since jsdom has no `inert`
+    // support to prefer instead) so assistive tech only sees the dialog.
+    // Because every SegmentedControlItem is a catalogued `Button` — which
+    // renders its own `aria-live` status span next to it for loading
+    // announcements — `hideOthers` walks past that span's kept ancestor
+    // chain and marks each preset BUTTON aria-hidden individually, not just
+    // a container around the whole group (contrast the merge-base's plain,
+    // status-span-free `<button>` elements, which got one aria-hidden
+    // ancestor and stayed queryable by role). `getByRole(..., { hidden:
+    // true })` only widens which elements COUNT toward the query; it never
+    // reaches dom-testing-library's accessible-name computation
+    // (`dom-accessibility-api`), which still treats an element carrying its
+    // own `aria-hidden="true"` as nameless (accname step 2A) regardless of
+    // that option — so `getByRole('button', { name, hidden: true })` finds
+    // zero matches here even though the button is very much in the DOM.
+    // `getByText` has no such filter (it matches raw text content only), so
+    // it reaches the same button node without depending on accessible-name
+    // computation.
     await waitFor(() => {
-      expect(
-        screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i, hidden: true }),
-      ).toHaveAttribute('aria-pressed', 'true')
+      expect(screen.getByText(/allow rfc1918 \+ loopback/i)).toHaveAttribute('aria-pressed', 'true')
     })
 
     // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
     // User cancels instead of confirming.
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic preset switch must revert — active preset goes back to
@@ -1037,14 +1058,14 @@ describe('cancelling the confirmation reverts optimistic state — deletes', () 
 
     // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
     // User cancels instead of confirming.
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistically deleted '10.0.0.0/8' entry must reappear — the
@@ -1224,9 +1245,9 @@ describe('shell workspace limit', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByTestId('confirm-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByTestId('confirm-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     // Reverted to the saved server value — otherwise the radio sits on an
     // unsaved value with no error shown, and the equality guard in the handler

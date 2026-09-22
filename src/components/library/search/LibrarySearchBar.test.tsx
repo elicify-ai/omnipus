@@ -105,7 +105,7 @@ function renderBar(opts: {
   info?: KnowledgeBaseInfo | LoadCollectionInfoFn
   filesRes?: FileSearchResponse | FileSearchFn
   onOpenNote?: (p: string) => void
-  onOpenFolder?: (p: string) => boolean
+  onOpenFolder?: (p: string) => boolean | Promise<boolean>
   loadViewResult?: LoadViewResultFn
   loadGraph?: KnowledgeGraphLoader
   debounceMs?: number
@@ -1115,6 +1115,71 @@ describe('LibrarySearchBar — a cancelled folder navigation must not wipe the s
     expect(screen.getByTestId('file-search-name-hit')).toBeInTheDocument()
     expect(screen.queryByTestId('file-tree')).not.toBeInTheDocument()
     expect(onOpenNote).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// design-system migration (window.confirm → ConfirmDialog, 2026-09-21):
+// LibraryExplorer's real onOpenFolder now answers ASYNCHRONOUSLY —
+// confirmDiscardLibraryEdits() opens a React dialog instead of a blocking
+// window.confirm, so it cannot return a boolean synchronously. openFolder()
+// (this file) must `await` whatever onOpenFolder returns before deciding to
+// clear the query. This is the mutation-proof test required by the
+// migration task: a raw, un-awaited Promise object is itself truthy, so a
+// caller that dropped the `await` would clear the query the instant
+// onOpenFolder is called, before the user (here, the test) has answered at
+// all. Verified by hand (2026-09-21): removing the `await` in openFolder
+// failed the first assertion below (query cleared immediately); restoring
+// it fixed it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — onOpenFolder can answer asynchronously', () => {
+  it('does not clear the query until the async onOpenFolder Promise resolves, and only if it resolves true', async () => {
+    let resolveFirst: (value: boolean) => void = () => {}
+    const firstAnswer = new Promise<boolean>((resolve) => {
+      resolveFirst = resolve
+    })
+    const onOpenFolder = vi.fn().mockReturnValue(firstAnswer)
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'sub-dir', match_kind: 'name', is_dir: true }] }),
+      onOpenFolder,
+      onOpenNote,
+    })
+
+    type('sub')
+    const row = await screen.findByTestId('file-search-name-hit')
+    fireEvent.click(row)
+
+    expect(onOpenFolder).toHaveBeenCalledWith('sub-dir')
+    // The Promise has not resolved yet — the query must still be exactly as
+    // typed. An un-awaited call would have cleared it already, right here.
+    expect(screen.getByTestId('library-search-input')).toHaveValue('sub')
+
+    await act(async () => {
+      resolveFirst(false)
+      await firstAnswer
+    })
+    // Declined: still not cleared once the Promise actually settles.
+    expect(screen.getByTestId('library-search-input')).toHaveValue('sub')
+    expect(onOpenNote).not.toHaveBeenCalled()
+
+    // Click again; this time the async answer is true.
+    let resolveSecond: (value: boolean) => void = () => {}
+    const secondAnswer = new Promise<boolean>((resolve) => {
+      resolveSecond = resolve
+    })
+    onOpenFolder.mockReturnValue(secondAnswer)
+    fireEvent.click(screen.getByTestId('file-search-name-hit'))
+    expect(screen.getByTestId('library-search-input')).toHaveValue('sub')
+
+    await act(async () => {
+      resolveSecond(true)
+      await secondAnswer
+    })
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).toHaveValue(''))
+    await waitFor(() => expect(screen.getByTestId('file-tree')).toBeInTheDocument())
   })
 })
 
