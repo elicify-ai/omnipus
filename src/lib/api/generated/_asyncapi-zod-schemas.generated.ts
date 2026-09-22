@@ -265,6 +265,7 @@ export const SubagentStartFrame = z
     parent_call_id: z.string().min(1),
     task_label: z.string().max(100),
     agent_id: z.string().optional(),
+    child_session_id: z.string().optional(),
     producing_session_id: z.string().min(1).optional(),
   })
   .strict();
@@ -291,7 +292,7 @@ export const SubagentMessageFrame = z
     session_id: z.string().min(1),
     span_id: z.string().min(1),
     message_id: z.string().min(1),
-    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond"]),
+    kind: z.enum(["progress", "checkpoint", "artifact", "blocker", "question", "decision_request", "error", "handback", "steer", "respond", "goal_status"]),
     text: z.string().optional(),
     pct: z.number().int().min(0).max(100).optional(),
     correlation_id: z.string().optional(),
@@ -582,6 +583,16 @@ export const CancelStageFrame = z
     session_id: z.string().min(1),
     stage: z.enum(["graceful", "hard", "detached"]),
     producing_session_id: z.string().min(1).optional(),
+    reached: z.array(z.string()).optional(),
+    unreachable: z.array(z
+    .object({
+      id: z.string().min(1),
+      reason: z.string(),
+    })
+    .strict()).optional(),
+    skipped_newer_generation: z.array(z.string()).optional(),
+    skipped_terminal: z.array(z.string()).optional(),
+    partial: z.boolean().optional(),
   })
   .strict();
 

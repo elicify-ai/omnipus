@@ -415,11 +415,24 @@ type CancelFrame struct {
 
 // CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
 type CancelStageFrame struct {
+	// ADR-091 I-6. True when `unreachable` is non-empty.
+	Partial *bool `json:"partial,omitempty"`
 	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Stage              string  `json:"stage"`
-	Type               string  `json:"type"`
+	// ADR-091 I-6. Present on the `detached` stage of a Stop: every session the cascade stamped with a Stop marker (the stopped session and each reachable non-terminal descendant).
+	Reached   []string `json:"reached,omitempty"`
+	SessionId string   `json:"session_id"`
+	// ADR-091 I-6. Sessions whose live turn belonged to a newer generation than the one stamped (a revival landed first); their cancel was refused.
+	SkippedNewerGeneration []string `json:"skipped_newer_generation,omitempty"`
+	// ADR-091 I-6. Terminal descendants, left unwritten.
+	SkippedTerminal []string `json:"skipped_terminal,omitempty"`
+	Stage           string   `json:"stage"`
+	Type            string   `json:"type"`
+	// ADR-091 I-6. Descendants the cascade could not reach, with why.
+	Unreachable []struct {
+		Id     string `json:"id"`
+		Reason string `json:"reason"`
+	} `json:"unreachable,omitempty"`
 }
 
 // DelegationFailure — Structured tool-result payload emitted in the `result` field of a tool_call_result frame (status="error") when a delegation tool (spawn / subagent / task_create) is denied by the delegation policy (trust set / mode / depth). The SPA matches on the fixed error="delegation_denied" discriminator, but (policy 2026-07-16) only renders a distinct delegation-failure block in verbose chat or an ActivityPanel step context — the default thread presentation is the calling agent's own narration of the denial, not a dedicated SPA-rendered block. The frame's top-level `error` field carries the same `reason`.
@@ -937,8 +950,11 @@ type SubagentMessageFrame struct {
 
 // SubagentStartFrame — Server → client subagent span opened (FR-H-004). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key, so producing_session_id would equal session_id and is therefore absent (FR-013's "iff it differs").
 type SubagentStartFrame struct {
-	AgentId      *string `json:"agent_id,omitempty"`
-	ParentCallId string  `json:"parent_call_id"`
+	AgentId *string `json:"agent_id,omitempty"`
+	// Optional session id of the opened child session. Present for steered sessions; absent for legacy/optional. Enables the open control on the side panel row (ADR-091 I-4).
+	ChildSessionId *string `json:"child_session_id,omitempty"`
+	// The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
+	ParentCallId string `json:"parent_call_id"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — producing == routing by construction (FR-017).
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	SessionId          string  `json:"session_id"`

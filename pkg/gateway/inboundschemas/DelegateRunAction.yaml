@@ -83,3 +83,9 @@ properties:
         maxLength: 8192
         description: Optional parent-authored notes, counted against `snapshot_max_bytes`.
         example: "Focus on anomalies after 2026-07-15."
+  goal:
+    $ref: './Goal.yaml'
+    description: >
+      Optional goal: criteria + Definition of Done for this delegation.
+      Reuses the shape `create_task` already validates. The delegated session
+      becomes goal-bearing when provided (ADR-091 I-2, D6).

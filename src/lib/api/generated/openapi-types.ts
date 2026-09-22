@@ -13401,7 +13401,7 @@ export interface components {
                 [key: string]: components["schemas"]["WorkspaceMemberConfig"];
             };
         };
-        /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. */
+        /** @description A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster. Delegation never awaits — a delegating agent hands work to the target and continues; the child runs in parallel and reports back through upward delivery (ADR-091 D4). */
         WorkspaceDelegationEdge: {
             /**
              * @description Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
@@ -14895,10 +14895,11 @@ export interface components {
             /** @example 0 */
             generation?: number;
             /**
+             * @description Direction this verdict travels. `session_to_ui` for verdicts meant for the operator; `session_to_parent` for verdicts from a steered child to its steering parent (ADR-091 I-5).
              * @example session_to_ui
              * @enum {string}
              */
-            direction: "session_to_ui";
+            direction: "session_to_ui" | "session_to_parent";
             /**
              * @description discriminator enum property added by openapi-typescript
              * @enum {string}
@@ -14916,11 +14917,29 @@ export interface components {
             /** @example false */
             untrusted_origin: boolean;
             /**
-             * @description The typed `GOAL_STATUS:` marker outcome (US-2). No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a third enum value here (absence of this message IS the not-waiting state).
+             * @description The typed condition outcome. `met` — goal conditions met. `not_met` — goal conditions failed (founder decision, round 10). `waiting_on_user` — waiting on operator input. No marker on a turn means "not waiting" — a deterministic fallback, never inferred by a prose classifier, and never represented as a fourth enum value here (absence of this message IS the not-waiting state).
              * @example met
              * @enum {string}
              */
-            condition: "met" | "waiting_on_user";
+            condition: "met" | "not_met" | "waiting_on_user";
+            /** @description Optional evidence list supporting the verdict. Each entry explains one criterion and whether it was met (ADR-091 I-5, founder decision round 10). */
+            evidence?: {
+                /**
+                 * @description The criterion being evaluated.
+                 * @example checkout complete
+                 */
+                criterion?: string;
+                /**
+                 * @description Whether this criterion was met.
+                 * @example true
+                 */
+                met?: boolean;
+                /**
+                 * @description Optional contextual note about this criterion.
+                 * @example Order confirmed with confirmation number XYZ
+                 */
+                note?: string;
+            }[];
             /**
              * @description The goal this condition applies to (R§8.11 — a session may carry multiple independent goals, each keyed by goal-id).
              * @example goal_01J3ZQK8N2H8VXNRP5T7C9M4WU
@@ -15219,6 +15238,104 @@ export interface components {
              * @example 2026-07-22T10:05:00Z
              */
             updated_at: string;
+            /** @description Every record carries its origin: how and where this session was launched (ADR-091 I-1). Kind discriminates the launch path. */
+            origin?: {
+                /**
+                 * @description The launch path that created this session. Root kinds (chat/channel/scheduled/heartbeat/verifier/plan/human) and derived kinds (delegate/task) — the kind's own definition.
+                 * @example delegate
+                 * @enum {string}
+                 */
+                kind: "delegate" | "task" | "chat" | "channel" | "scheduled" | "heartbeat" | "verifier" | "plan" | "human";
+                /**
+                 * @description For delegate/task-origin sessions, the tool-call id (span key) of the originating delegate or create_task call. Absent for other kinds.
+                 * @example span_01J3ZQK8N2H8VXNRP5T7C9M4WE
+                 */
+                call_id?: string;
+                /**
+                 * @description For task-origin sessions, the persistent task id from the task record (persisted on the task disk-only, by tools/task.go). Absent for delegate-origin and other kinds.
+                 * @example task_01J3ZQK8N2H8VXNRP5T7C9M4WF
+                 */
+                task_id?: string;
+            };
+            /** @description Present for steered sessions (a session launched by another session's delegate or create_task). Absent for ordinary-root sessions that nobody steers (ADR-091 I-1). No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment). */
+            steered_by?: {
+                /**
+                 * @description The direct parent session; the inbox owner key.
+                 * @example 550e8400-e29b-41d4-a716-446655440001
+                 */
+                steering_session_id?: string;
+                /**
+                 * @description The cascade root, verified by walking the chain at launch. Equal to steering_session_id at depth 1.
+                 * @example 550e8400-e29b-41d4-a716-446655440002
+                 */
+                root_session_id?: string;
+                /** @description The steering session's own address; where completion wakes it. */
+                reporting_target?: {
+                    /** @example 550e8400-e29b-41d4-a716-446655440001 */
+                    session_id?: string;
+                    /** @example web */
+                    channel?: string;
+                    /** @example chat_01J3ZQK8N2H8VXNRP5T7C9M4WL */
+                    chat_id?: string;
+                };
+                /** @description The gate verdict at launch. */
+                authorization?: {
+                    /**
+                     * @description How the child was authorized. `direct` for delegate-origin, `task` for task-origin.
+                     * @example direct
+                     * @enum {string}
+                     */
+                    mode?: "direct" | "task";
+                    /**
+                     * @description Remaining delegation depth budget for this child's own onward delegations. Decremented from the edge or global default.
+                     * @example 2
+                     */
+                    remaining_depth?: number;
+                };
+                /** @description Creator-set session limits. */
+                limits?: {
+                    /**
+                     * @description Maximum seconds before this delegation is force-cancelled. 0 = the configured default. Scope is the session's lifetime across re-entries (ADR-091 I-1).
+                     * @example 300
+                     */
+                    timeout_seconds?: number;
+                };
+                /**
+                 * @description Tool names excluded for this steered session (e.g., switch_agent). Applied at launch.
+                 * @example [
+                 *       "switch_agent"
+                 *     ]
+                 */
+                tool_exclusions?: string[];
+            };
+            /** @description Present when this session's own record carries a Stop marker, written by the cancel cascade on the stopped node and every reachable non-terminal descendant (ADR-091 I-6). Absent for sessions that were not stopped. No `nullable: true` — an optional-object field should use optional-only semantics to avoid Zod/openapi-typescript codegen mismatch (see needs_input field comment). */
+            stop?: {
+                /**
+                 * Format: date-time
+                 * @description RFC3339 timestamp when the Stop marker was written.
+                 * @example 2026-07-22T10:05:00Z
+                 */
+                at?: string;
+                /**
+                 * @description The generation this Stop marker names. A revived generation is a newer generation number.
+                 * @example 1
+                 */
+                generation?: number;
+                /** @description Who or what initiated the stop. */
+                by?: {
+                    /**
+                     * @description Principal kind (agent or human).
+                     * @example human
+                     * @enum {string}
+                     */
+                    kind?: "agent" | "human";
+                    /**
+                     * @description The agent id (if kind=agent) or user id (if kind=human).
+                     * @example user-123
+                     */
+                    id?: string;
+                };
+            };
         };
         /**
          * Goal
@@ -15465,6 +15582,8 @@ export interface components {
                  */
                 notes?: string;
             };
+            /** @description Optional goal: criteria + Definition of Done for this delegation. Reuses the shape `create_task` already validates. The delegated session becomes goal-bearing when provided (ADR-091 I-2, D6). */
+            goal?: components["schemas"]["Goal"];
         };
         /**
          * DelegateStatusAction
@@ -15661,6 +15780,11 @@ export interface components {
              * @example 1
              */
             generation: number;
+            /**
+             * @description 1-based position in the admission queue when `state == queued`, else 0. Lets the caller know its place in line for execution (ADR-091 I-2).
+             * @example 1
+             */
+            queue_position?: number;
             /**
              * @description The prior session id this generation resumed from, when applicable.
              * @example 660e8400-e29b-41d4-a716-446655440000
