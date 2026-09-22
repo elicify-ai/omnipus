@@ -258,3 +258,38 @@ Twelve places can publish something a human would see. Each calls the injected `
 | 10 | Typed error frames | the `LLMError` family (`code: delegated_task_limit`, #805) |
 | 11 | Delegate-lifecycle notices | `subturn_result.go::emitSubTurnIterationLimitNotice` — becomes an `error` (`fatal: false`) inbox entry, never a root-transcript write |
 | 12 | Question cards | `askuser/registry.go` — a steered session's question is relayed to its steering session, never broadcast as the parent's own |
+
+## 7. Delivery lanes and model casting (founder decision, 2026-09-22)
+
+The founder chose this mix of models for implementation instead of the default GLM-first ladder in the global operating rules. Casting follows risk: the lanes where a mistake leaks a message or loses a Stop get the strongest reasoning; mechanical lanes get the cheapest model that can follow an exact spec.
+
+| Lane | Package | Model | Runs as |
+|---|---|---|---|
+| 1 | WP-A — launcher, edge, reconstruction, admission, and the CP-0 publication of `pkg/steer` | Sonnet | Claude subagent |
+| 2 | WP-B — audience and upward delivery | Sonnet | Claude subagent |
+| 3 | WP-D — cancel cascade, revival, boot recovery | Codex Sol (`gpt-5.6-sol`) | `codex exec`, workspace-write sandbox |
+| 4 | WP-C — `delegate` front, steering, deletion manifest | Codex Sol | `codex exec`, workspace-write sandbox |
+| 5a | WP-E — contracts half (schemas and regeneration) | Haiku | Claude subagent |
+| 5b | WP-E — SPA half | Sonnet | Claude subagent, after WP-B's frames exist |
+| 6a | WP-G — classification of the 49 existing test files | Haiku | Claude subagent |
+| 6b | WP-G — fixtures and cross-package suites | Codex Sol | `codex exec`, workspace-write sandbox |
+| 7 | WP-F — audit test and guard (Haiku); docs and the issue-closure script (MiniMax via `claudem`) | Haiku, MiniMax | Claude subagent; `claudem -p` |
+
+```
+ day 1               CP-0                 CP-1 … CP-5              CP-6      CP-7
+ A ██ Sonnet ████████████████████████████████████████████████████▌
+ G ██ Haiku: classify 49 ▌██ Codex Sol: fixtures + E2E ██████████▌
+ E ██ Haiku: contracts ▌       ░░ Sonnet: SPA ░░░░░░░░░░░░░░░░░░░▌
+ B                    ██ Sonnet ████████████████████████████████▌
+ C                    ██ Codex Sol ████████████████████████████▌
+ D                    ██ Codex Sol ████████████████████████████▌
+ F                                                                ██ Haiku ▌ ▪ MiniMax (closure)
+ running: 3 ──────────► 6 ─────────────────────────────────────► 1 ─────► 1
+```
+
+Rules that make the mix safe:
+
+- **Cross-family review.** Each lane's work is reviewed by a different model family before it enters the integration branch: Sonnet lanes by Codex Sol, Codex lanes by Sonnet, Haiku and MiniMax output by Sonnet. This is in addition to the repository's seven-reviewer gate, not a replacement.
+- **One lane, one worktree, one branch.** Every lane works in its own worktree on `adr091/wp-<letter>`, branched from the integration branch `feat/adr-091-steered-sessions`; the lead merges lanes into the integration branch in landing order and resolves conflicts there.
+- **One Go compile at a time.** The repository forbids parallel Go test suites locally, so every lane runs Go through one shared lock; lanes queue for it rather than running Go concurrently.
+- **CP-0 publication.** To keep the first checkpoint a single step, the WP-A lane writes the compiled no-op bodies for the interfaces WP-B and WP-D later implement, in files named for their owners; ownership of those files passes to WP-B and WP-D at CP-0.
