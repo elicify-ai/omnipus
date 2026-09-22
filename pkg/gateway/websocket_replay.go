@@ -355,11 +355,14 @@ func (wh *wsHandlerHandleAttachSession) bindConnection() {
 	// covers the replay-error early return below (CR10) — session_state is
 	// already sent by the time any replay failure could occur.
 	wh.h.emitSessionState(wh.wc, wh.attachID)
-	wh.h.mu.Unlock()
-
-	// Arm the divert: any sendConnGenFrame calls after this point will route live
-	// frames into replayDivertCh instead of sendCh.
+	// Issue #822: arm diversion BEFORE releasing h.mu. Finalize resolves this
+	// connection under the same lock and sends its terminal done immediately
+	// afterward. Unlocking first left a gap where done could reach sendCh ahead
+	// of replay/catch-up; the later catch-up token then had no terminal frame
+	// left to close it. session_state is already in sendCh, so it remains the
+	// first frame for this attach.
 	wh.wc.isReplayingLive.Store(true)
+	wh.h.mu.Unlock()
 }
 
 // runReplay constructs the replay emitter and streams the persisted session frames.

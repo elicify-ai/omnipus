@@ -72,6 +72,25 @@ function appendUnmatchedToolError(
   }) as Partial<SessionChatState>
 }
 
+// Issue #822: a real done can arrive at the reconnect bind boundary before
+// its catch-up token. That next token is the completed snapshot, not a new
+// live stream. New turns are already streaming before their first token.
+function isTerminalCatchUpToken(bucket: SessionChatState): boolean {
+  return bucket.terminalCatchUpPending === true && !bucket.isStreaming
+}
+
+function applyTokenStreamingState(bucket: SessionChatState, message: ChatMessage): void {
+  const isStreaming = !isTerminalCatchUpToken(bucket)
+  message.isStreaming = isStreaming
+  message.status = isStreaming ? 'streaming' : 'done'
+  bucket.isStreaming = isStreaming
+  bucket.terminalCatchUpPending = false
+}
+
+function needsTerminalCatchUp(bucket: SessionChatState, wasReplaying: boolean): boolean {
+  return wasReplaying && !!bucket.activeTurnId && !bucket.activeTurnBubbleOpened
+}
+
 interface FrameContext {
   set: StoreApi<ChatStore>['setState']
   get: StoreApi<ChatStore>['getState']
@@ -538,9 +557,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                   msg.pendingTextBoundary = false
                 }
                 msg.content = msg.content + frame.content
-                msg.isStreaming = true
-                msg.status = 'streaming'
-                draft.isStreaming = true
+                applyTokenStreamingState(draft, msg)
                 // ADR-082 review S1/CR1: a token proves the announced turn's
                 // bubble now exists, regardless of which frame order got us
                 // here (fixed-contract session_state-first, an older
@@ -878,6 +895,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
                 draft.activeTurnId = null
                 draft.activeTurnAgentId = null
                 draft.activeTurnBubbleOpened = false
+                draft.terminalCatchUpPending = needsTerminalCatchUp(priorBucket, wasReplaying)
                 if (clearReplayingNow) {
                   draft.isReplaying = false
                 }
