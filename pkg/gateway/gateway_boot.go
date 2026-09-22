@@ -783,19 +783,6 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, boo
 	// can emit FR-039 omnipus_tool_filter_total counters. (C4)
 	tools.SetToolMetricsRecorder(globalToolMetrics)
 
-	// FIX (14-reviewer sign-off, HIGH): tools.SetMessageParentWakeFailureLogger
-	// was never called anywhere in the codebase, so message_parent's default
-	// logMessageParentWakeFailure — a deliberate no-op — was the ONLY logger
-	// ever installed on the production runtime path. A delegated child's
-	// failure to wake its parent session (B.6: the bounded typed wake that
-	// backs question/blocker/handback delivery) therefore vanished silently —
-	// no log line, no metric, nothing an operator could see. Install a
-	// slog-backed handler here, right alongside the sibling tool-level wiring
-	// immediately above, so a wake failure is surfaced as a slog.Warn.
-	tools.SetMessageParentWakeFailureLogger(func(kind string, err error) {
-		slog.Warn("gateway: message_parent: failed to wake parent session",
-			"kind", kind, "error", err)
-	})
 	return nil, false, nil
 }
 
@@ -988,11 +975,17 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 func (stg *setupAndStartServicesState) wireSteerDeps() {
 	sessionStore := stg.agentLoop.GetSessionStore()
 	classifier := agent.NewSteerRecordClassifier(stg.lifecycleStore, sessionStore)
-	stg.runningServices.SteerAudienceResolver = agent.NewSteerAudienceResolver(classifier)
+	resolver := agent.NewSteerAudienceResolver(classifier)
+	observer := steer.NopBoundaryObserver{}
+	launcher := agent.NewSteerLauncher(stg.agentLoop)
+	deliverer := agent.NewSteerUpwardDeliverer()
+	canceller := agent.NewSteerCanceller(stg.lifecycleStore, stg.agentLoop.SteerGenerationCancel).
+		SetRevivalStateWriter(stg.agentLoop.WriteSteerRevivalState)
+	stg.runningServices.SteerAudienceResolver = resolver
 	stg.runningServices.SteerDeps = steer.Deps{
-		Launcher:       agent.NewSteerLauncher(stg.agentLoop),
-		Canceller:      agent.NewSteerCanceller(stg.lifecycleStore),
-		Deliverer:      agent.NewSteerUpwardDeliverer(),
+		Launcher:       launcher,
+		Canceller:      canceller,
+		Deliverer:      deliverer,
 		Classifier:     classifier,
 		LifecycleStore: stg.lifecycleStore,
 		SessionStore:   sessionStore,
@@ -1011,6 +1004,21 @@ func (stg *setupAndStartServicesState) wireSteerDeps() {
 			return recovery.Run(ctx)
 		},
 	}
+
+	stg.agentLoop.SetSteerAudienceDeps(resolver, observer, deliverer)
+	stg.agentLoop.SetSteerSessionLauncher(launcher)
+	if stg.runningServices.ChannelManager != nil {
+		stg.runningServices.ChannelManager.SetSteerAudienceResolver(resolver, observer)
+	}
+	if stg.wsHandler != nil && stg.wsHandler.askUserReg != nil {
+		stg.wsHandler.askUserReg.SetSteerAudienceResolver(resolver, observer)
+	}
+	SetGatewaySteerAudienceDeps(resolver, observer)
+	if stg.tExecutor != nil {
+		stg.tExecutor.SetSessionLauncher(launcher)
+	}
+	stg.runningServices.steerSpawnPersisterCancel = stg.agentLoop.StartSubagentSpawnPersister(stg.ctx)
+	setGatewaySteerCanceller(stg.agentLoop, canceller)
 }
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.

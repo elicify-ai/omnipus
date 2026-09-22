@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -70,6 +71,7 @@ type taskSlot struct {
 type TaskExecutor struct {
 	agentLoop *AgentLoop
 	store     *task.Store
+	launcher  steer.SessionLauncher
 	mu        sync.Mutex
 	running   map[string]*taskSlot
 	// dispatchSema is the ONLY concurrency gate on task dispatch. It bounds
@@ -213,6 +215,14 @@ type TaskExecutor struct {
 	// wg.Wait. Held for two atomic ops and never across I/O or a lock of
 	// te.mu, so it cannot participate in a lock cycle.
 	dispatchGate sync.RWMutex
+}
+
+// SetSessionLauncher installs ADR-091's single session launch/dispatch
+// primitive. StartTaskNow is its task-front consumer.
+func (te *TaskExecutor) SetSessionLauncher(launcher steer.SessionLauncher) {
+	if te != nil {
+		te.launcher = launcher
+	}
 }
 
 // newTaskExecutor creates a TaskExecutor over the unified task store.

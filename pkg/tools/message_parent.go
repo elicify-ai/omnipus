@@ -130,9 +130,9 @@ func outcomeForKind(kind string, sm generated.SessionMessage) steer.Outcome {
 type MessageParentTool struct {
 	BaseTool
 
-	lifecycle  MessageParentLifecycleStore
-	deliverer  steer.UpwardDeliverer
-	egress     ContentEgressFilter
+	lifecycle MessageParentLifecycleStore
+	deliverer steer.UpwardDeliverer
+	egress    ContentEgressFilter
 
 	// sessionMessagingEnabled, when set via SetSessionMessagingEnabled, is the
 	// live-read FR-196 kill switch (session_messaging.enabled) for the SYNC
@@ -832,36 +832,4 @@ func toIntArg(v any) (int, error) {
 	default:
 		return 0, fmt.Errorf("not a number")
 	}
-}
-
-// logMessageParentWakeFailure is the default logger-injection hook for
-// surfacing wake failures (B.6).
-//
-// ADR-091 I-5: this package no longer calls WakeParent directly — Deliver
-// (steer_audience.go::SteerUpwardDeliverer, pkg/agent) now logs its own
-// wake failures via logger.WarnCF, so nothing in THIS package invokes this
-// hook any more. Kept (not deleted) purely because
-// pkg/gateway/gateway_boot.go — a file this lane does not own — still calls
-// SetMessageParentWakeFailureLogger at boot; removing it would break that
-// caller's compile. See this lane's final report, "Requests to other
-// owners": WP-A should delete gateway_boot.go's call and this pair once
-// D10's dead-code sweep reaches it.
-var logMessageParentWakeFailure = func(kind string, err error) {
-	// Intentionally best-effort by default; see the WakeParent call site's
-	// comment. Production callers should install a real slog handler via
-	// SetMessageParentWakeFailureLogger at boot so a wake failure is
-	// surfaced as a slog.Warn rather than silently swallowed.
-	_ = kind
-	_ = err
-}
-
-// SetMessageParentWakeFailureLogger installs the slog-backed wake-failure
-// logger used on the production runtime path (B.6). It wraps the existing
-// package-level var indirection so test-time overrides via direct assignment
-// still work; install a no-op explicitly to silence the wake log in tests.
-func SetMessageParentWakeFailureLogger(logger func(string, error)) {
-	if logger == nil {
-		return
-	}
-	logMessageParentWakeFailure = logger
 }

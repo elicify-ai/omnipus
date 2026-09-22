@@ -200,6 +200,9 @@ type services struct {
 	browserWS        *BrowserWSHandler
 	HealthServer     *health.Server
 	manualReloadChan chan struct{}
+	// steerSpawnPersisterCancel stops ADR-091's connection-independent
+	// subagent_start/subagent_end transcript subscriber at gateway shutdown.
+	steerSpawnPersisterCancel context.CancelFunc
 	// reloadCoalesceMu guards reloadInFlight and reloadRequested. Together they
 	// single-flight config reloads AND coalesce the requests that arrive while
 	// one is already running, instead of dropping them.
@@ -1659,6 +1662,10 @@ const catalogRefreshStopTimeout = 10 * time.Second
 func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Duration, isReload bool) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
+	if runningServices.steerSpawnPersisterCancel != nil {
+		runningServices.steerSpawnPersisterCancel()
+		runningServices.steerSpawnPersisterCancel = nil
+	}
 
 	if !isReload && runningServices.browserWS != nil {
 		runningServices.browserWS.closeMediaTransport()

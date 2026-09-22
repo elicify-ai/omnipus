@@ -13,6 +13,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
@@ -25,20 +27,43 @@ type e2eHarness struct {
 	deliverer  steer.UpwardDeliverer
 	canceller  steer.Canceller
 	classifier steer.RecordClassifier
+	launcher   steer.SessionLauncher
 }
 
 func newE2EHarness(t *testing.T) *e2eHarness {
 	t.Helper()
 	home := t.TempDir()
-	sessions, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	msgBus := bus.NewMessageBus()
+	t.Cleanup(msgBus.Close)
+	cfg := &config.Config{Agents: config.AgentsConfig{
+		Defaults: config.AgentDefaults{
+			Home: filepath.Join(home, "agents"), DefaultModel: config.DefaultModel{Model: "scripted-model"}, MaxTokens: 4096,
+		},
+		List: []config.AgentConfig{
+			{ID: "mia", Name: "ADR-091 fixture agent", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "mia")},
+			{ID: "adr091-fixture-task-agent", Name: "ADR-091 task fixture agent", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "task")},
+		},
+	}}
+	al, err := agent.NewAgentLoop(cfg, msgBus, testutil.NewScenario())
 	if err != nil {
-		t.Fatalf("NewUnifiedStore: %v", err)
+		t.Fatalf("NewAgentLoop: %v", err)
+	}
+	t.Cleanup(al.Close)
+	sessions := al.GetSessionStore()
+	if sessions == nil {
+		t.Fatal("NewAgentLoop did not construct the shared session store")
 	}
 	lifecycle := session.NewLifecycleStore(filepath.Join(home, "lifecycle"))
+	inbox := session.NewMessageInboxStore(filepath.Join(home, "inbox"))
+	al.SetSessionMessagingStores(inbox, lifecycle)
 	classifier := agent.NewSteerRecordClassifier(lifecycle, sessions)
 	audience := agent.NewSteerAudienceResolver(classifier)
 	deliverer := agent.NewSteerUpwardDeliverer()
-	canceller := agent.NewSteerCanceller(lifecycle)
+	al.SetSteerAudienceDeps(audience, steer.NopBoundaryObserver{}, deliverer)
+	launcher := agent.NewSteerLauncher(al)
+	canceller := agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel)
+	cancelPersister := al.StartSubagentSpawnPersister(context.Background())
+	t.Cleanup(cancelPersister)
 	deps := steer.Deps{
 		Canceller: canceller, Deliverer: deliverer, Classifier: classifier,
 		LifecycleStore: lifecycle, SessionStore: sessions,
@@ -47,7 +72,7 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 	return &e2eHarness{
 		tree: testutil.DelegationTree(t, deps, 3), sessions: sessions,
 		lifecycle: lifecycle, audience: audience, deliverer: deliverer,
-		canceller: canceller, classifier: classifier,
+		canceller: canceller, classifier: classifier, launcher: launcher,
 	}
 }
 
@@ -212,32 +237,19 @@ func TestE2E_TaskChildInSidePanel(t *testing.T) {
 func seedTaskChild(t *testing.T, h *e2eHarness, parent testutil.TreeNode) testutil.TreeNode {
 	t.Helper()
 	const agentID = "adr091-fixture-task-agent"
-	meta, err := h.sessions.NewSession(session.SessionTypeTask, "webchat", agentID)
+	result, err := h.launcher.Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parent.SessionID,
+		TargetAgentID:     agentID,
+		Label:             "ADR-091 task child",
+		Task:              "Exercise the task-origin side-panel path",
+		Origin:            steer.Origin{Kind: steer.OriginKindTask, CallID: "create-task-call", TaskID: "task-record"},
+	})
 	if err != nil {
-		t.Fatalf("create task child: %v", err)
-	}
-	title, owner, workspace := "ADR-091 task child", "adr091-fixture-owner", parent.WorkspaceID
-	if err := h.sessions.SetMeta(meta.ID, session.MetaPatch{
-		Title: &title, Owner: &owner, WorkspaceID: &workspace, ParentSessionID: &parent.SessionID,
-	}); err != nil {
-		t.Fatalf("stamp task child metadata: %v", err)
+		t.Fatalf("launch task child: %v", err)
 	}
 	node := testutil.TreeNode{
-		Name: "task", SessionID: meta.ID, AgentID: agentID,
-		WorkspaceID: workspace, Generation: 1,
-	}
-	if err := h.lifecycle.Persist(&session.LifecycleRecord{
-		SessionID: node.SessionID, Generation: 1, State: session.LifecycleRunning,
-		Origin: &session.Origin{Kind: session.OriginKindTask, CallID: "create-task-call", TaskID: "task-record"},
-		SteeredBy: &session.SteeredBy{
-			SteeringSessionID: parent.SessionID, RootSessionID: parent.SessionID,
-			ReportingTarget: session.ReportingTarget{SessionID: parent.SessionID, Channel: "webchat", ChatID: parent.SessionID},
-			Authorization:   session.Authorization{Mode: session.AuthorizationModeTask, RemainingDepth: 2},
-		},
-		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: parent.SessionID,
-		WorkspaceID: workspace, AgentID: agentID, ParentAgentID: parent.AgentID,
-	}); err != nil {
-		t.Fatalf("persist task child lifecycle: %v", err)
+		Name: "task", SessionID: result.SessionID, AgentID: agentID,
+		WorkspaceID: parent.WorkspaceID, Generation: result.Generation,
 	}
 	return node
 }

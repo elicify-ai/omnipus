@@ -63,6 +63,31 @@ func (al *AgentLoop) SetSteerAudienceDeps(resolver steer.AudienceResolver, obser
 	}
 }
 
+// SetSteerSessionLauncher installs ADR-091's single launch/dispatch primitive
+// and re-wires every registered delegate tool. Future registry refreshes pick
+// it up through wireSessionMessagingForAgent.
+func (al *AgentLoop) SetSteerSessionLauncher(launcher steer.SessionLauncher) {
+	al.steerDepsMu.Lock()
+	al.sessionLauncher = launcher
+	al.steerDepsMu.Unlock()
+
+	reg := al.GetRegistry()
+	if reg == nil {
+		return
+	}
+	for _, agentID := range reg.ListAgentIDs() {
+		if inst, ok := reg.GetAgent(agentID); ok && inst != nil {
+			al.wireSessionMessagingForAgent(inst)
+		}
+	}
+}
+
+func (al *AgentLoop) getSteerSessionLauncher() steer.SessionLauncher {
+	al.steerDepsMu.RLock()
+	defer al.steerDepsMu.RUnlock()
+	return al.sessionLauncher
+}
+
 // getSteerAudienceResolver, getBoundaryObserver and getUpwardDeliverer are
 // steerDepsMu-guarded read accessors (SetSteerAudienceDeps writes late,
 // post-boot, exactly like askUserRegistry/toolApprover).

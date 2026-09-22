@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +49,39 @@ type GenerationCancelFunc func(ctx context.Context, sessionID string, generation
 // event after Revive has durably published the new generation. WP-B supplies
 // the transcript/frame implementation at the composition root.
 type RevivalStateWriter func(ctx context.Context, sessionID string, generation int) error
+
+// SteerGenerationCancel adapts the active-turn registry to the durable
+// generation-aware cancellation contract used by SteerCanceller.
+func (al *AgentLoop) SteerGenerationCancel(_ context.Context, sessionID string, generation int) (GenerationCancelResult, error) {
+	ok, reason := al.requestCancelForGeneration(sessionID, generation)
+	if ok {
+		return GenerationCancelResult{Found: true, Cancelled: true}, nil
+	}
+	if strings.HasPrefix(reason, "stale generation:") {
+		return GenerationCancelResult{Found: true, SkippedNewerGeneration: true}, nil
+	}
+	return GenerationCancelResult{}, nil
+}
+
+// WriteSteerRevivalState publishes the running state created by Revive to the
+// session that owns the durable steering edge.
+func (al *AgentLoop) WriteSteerRevivalState(_ context.Context, sessionID string, generation int) error {
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return session.ErrLifecycleNotFound
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	if rec.Generation != generation {
+		return steer.ErrStaleGeneration
+	}
+	if rec.SteeredBy != nil {
+		al.deliverSubagentState(rec.SteeredBy.SteeringSessionID, rec, string(session.LifecycleRunning))
+	}
+	return nil
+}
 
 // NewSteerCanceller builds the I-6 Canceller. cancelTurn is optional only so
 // CP-0 wiring continues to compile until WP-A's generation-aware turn registry

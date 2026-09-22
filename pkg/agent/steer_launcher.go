@@ -119,7 +119,36 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if req.SteeringSessionID == "" {
 		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType)
 	}
-	return l.launchSteered(sessions, lifecycle, req, title, sessionType)
+	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType)
+	if err == nil {
+		l.publishSteeredLaunch(req, result, title)
+	}
+	return result, err
+}
+
+// publishSteeredLaunch preserves the subagent span event while the old
+// in-chat child executor is removed. The event is parent-scoped: its routing
+// session is the steering session, while Label identifies the child.
+func (l *SteerLauncher) publishSteeredLaunch(req steer.LaunchRequest, result steer.LaunchResult, title string) {
+	if l == nil || l.al == nil || req.SteeringSessionID == "" || req.Origin.CallID == "" || result.SessionID == "" {
+		return
+	}
+	l.al.emitEvent(EventKindSubTurnSpawn,
+		EventMeta{Source: "steer", TracePath: "steer.launch", SessionKey: req.SteeringSessionID},
+		SubTurnSpawnPayload{
+			AgentID:           req.TargetAgentID,
+			Label:             result.SessionID,
+			SpanID:            subagentSpanID(req.Origin.CallID),
+			ParentSpawnCallID: session.ToolCallID(req.Origin.CallID),
+			TaskLabel:         title,
+			SessionID:         req.SteeringSessionID,
+		},
+	)
+	if lifecycle := l.al.GetSessionLifecycleStore(); lifecycle != nil {
+		if rec, err := lifecycle.Load(result.SessionID); err == nil {
+			l.al.deliverSubagentState(req.SteeringSessionID, rec, string(session.LifecycleQueued))
+		}
+	}
 }
 
 // launchOrdinaryRoot is Launch's no-steering-session path (US-1/AS-3: a
