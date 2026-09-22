@@ -33,21 +33,75 @@ package tools
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-func TestDelegateTool_FollowUp_NativeSetsIsResume(t *testing.T) {
-	spawner := &capturingDelegateSpawner{}
+type followUpLauncher struct {
+	sessionID  string
+	generation int
+	dispatch   steer.DispatchResult
+	err        error
+}
+
+type followUpHistoryStore struct {
+	history map[string][]providers.Message
+}
+
+func (s *followUpHistoryStore) ReadTranscript(string) ([]session.TranscriptEntry, error) {
+	return nil, nil
+}
+
+func (s *followUpHistoryStore) AddMessage(sessionID, role, content string) {
+	if s.history == nil {
+		s.history = make(map[string][]providers.Message)
+	}
+	s.history[sessionID] = append(s.history[sessionID], providers.Message{Role: role, Content: content})
+}
+
+func wireFollowUpTestLauncher(tool *DelegateTool) (*followUpLauncher, *followUpHistoryStore) {
+	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning}}
+	history := &followUpHistoryStore{history: make(map[string][]providers.Message)}
+	tool.SetSessionLauncher(launcher)
+	tool.SetSessionStore(history)
+	return launcher, history
+}
+
+func (f *followUpLauncher) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {
+	return steer.LaunchResult{}, fmt.Errorf("follow_up must not launch a second native session")
+}
+
+func (f *followUpLauncher) Dispatch(_ context.Context, sessionID string, generation int) (steer.DispatchResult, error) {
+	f.sessionID = sessionID
+	f.generation = generation
+	result := f.dispatch
+	if result.Generation == 0 {
+		result.Generation = generation
+	}
+	return result, f.err
+}
+
+func TestDelegateTool_FollowUp_NativeBumpsGenerationThenDispatches(t *testing.T) {
+	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 2}}
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSpawner(spawner)
+	tool.SetSessionLauncher(launcher)
+	sessions, err := session.NewUnifiedStore(filepath.Join(t.TempDir(), "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	t.Cleanup(func() { _ = sessions.Close() })
+	tool.SetSessionStore(sessions)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-followup-resume-native", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: "child-followup-resume-native", Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
 		Is3P: false,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -59,28 +113,47 @@ func TestDelegateTool_FollowUp_NativeSetsIsResume(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("follow_up failed: %s", result.ForLLM)
 	}
-	tool.WaitForAsyncTasks()
-
-	cfg := spawner.lastConfig()
-	if !cfg.IsResume {
-		t.Error("native follow_up (Is3P:false) must set SubTurnConfig.IsResume=true — it reuses the " +
-			"terminal session's own id verbatim, and the spawner must treat this as a warm resume rather " +
-			"than attempt to create a session that already exists (the exact FR-096 collision this fix closes)")
+	if launcher.sessionID != "child-followup-resume-native" || launcher.generation != 2 {
+		t.Fatalf("Dispatch = (%q, %d), want existing session at generation 2", launcher.sessionID, launcher.generation)
 	}
-	if cfg.DelegateSessionID != "child-followup-resume-native" {
-		t.Errorf("native follow_up must reuse the session id verbatim, got DelegateSessionID=%q", cfg.DelegateSessionID)
+	rec, err := lc.Load("child-followup-resume-native")
+	if err != nil || rec.Generation != 2 || rec.State != session.LifecycleQueued {
+		t.Fatalf("persisted generation before Dispatch = %+v, %v; want queued generation 2", rec, err)
+	}
+	history := sessions.GetHistory("child-followup-resume-native")
+	if len(history) == 0 || history[len(history)-1].Role != "user" || history[len(history)-1].Content != "resume please" {
+		t.Fatalf("follow-up instruction was not persisted before Dispatch: %+v", history)
 	}
 }
 
-func TestDelegateTool_FollowUp_3PDoesNotSetIsResume(t *testing.T) {
-	spawner := &capturingDelegateSpawner{}
+func TestDelegateTool_FollowUp_3PDispatchesNewCorrectiveSession(t *testing.T) {
+	launcher := &followUpLauncher{dispatch: steer.DispatchResult{State: steer.DispatchRunning, Generation: 2}}
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSpawner(spawner)
-	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
+	tool.SetSessionLauncher(launcher)
+	sessions, err := session.NewUnifiedStore(filepath.Join(t.TempDir(), "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	t.Cleanup(func() { _ = sessions.Close() })
+	parentMeta, err := sessions.NewSession(session.SessionTypeChat, "webchat", "parent-agent")
+	if err != nil {
+		t.Fatalf("create steering session: %v", err)
+	}
+	parentID := parentMeta.ID
+	if _, err := sessions.CreateSessionWithID("child-followup-resume-3p", parentID, session.SessionTypeDelegate, "webchat", "claude-code"); err != nil {
+		t.Fatalf("create original external session: %v", err)
+	}
+	title, workspace := "External checkout audit", "ws-1"
+	if err := sessions.SetMeta("child-followup-resume-3p", session.MetaPatch{Title: &title, WorkspaceID: &workspace}); err != nil {
+		t.Fatalf("stamp original external session: %v", err)
+	}
+	tool.SetSessionStore(sessions)
+	ctx := WithTranscriptSessionID(context.Background(), parentID)
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-followup-resume-3p", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "claude-code",
+		SessionID: "child-followup-resume-3p", Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID},
+		WorkspaceID:    "ws-1", AgentID: "claude-code",
 		Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -92,77 +165,55 @@ func TestDelegateTool_FollowUp_3PDoesNotSetIsResume(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("follow_up failed: %s", result.ForLLM)
 	}
-	tool.WaitForAsyncTasks()
-
-	cfg := spawner.lastConfig()
-	if cfg.IsResume {
-		t.Error("a 3P follow_up mints a brand-new session id (cold respawn, D5) — it is a genuine create " +
-			"like any other dispatch and must NOT set IsResume")
-	}
-	if cfg.DelegateSessionID == "child-followup-resume-3p" {
+	if launcher.sessionID == "" || launcher.sessionID == "child-followup-resume-3p" {
 		t.Error("a 3P follow_up must mint a NEW session id, not reuse the terminal one verbatim")
+	}
+	if launcher.generation != 2 {
+		t.Fatalf("3P corrective Dispatch generation = %d, want 2", launcher.generation)
+	}
+	meta, err := sessions.GetMeta(launcher.sessionID)
+	if err != nil {
+		t.Fatalf("new external corrective session has no durable identity: %v", err)
+	}
+	if meta.ParentSessionID != parentID || meta.ActiveAgentID != "claude-code" || meta.WorkspaceID != "ws-1" {
+		t.Fatalf("new external corrective identity = %+v; want copied parent, agent, and workspace", meta)
+	}
+	history := sessions.GetHistory(launcher.sessionID)
+	if len(history) == 0 || history[len(history)-1].Content != "resume please" {
+		t.Fatalf("new external corrective session lacks follow-up instruction: %+v", history)
 	}
 }
 
-// TestDelegateTool_FollowUp_SpawnFailure_LoggedUnconditionally proves the
-// "kill the silent swallow" half: even when the underlying spawn genuinely
-// fails (any reason — this test simulates it directly via a failing
-// spawner, standing in for e.g. a resume target that vanished on disk
-// between Load and dispatch), the failure is (a) logged at Error level
-// UNCONDITIONALLY — not merely handed to a callback that might do nothing
-// visible with it — and (b) reflected in the lifecycle record as Failed, so
-// a subsequent delegate(status)/peek poll can discover it. Before this fix,
-// executeAsync's goroutine only ever logged on error when cb was nil
-// ("subturn failed with no callback") — a real agent-turn cb is never nil,
-// so a doomed follow_up's failure had NO unconditional, cb-independent log
-// line at all.
-func TestDelegateTool_FollowUp_SpawnFailure_LoggedUnconditionally(t *testing.T) {
+// TestDelegateTool_FollowUp_DispatchFailure_LoggedUnconditionally pins the
+// immediate error, durable failed state, and operator-visible diagnostic.
+func TestDelegateTool_FollowUp_DispatchFailure_LoggedUnconditionally(t *testing.T) {
 	getLogs := captureLogs(t)
 
 	const sessionID = "child-followup-resume-logging"
-	failingSpawner := spawnerFunc(func(_ context.Context, _ SubTurnConfig) (*ToolResult, error) {
-		return nil, fmt.Errorf("subturn: resume child session %q: simulated store failure", sessionID)
-	})
+	failingLauncher := &followUpLauncher{err: fmt.Errorf("dispatch session %q: simulated store failure", sessionID)}
 
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSpawner(failingSpawner)
+	tool.SetSessionLauncher(failingLauncher)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: sessionID, State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: sessionID, Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
 
-	// Deliberately provide a NON-NIL callback via ExecuteAsync — the
-	// realistic production shape (pkg/agent/loop.go's asyncCallback closure
-	// is never nil for a real agent turn). Before this fix, executeAsync's
-	// goroutine ONLY logged unconditionally when cb WAS nil ("delegate:
-	// subturn failed with no callback") — a failure handed to a non-nil cb
-	// had no cb-independent log line at all, regardless of what that
-	// callback's own downstream (e.g. AsyncNotifier.Notify landing somewhere
-	// an operator isn't watching) did with it. This callback intentionally
-	// does NOTHING with the result — the strongest version of "downstream
-	// does nothing observable" — so the ONLY way this test's log assertions
-	// below can pass is via the new unconditional log line.
-	cb := func(context.Context, *ToolResult) {}
-
-	// The synchronous ack is still a well-formed AsyncResult (fire-and-forget
-	// dispatch is unchanged design, documented at executeAsync's own return) —
-	// this test is about what happens to the FAILURE, not this initial ack.
-	result := tool.ExecuteAsync(ctx, map[string]any{
+	result := tool.Execute(ctx, map[string]any{
 		"action": "follow_up", "session_id": sessionID, "text": "resume please",
-	}, cb)
-	if result.IsError {
-		t.Fatalf("the synchronous follow_up ack itself must not be an error (fire-and-forget dispatch): %s", result.ForLLM)
+	})
+	if !result.IsError {
+		t.Fatalf("a Dispatch failure must be returned immediately, got: %s", result.ForLLM)
 	}
-	tool.WaitForAsyncTasks()
 
 	logs := getLogs()
-	if !strings.Contains(logs, "async subturn spawn failed") {
-		t.Errorf("a spawn failure must be logged unconditionally at Error level regardless of any downstream "+
-			"callback — got logs:\n%s", logs)
+	if !strings.Contains(logs, "follow-up dispatch failed") {
+		t.Errorf("a Dispatch failure must be logged unconditionally, got logs:\n%s", logs)
 	}
 	if !strings.Contains(logs, sessionID) {
 		t.Errorf("the failure log must name the affected session_id, got logs:\n%s", logs)

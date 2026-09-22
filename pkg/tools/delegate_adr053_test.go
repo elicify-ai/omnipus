@@ -610,11 +610,13 @@ func TestDelegateTool_FollowUp_RequiresTerminalSession(t *testing.T) {
 
 func TestDelegateTool_FollowUp_NativeReusesSessionID(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
+	wireFollowUpTestLauncher(tool)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-done", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: "child-done", Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
 		Is3P: false,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -633,8 +635,8 @@ func TestDelegateTool_FollowUp_NativeReusesSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if rec.Generation != 1 {
-		t.Errorf("Generation = %d, want 1", rec.Generation)
+	if rec.Generation != 2 {
+		t.Errorf("Generation = %d, want 2", rec.Generation)
 	}
 	if rec.ResumedFrom != "child-done" {
 		t.Errorf("ResumedFrom = %q, want %q", rec.ResumedFrom, "child-done")

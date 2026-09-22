@@ -180,14 +180,14 @@ func TestDelegateTool_Run_TimeoutSeconds_ThreadsIntoSubTurnConfig(t *testing.T) 
 // --- #579: delegate follow_up silently drops the new instruction --------
 
 func TestDelegateTool_FollowUp_UsesTextField(t *testing.T) {
-	spawner := &capturingDelegateSpawner{}
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSpawner(spawner)
+	_, history := wireFollowUpTestLauncher(tool)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-followup-text", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: "child-followup-text", Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -198,9 +198,7 @@ func TestDelegateTool_FollowUp_UsesTextField(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("follow_up failed: %s", result.ForLLM)
 	}
-	tool.WaitForAsyncTasks()
-
-	sp := spawner.lastConfig().SystemPrompt
+	sp := history.history["child-followup-text"][0].Content
 	if !strings.Contains(sp, "also do this") {
 		t.Errorf("expected the resumed instruction to contain the text field's content, got SystemPrompt=%q", sp)
 	}
@@ -211,14 +209,14 @@ func TestDelegateTool_FollowUp_UsesTextField(t *testing.T) {
 
 func TestDelegateTool_FollowUp_TaskAliasStillWorks(t *testing.T) {
 	// Back-compat: "task" remains an accepted alias when "text" is absent.
-	spawner := &capturingDelegateSpawner{}
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSpawner(spawner)
+	_, history := wireFollowUpTestLauncher(tool)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-followup-task-alias", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: "child-followup-task-alias", Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -229,21 +227,20 @@ func TestDelegateTool_FollowUp_TaskAliasStillWorks(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("follow_up failed: %s", result.ForLLM)
 	}
-	tool.WaitForAsyncTasks()
-	if sp := spawner.lastConfig().SystemPrompt; !strings.Contains(sp, "legacy field still works") {
+	if sp := history.history["child-followup-task-alias"][0].Content; !strings.Contains(sp, "legacy field still works") {
 		t.Errorf("expected the deprecated task alias to still work, got SystemPrompt=%q", sp)
 	}
 }
 
 func TestDelegateTool_FollowUp_TextWinsOverTask(t *testing.T) {
-	spawner := &capturingDelegateSpawner{}
 	tool, lc, _, _ := newADR053TestTool(t)
-	tool.SetSpawner(spawner)
+	_, history := wireFollowUpTestLauncher(tool)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID: "child-followup-both", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
-		WorkspaceID: "ws-1", AgentID: "worker",
+		SessionID: "child-followup-both", Generation: 1, State: session.LifecycleCompleted,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}
@@ -255,8 +252,7 @@ func TestDelegateTool_FollowUp_TextWinsOverTask(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("follow_up failed: %s", result.ForLLM)
 	}
-	tool.WaitForAsyncTasks()
-	sp := spawner.lastConfig().SystemPrompt
+	sp := history.history["child-followup-both"][0].Content
 	if !strings.Contains(sp, "text wins") {
 		t.Errorf("expected text to win over task, got SystemPrompt=%q", sp)
 	}
