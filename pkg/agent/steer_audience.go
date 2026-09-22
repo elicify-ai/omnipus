@@ -185,16 +185,6 @@ func deliverOwnerKey(rec *session.LifecycleRecord) string {
 	return strings.TrimSpace(rec.SteeringSessionID())
 }
 
-// steeringSessionKey mirrors steering.go::enqueueSteeringFromMessage's own
-// key composition ("agent:<id>:<sid>") — the same key runTurn registers the
-// active turn under in activeTurnStates.
-func steeringSessionKey(agentID, sessionID string) string {
-	if agentID == "" {
-		return sessionID
-	}
-	return "agent:" + agentID + ":" + sessionID
-}
-
 // withDeterministicMessageID returns msg with its MessageId field
 // overwritten to id. Only the two SessionMessage kinds a terminal Outcome
 // ever maps to (handback, error) need this — every other kind's id is
@@ -308,6 +298,13 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: append: %w", appendErr)
 	}
 
+	// A deterministic duplicate means a previous delivery already performed
+	// every externally visible effect. Repeating frames or a wake would turn
+	// inbox deduplication into at-least-once behavior at the actual sinks.
+	if res.Deduped {
+		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	}
+
 	// ADR-091 D7/I-4: the parent's side-panel status line, persisted as an
 	// event in the parent's OWN transcript so it survives a reload
 	// (steer_frames.go). Best-effort — see deliverSubagentMessage/State's
@@ -341,10 +338,10 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
 
-	sessionKey := steeringSessionKey(ownerRec.AgentID, ownerKey)
+	sessionKey := ownerKey
 	if ts := al.getActiveTurnState(sessionKey); ts != nil && ts.IsAlive() {
 		pm := providers.Message{Role: "user", Content: deliverySummary(msg)}
-		if enqErr := al.EnqueueSteeringMessage(sessionKey, ownerRec.AgentID, pm); enqErr != nil {
+		if enqErr := al.EnqueueSteeringWake(sessionKey, ownerRec.AgentID, ownerKey, res.MessageID, pm); enqErr != nil {
 			return steer.Delivery{}, fmt.Errorf("steer: deliver: enqueue steering message: %w", enqErr)
 		}
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryQueuedIntoLiveTurn}, nil
@@ -352,9 +349,10 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 
 	kindStr, _ := msg.Discriminator()
 	if al.asyncNotifier != nil {
+		target := childRec.SteeredBy.ReportingTarget
 		wakeEvent := tools.MessageParentWakeEvent{
-			Channel:             ownerRec.OriginChannel,
-			ChatID:              ownerRec.OriginChatID,
+			Channel:             target.Channel,
+			ChatID:              target.ChatID,
 			AgentID:             ownerRec.AgentID,
 			TranscriptSessionID: ownerKey,
 			Content:             deliverySummary(msg),
@@ -367,7 +365,9 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 			// fatal to Deliver — the boot re-nudge (WP-D) covers it.
 			logger.WarnCF("agent", "steer: deliver: wake failed (message is durable)",
 				map[string]any{"kind": kindStr, "error": werr.Error()})
+			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 		}
+		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
 	}
-	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
+	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 }

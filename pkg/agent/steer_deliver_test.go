@@ -71,6 +71,9 @@ func seedParentAndChild(t *testing.T, lifecycle *session.LifecycleStore, parentI
 		SteeredBy: &session.SteeredBy{
 			SteeringSessionID: parentID,
 			RootSessionID:     parentID,
+			ReportingTarget: session.ReportingTarget{
+				Channel: "webchat", ChatID: parentID,
+			},
 		},
 	}); err != nil {
 		t.Fatalf("seed child: %v", err)
@@ -244,8 +247,12 @@ func TestDeliver_RepeatWake_SameDeterministicID_OneEntry(t *testing.T) {
 	if _, err := deliverer.Deliver(ctx, handbackEvent(childID, "first-attempt")); err != nil {
 		t.Fatalf("first Deliver: %v", err)
 	}
-	if _, err := deliverer.Deliver(ctx, handbackEvent(childID, "second-attempt-different-caller-id")); err != nil {
+	second, err := deliverer.Deliver(ctx, handbackEvent(childID, "second-attempt-different-caller-id"))
+	if err != nil {
 		t.Fatalf("second Deliver (repair): %v", err)
+	}
+	if second.Outcome != steer.DeliveryStoredNotWoken {
+		t.Fatalf("duplicate Delivery.Outcome = %q, want stored_not_woken with no repeated effects", second.Outcome)
 	}
 
 	msgs, _, _, err := inbox.Drain(parentID, childID, "", 10)
@@ -254,6 +261,51 @@ func TestDeliver_RepeatWake_SameDeterministicID_OneEntry(t *testing.T) {
 	}
 	if len(msgs) != 1 {
 		t.Fatalf("expected exactly 1 entry after a repeated terminal delivery, got %d", len(msgs))
+	}
+}
+
+func TestDeliver_LiveParentUsesRawSessionKeyAndRetainsMessageIdentity(t *testing.T) {
+	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	const parentID, childID = "parent-1", "child-1"
+	seedParentAndChild(t, lifecycle, parentID, childID)
+	al.activeTurnStates.Store(parentID, &turnState{sessionKey: parentID})
+
+	delivery, err := deliverer.Deliver(context.Background(), handbackEvent(childID, "ignored"))
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if delivery.Outcome != steer.DeliveryQueuedIntoLiveTurn {
+		t.Fatalf("Delivery.Outcome = %q, want queued_into_live_turn", delivery.Outcome)
+	}
+
+	al.steering.mu.Lock()
+	items := append([]steeringQueueItem(nil), al.steering.queues[parentID]...)
+	al.steering.mu.Unlock()
+	if len(items) != 1 || items[0].wake == nil {
+		t.Fatalf("live steering queue = %+v, want one identity-bearing wake", items)
+	}
+	if items[0].wake.messageID != "child-1:1:final" || items[0].wake.transcriptSessionID != parentID {
+		t.Fatalf("wake identity = %+v, want message child-1:1:final in transcript %s", items[0].wake, parentID)
+	}
+}
+
+func TestDeliver_IdleWakeFailureRemainsStoredNotWoken(t *testing.T) {
+	_, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	const parentID, childID = "parent-1", "child-1"
+	seedParentAndChild(t, lifecycle, parentID, childID)
+	if err := lifecycle.Mutate(childID, func(rec *session.LifecycleRecord) error {
+		rec.SteeredBy.ReportingTarget = session.ReportingTarget{}
+		return nil
+	}); err != nil {
+		t.Fatalf("clear reporting target: %v", err)
+	}
+
+	delivery, err := deliverer.Deliver(context.Background(), handbackEvent(childID, "ignored"))
+	if err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if delivery.Outcome != steer.DeliveryStoredNotWoken {
+		t.Fatalf("Delivery.Outcome = %q, want stored_not_woken after refused wake", delivery.Outcome)
 	}
 }
 
