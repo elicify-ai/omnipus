@@ -88,6 +88,14 @@ function resetStores() {
 
 beforeEach(resetStores)
 
+function outboundQueueContents(): string[] {
+  return useChatStore.getState().outboundQueue.map((item) => typeof item === 'string' ? item : item.content)
+}
+
+function pendingDrainQueueContents(): string[] {
+  return useChatStore.getState().pendingDrainQueue.map((item) => typeof item === 'string' ? item : item.content)
+}
+
 /** Connects the store with a `send` spy that always succeeds. */
 function connectWithSendSpy() {
   const send = vi.fn().mockReturnValue(true)
@@ -391,7 +399,7 @@ describe('sendMessage — mid-turn steering respects offline buffering (does not
     })
 
     expect(send).not.toHaveBeenCalled()
-    expect(useChatStore.getState().outboundQueue).toContain('steer while offline')
+    expect(outboundQueueContents()).toContain('steer while offline')
     // No new user message was appended to the thread — it's buffered, not
     // rendered optimistically (matches the pre-existing idle-state offline
     // behavior in sendMessage's disconnected-WS branch).
@@ -666,7 +674,7 @@ describe('sendMessage — steer during the "__pending" session window (bugfixes3
     // Nothing sent on the socket for the steer attempt.
     expect(send).not.toHaveBeenCalled()
     // Buffered into outboundQueue instead of lost.
-    expect(useChatStore.getState().outboundQueue).toContain('steer before session_started')
+    expect(outboundQueueContents()).toContain('steer before session_started')
     // The first turn's own bucket/messages are untouched — no stray user
     // bubble was appended for the (buffered, not sent) steer, and the
     // original placeholder assistant message is still streaming normally.
@@ -694,7 +702,7 @@ describe('sendMessage — steer during the "__pending" session window (bugfixes3
     act(() => {
       useChatStore.getState().sendMessage('steer before session_started')
     })
-    expect(useChatStore.getState().outboundQueue).toContain('steer before session_started')
+    expect(outboundQueueContents()).toContain('steer before session_started')
 
     // The server resolves the real session_id — session_started now also
     // calls drainOutboundQueue(), which moves the buffered steer into
@@ -704,7 +712,7 @@ describe('sendMessage — steer during the "__pending" session window (bugfixes3
       useChatStore.getState().handleFrame({ type: 'session_started', session_id: 'real-session-1', agent_id: 'general-assistant' })
     })
     expect(useChatStore.getState().outboundQueue).toEqual([])
-    expect(useChatStore.getState().pendingDrainQueue).toContain('steer before session_started')
+    expect(pendingDrainQueueContents()).toContain('steer before session_started')
     expect(send).not.toHaveBeenCalled()
 
     // The first turn completes — its own `done` handler's maybeDrainNext()

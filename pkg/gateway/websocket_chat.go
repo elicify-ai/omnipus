@@ -73,22 +73,30 @@ const (
 
 // wsHandlerHandleChatMessage carries the shared state of handleChatMessage across its stages.
 type wsHandlerHandleChatMessage struct {
-	h                  *WSHandler
-	chatID             string
-	frameSessionID     string
-	content            string
-	agentID            string
-	mediaRefs          []string
-	modelName          string
-	workspaceID        string
-	setupKickoff       bool
-	wc                 *wsConn
-	targetAgentID      string
-	sessionID          string
-	store              *session.UnifiedStore
-	kickoffInstruction string
-	acceptedMedia      []string
-	msg                bus.InboundMessage
+	h                   *WSHandler
+	chatID              string
+	frameSessionID      string
+	content             string
+	agentID             string
+	mediaRefs           []string
+	modelName           string
+	workspaceID         string
+	setupKickoff        bool
+	clientMessageID     string
+	wc                  *wsConn
+	targetAgentID       string
+	sessionID           string
+	store               *session.UnifiedStore
+	kickoffInstruction  string
+	acceptedMedia       []string
+	msg                 bus.InboundMessage
+	transcriptPersisted bool
+	admitted            bool
+}
+
+type pendingMessageStatus struct {
+	clientMessageID string
+	wc              *wsConn
 }
 
 // handleChatMessage mints a new session when frame.SessionID is empty, records
@@ -174,7 +182,31 @@ func (h *WSHandler) handleChatMessage(
 	setupKickoff bool,
 	wc *wsConn,
 ) {
-	hcm := &wsHandlerHandleChatMessage{h: h, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, wc: wc}
+	h.handleChatMessageWithClientID(ctx, chatID, frameSessionID, content, agentID, mediaRefs, modelName, workspaceID, setupKickoff, "", wc)
+}
+
+// handleChatMessageWithClientID is the acknowledgement-aware message intake.
+// The compatibility wrapper above keeps older callers and clients unchanged;
+// a client_message_id opts a newer client into received/working/failed frames.
+func (h *WSHandler) handleChatMessageWithClientID(
+	ctx context.Context,
+	chatID string,
+	frameSessionID string,
+	content string,
+	agentID string,
+	mediaRefs []string,
+	modelName string,
+	workspaceID string,
+	setupKickoff bool,
+	clientMessageID string,
+	wc *wsConn,
+) {
+	hcm := &wsHandlerHandleChatMessage{h: h, chatID: chatID, frameSessionID: frameSessionID, content: content, agentID: agentID, mediaRefs: mediaRefs, modelName: modelName, workspaceID: workspaceID, setupKickoff: setupKickoff, clientMessageID: clientMessageID, wc: wc}
+	defer func() {
+		if !hcm.admitted {
+			hcm.sendMessageStatus("failed")
+		}
+	}()
 
 	if hcm.resolveTargetAgent() {
 		return
@@ -193,11 +225,16 @@ func (h *WSHandler) handleChatMessage(
 	if hcm.recordSessionAndTranscript() {
 		return
 	}
+	if hcm.transcriptPersisted {
+		hcm.sendMessageStatus("received")
+	}
 
 	hcm.buildInboundMessage()
+	hcm.queueWorkingStatus()
 	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := hcm.h.msgBus.PublishInbound(pubCtx, hcm.msg); err != nil {
+		hcm.removeQueuedWorkingStatus()
 		slog.Warn("ws: failed to publish message", "error", err)
 		// Same compensation as the earlier session-mint/SetMeta failures — a
 		// successful kickoff consume must not be silently lost just because
@@ -215,6 +252,8 @@ func (h *WSHandler) handleChatMessage(
 		})
 		return
 	}
+	hcm.admitted = true
+	hcm.markWorkingIfTurnAlreadyActive()
 
 	// Audit the kickoff consume only AFTER a successful publish — the turn is
 	// now genuinely running (the commit point; see the two accepted-tradeoff
@@ -240,6 +279,89 @@ func (h *WSHandler) handleChatMessage(
 			}
 		}
 	}
+}
+
+func (hcm *wsHandlerHandleChatMessage) queueWorkingStatus() {
+	if hcm.clientMessageID == "" || hcm.sessionID == "" {
+		return
+	}
+	hcm.h.mu.Lock()
+	if hcm.h.pendingMessageStatuses == nil {
+		hcm.h.pendingMessageStatuses = make(map[string][]pendingMessageStatus)
+	}
+	hcm.h.pendingMessageStatuses[hcm.sessionID] = append(
+		hcm.h.pendingMessageStatuses[hcm.sessionID],
+		pendingMessageStatus{clientMessageID: hcm.clientMessageID, wc: hcm.wc},
+	)
+	hcm.h.mu.Unlock()
+}
+
+func (hcm *wsHandlerHandleChatMessage) removeQueuedWorkingStatus() bool {
+	hcm.h.mu.Lock()
+	defer hcm.h.mu.Unlock()
+	queue := hcm.h.pendingMessageStatuses[hcm.sessionID]
+	for index, pending := range queue {
+		if pending.clientMessageID != hcm.clientMessageID || pending.wc != hcm.wc {
+			continue
+		}
+		queue = append(queue[:index], queue[index+1:]...)
+		if len(queue) == 0 {
+			delete(hcm.h.pendingMessageStatuses, hcm.sessionID)
+		} else {
+			hcm.h.pendingMessageStatuses[hcm.sessionID] = queue
+		}
+		return true
+	}
+	return false
+}
+
+func (hcm *wsHandlerHandleChatMessage) markWorkingIfTurnAlreadyActive() {
+	hcm.h.mu.Lock()
+	active := hcm.h.liveStreamers[hcm.sessionID] != nil
+	hcm.h.mu.Unlock()
+	if !active {
+		return
+	}
+	if hcm.removeQueuedWorkingStatus() {
+		hcm.sendMessageStatus("working")
+	}
+}
+
+func (h *WSHandler) takePendingMessageStatus(sessionID string) (pendingMessageStatus, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	queue := h.pendingMessageStatuses[sessionID]
+	if len(queue) == 0 {
+		return pendingMessageStatus{}, false
+	}
+	pending := queue[0]
+	if len(queue) == 1 {
+		delete(h.pendingMessageStatuses, sessionID)
+	} else {
+		h.pendingMessageStatuses[sessionID] = queue[1:]
+	}
+	return pending, true
+}
+
+func sendPendingMessageWorking(sessionID string, pending pendingMessageStatus) {
+	sendConnGenFrame(pending.wc, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       sessionID,
+		ClientMessageId: pending.clientMessageID,
+		State:           "working",
+	})
+}
+
+func (hcm *wsHandlerHandleChatMessage) sendMessageStatus(state string) {
+	if hcm.clientMessageID == "" || hcm.sessionID == "" {
+		return
+	}
+	sendConnGenFrame(hcm.wc, string(generated.WsFrameTypeMessageStatus), generated.MessageStatusFrame{
+		Type:            string(generated.WsFrameTypeMessageStatus),
+		SessionId:       hcm.sessionID,
+		ClientMessageId: hcm.clientMessageID,
+		State:           state,
+	})
 }
 
 // resolveTargetAgent resolves the target agent from the frame's agent_id (default-agent fallbacks included) and rejects worker agents and targets that resolve to nothing.
@@ -723,6 +845,8 @@ func (hcm *wsHandlerHandleChatMessage) recordSessionAndTranscript() bool {
 			}
 			if err := hcm.store.AppendTranscript(hcm.sessionID, entry); err != nil {
 				slog.Warn("ws: could not record user message", "session_id", hcm.sessionID, "error", err)
+			} else {
+				hcm.transcriptPersisted = true
 			}
 			// The workspace.setup_consumed audit entry is emitted further
 			// below, AFTER a successful bus publish — not here. Emitting it

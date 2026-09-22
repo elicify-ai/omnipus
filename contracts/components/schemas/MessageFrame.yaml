@@ -30,6 +30,15 @@ properties:
   type:
     type: string
     const: message
+  client_message_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      Client-generated correlation id for message-level delivery status.
+      When present, the gateway echoes it in MessageStatusFrame after durable
+      transcript persistence and after successful turn admission. Optional for
+      compatibility with older clients.
   content:
     type: string
     maxLength: 5242880

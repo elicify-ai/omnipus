@@ -8,24 +8,6 @@ export const chatInput = (page: Page) =>
   page.locator('textarea[aria-label="Message input"]');
 
 /**
- * Reconnect banner — ChatScreen.tsx renders `data-testid="reconnect-banner"`
- * in exactly three mutually-exclusive branches, together covering EVERY
- * state where the WebSocket is not genuinely open:
- *   - `reconnectPhase === 'gave_up'`
- *   - `reconnectPhase === 'reconnecting' | 'slow'`
- *   - `!isConnected && reconnectPhase === null` (brief pre-first-connect /
- *     just-dropped window)
- * `useConnectionStore.setConnected` (src/store/connection.ts) atomically
- * clears `reconnectPhase` to `null` in the SAME update that flips
- * `isConnected` true, so there is no window where the banner is hidden yet
- * the socket isn't really open. Its absence is therefore an exact,
- * already-shipped (not test-only) observable for "the WebSocket is
- * genuinely connected" — see `waitForConnected` below.
- */
-export const reconnectBanner = (page: Page) =>
-  page.locator('[data-testid="reconnect-banner"]');
-
-/**
  * Wait for a GENUINE, wire-ready WebSocket connection — not merely for the
  * composer's `disabled` attribute to clear.
  *
@@ -49,7 +31,10 @@ export const reconnectBanner = (page: Page) =>
  * `toBeEnabled()` alone as its "safe to type and send" gate.
  */
 export async function waitForConnected(page: Page, opts?: { timeout?: number }): Promise<void> {
-  await expect(reconnectBanner(page)).toBeHidden({ timeout: opts?.timeout ?? 15_000 });
+  await expect.poll(async () => page.evaluate(() =>
+    ((window as unknown as { __ws_instances?: WebSocket[] }).__ws_instances ?? [])
+      .some((ws) => ws.readyState === WebSocket.OPEN),
+  ), { timeout: opts?.timeout ?? 15_000 }).toBe(true);
 }
 
 /**

@@ -15,6 +15,7 @@ export type WsFrameType =
   | "device_pairing_response"
   | "session_close"
   | "session_started"
+  | "message_status"
   | "token"
   | "done"
   | "error"
@@ -83,6 +84,7 @@ export interface AuthFrame {
 
 export interface MessageFrame {
   type: "message";
+  client_message_id?: string;
   content: string;
   session_id?: string;
   agent_id?: string;
@@ -125,6 +127,13 @@ export interface SessionStartedFrame {
   session_id: string;
   agent_id?: string;
   producing_session_id?: string;
+}
+
+export interface MessageStatusFrame {
+  type: "message_status";
+  session_id: string;
+  client_message_id: string;
+  state: "received" | "working" | "failed";
 }
 
 export interface TokenFrame {
@@ -975,6 +984,7 @@ export type WsFrame =
   | AttachSessionFrame
   | DevicePairingResponseFrame
   | SessionStartedFrame
+  | MessageStatusFrame
   | TokenFrame
   | DoneFrame
   | ErrorFrame
@@ -1064,6 +1074,7 @@ export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_se
 export type ServerFrame =
   | PongFrame
   | SessionStartedFrame
+  | MessageStatusFrame
   | TokenFrame
   | DoneFrame
   | ErrorFrame

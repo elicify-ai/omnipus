@@ -204,6 +204,10 @@ type WSHandler struct {
 	// (handleAttachSession) and the append+resolve (Update) must share this
 	// SAME critical section to get "no duplicate, no gap" catch-up ordering.
 	liveStreamers map[string]*wsStreamer
+	// pendingMessageStatuses holds persisted user messages until the agent
+	// actually opens a streamer for their turn. It backs the received→working
+	// distinction exposed to the SPA. Guarded by mu.
+	pendingMessageStatuses map[string][]pendingMessageStatus
 
 	// approvalRegV2 is the Central Tool Registry approval registry (FR-016, FR-070).
 	// Injected at boot by the gateway after construction.  Nil until then.
@@ -1188,6 +1192,18 @@ wsHandlerReadLoopLoop1:
 	}
 }
 
+// stringPtrOrEmpty dereferences an optional wire-format string field,
+// returning "" for a nil pointer. Kept out of dispatchFrame's own body so
+// the #823 client_message_id field doesn't grow dispatchFrame's grandfathered
+// gocyclo budget (scripts/budgets/gocyclo.txt) — mirrors the existing
+// agentID/sessionID deref pattern inline below.
+func stringPtrOrEmpty(p *string) string {
+	if p != nil {
+		return *p
+	}
+	return ""
+}
+
 // dispatchFrame dispatches one validated WebSocket frame to its type-specific handler.
 func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandlerReadLoopFlow {
 	switch peek.Type {
@@ -1212,6 +1228,7 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 		if f.SessionId != nil {
 			sessionID = *f.SessionId
 		}
+		clientMessageID := stringPtrOrEmpty(f.ClientMessageId)
 		var modelName string
 		if v, ok := f.Metadata["model_name"].(string); ok {
 			if strings.TrimSpace(v) != "" {
@@ -1246,9 +1263,9 @@ func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandl
 			})
 			return wsHandlerReadLoopContinue
 		}
-		wh.h.handleChatMessage(
+		wh.h.handleChatMessageWithClientID(
 			wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
-			modelName, workspaceID, setupKickoff, wh.wc,
+			modelName, workspaceID, setupKickoff, clientMessageID, wh.wc,
 		)
 	case string(generated.WsFrameTypeCancel):
 		var f generated.CancelFrame
