@@ -280,8 +280,8 @@ func followUpInstructionArg(args map[string]any) (string, error) {
 // and 3P) and a 3P `respond` (D5 — a 3P child never warm-resumes; every
 // continuation is a NEW corrective session carrying the prior context).
 // Native follow_up reuses sessionID verbatim (warm resume, same session, new
-// generation — see agent.spawnSubTurn's childID-reuse mechanism); 3P mints a
-// NEW session_id (cold respawn), linked back via ResumedFrom.
+// generation — the terminal follow-up bumps the record's Generation); 3P mints
+// a NEW session_id (cold respawn), linked back via ResumedFrom.
 func (t *DelegateTool) spawnCorrectiveFollowUp(
 	ctx context.Context,
 	sessionID string,

@@ -309,10 +309,10 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 	// just above — a caller that supplies the key must not supply an empty
 	// string, which would silently mean the same thing as omitting it while
 	// looking like a deliberate request. The actual grant/existence
-	// resolution happens against the CHILD's own ContextBuilder inside
-	// spawnSubTurn (pkg/agent/subturn.go) — this file never resolves or
-	// gates the slug itself (D9: "the receiver's grant is the real gate,
-	// structurally, not by convention").
+	// resolution happens against the CHILD's own ContextBuilder, built in the
+	// steered-session reconstruction path (pkg/agent/steer_reconstruct.go) —
+	// this file never resolves or gates the slug itself (D9: "the receiver's
+	// grant is the real gate, structurally, not by convention").
 
 	if raw, present := dt.args["requested_skill"]; present && raw != nil {
 		s, ok := raw.(string)

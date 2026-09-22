@@ -460,7 +460,7 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 	// The durable LifecycleRecord is persisted keyed by the child's OWN
 	// ADR-053 durable session_id (ToolDelegateSessionID — see
 	// WithDelegateSessionID / ToolDelegateSessionID in pkg/tools/delegate.go,
-	// the canonical helpers seeded by pkg/agent/subturn.go's spawnSubTurn),
+	// the canonical helpers for the child's own durable identity),
 	// which is distinct from the shared parent/child transcript session id
 	// (ToolTranscriptSessionID, deliberately inherited by the child per
 	// pkg/agent/subturn.go's FR-6a cascade-cancel matching). Looking this up
@@ -471,8 +471,8 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 	if mt.childSessionID == "" {
 		// A native task run's root turn carries tools.WithRunningTaskID on ctx
 		// (task_executor.go, set before processTaskDirect) but is never a
-		// delegated child — only pkg/agent/subturn.go's spawnSubTurn calls
-		// WithDelegateSessionID, and it never runs for a task dispatch. This
+		// delegated child — a delegated child's own turn carries the delegate
+		// session id; a task dispatch never runs under one. This
 		// is a structural, not transient, gap: a task-dispatch session's
 		// durable lifecycle record deliberately leaves SteeringSessionID empty
 		// (task_executor.go's mintTaskLifecycleRecord doc comment — "a task

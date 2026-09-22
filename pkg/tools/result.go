@@ -67,11 +67,7 @@ type ToolResult struct {
 
 	// Interrupted indicates the tool's underlying work was cut short by a
 	// parent-turn cancellation (or a direct cancel targeting it) rather than
-	// a genuine execution failure. Currently set only by the synchronous
-	// delegate/spawn path (pkg/agent/subturn.go's spawnSubTurn cleanup defer,
-	// which is the single source of truth for the classification — mirrors
-	// the exact SubTurnStatusInterrupted/SubTurnStatusCancelled check used
-	// for the live subagent_end frame) so pkg/agent/loop.go's tool-call-
+	// a genuine execution failure, so pkg/agent/loop.go's tool-call-
 	// transcript persistence can record status "interrupted" instead of
 	// folding it into the generic IsError=true/"error" bucket every other
 	// tool failure uses (Finding F / A-I4 round 5: without this, a session
