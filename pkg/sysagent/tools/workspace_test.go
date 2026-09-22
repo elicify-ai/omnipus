@@ -1149,7 +1149,7 @@ func modesOf(edge map[string]any) []string {
 // whose endpoints are both on the new team AND touch a newly added member
 // (jim→ava, jim→worker, ava→worker) — jim→ray is dropped because ray is off
 // team, even though it's part of Jim's compiled-in seed. Also asserts Jim's
-// 3-value seed vocabulary ([task, background, await]) collapses+dedupes to
+// 2-value seed vocabulary ([task, background]) maps to
 // the 2-value trust-edge vocabulary ([task, direct]) per edgeModeCategory,
 // and that depth (unset for Jim/Ava's seed) stays absent.
 func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {

@@ -751,13 +751,11 @@ type AgentMCPServerBinding struct {
 }
 
 // DelegationMode is the mode in which delegation is allowed.
-// "await" = synchronous subagent (blocks caller).
 // "background" = async spawn (caller continues).
 // "task" = task_create delegation.
 type DelegationMode string
 
 const (
-	DelegationModeAwait      DelegationMode = "await"
 	DelegationModeBackground DelegationMode = "background"
 	DelegationModeTask       DelegationMode = "task"
 )
