@@ -14,7 +14,7 @@ import "time"
 // Ensure time is used even if no date-time fields are present.
 var _ = time.Time{}
 
-// AgentSwitchedFrame — Server → client active agent changed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
+// AgentSwitchedFrame — Server → client active agent changed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
 type AgentSwitchedFrame struct {
 	AgentId   *string `json:"agent_id,omitempty"`
 	Message   *string `json:"message,omitempty"`
@@ -411,7 +411,7 @@ type CancelFrame struct {
 	Type      string `json:"type"`
 }
 
-// CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
+// CancelStageFrame — Server → client cancel progress notification (B3). stage MUST be one of three values — SPA validates via isValidFrame() and drops invalid stages. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
 type CancelStageFrame struct {
 	// ADR-091 I-6. True when `unreachable` is non-empty.
 	Partial *bool `json:"partial,omitempty"`
@@ -535,7 +535,7 @@ type GoalOutcomeFrameOutcome struct {
 	RoundsUsed    int     `json:"rounds_used"`
 }
 
-// GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
+// GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089).
 type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
 	Cap         int    `json:"cap"`
@@ -683,7 +683,7 @@ type LibraryChangedFrame struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
-// LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
+// LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class not yet assigned by the ADR-057 W5 audit (FR-089).
 type LoopStatusFrame struct {
 	MaxRuns int    `json:"max_runs"`
 	Mode    string `json:"mode"`
@@ -779,7 +779,7 @@ type PongFrame struct {
 	Type string `json:"type"`
 }
 
-// RateLimitFrame — Server → client rate limit applied (SEC-26). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (c) per the ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited and recorded here rather than fixed (operator decision 11): the underlying RateLimitPayload (pkg/agent/events.go) carries no SessionID field at all, so there is no child-provenance signal to stamp a producing_session_id from; this frame's session_id is reconstructed downstream from the connection's chat→session map at serialization time. No producing_session_id property is added to this schema.
+// RateLimitFrame — Server → client rate limit applied (SEC-26). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (c) per the ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited and recorded here rather than fixed (operator decision 11): the underlying RateLimitPayload (pkg/agent/events.go) carries no SessionID field at all; this frame's session_id is reconstructed downstream from the connection's chat→session map at serialization time.
 type RateLimitFrame struct {
 	AgentId           *string `json:"agent_id,omitempty"`
 	PolicyRule        string  `json:"policy_rule"`
@@ -814,7 +814,7 @@ type ReplayErrorPayload struct {
 	LlmError LLMErrorReplay `json:"llm_error"`
 }
 
-// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path, not by a turn, so producing_session_id is absent (FR-013).
+// ReplayMessageFrame — Server → client replayed transcript entry. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
 type ReplayMessageFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	Content string  `json:"content"`
@@ -846,7 +846,7 @@ type ReplayWarningStats struct {
 	DuplicateToolCallIdCount *int `json:"duplicate_tool_call_id_count,omitempty"`
 }
 
-// SessionCloseAckFrame — Server → client session close acknowledged. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output, so producing_session_id is absent (FR-013).
+// SessionCloseAckFrame — Server → client session close acknowledged. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
 type SessionCloseAckFrame struct {
 	Id        *string `json:"id,omitempty"`
 	SessionId string  `json:"session_id"`
@@ -859,7 +859,7 @@ type SessionCloseFrame struct {
 	Type      string `json:"type"`
 }
 
-// SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output — so producing_session_id is absent (FR-013).
+// SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
 type SessionStartedFrame struct {
 	AgentId   *string `json:"agent_id,omitempty"`
 	SessionId string  `json:"session_id"`
@@ -899,7 +899,7 @@ type SessionStatePendingApproval struct {
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
-// SubagentEndFrame — Server → client subagent span closed (FR-H-004). status MUST be one of the six allowed values — the SPA drops frames with invalid status (W4-6). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key, so producing_session_id would equal session_id and is therefore absent (FR-013's "iff it differs"). Kept in sync by hand with components/schemas/SubagentEndFrame.yaml for the full shape — see that file for the per-value description (including "parked", ADR-057 UAT defect C2 fix).
+// SubagentEndFrame — Server → client subagent span closed (FR-H-004). status MUST be one of the six allowed values — the SPA drops frames with invalid status (W4-6). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key. Kept in sync by hand with components/schemas/SubagentEndFrame.yaml for the full shape — see that file for the per-value description (including "parked", ADR-057 UAT defect C2 fix).
 type SubagentEndFrame struct {
 	AgentId      *string `json:"agent_id,omitempty"`
 	DurationMs   *int    `json:"duration_ms,omitempty"`
@@ -928,7 +928,7 @@ type SubagentMessageFrame struct {
 	UntrustedOrigin bool    `json:"untrusted_origin"`
 }
 
-// SubagentStartFrame — Server → client subagent span opened (FR-H-004). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key, so producing_session_id would equal session_id and is therefore absent (FR-013's "iff it differs").
+// SubagentStartFrame — Server → client subagent span opened (FR-H-004). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key.
 type SubagentStartFrame struct {
 	AgentId *string `json:"agent_id,omitempty"`
 	// Optional session id of the opened child session. Present for steered sessions; absent for legacy/optional. Enables the open control on the side panel row (ADR-091 I-4).
@@ -954,7 +954,7 @@ type SubagentStateFrame struct {
 	Type string `json:"type"`
 }
 
-// SystemOverloadFrame — Server → client system at capacity (FR-016, MAJ-009). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
+// SystemOverloadFrame — Server → client system at capacity (FR-016, MAJ-009). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
 type SystemOverloadFrame struct {
 	Message   *string `json:"message,omitempty"`
 	SessionId string  `json:"session_id"`
@@ -971,7 +971,7 @@ type TaskRunStatusFrame struct {
 	Type         string `json:"type"`
 }
 
-// TaskStatusChangedFrame — Server → client task status updated. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
+// TaskStatusChangedFrame — Server → client task status updated. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089).
 type TaskStatusChangedFrame struct {
 	AgentId   *string `json:"agent_id,omitempty"`
 	SessionId string  `json:"session_id"`

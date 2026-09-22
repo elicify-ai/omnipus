@@ -6,9 +6,7 @@ description: >
   lives inline in contracts/asyncapi.yaml components.schemas (AsyncAPI does
   not resolve cross-file $ref for its own codegen) — this file exists for
   the Constraint #8 5-step process and the inboundschemas sync; keep both
-  in sync by hand. Class not yet assigned by the ADR-057 W5 audit (FR-089)
-  — do not assume presence or absence of producing_session_id until the
-  audit classifies it.
+  in sync by hand. Class not yet assigned by the ADR-057 W5 audit (FR-089).
 type: object
 required:
   - type
