@@ -2,14 +2,34 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+type steeredInputCaptureProvider struct {
+	once     sync.Once
+	messages []providers.Message
+	done     chan struct{}
+}
+
+func (p *steeredInputCaptureProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	p.once.Do(func() {
+		p.messages = append([]providers.Message(nil), messages...)
+		close(p.done)
+	})
+	return &providers.LLMResponse{Content: "child answer"}, nil
+}
+
+func (p *steeredInputCaptureProvider) GetDefaultModel() string { return "steered-input-capture" }
 
 func wireSteerCompletionDeps(t *testing.T, al *AgentLoop) {
 	t.Helper()
@@ -201,5 +221,147 @@ func TestSubagentLifecycleFrames_StartQueuedRunningTerminalEndOrder(t *testing.T
 		if got[i] != want[i] {
 			t.Fatalf("frame order = %#v, want %#v", got, want)
 		}
+	}
+}
+
+func TestGoalDelegation_Judged(t *testing.T) {
+	al, judgeInst := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	wireSteerCompletionDeps(t, al)
+
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession(parent): %v", err)
+	}
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentMeta.ID,
+		TargetAgentID:     "native-agent",
+		Task:              "prove the goal",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-judged"},
+		Goal: &steer.GoalSpec{
+			Criteria: []steer.Criterion{{Text: "the work is complete"}},
+			DoD:      []steer.Criterion{{Text: "the evidence is sufficient"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	rec, err := lifecycle.Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	rec.State = session.LifecycleRunning
+	if err := lifecycle.Persist(rec); err != nil {
+		t.Fatalf("Persist(running): %v", err)
+	}
+
+	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
+	if err != nil {
+		t.Fatalf("Get(goal): %v", err)
+	}
+	type criterionVerdict struct {
+		ID     string `json:"id"`
+		Met    bool   `json:"met"`
+		Reason string `json:"reason"`
+	}
+	verdicts := make([]criterionVerdict, 0, len(g.Criteria)+len(g.DoD))
+	for _, criterion := range append(append([]task.AcceptanceCriterion{}, g.Criteria...), g.DoD...) {
+		verdicts = append(verdicts, criterionVerdict{ID: criterion.ID, Met: true, Reason: "verified"})
+	}
+	body, err := json.Marshal(map[string]any{"met": true, "criteria": verdicts})
+	if err != nil {
+		t.Fatalf("Marshal(verdict): %v", err)
+	}
+	judgeInst.Provider = &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{Content: string(body)}, nil
+	}}
+
+	ts, err := al.reconstructSteeredTurn(rec, nil)
+	if err != nil {
+		t.Fatalf("reconstructSteeredTurn: %v", err)
+	}
+	if !ts.opts.UserInitiated {
+		t.Fatal("first steered turn is not marked user-initiated; goal claim would be ignored")
+	}
+	done := make(chan string, 1)
+	oldDone := goalDeferredAdjudicationDoneFn
+	goalDeferredAdjudicationDoneFn = func(sessionID string) { done <- sessionID }
+	t.Cleanup(func() { goalDeferredAdjudicationDoneFn = oldDone })
+	result := turnResult{finalContent: "[goal:evidence] verified the work\nGOAL_STATUS: met"}
+	al.finishSteeredGoalTurn(ts, &result, nil)
+	select {
+	case got := <-done:
+		if got != rec.SessionID {
+			t.Fatalf("adjudicated session = %q, want %q", got, rec.SessionID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for delegated goal adjudication")
+	}
+
+	messages, _, _, err := inbox.Drain(parentMeta.ID, rec.SessionID, "", 10)
+	if err != nil {
+		t.Fatalf("Drain(parent): %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("parent messages = %d, want one goal_status", len(messages))
+	}
+	status, err := messages[0].AsSessionMessageGoalStatus()
+	if err != nil {
+		t.Fatalf("AsSessionMessageGoalStatus: %v", err)
+	}
+	if status.Condition != generated.SessionMessageGoalStatusConditionMet ||
+		status.Direction != generated.SessionMessageGoalStatusDirectionSessionToParent ||
+		status.Evidence == nil || len(*status.Evidence) != len(verdicts) {
+		t.Fatalf("goal_status = %+v, want met/session_to_parent with %d evidence rows", status, len(verdicts))
+	}
+}
+
+func TestGoalDelegation_ParentGoalAbsentFromChildInput(t *testing.T) {
+	provider := &steeredInputCaptureProvider{done: make(chan struct{})}
+	al, _ := newGoalLoopTestLoop(t, provider, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	wireSteerCompletionDeps(t, al)
+
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession(parent): %v", err)
+	}
+	const parentGoalSecret = "PARENT-GOAL-MUST-NOT-CROSS-EDGE"
+	activateTestGoalRecord(t, parentMeta.ID, parentGoalSecret)
+
+	launcher := NewSteerLauncher(al)
+	res, err := launcher.Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentMeta.ID,
+		TargetAgentID:     "native-agent",
+		Task:              "child-only instruction",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-isolation"},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if _, err := launcher.Dispatch(context.Background(), res.SessionID, res.Generation); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	select {
+	case <-provider.done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for child model input")
+	}
+
+	var assembled strings.Builder
+	for _, message := range provider.messages {
+		assembled.WriteString(message.Content)
+		assembled.WriteByte('\n')
+	}
+	input := assembled.String()
+	if strings.Contains(input, parentGoalSecret) {
+		t.Fatalf("assembled child input leaked the parent's goal:\n%s", input)
+	}
+	if !strings.Contains(input, "child-only instruction") {
+		t.Fatalf("assembled child input omitted its own instruction:\n%s", input)
 	}
 }

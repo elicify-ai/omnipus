@@ -87,6 +87,26 @@ func (al *AgentLoop) completeSteeredTurn(ctx context.Context, snapshot *session.
 	return nil
 }
 
+// finishSteeredGoalTurn sends a goal-bearing child through the same
+// session-owned claim/Judge pipeline used by an interactive goal turn. The
+// Judge dispatch remains asynchronous, matching runAgentLoop's ordering.
+func (al *AgentLoop) finishSteeredGoalTurn(ts *turnState, result *turnResult, runErr error) {
+	if al == nil || ts == nil || result == nil || runErr != nil {
+		return
+	}
+	al.checkGoalLoopAfterTurn(context.Background(), ts.agent, ts.opts, result)
+	for _, followUp := range result.followUps {
+		if err := al.bus.PublishInbound(context.Background(), followUp); err != nil {
+			logger.WarnCF("agent", "steer: publish goal follow-up failed",
+				map[string]any{"session_id": ts.opts.TranscriptSessionID, "error": err.Error()})
+		}
+	}
+	if result.goalDeferredAdjudication != nil {
+		work := result.goalDeferredAdjudication
+		go al.dispatchDeferredGoalAdjudication(work)
+	}
+}
+
 func completionDisposition(result turnResult, runErr error, answer string) (steer.Outcome, session.LifecycleState, string) {
 	switch {
 	case errors.Is(runErr, context.DeadlineExceeded):

@@ -705,6 +705,10 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		}
 		defer cancel()
 		result, runErr := al.runTurn(runCtx, ts)
+		if rec.GoalRef != "" {
+			al.finishSteeredGoalTurn(ts, &result, runErr)
+			return
+		}
 		if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
 			logger.WarnCF("agent", "steer: complete dispatched turn failed",
 				map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})

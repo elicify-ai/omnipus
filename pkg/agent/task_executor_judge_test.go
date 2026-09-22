@@ -222,11 +222,10 @@ func TestWriteJudgeVerdictTranscript_NotMet_DeliversGoalStatusUpward(t *testing.
 	}
 }
 
-// TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery covers the negative
-// half of FR-B-017: a MET verdict must never produce a goal_status upward
-// delivery — that is what the handback/final-answer path already covers
-// (FR-B-002), and a duplicate "everything is fine" card would be noise.
-func TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery(t *testing.T) {
+// TestWriteJudgeVerdictTranscript_Met_DeliversGoalStatus covers FR-C-009's
+// positive verdict half: the parent receives the Judge's actual decision,
+// not an inferred handback-only success.
+func TestWriteJudgeVerdictTranscript_Met_DeliversGoalStatus(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	store := al.GetAgentStore("native-agent")
 	if store == nil {
@@ -253,7 +252,7 @@ func TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery(t *testing.T) {
 	}
 
 	tk := &task.Task{
-		Title: "met judge verdict, no upward delivery", Prompt: "x", Action: task.ActionLLM,
+		Title: "met judge verdict upward delivery", Prompt: "x", Action: task.ActionLLM,
 		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
 	}
 	if err := al.taskStore.Create(tk); err != nil {
@@ -271,8 +270,15 @@ func TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery(t *testing.T) {
 	if derr != nil {
 		t.Fatalf("Drain: %v", derr)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected NO goal_status entry for a MET verdict, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected one goal_status entry for a MET verdict, got %d", len(msgs))
+	}
+	gs, gerr := msgs[0].AsSessionMessageGoalStatus()
+	if gerr != nil {
+		t.Fatalf("AsSessionMessageGoalStatus: %v", gerr)
+	}
+	if gs.Condition != generated.SessionMessageGoalStatusConditionMet {
+		t.Fatalf("condition = %q, want met", gs.Condition)
 	}
 }
 

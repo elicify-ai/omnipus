@@ -330,7 +330,7 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 }
 
 // deliverGoalVerdictUpward covers ADR-091 FR-B-017 (I-5, AS-12): when the
-// Judge rules a goal's criteria NOT met, the deciding verdict is delivered
+// Judge rules on a goal's criteria, the deciding verdict is delivered
 // upward through steer.UpwardDeliverer as a goal_status SessionMessage —
 // direction session_to_parent, condition not_met, one evidence item per
 // judged criterion — the same one upward-delivery operation every other
@@ -340,10 +340,6 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 // goal_loop.go::writeGoalVerdictTranscript — this function is the shared
 // body both call).
 //
-// A MET verdict is a deliberate no-op: the handback/final-answer path
-// already covers "goal succeeded" (FR-B-002); a second "all good" card off
-// this call site would be noise, not signal (mirrors
-// TestDeliver_HandbackOnePerChild_Identity's "exactly one entry" contract).
 // sessionID with no steered parent, or with no active /goal record bound to
 // it (activeGoalForSession, GOAL-FR-013's one session-bound lookup for both
 // owner kinds), both no-op silently and are logged at Warn only for the
@@ -351,7 +347,7 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 // "no steering parent to deliver to" the same way every other Deliver call
 // site in this package does (best-effort, never fails the caller).
 func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID string, verdict *task.JudgeVerdict) {
-	if verdict == nil || verdict.Met || sessionID == "" {
+	if verdict == nil || sessionID == "" {
 		return
 	}
 	deliverer := al.getUpwardDeliverer()
@@ -376,6 +372,10 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 		evidence[i].Note = &c.Reason
 	}
 	var sm generated.SessionMessage
+	condition := generated.SessionMessageGoalStatusConditionNotMet
+	if verdict.Met {
+		condition = generated.SessionMessageGoalStatusConditionMet
+	}
 	if err := sm.FromSessionMessageGoalStatus(generated.SessionMessageGoalStatus{
 		Kind:            generated.SessionMessageGoalStatusKindGoalStatus,
 		MessageId:       fmt.Sprintf("%s-verdict-%d", rec.GoalID, verdict.Round),
@@ -384,7 +384,7 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 		CreatedAt:       time.Now().UTC(),
 		Depth:           1,
 		GoalId:          rec.GoalID,
-		Condition:       generated.SessionMessageGoalStatusConditionNotMet,
+		Condition:       condition,
 		Direction:       generated.SessionMessageGoalStatusDirectionSessionToParent,
 		Evidence:        &evidence,
 		UntrustedOrigin: false,
