@@ -74,6 +74,8 @@ type MessageParentWakeEvent struct {
 	AgentID             string
 	TranscriptSessionID string
 	Content             string
+	MessageID           string
+	Generation          int
 }
 
 // ContentEgressFilter redacts/filters untrusted child-authored text before

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
@@ -571,6 +573,9 @@ func (al *AgentLoop) processSystemMessage(
 			msg.Channel,
 		)
 	}
+	if msg.AsyncTranscriptSessionID != "" && inboundMetadata(msg, "steer_message_id") != "" {
+		return al.processSteeredSystemWake(ctx, msg)
+	}
 
 	logger.InfoCF("agent", "Processing system message",
 		map[string]any{
@@ -800,6 +805,66 @@ func (al *AgentLoop) processSystemMessage(
 		TranscriptStore:      transcriptStore,
 		WorkspaceID:          workspaceID,
 	})
+}
+
+// processSteeredSystemWake reconstructs a durable steering-session turn from
+// its lifecycle record. The consumed marker is the idempotency boundary: a
+// replayed wake is acknowledged without starting another turn.
+func (al *AgentLoop) processSteeredSystemWake(ctx context.Context, msg bus.InboundMessage) (string, error) {
+	sessionID := msg.AsyncTranscriptSessionID
+	messageID := inboundMetadata(msg, "steer_message_id")
+	generation, err := strconv.Atoi(inboundMetadata(msg, "steer_generation"))
+	if err != nil || generation < 0 {
+		return "", fmt.Errorf("steer: wake %q has invalid generation", messageID)
+	}
+	lifecycle := al.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return "", fmt.Errorf("steer: wake: lifecycle store is not configured")
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil {
+		return "", fmt.Errorf("steer: wake: load %q: %w", sessionID, err)
+	}
+	store := al.ResolveSessionStore(sessionID)
+	if store == nil {
+		return "", fmt.Errorf("steer: wake: transcript store for %q is not available", sessionID)
+	}
+	marker := "consumed " + messageID
+	entries, readErr := store.ReadTranscript(sessionID)
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+		return "", fmt.Errorf("steer: wake: read transcript: %w", readErr)
+	}
+	for _, entry := range entries {
+		if entry.Content == marker {
+			if inbox := al.GetMessageInboxStore(); inbox != nil {
+				_ = inbox.Ack(sessionID, []string{messageID})
+			}
+			return "", nil
+		}
+	}
+
+	ts, err := al.reconstructSteeredTurn(rec, &steer.WakeInput{MessageID: messageID, Generation: generation})
+	if err != nil {
+		return "", err
+	}
+	if err := store.AppendTranscriptStrict(sessionID, session.TranscriptEntry{
+		ID: "consumed-" + messageID, Type: session.EntryTypeSystem, Role: "system",
+		Content: marker, AgentID: rec.AgentID, Timestamp: time.Now().UTC(),
+	}); err != nil {
+		return "", fmt.Errorf("steer: wake: append consumed marker: %w", err)
+	}
+	if inbox := al.GetMessageInboxStore(); inbox != nil {
+		if err := inbox.Ack(sessionID, []string{messageID}); err != nil {
+			return "", fmt.Errorf("steer: wake: acknowledge %q: %w", messageID, err)
+		}
+	}
+	ts.opts.UserMessage = msg.Content
+	ts.userMessage = msg.Content
+	if !al.registerTurnIfAbsent(ts) {
+		return "", steer.ErrStaleGeneration
+	}
+	result, err := al.runTurn(ctx, ts)
+	return result.finalContent, err
 }
 
 // extractPeer extracts the routing peer from the inbound message's structured Peer field.

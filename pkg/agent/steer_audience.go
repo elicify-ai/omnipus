@@ -358,6 +358,8 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 			AgentID:             ownerRec.AgentID,
 			TranscriptSessionID: ownerKey,
 			Content:             deliverySummary(msg),
+			MessageID:           res.MessageID,
+			Generation:          ownerRec.Generation,
 		}
 		if werr := al.asyncNotifier.WakeParentAlways(ctx, kindStr, wakeEvent); werr != nil {
 			// Best-effort (matches message_parent.go's own contract): the

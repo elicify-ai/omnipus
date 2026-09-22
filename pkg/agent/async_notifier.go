@@ -310,6 +310,7 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 			// comments on these two fields for the full rationale.
 			AsyncOriginAgentID:       event.AgentID,
 			AsyncTranscriptSessionID: event.TranscriptSessionID,
+			Metadata:                 asyncNotifyMetadata(event),
 		})
 	} else {
 		publishErr = fmt.Errorf("async notifier: no message bus available (source %q)", event.SourceKind)
@@ -346,6 +347,23 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 	}
 
 	return nil
+}
+
+func asyncNotifyMetadata(event AsyncNotifyEvent) map[string]string {
+	metadata := make(map[string]string, len(event.Metadata)+2)
+	for key, value := range event.Metadata {
+		metadata[key] = fmt.Sprint(value)
+	}
+	if id, ok := event.Metadata["steer_message_id"]; ok {
+		metadata["steer_message_id"] = fmt.Sprint(id)
+	}
+	if generation, ok := event.Metadata["steer_generation"]; ok {
+		metadata["steer_generation"] = fmt.Sprint(generation)
+	}
+	if len(metadata) == 0 {
+		return nil
+	}
+	return metadata
 }
 
 // ====================== ADR-053 S3: Bounded Typed Wake ======================
@@ -518,6 +536,10 @@ func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event t
 		TranscriptSessionID: event.TranscriptSessionID,
 		SourceKind:          "message_parent:" + kind,
 		Content:             event.Content,
+		Metadata: map[string]any{
+			"steer_message_id": event.MessageID,
+			"steer_generation": event.Generation,
+		},
 	})
 }
 
@@ -541,5 +563,9 @@ func (n *asyncNotifierImpl) WakeParentAlways(ctx context.Context, kind string, e
 		TranscriptSessionID: event.TranscriptSessionID,
 		SourceKind:          "message_parent:" + kind,
 		Content:             event.Content,
+		Metadata: map[string]any{
+			"steer_message_id": event.MessageID,
+			"steer_generation": event.Generation,
+		},
 	})
 }

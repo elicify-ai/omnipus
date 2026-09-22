@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"context"
+	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -65,5 +68,39 @@ func TestSteeringDrain_WritesConsumedMarkerForWake(t *testing.T) {
 	}
 	if markers != 1 {
 		t.Fatalf("second drain duplicated consumed marker: %d", markers)
+	}
+}
+
+func TestProcessSystemMessage_ConsumedSteeredWakeDoesNotRunTurnAgain(t *testing.T) {
+	store, err := session.NewUnifiedStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	defer store.Close()
+	meta, err := store.NewSession(session.SessionTypeChat, "webchat", "agent-1")
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	lifecycle := session.NewLifecycleStore(filepath.Join(t.TempDir(), "lifecycle"))
+	if err := lifecycle.Persist(&session.LifecycleRecord{
+		SessionID: meta.ID, Generation: 2, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, AgentID: "agent-1",
+		Origin: &session.Origin{Kind: session.OriginKindChat},
+	}); err != nil {
+		t.Fatalf("Persist: %v", err)
+	}
+	if err := store.AppendTranscriptStrict(meta.ID, session.TranscriptEntry{
+		ID: "consumed-wake-1", Type: session.EntryTypeSystem, Role: "system", Content: "consumed wake-1",
+	}); err != nil {
+		t.Fatalf("AppendTranscriptStrict: %v", err)
+	}
+	al := &AgentLoop{sharedSessionStore: store}
+	al.SetSessionMessagingStores(nil, lifecycle)
+	response, err := al.processSystemMessage(context.Background(), bus.InboundMessage{
+		Channel: "system", AsyncTranscriptSessionID: meta.ID,
+		Metadata: map[string]string{"steer_message_id": "wake-1", "steer_generation": "2"},
+	})
+	if err != nil || response != "" {
+		t.Fatalf("consumed wake = (%q, %v), want empty success", response, err)
 	}
 }
