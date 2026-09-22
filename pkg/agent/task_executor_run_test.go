@@ -105,7 +105,7 @@ func TestBuildPrompt_TeachesTheOneClaimPathPerDispatchKind(t *testing.T) {
 // regression for delta-review Fix 2 (2026-07-20): a SECOND closeRun call for
 // a run that is already terminal — e.g. runTask's top-level panic-recovery
 // defer re-invoking closeRun after a panic in POST-completion housekeeping
-// (onTaskComplete / notifyParentIfAllSiblingsDone) that runs AFTER
+// (onTaskComplete / deliverTaskCompletionUpward) that runs AFTER
 // completeTaskWithResult already closed the run successfully — is a benign
 // duplicate, not a stranded run. It must:
 //  1. never mutate the already-closed run's terminal record (the store

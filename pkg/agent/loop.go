@@ -2130,7 +2130,15 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	if opts.SendResponse && result.finalContent != "" {
+	// ADR-091 boundary 3 (landing order §6, FR-B-001): a steered session's
+	// final reply is never the user's audience, regardless of
+	// SendResponse — this is the re-entered-delegate leak D11 contained by
+	// hand (`processSystemMessage`'s SendResponse deny) before this ADR;
+	// the permanent form is asking the audience here. audienceFor also
+	// calls steer.BoundaryObserver.Observe before this decision is acted on
+	// (FR-B-014).
+	finalReplyAudience := al.audienceFor(ctx, steer.BoundaryFinalReply, opts.TranscriptSessionID)
+	if opts.SendResponse && result.finalContent != "" && finalReplyAudience == steer.AudienceUser {
 		// ADR-082 D6/FR-011: carry the transcript session id so
 		// webchatChannel.Send (pkg/gateway/webchat_channel.go) can resolve
 		// delivery targets by session id first, chat id second — the fix for
@@ -2551,14 +2559,25 @@ func (al *AgentLoop) emitTurnErrorFrame(
 
 // emitDelegatedTaskLimitNotice keeps publication ownership coherent by
 // deriving both destinations from sourceTS: live delivery uses the child's
-// inherited routing identity, and replay persistence walks that same child's
-// canonical parent chain to the root conversation transcript.
+// own event identity, and persistence writes to that SAME child's own
+// transcript.
+//
+// ADR-091 boundary 11 (landing order §6): this used to walk
+// rootTurnState(sourceTS) and persist there — "always tell the top of the
+// tree" is exactly the hardcoded audience decision D3 replaces. A steered
+// child's own view is where R1 ("errors visible in the session's own view
+// and transcript") puts this; the upward half (the parent's side panel
+// status line) is subturn_result.go::emitSubTurnIterationLimitNotice's own
+// added Deliver call, not this shared helper — subTurnTimedOutResult's own
+// call site does not duplicate that upward delivery, since a timeout is
+// already one of I-5's terminal Outcomes, delivered once via turn
+// reconstruction (I-3, WP-A).
 func (al *AgentLoop) emitDelegatedTaskLimitNotice(
 	sourceTS *turnState, meta EventMeta, notice delegatedTaskLimitNotice,
 ) {
 	llm := notice.llmError()
 	al.emitErrorEvent(sourceTS, meta, string(notice.stage), llm)
-	rootTurnState(sourceTS).appendDelegatedTaskLimitNotice(notice)
+	sourceTS.appendDelegatedTaskLimitNotice(notice)
 }
 
 func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {

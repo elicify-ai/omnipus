@@ -20,6 +20,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -1182,7 +1183,12 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 	allowSuppressedErrorFeedback := result.IsError &&
 		ts.opts.SuppressToolFeedback && ts.opts.SendResponse &&
 		ts.depth == 0 && !ts.opts.IsTaskRun
-	if allowTopLevelToolFeedback || allowSuppressedErrorFeedback {
+	// ADR-091 boundary 2 (landing order §6, FR-B-001): a steered session's
+	// audience is never the user, regardless of the origin gate above.
+	// audienceFor also calls steer.BoundaryObserver.Observe before this
+	// decision is acted on (FR-B-014).
+	asyncAudience := ex.rx.rr.rq.ri.rf.rt.al.audienceFor(ex.rx.ctx, steer.BoundaryAsyncToolFeedback, ts.transcriptSessionID)
+	if (allowTopLevelToolFeedback || allowSuppressedErrorFeedback) && asyncAudience == steer.AudienceUser {
 		// Send ForUser content directly to the user (immediate feedback),
 		// mirroring the synchronous tool execution path. This stays separate
 		// from AsyncNotifier, which owns the reactive continuation turn below.
@@ -1513,7 +1519,17 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 			SessionID:   ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
 			Parts:       parts,
 		}
-		if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
+		// ADR-091 boundary 4 (landing order §6, FR-B-001): a steered
+		// session's media is persisted to its own transcript (untouched
+		// above) but never sent to a channel or published — this boundary
+		// was UNGATED before ADR-091 (sent whenever media was present).
+		// audienceFor also calls steer.BoundaryObserver.Observe before this
+		// decision is acted on (FR-B-014).
+		mediaAudience := ex.rx.rr.rq.ri.rf.rt.al.audienceFor(ex.rx.ctx, steer.BoundaryMedia, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID)
+		if mediaAudience != steer.AudienceUser {
+			logger.DebugCF("agent", "Steered session: media contained (not sent to a channel)",
+				map[string]any{"tool": ex.toolName, "session_id": ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID})
+		} else if ex.rx.turnChannelManager != nil && ex.rx.rr.rq.ri.rf.rt.ts.channel != "" && !constants.IsInternalChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
 			if err := ex.rx.turnChannelManager.SendMedia(ex.rx.ctx, outboundMedia); err != nil {
 				logger.WarnCF("agent", "Failed to deliver tool media",
 					map[string]any{
@@ -1537,7 +1553,12 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback,
 		ex.toolResult,
 	)
-	if userContent != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse {
+	// ADR-091 boundary 1 (landing order §6, FR-B-001): a steered session's
+	// audience is never the user, regardless of SendResponse. audienceFor
+	// also calls steer.BoundaryObserver.Observe before this decision is
+	// acted on (FR-B-014).
+	audience := ex.rx.rr.rq.ri.rf.rt.al.audienceFor(ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID)
+	if userContent != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse && audience == steer.AudienceUser {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,

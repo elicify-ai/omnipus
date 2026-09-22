@@ -372,12 +372,20 @@ const (
 )
 
 // wakeableSessionMessageKinds is the closed set of SessionMessage `kind`
-// values that may trigger a bounded typed wake.
+// values that may trigger a bounded typed wake — the legacy WakeParent path
+// (pkg/agent/session_messaging_wire.go::fireWakeForBusMessage, the bus
+// consumer's child->parent route; nothing publishes on that bus channel in
+// production today). ADR-091 I-5 extends this set with goal_status and
+// narrows "error" to fatal errors only — that finer-grained decision is
+// steer.UpwardDeliverer.Deliver's (WakeParentAlways below), which computes
+// eligibility from the turn Outcome directly rather than from this
+// kind-string map, since MessageParentWakeEvent carries no Fatal field.
 var wakeableSessionMessageKinds = map[string]bool{ //nolint:gochecknoglobals
-	"question": true,
-	"blocker":  true,
-	"error":    true,
-	"handback": true,
+	"question":    true,
+	"blocker":     true,
+	"error":       true,
+	"handback":    true,
+	"goal_status": true,
 }
 
 // SetWakeClock overrides WakeParent's time source for deterministic
@@ -503,6 +511,29 @@ func (n *asyncNotifierImpl) WakeParent(ctx context.Context, kind string, event t
 		return nil
 	}
 
+	return n.Notify(ctx, AsyncNotifyEvent{
+		Channel:             event.Channel,
+		ChatID:              event.ChatID,
+		AgentID:             event.AgentID,
+		TranscriptSessionID: event.TranscriptSessionID,
+		SourceKind:          "message_parent:" + kind,
+		Content:             event.Content,
+	})
+}
+
+// WakeParentAlways delivers the bounded typed wake for a WAKE-ELIGIBLE
+// outcome (ADR-091 landing order I-5's table: handback, question, blocker,
+// a fatal error, goal_status) WITHOUT allowWake's debounce/hourly cap —
+// FR-B-010's "wake-eligible kinds ... bypass allowWake, so a terminal
+// outcome can never be suppressed". The caller (steer.UpwardDeliverer's
+// Deliver, steer_audience.go) has already decided eligibility from the
+// turn's Outcome before calling this; kind is descriptive only (SourceKind
+// composition), never re-validated against wakeableSessionMessageKinds.
+func (n *asyncNotifierImpl) WakeParentAlways(ctx context.Context, kind string, event tools.MessageParentWakeEvent) error {
+	if event.Channel == "" || event.ChatID == "" {
+		return fmt.Errorf("async notifier: wake parent: refusing to wake with empty destination (channel=%q chatID=%q)",
+			event.Channel, event.ChatID)
+	}
 	return n.Notify(ctx, AsyncNotifyEvent{
 		Channel:             event.Channel,
 		ChatID:              event.ChatID,

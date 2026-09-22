@@ -87,9 +87,6 @@ type TaskExecutor struct {
 	// it resolve from the same central, operator-configurable authority.
 	dispatchSema *DispatchSemaphore
 
-	// parentFollowUp is a test seam ONLY — production leaves it nil.
-	parentFollowUp func(parentID string)
-
 	// liveTaskActivity (founder decision 2026-09-14) is the REST surface's
 	// read seam for a running task's live last-activity stamp: the AgentLoop
 	// itself, wired once at boot via SetLiveTaskActivitySource, answering
