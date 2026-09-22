@@ -817,6 +817,8 @@ func applyInput(in Input, wio wizardIO) error {
 	if err := credentials.Unlock(store); err != nil {
 		return fmt.Errorf("unlock credentials store: %w", err)
 	}
+	// Overwrite the store's master key when this onboarding step finishes.
+	defer store.Close()
 
 	// 2. Validate the API key before persisting (FR-014/FR-015).
 	//    resolvedKey may differ from in.APIKey when the interactive loop re-prompts.

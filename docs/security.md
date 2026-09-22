@@ -71,6 +71,7 @@ The viewer refreshes every 30 seconds. The log includes security events, policy 
 - Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
 - Removing a credential is permanent. Services that refer to it may stop working.
 - Losing the master key makes the encrypted credential store permanently inaccessible.
+- Omnipus overwrites the master key in memory at shutdown and when a command finishes, best-effort only — nothing in this programming environment can guarantee that every copy of a value in memory is erased, so a memory dump taken while the key was in use may still contain it.
 - **God-mode** under **Settings**, **Gateway** disables the kernel sandbox, outbound-network restrictions, and shell guard for every agent. For tools, it sets the **global** policy to Allow for every tool and removes the permission prompts that come from that global policy. It does **not** override an agent's own tool policy: a tool an agent denies itself stays denied, and a tool that agent asks about still asks. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
 
 ## Related pages

@@ -116,8 +116,37 @@ func (s *Store) IsLocked() bool {
 	return s.key == nil
 }
 
+// Close overwrites the store's key material and locks the store. Every owner of
+// a Store calls it once it is done with it — the gateway at shutdown, each CLI
+// command on completion — so that the key does not outlive the work that needed
+// it.
+//
+// # The guarantee, stated honestly
+//
+// The overwrite is best-effort, not cryptographic. Close zeroes the one array
+// this Store owns exclusively — every unlock path allocates it and copies into
+// it, so a caller's slice is never affected — and then drops the reference.
+// Copies it cannot reach stay readable: subkeys handed out by DeriveSubkey,
+// plaintext credential values returned by Get, the passphrase string itself
+// (Go strings are immutable and cannot be overwritten at all), and anything the
+// runtime copied. See wipe for why Go cannot offer more than this.
+//
+// Close is idempotent, and it is safe on a store that was never unlocked. The
+// store is left locked rather than unusable: Unlock (or UnlockWithKey) can
+// unlock it again, and every operation called in between returns ErrStoreLocked
+// rather than attempting a decrypt with a zeroed key.
+func (s *Store) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	wipe(s.key)
+	s.key = nil
+}
+
 // UnlockWithKey sets the 32-byte AES-256 key directly.
 // Used when the key was provisioned via OMNIPUS_MASTER_KEY or key-file.
+//
+// The key is COPIED, never aliased: the store owns the array Close overwrites,
+// and the caller keeps ownership of the slice it passed in.
 func (s *Store) UnlockWithKey(key []byte) error {
 	if len(key) != keyLen {
 		return fmt.Errorf("credentials: key must be exactly %d bytes, got %d", keyLen, len(key))
@@ -141,11 +170,18 @@ func (s *Store) UnlockWithPassphrase(passphrase string) error {
 		return err
 	}
 
-	key := argon2.IDKey([]byte(passphrase), salt, argonTime, argonMemory, argonThreads, keyLen)
+	derived := argon2.IDKey([]byte(passphrase), salt, argonTime, argonMemory, argonThreads, keyLen)
+	// The store copies the key rather than aliasing this buffer, so the Argon2id
+	// output can be overwritten the moment it has been handed over. Argon2id's
+	// own internal working memory (64 MB at these parameters) lives inside
+	// golang.org/x/crypto and is not reachable from here — any copy surviving
+	// there is one this wipe cannot touch.
+	defer wipe(derived)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.key = key
+	s.key = make([]byte, keyLen)
+	copy(s.key, derived)
 	return nil
 }
 
@@ -286,6 +322,10 @@ func (s *Store) Delete(name string) error {
 // Rotate re-encrypts all credentials with newKey.
 // The old key must already be loaded (store must be unlocked).
 // A fresh random salt is generated and persisted alongside the new ciphertext.
+//
+// The store takes a COPY of newKey and never overwrites the caller's slice:
+// Close wipes the store's own array only, so what the caller does with the
+// buffer it passed in is the caller's to decide.
 // Implements US-12 AC4.
 func (s *Store) Rotate(newKey []byte) error {
 	if len(newKey) != keyLen {
@@ -311,6 +351,9 @@ func (s *Store) RotateWithPassphrase(newPassphrase string) error {
 		return fmt.Errorf("credentials: generate salt: %w", err)
 	}
 	newKey := argon2.IDKey([]byte(newPassphrase), newSalt, argonTime, argonMemory, argonThreads, keyLen)
+	// rotateFull copies newKey into the store before it returns, so this
+	// derivation buffer can be overwritten on the way out.
+	defer wipe(newKey)
 	return s.rotateFull(newKey, newSalt)
 }
 
@@ -323,6 +366,9 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 	if s.key == nil {
 		return ErrStoreLocked
 	}
+	// Hold the replaced key explicitly so it is still reachable, and still
+	// wipeable, after s.key has been repointed at the new one.
+	oldKey := s.key
 
 	sf, err := s.loadFileInternal()
 	if err != nil {
@@ -332,7 +378,7 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 	// Decrypt all with old key, re-encrypt with new key.
 	newCredentials := make(map[string]encEntry, len(sf.Credentials))
 	for name, entry := range sf.Credentials {
-		plain, err := decrypt(s.key, entry)
+		plain, err := decrypt(oldKey, entry)
 		if err != nil {
 			return fmt.Errorf("credentials: rotate decrypt %q: %w", name, err)
 		}
@@ -345,11 +391,19 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 
 	sf.Salt = base64.StdEncoding.EncodeToString(newSalt)
 	sf.Credentials = newCredentials
+	// A failed save leaves the rotation without effect, so the old key stays
+	// live and is deliberately NOT wiped on this path.
 	if err := s.saveFileNoLock(sf); err != nil {
 		return err
 	}
 
-	s.key = newKey
+	s.key = make([]byte, keyLen)
+	copy(s.key, newKey)
+
+	// From here the replaced key is unreachable from the store, and nothing
+	// else holds a reference that would ever clear it. Overwrite it now.
+	wipe(oldKey)
+
 	slog.Info("credentials: rotation complete")
 	return nil
 }
