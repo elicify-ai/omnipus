@@ -5,13 +5,44 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"sync"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+var gatewaySteerCancellers sync.Map // key: *agent.AgentLoop, value: steer.Canceller
+
+// setGatewaySteerCanceller binds the composition-root Canceller to gateway
+// Stop surfaces. WP-A's wiring section calls this when it supplies the
+// generation-aware live-turn adapter; the lazy fallback keeps focused gateway
+// tests and partially landed branches functional without inventing a second
+// wire contract.
+func setGatewaySteerCanceller(al *agent.AgentLoop, canceller steer.Canceller) {
+	if al != nil && canceller != nil {
+		gatewaySteerCancellers.Store(al, canceller)
+	}
+}
+
+func gatewaySteerCanceller(al *agent.AgentLoop) steer.Canceller {
+	if al == nil {
+		return nil
+	}
+	if value, ok := gatewaySteerCancellers.Load(al); ok {
+		return value.(steer.Canceller)
+	}
+	canceller := agent.NewSteerCanceller(al.GetSessionLifecycleStore())
+	actual, _ := gatewaySteerCancellers.LoadOrStore(al, steer.Canceller(canceller))
+	return actual.(steer.Canceller)
+}
 
 // sendCancelStageFrame marshals a generated.CancelStageFrame and delivers it via wc.sendCh.
 // Mirrors sendConnGenFrame's non-critical send path (immediate try, then 10ms/50ms
@@ -36,6 +67,88 @@ func sendCancelStageFrame(wc *wsConn, sessionID, stage string) {
 	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
 	// sendRawFrameBytes logs at Warn on drop; suppress the duplicate debug log that
 	// existed in the old inline implementation.
+}
+
+func sendCancelReportFrame(wc *wsConn, sessionID, stage string, report steer.CancelReport) {
+	if wc == nil {
+		return
+	}
+	partial := len(report.Unreachable) > 0
+	frame := generated.CancelStageFrame{
+		Type:                   string(generated.WsFrameTypeCancelStage),
+		SessionId:              sessionID,
+		Stage:                  stage,
+		Reached:                append([]string(nil), report.Reached...),
+		SkippedNewerGeneration: append([]string(nil), report.SkippedNewerGeneration...),
+		SkippedTerminal:        append([]string(nil), report.SkippedTerminal...),
+		Partial:                &partial,
+	}
+	for _, unreachable := range report.Unreachable {
+		frame.Unreachable = append(frame.Unreachable, struct {
+			Id     string `json:"id"`
+			Reason string `json:"reason"`
+		}{Id: unreachable.ID, Reason: unreachable.Reason})
+	}
+	data, err := json.Marshal(frame)
+	if err != nil {
+		slog.Debug("ws: marshal cancel report frame failed", "stage", stage, "error", err)
+		return
+	}
+	sendRawFrameBytes(wc, string(generated.WsFrameTypeCancelStage), data)
+}
+
+func cancelPartialSummary(report steer.CancelReport) string {
+	if len(report.Unreachable) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("stopped %d of %d; %d unreachable",
+		len(report.Reached), len(report.Reached)+len(report.Unreachable), len(report.Unreachable))
+}
+
+func sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelReport) {
+	message := cancelPartialSummary(report)
+	if wc == nil || message == "" {
+		return
+	}
+	sid := sessionID
+	sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		Type:      string(generated.WsFrameTypeError),
+		SessionId: &sid,
+		Message:   message,
+	})
+}
+
+// cancelSteeredSubtree applies ADR-091 Stop only when a durable lifecycle
+// record exists. Ordinary chats with no steering record keep using the legacy
+// live-turn cancel path and must not be falsely reported as partial.
+func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID string, by steer.Principal) (steer.CancelReport, bool) {
+	var report steer.CancelReport
+	if al == nil {
+		return report, false
+	}
+	store := al.GetSessionLifecycleStore()
+	if store == nil {
+		return report, false
+	}
+	if _, err := store.Load(sessionID); err != nil {
+		if errors.Is(err, session.ErrLifecycleNotFound) {
+			if _, statErr := os.Stat(filepath.Join(store.Dir(), sessionID+".jsonl")); errors.Is(statErr, os.ErrNotExist) {
+				return report, false
+			}
+		}
+		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
+		return report, true
+	}
+	canceller := gatewaySteerCanceller(al)
+	if canceller == nil {
+		report.Unreachable = append(report.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: "steer canceller is not configured"})
+		return report, true
+	}
+	result, err := canceller.CancelSubtree(ctx, sessionID, by)
+	if err != nil {
+		result.Unreachable = append(result.Unreachable, steer.UnreachableSession{ID: sessionID, Reason: err.Error()})
+	}
+	return result, true
 }
 
 // u11CollectDescendantSessionIDs walks the durable lifecycle store's
@@ -105,8 +218,16 @@ func u11CollectDescendantSessionIDs(ls *session.LifecycleStore, rootID string) [
 // is only one place in this file that knows how to build a web-cancel's side
 // effects.
 func (h *WSHandler) buildCancelHooks(wc *wsConn) agent.CancelHooks {
+	return h.buildCancelHooksWithReport(wc, nil)
+}
+
+func (h *WSHandler) buildCancelHooksWithReport(wc *wsConn, report *steer.CancelReport) agent.CancelHooks {
 	return agent.CancelHooks{
 		SendStageFrame: func(sid, stage string) {
+			if stage == "detached" && report != nil {
+				sendCancelReportFrame(wc, sid, stage, *report)
+				return
+			}
 			sendCancelStageFrame(wc, sid, stage)
 		},
 		CancelPendingApprovals: func(sid, reason string) {
@@ -235,12 +356,24 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 		return
 	}
 
+	report, cascaded := cancelSteeredSubtree(context.Background(), h.agentLoop, sessionID, steer.Principal{
+		Kind: steer.PrincipalKindHuman,
+		ID:   wc.userID,
+	})
+	if cascaded {
+		sendCancelPartialNotice(wc, sessionID, report)
+	}
+
 	scope := agent.CancelScope{SessionID: sessionID}
 	canceller := agent.CancelCanceller{
 		UserID:  wc.userID,
 		Channel: "web",
 	}
-	hooks := h.buildCancelHooks(wc)
+	var reportForHooks *steer.CancelReport
+	if cascaded {
+		reportForHooks = &report
+	}
+	hooks := h.buildCancelHooksWithReport(wc, reportForHooks)
 
 	outcome, err := h.agentLoop.RequestCancel(context.Background(), scope, canceller, hooks)
 	if err != nil {
@@ -307,7 +440,9 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 				"session_id", sessionID,
 			)
 		}
-		if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
+		if cascaded {
+			sendCancelReportFrame(wc, sessionID, "detached", report)
+		} else if outcome.BackgroundSessionsKilled > 0 || outcome.Armed {
 			sendCancelStageFrame(wc, sessionID, "graceful")
 		}
 	}
