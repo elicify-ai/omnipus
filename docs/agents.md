@@ -64,22 +64,31 @@ To change an agent, open its card. The edit slide-over saves as you type. Its ta
 
 ## Workers and delegation
 
-A worker never appears in your chat. Another agent delegates one task to it and reports the result to you.
+A worker is just a session that another agent owns and steers. The delegating agent hands the worker a task and keeps working; the worker runs in its own session, with its own tools, its own transcript, and a chat you can open to watch it live.
 
 ```mermaid
 flowchart LR
-  You[You] -->|ask for work| Main[Main agent]
-  Main -->|delegates one task| Worker[Worker]
-  Worker -->|reports the result| Main
-  Main -->|answers you| You
+  You[You] -->|"ask for work"| Main[Main agent]
+  Main -->|"delegate run<br/>(never blocks)"| Worker["Worker<br/>its own session"]
+  Worker -->|"report"| Main
+  Main -->|"answer"| You
+  Main -.->|"one delegate line"| MainChat[Main's chat]
+  Worker -.->|"status + Open"| Side[Side panel]
+  Side -.->|"Open"| Worker
+  Stop["Stop on Main"] -.->|"stops everything below"| Worker
+  Queue["At the cap"] -.->|"queued, with place in line"| Worker
 ```
 
-The main agent keeps the conversation; the worker does one delegated task and reports back.
+What this looks like in practice:
 
-Two rules make delegation predictable:
+- The worker's voice never reaches your chat. The delegating agent's chat shows only the one line the `delegate` tool call produces. A worker's steps, narration, and output do not appear there.
+- The delegating agent can keep many workers running. Each one shows up in the **side panel** as a row with a one-line status that updates as the worker reports progress, and an **Open** button you can click to open that worker's session and watch it work.
+- The worker reports only to the agent that delegated it, never to the person. It uses a separate `message_parent` channel plus the steering surface (`status`, `steer`, `follow_up`), and nothing else.
+- The delegating agent never blocks. The tool returns as soon as the worker is launched and dispatched, and the agent carries on. When it needs the worker's answer, the worker wakes it on completion.
+- **Stop on a session stops everything below it.** A Stop on the main agent stops every worker it delegated, including any queued for a slot.
+- When too many workers are already running, the next one is **queued** — the parent's tool result tells it its place in line, and queued workers start in order as slots free. There is no blocking wait, and `delegate cancel` drops a queued worker.
 
-- The worker runs with its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else.
-- Delegation is a per-workspace decision. Which agent may delegate to which is set on that [workspace](workspaces.md) **Team** tab, and it applies only there.
+A worker has its own settings — its model, its tools, its limits. The delegating agent hands over the task; the worker supplies everything else. Delegation itself is a per-workspace decision: which agent may delegate to which is set on that [workspace](workspaces.md) **Team** tab, and that rule applies only there.
 
 An **external worker** runs on a command-line tool installed on the same machine as Omnipus: Claude Code, Codex, or OpenCode. Its model is a free-text name passed straight to that tool. The **Test run** button on its card checks the connection — that the tool's program is present and answers.
 
