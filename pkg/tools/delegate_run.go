@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/google/uuid"
 )
 
@@ -170,6 +172,7 @@ type delegateToolExecuteRun struct {
 	snap              *ContextSnapshot
 	resolvedMaxDepth  *int
 	delegateSessionID string
+	goal              *steer.GoalSpec
 }
 
 func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
@@ -201,23 +204,63 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		return r0
 	}
 
-	// ADR-053 S2 — mint the child's own durable session_id (distinct from
-	// the shared transcript session id, D1) and persist its initial
-	// `queued` lifecycle record BEFORE dispatch, so a crash between here and
-	// the goroutine/spawn call below still leaves a queryable record (the
-	// boot sweep — another wave — will reconcile it to failed(interrupted)).
-	if r0, stop := dt.persistLifecycle(); stop {
-		return r0
+	return dt.launchAndDispatch(cb)
+}
+
+// launchAndDispatch is the entire ADR-091 run front: creation belongs to the
+// injected launcher, Dispatch owns admission, and this method waits for
+// neither the child turn nor its completion.
+func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult {
+	if dt.t.launcher == nil {
+		return ErrorResult("delegate: no session launcher configured")
+	}
+	targetAgentID := strings.TrimSpace(dt.agentID)
+	if targetAgentID == "" {
+		targetAgentID = strings.TrimSpace(ToolAgentID(dt.ctx))
+	}
+	launch, err := dt.t.launcher.Launch(dt.ctx, steer.LaunchRequest{
+		SteeringSessionID: strings.TrimSpace(ToolTranscriptSessionID(dt.ctx)),
+		TargetAgentID:     targetAgentID,
+		Label:             strings.TrimSpace(dt.label),
+		Task:              strings.TrimSpace(dt.task),
+		Origin: steer.Origin{
+			Kind:   steer.OriginKindDelegate,
+			CallID: strings.TrimSpace(ToolCallID(dt.ctx)),
+		},
+		Goal: dt.goal,
+		Limits: steer.Limits{
+			TimeoutSeconds: int(dt.timeout / time.Second),
+		},
+		ToolExclusions: []string{string(ExcludedSwitchAgent)},
+	})
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: launch: %v", err)).WithError(err)
+	}
+	dispatch, err := dt.t.launcher.Dispatch(dt.ctx, launch.SessionID, launch.Generation)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: dispatch: %v", err)).WithError(err)
 	}
 
-	if dt.async {
-		// isResume: false — executeRun always mints a BRAND-NEW
-		// delegateSessionID (generation 0) just above; this is a genuine
-		// create, never a resume. Native `follow_up`'s warm resume goes
-		// through spawnCorrectiveFollowUp's own executeAsync call instead.
-		return dt.t.executeAsync(dt.ctx, dt.task, dt.label, dt.agentID, dt.resolvedMaxDepth, dt.delegateSessionID, dt.timeout, dt.snap, dt.requestedSkill, false, cb)
+	state := generated.DelegateSessionResponseState(dispatch.State)
+	response := generated.DelegateSessionResponse{
+		Generation: dispatch.Generation,
+		SessionId:  launch.SessionID,
+		State:      state,
 	}
-	return dt.t.executeSync(dt.ctx, dt.task, dt.label, dt.agentID, dt.resolvedMaxDepth, dt.delegateSessionID, dt.timeout, dt.snap, dt.requestedSkill)
+	if dt.t.getAgentRegistry != nil {
+		if registry := dt.t.getAgentRegistry(); registry != nil {
+			response.Is3p = registry.IsExternalCLI(targetAgentID)
+		}
+	}
+	if dispatch.State == steer.DispatchQueued {
+		position := dispatch.QueuePosition
+		response.QueuePosition = &position
+	}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: encode launch response: %v", err)).WithError(err)
+	}
+	return NewToolResult(string(payload))
 }
 
 // validateRequest validates and resolves the delegation request arguments.
@@ -327,6 +370,11 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 	if err := ValidateContextSnapshot(dt.snap, dt.t.snapshotMaxBytes, dt.t.snapshotMaxRefs); err != nil {
 		return ErrorResult(err.Error()).WithError(err), true
 	}
+	goal, err := parseDelegateGoal(dt.args["goal"])
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("goal: %v", err)).WithError(err), true
+	}
+	dt.goal = goal
 	return nil, false
 }
 

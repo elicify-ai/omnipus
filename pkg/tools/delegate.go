@@ -14,6 +14,7 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ADR-036 / docs/internal/specs/agent-delegation-spec.md — `delegate` is the
@@ -342,6 +343,7 @@ type DelegateProgressReader interface {
 type DelegateTool struct {
 	BaseTool
 
+	launcher     steer.SessionLauncher
 	spawner      SubTurnSpawner
 	defaultModel string
 	maxTokens    int
@@ -546,6 +548,12 @@ type DelegateTool struct {
 
 	// now is overridable for deterministic tests.
 	now func() time.Time
+}
+
+// SetSessionLauncher installs ADR-091's one session-launch primitive. The
+// delegate run front refuses to launch while this dependency is absent.
+func (t *DelegateTool) SetSessionLauncher(launcher steer.SessionLauncher) {
+	t.launcher = launcher
 }
 
 // Compile-time check: DelegateTool implements AsyncExecutor.
