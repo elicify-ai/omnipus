@@ -1,6 +1,7 @@
 package testutil
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,39 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
+
+func TestDelegationTree_RebootHookCanReadReopenedDeps(t *testing.T) {
+	home := t.TempDir()
+	sessions, err := session.NewUnifiedStore(filepath.Join(home, "sessions"))
+	if err != nil {
+		t.Fatalf("NewUnifiedStore: %v", err)
+	}
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "lifecycle"))
+	var tree *Tree
+	bootCalled := false
+	tree = DelegationTree(t, steer.Deps{
+		LifecycleStore: lifecycle,
+		SessionStore:   sessions,
+		BootHook: func(context.Context) error {
+			bootCalled = true
+			deps := tree.Deps()
+			if deps.SessionStore == nil || deps.LifecycleStore == nil {
+				t.Fatal("boot hook received incomplete reopened dependencies")
+			}
+			return nil
+		},
+	}, 1)
+
+	if err := tree.Crash(); err != nil {
+		t.Fatalf("Crash: %v", err)
+	}
+	if err := tree.Reboot(context.Background()); err != nil {
+		t.Fatalf("Reboot: %v", err)
+	}
+	if !bootCalled {
+		t.Fatal("Reboot did not invoke BootHook")
+	}
+}
 
 func TestDelegationTree_BuildsValidEdges_AndRootRecord(t *testing.T) {
 	home := t.TempDir()

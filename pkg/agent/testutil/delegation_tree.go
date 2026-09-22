@@ -331,19 +331,22 @@ func (tree *Tree) Crash() error {
 // Reboot reopens both stores and runs the injected production boot hook.
 func (tree *Tree) Reboot(ctx context.Context) error {
 	tree.mu.Lock()
-	defer tree.mu.Unlock()
 	if !tree.crashed {
+		tree.mu.Unlock()
 		return errors.New("DelegationTree: Reboot requires Crash first")
 	}
 	sessions, err := session.NewUnifiedStore(tree.sessionDir)
 	if err != nil {
+		tree.mu.Unlock()
 		return fmt.Errorf("DelegationTree: reopen session store: %w", err)
 	}
 	tree.deps.SessionStore = sessions
 	tree.deps.LifecycleStore = session.NewLifecycleStore(tree.lifecycleDir)
 	tree.crashed = false
-	if tree.deps.BootHook != nil {
-		if err := tree.deps.BootHook(ctx); err != nil {
+	bootHook := tree.deps.BootHook
+	tree.mu.Unlock()
+	if bootHook != nil {
+		if err := bootHook(ctx); err != nil {
 			return err
 		}
 	}
