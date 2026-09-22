@@ -41,7 +41,7 @@ func (*e2eBoundaryProvider) Chat(
 		}
 	}
 	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
-		ID: "adr091-probe-call",
+		ID:       "adr091-probe-call",
 		Function: &providers.FunctionCall{Name: e2eProbeToolName, Arguments: `{}`},
 	}}}, nil
 }
@@ -62,13 +62,34 @@ func (*e2eIdleProvider) Chat(
 
 func (*e2eIdleProvider) GetDefaultModel() string { return "scripted-model" }
 
+type e2eBlockingProvider struct {
+	release <-chan struct{}
+}
+
+func (p *e2eBlockingProvider) Chat(
+	ctx context.Context,
+	_ []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	select {
+	case <-p.release:
+		return &providers.LLMResponse{Content: "released child"}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (*e2eBlockingProvider) GetDefaultModel() string { return "scripted-model" }
+
 type e2eBoundaryProbe struct {
 	tools.BaseTool
 	calls    atomic.Int32
 	recorder *testutil.OutboundRecorder
 }
 
-func (*e2eBoundaryProbe) Name() string { return e2eProbeToolName }
+func (*e2eBoundaryProbe) Name() string        { return e2eProbeToolName }
 func (*e2eBoundaryProbe) Description() string { return "exercise a real child tool boundary" }
 func (*e2eBoundaryProbe) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
@@ -177,11 +198,31 @@ func newE2EHarnessWithProvider(
 		Launcher: launcher,
 		BootHook: func(context.Context) error { return nil },
 	}
-	return &e2eHarness{
+	harness := &e2eHarness{
 		tree: testutil.DelegationTree(t, deps, 3), sessions: sessions,
 		lifecycle: lifecycle, audience: audience, deliverer: deliverer,
 		canceller: canceller, classifier: classifier, launcher: launcher,
 		recorder: recorder, probe: probe, msgBus: msgBus,
+	}
+	t.Cleanup(func() { harness.waitForTreeTurns() })
+	return harness
+}
+
+func (h *e2eHarness) waitForTreeTurns() {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		settled := true
+		for _, child := range []testutil.TreeNode{h.tree.A, h.tree.B, h.tree.C} {
+			record, err := h.lifecycle.Load(child.SessionID)
+			if err == nil && !record.Terminal() {
+				settled = false
+				break
+			}
+		}
+		if settled {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -222,7 +263,7 @@ func TestE2E_ThreeLevelDelegation_NoLeak(t *testing.T) {
 			goto drained
 		}
 	}
-	drained:
+drained:
 	h.recorder.AssertBoundaryInvoked(steer.BoundarySyncToolText)
 	h.recorder.AssertBoundaryInvoked(steer.BoundaryFinalReply)
 	h.recorder.AssertReceived(h.tree.C.SessionID, "tool_error")
@@ -314,7 +355,9 @@ func TestE2E_StopSurvivesRestart(t *testing.T) {
 }
 
 func TestE2E_CompletionWakesPerChild(t *testing.T) {
-	h := newE2EHarness(t)
+	release := make(chan struct{})
+	h := newE2EHarnessWithProvider(t, &e2eBlockingProvider{release: release}, testutil.RecordingOutbound(t), false)
+	defer close(release)
 	for _, parent := range []testutil.TreeNode{h.tree.A, h.tree.B} {
 		delivery, err := h.tree.Reenter(parent.SessionID)
 		if err != nil {
