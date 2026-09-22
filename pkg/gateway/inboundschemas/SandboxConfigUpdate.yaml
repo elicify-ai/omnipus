@@ -7,14 +7,14 @@ description: >
   in the same request body.
   mode and allowed_paths are restart-gated
   (the response includes requires_restart=true when either changes).
-  ssrf.allow_internal and shell_permission_mode are hot-reloaded.
-  This endpoint is the routing target for ADR-091's global shell-permission
-  mode write (shell_permission_mode below) specifically because it already
+  ssrf.allow_internal and auto_approve are hot-reloaded.
+  This endpoint is the routing target for ADR-091's global Auto-approve
+  default write (auto_approve below) specifically because it already
   gates every write behind requireReAuth (see putSandboxConfig ->
   authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same
-  password step-up God Mode and credential writes use (ADR-091 FR-045). No
-  new auth mechanism; the requirement is routing the mode write through this
-  handler rather than a bespoke endpoint that bypasses it.
+  password step-up God Mode and credential writes use. No new auth
+  mechanism; the requirement is routing the write through this handler
+  rather than a bespoke endpoint that bypasses it.
 properties:
   mode:
     type: string
@@ -78,29 +78,28 @@ properties:
         description: CIDR ranges or IP addresses the agent may reach despite SSRF blocking.
         example:
           - "10.0.0.1/32"
-  shell_permission_mode:
-    type: string
-    enum:
-      - ask
-      - auto
-      - god
+  auto_approve:
+    type: boolean
     description: >
-      Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write
-      the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies
-      already exposes ("ask"/"allow" respectively — no new storage,
-      FR-001); "god" additionally sets the same GodMode state the existing
-      POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes
-      effect immediately, no restart required. Deliberately not named
-      `mode` — that key above is the unrelated kernel sandbox enforcement
-      mode (off/permissive/enforce).
+      Set the ADR-091 global default for Auto-approve. Auto is a SEPARATE
+      setting from tool policy — it only has meaning for a tool currently
+      resolved to "ask" (see SandboxConfig.auto_approve for the full
+      behavioural description) and applies to every such tool, not only
+      bash. Hot-reloaded — takes effect immediately, no restart required.
+      Deliberately not named `mode` — that key above is the unrelated
+      kernel sandbox enforcement mode (off/permissive/enforce).
 
-      Per-agent and per-chat modes tighten only, and are NOT set here: an
-      agent's mode is `tool_policy_changes.set.bash` on
-      PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped
-      modifier is the session_mode_update WS frame (asyncapi.yaml). A
-      per-agent or per-chat write looser than this value is rejected 4xx by
-      its own writer (FR-003).
-    example: auto
+      Per-agent and per-chat Auto settings are NOT set here: a per-agent
+      override is `auto_approve_disabled` on PUT /agents/{id}
+      (AgentUpdateRequest) — off-only, tighten-only. A chat's session
+      modifier is the session_mode_update WS frame (asyncapi.yaml,
+      SessionModeUpdateFrame) — the one place in this contract allowed to
+      LOOSEN (turn Auto on for that chat even when the agent or this
+      global default has it off), because a human is present in that
+      session. The per-agent field is tighten-only relative to this
+      global default; this global default has no scope above it to
+      tighten against.
+    example: true
   workspace_path_guard:
     type: boolean
     description: >

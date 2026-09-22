@@ -1,24 +1,35 @@
 title: SessionModeUpdateFrame
 description: >
-  Client → server. Set or clear this session's ADR-091 D1/FR-004 per-chat
-  shell-permission-mode modifier — new, session-keyed state
+  Client → server. Set or clear this session's ADR-091 per-chat
+  Auto-approve modifier — new, session-keyed state
   (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never
-  written into config.json and never a chat_id key on either policy map
-  (Hard Constraint #6). Applied after the global x per-agent merge resolves
-  the effective bash policy; tighten-only — the server rejects (via error,
-  session-scoped, session_id set) a value looser than the resolved global x
-  per-agent mode. "god" is not a valid per-chat value: God Mode is
-  global-only (D1) and always requires the existing password step-up
-  endpoint (POST /api/v1/gateway/god-mode), never this frame. Inherits to a
-  delegated subagent session exactly as approval grants do
-  (ApprovalGrantStore.InheritFrom); clears with the session on restart
-  (FR-006). Documentation copy — the canonical, code-generating definition
-  is the inline schema of the same name in asyncapi.yaml.
+  written into config.json and never a chat_id key on any policy map (Hard
+  Constraint #6). Auto is NOT a tool-policy value — it only has meaning for
+  a tool currently resolved to "ask", and applies to every such tool, not
+  only bash (see SandboxConfig.auto_approve for the full behavioural
+  description).
+
+  THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the global
+  default (SandboxConfig.auto_approve) and the per-agent override
+  (Agent.auto_approve_disabled, off-only), this frame may LOOSEN — turn
+  Auto ON for this one chat even when the resolved agent x global default
+  has it off — because a human is present in this session to accept that
+  risk. It may also tighten (turn Auto off). Turning Auto on for a chat is
+  deliberately a human-only action: the agent-facing `set_config` tool must
+  never be able to send this frame or reach an equivalent effect (enforced
+  server-side; this frame's shape — a session-scoped WS write, not a
+  config.json path — structurally keeps it outside `set_config`'s reach in
+  the first place).
+
+  Inherits to a delegated subagent session exactly as approval grants do
+  (ApprovalGrantStore.InheritFrom); clears with the session on restart.
+  Documentation copy — the canonical, code-generating definition is the
+  inline schema of the same name in asyncapi.yaml.
 type: object
 required:
   - type
   - session_id
-  - mode
+  - auto_approve
 additionalProperties: false
 properties:
   type:
@@ -27,15 +38,14 @@ properties:
   session_id:
     type: string
     minLength: 1
-  mode:
-    type: string
-    enum:
-      - ask
-      - auto
-      - inherit
+  auto_approve:
+    type: boolean
+    nullable: true
     description: >
-      "ask"/"auto" set the per-chat modifier (tighten-only against the
-      resolved global x per-agent value). "inherit" clears any existing
-      per-chat modifier for this session — the chat reverts to the global
-      x per-agent resolved mode rather than being set to a stricter one.
-    example: ask
+      true — turn Auto-approve ON for this chat (may loosen past the
+      resolved agent x global default). false — turn Auto-approve OFF for
+      this chat (tightens, same as every other scope). null — clear this
+      session's modifier; the chat reverts to whatever the agent x global
+      default currently resolves to, and will track future changes to that
+      default rather than staying pinned.
+    example: true

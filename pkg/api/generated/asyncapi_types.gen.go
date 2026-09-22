@@ -894,22 +894,20 @@ type SessionCloseFrame struct {
 	Type      string `json:"type"`
 }
 
-// SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-091 D1/FR-004 per-chat shell-permission-mode modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on either policy map (Hard Constraint #6). Applied after the global x per-agent merge resolves the effective bash policy; tighten-only — the server rejects (via error, session-scoped, session_id set) a value looser than the resolved global x per-agent mode. "god" is not a valid per-chat value: God Mode is global-only (D1) and always requires the existing password step-up endpoint (POST /api/v1/gateway/god-mode), never this frame. Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart (FR-006).
+// SessionModeUpdateFrame — Client → server. Set or clear this session's ADR-091 per-chat Auto-approve modifier — new, session-keyed state (pkg/agent/sessionmode.go), structurally like ApprovalGrantStore, never written into config.json and never a chat_id key on any policy map (Hard Constraint #6). Auto is NOT a tool-policy value — it only has meaning for a tool currently resolved to "ask", and applies to every such tool, not only bash (see SandboxConfig.auto_approve for the full behavioural description). THE ONE EXCEPTION TO TIGHTEN-ONLY in this contract: unlike the global default (SandboxConfig.auto_approve) and the per-agent override (Agent.auto_approve_disabled, off-only), this frame may LOOSEN — turn Auto ON for this one chat even when the resolved agent x global default has it off — because a human is present in this session to accept that risk. It may also tighten (turn Auto off). Turning Auto on for a chat is deliberately a human-only action: the agent-facing `set_config` tool must never be able to send this frame or reach an equivalent effect (enforced server-side; this frame's shape — a session-scoped WS write, not a config.json path — structurally keeps it outside `set_config`'s reach in the first place). Inherits to a delegated subagent session exactly as approval grants do (ApprovalGrantStore.InheritFrom); clears with the session on restart.
 type SessionModeUpdateFrame struct {
-	// "ask"/"auto" set the per-chat modifier (tighten-only against the resolved global x per-agent value). "inherit" clears any existing per-chat modifier for this session — the chat reverts to the global x per-agent resolved mode rather than being set to a stricter one.
-	Mode      string `json:"mode"`
-	SessionId string `json:"session_id"`
-	Type      string `json:"type"`
+	// true — turn Auto-approve ON for this chat (may loosen past the resolved agent x global default). false — turn Auto-approve OFF for this chat (tightens, same as every other scope). null — clear this session's modifier; the chat reverts to whatever the agent x global default currently resolves to, and will track future changes to that default rather than staying pinned.
+	AutoApprove bool   `json:"auto_approve"`
+	SessionId   string `json:"session_id"`
+	Type        string `json:"type"`
 }
 
-// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved mode. A rejected (loosening) request is NOT acknowledged here — it receives the existing, session-scoped ErrorFrame instead, matching every other WS write rejection in this spec. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013), matching SessionCloseAckFrame's own precedent.
+// SessionModeUpdatedFrame — Server → client. Acknowledges a session_mode_update request with the session's resulting resolved Auto-approve state. A request is always acknowledged here — this is the one frame allowed to loosen, so there is no "rejected for looseness" case the way there is for the global/per-agent scopes; a malformed request still gets the existing, session-scoped ErrorFrame instead. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle/settings frame, not turn output, so producing_session_id is absent (FR-013), matching SessionCloseAckFrame's own precedent.
 type SessionModeUpdatedFrame struct {
-	// True when the underlying per-agent bash policy is a stricter explicit override outside the three named modes (e.g. ADR-090's Jim, bash: deny) — FR-001's "custom override" indicator. The SPA shows this session as its nearest named mode (Ask) with the indicator rather than silently bucketing it.
-	CustomOverride *bool `json:"custom_override,omitempty"`
-	// The resolved effective mode for this session after applying (or clearing) the modifier — same three-value vocabulary as SandboxStatus.effective_mode. "god" appears here only when the global default itself is God Mode (a per-chat modifier can never produce it, tighten-only).
-	EffectiveMode string `json:"effective_mode"`
-	SessionId     string `json:"session_id"`
-	Type          string `json:"type"`
+	// The resolved Auto-approve state for THIS session after applying (or clearing) the modifier — the true per-session resolution that SandboxStatus.auto_approve_effective cannot provide (that field is the gateway-wide default only, with no session or agent context). Combine with SandboxStatus.kernel_sandbox_active for the same "Auto → Ask" degradation rendering described on that field: true here with no active kernel sandbox still means every "ask" tool call in this session prompts.
+	AutoApproveEffective bool   `json:"auto_approve_effective"`
+	SessionId            string `json:"session_id"`
+	Type                 string `json:"type"`
 }
 
 // SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output — so producing_session_id is absent (FR-013).

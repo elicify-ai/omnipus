@@ -1101,6 +1101,7 @@ type Agent = {
   timeout_seconds: number;
   max_tool_iterations: number;
   tools_cfg?: AgentToolsCfg | undefined;
+  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?: AgentModelParams | undefined;
   rate_limits?: AgentRateLimits | undefined;
@@ -1196,6 +1197,7 @@ type AgentCreateRequestMain = {
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
+  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1227,6 +1229,7 @@ type AgentCreateRequestSubagent = {
   color?: string | undefined;
   icon?: string | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
+  auto_approve_disabled?: boolean | undefined;
   fallback_models?: Array<FallbackModel> | undefined;
   model_params?:
     | Partial<{
@@ -1279,6 +1282,7 @@ type AgentUpdateRequest = {
       }>
     | undefined;
   tools_cfg?: AgentToolsCfg | undefined;
+  auto_approve_disabled?: boolean | undefined;
   default?: boolean | undefined;
   skills?: Array<string> | undefined;
   voice?: (string | null) | undefined;
@@ -3142,6 +3146,7 @@ export const Agent: z.ZodType<Agent> = z
     timeout_seconds: z.number().int().gte(0),
     max_tool_iterations: z.number().int().gte(0),
     tools_cfg: AgentToolsCfg.optional(),
+    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: AgentModelParams.optional(),
     rate_limits: AgentRateLimits.optional(),
@@ -3185,6 +3190,7 @@ export const AgentCreateRequestMain =
       .optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
+    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3211,6 +3217,7 @@ export const AgentCreateRequestSubagent =
       .optional(),
     icon: z.string().max(50).optional(),
     tools_cfg: AgentToolsCfg.optional(),
+    auto_approve_disabled: z.boolean().optional(),
     fallback_models: z.array(FallbackModel).max(2).optional(),
     model_params: z
       .object({ temperature: z.number(), max_tokens: z.number().int() })
@@ -3276,6 +3283,7 @@ export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
     .passthrough()
     .optional(),
   tools_cfg: AgentToolsCfg.optional(),
+  auto_approve_disabled: z.boolean().optional(),
   default: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
   voice: z.string().nullish(),
@@ -3541,7 +3549,7 @@ export const SandboxConfig = z
     god_mode_available: z.boolean(),
     workspace_path_guard: z.boolean(),
     workspace_path_guard_env_override: z.boolean(),
-    shell_permission_mode: z.enum(["ask", "auto", "god"]),
+    auto_approve: z.boolean(),
     requires_restart: z.boolean(),
     saved: z.boolean(),
   })
@@ -3559,7 +3567,7 @@ export const SandboxConfigUpdate = z
       .object({ allow_internal: z.array(z.string()) })
       .partial()
       .passthrough(),
-    shell_permission_mode: z.enum(["ask", "auto", "god"]),
+    auto_approve: z.boolean(),
     workspace_path_guard: z.boolean(),
   })
   .partial()
@@ -3583,7 +3591,8 @@ export const SandboxStatus = z
     seccomp_enforced: z.boolean().optional(),
     audit_only: z.boolean().optional(),
     bind_ports_count: z.number().int().gte(0),
-    effective_mode: z.enum(["ask", "auto", "god"]).optional(),
+    kernel_sandbox_active: z.boolean().optional(),
+    auto_approve_effective: z.boolean().optional(),
   })
   .passthrough();
 export const AuditEntry: z.ZodType<AuditEntry> = z
@@ -11362,7 +11371,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
     method: "put",
     path: "/security/sandbox-config",
     alias: "updateSandboxConfig",
-    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_permission_mode. At least one field required. mode and allowed_paths are restart-gated (requires_restart&#x3D;true). SSRF and shell_permission_mode are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+    description: `Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, auto_approve. At least one field required. mode and allowed_paths are restart-gated (requires_restart&#x3D;true). SSRF and auto_approve are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
 `,
     requestFormat: "json",
     parameters: [
@@ -14572,7 +14581,7 @@ export const SessionModeUpdateFrame = z
   .object({
     type: z.literal("session_mode_update"),
     session_id: z.string().min(1),
-    mode: z.enum(["ask", "auto", "inherit"]),
+    auto_approve: z.boolean(),
   })
   .strict();
 
@@ -14580,8 +14589,7 @@ export const SessionModeUpdatedFrame = z
   .object({
     type: z.literal("session_mode_updated"),
     session_id: z.string().min(1),
-    effective_mode: z.enum(["ask", "auto", "god"]),
-    custom_override: z.boolean().optional(),
+    auto_approve_effective: z.boolean(),
   })
   .strict();
 

@@ -3850,7 +3850,7 @@ paths:
     put:
       operationId: updateSandboxConfig
       summary: Update sandbox configuration
-      description: "Partial update \u2014 any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_permission_mode. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_permission_mode are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).\n"
+      description: "Partial update \u2014 any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, auto_approve. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and auto_approve are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).\n"
       tags:
       - Security
       requestBody:

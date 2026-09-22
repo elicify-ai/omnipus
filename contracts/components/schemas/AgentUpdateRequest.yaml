@@ -113,6 +113,18 @@ properties:
         example: 4096
   tools_cfg:
     $ref: './AgentToolsCfg.yaml'
+  auto_approve_disabled:
+    type: boolean
+    description: >
+      Force Auto-approve off for this agent (ADR-091), overriding the
+      global default (SandboxConfig.auto_approve) for every tool this
+      agent resolves to "ask". Off-only: true disables Auto for this
+      agent; false (or omitting the field, which leaves the stored value
+      unchanged) does not loosen past the global default — there is no
+      value here that turns Auto on when the global default has it off.
+      Distinct from `tool_policy_changes`, which is unchanged and still
+      governs allow/deny/ask per tool.
+    example: false
   default:
     type: boolean
     description: >

@@ -846,7 +846,7 @@ export interface paths {
         get: operations["getSandboxConfig"];
         /**
          * Update sandbox configuration
-         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, shell_permission_mode. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and shell_permission_mode are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
+         * @description Partial update — any subset of mode, allow_network_outbound, allowed_paths, ssrf_enabled, ssrf_allow_internal, ssrf.allow_internal, auto_approve. At least one field required. mode and allowed_paths are restart-gated (requires_restart=true). SSRF and auto_approve are hot-reloaded. Protected by RequireNotBypass middleware (returns 503 when dev_mode_bypass is active).
          */
         put: operations["updateSandboxConfig"];
         post?: never;
@@ -7982,6 +7982,11 @@ export interface components {
             max_tool_iterations: number;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
+             * @description ADR-091 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-091 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
+            /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error (Phase 1B / FR-005). Each entry carries its own provider so the fallback can route through a different provider than the primary — useful when the primary's provider is rate-limited (FR-007). Capped at 2 entries. Hidden for subagent_3p.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
@@ -8242,6 +8247,11 @@ export interface components {
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
+             * @description Initial per-agent override forcing Auto-approve off (ADR-091) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
+            /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
              * @example [
@@ -8334,6 +8344,11 @@ export interface components {
              */
             icon?: string;
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
+            /**
+             * @description Initial per-agent override forcing Auto-approve off (ADR-091) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
             /**
              * @description Ordered list of fallback model entries tried when the primary model returns an error. Each entry carries its own provider so the fallback can route through a different provider than the primary (FR-007). Capped at 2 entries.
              *     Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
@@ -8531,6 +8546,11 @@ export interface components {
                 max_tokens?: number;
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
+            /**
+             * @description Force Auto-approve off for this agent (ADR-091), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
+             * @example false
+             */
+            auto_approve_disabled?: boolean;
             /**
              * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
              * @example false
@@ -9034,7 +9054,7 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description O14 global god-mode ("bypass-permissions") runtime state — ADR-091 D1's "God Mode" of the three shell-permission modes (Ask/Auto/God Mode). When true, every agent's bash tool-policy ceiling is floored at "allow", the kernel sandbox is off, and network egress is open (D6). Operator `deny` command rules (ADR-091 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+             * @description O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool-policy ceiling is floored at "allow" (for every tool, not just bash) — which also makes `auto_approve` below moot for that agent, since Auto only ever applies to a tool resolved to "ask" and nothing is left in "ask" state once the ceiling is floored. The kernel sandbox is off and network egress is open. Operator `deny` command rules (ADR-091 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable. Independent of `auto_approve` — the two are separate mechanisms.
              * @example false
              */
             god_mode?: boolean;
@@ -9054,12 +9074,12 @@ export interface components {
              */
             workspace_path_guard_env_override?: boolean;
             /**
-             * @description ADR-091 D1's configured global shell-permission mode. "ask" — every bash call shows the approval dialog. "auto" (fresh-install default) — commands run while a kernel sandbox confines them; anything needing more asks (Auto behaves like Ask where no kernel sandbox is active, FR-008). "god" — no approvals, no kernel sandbox, no network egress filter (mirrors `god_mode`/`god_mode_available` below).
-             *     This is a convenience presentation, not independent storage (ADR-091 D1/FR-001): "ask" reads/writes the same underlying value as the global `bash` entry in GET/PUT /api/v1/security/tool-policies ("ask"), "auto" the same underlying value ("allow"), distinguished from "god" by the `god_mode` flag above. Deliberately named `shell_permission_mode`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide.
-             * @example auto
-             * @enum {string}
+             * @description ADR-091's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear against the kernel sandbox (ADR-091 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool, and never reaches past what the kernel sandbox can actually confine (no active kernel sandbox ⇒ nothing can be positively cleared ⇒ every "ask" call prompts regardless of this setting — see SandboxStatus.kernel_sandbox_active).
+             *     This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+             *     Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
+             * @example true
              */
-            shell_permission_mode?: "ask" | "auto" | "god";
+            auto_approve?: boolean;
             /** @description Present in PUT responses. True when the change requires a gateway restart to take effect (mode, allowed_paths). */
             requires_restart?: boolean;
             /** @description Present in PUT responses. Always true on success. */
@@ -9136,11 +9156,28 @@ export interface components {
              */
             bind_ports_count: number;
             /**
-             * @description ADR-091 D1's resolved shell-permission mode for this gateway's global default — the chat-header badge's read target. "ask" and "auto"/"god" are a presentation over the existing bash tool-policy ceiling value ("ask" vs "allow") and the existing GodMode flag respectively; no second kernel_sandbox_active derivation is added here — this field already folds in the FR-007 platform predicate (Linux: Landlock enforce, not degraded; macOS: Seatbelt's own active/enabled state, read directly rather than via policy_applied, which is documented false on macOS by design; Windows: never) and FR-008's Auto-to-Ask fallback, so a configured "auto" with no active kernel sandbox is reported here as "ask". The SPA renders the "Auto → Ask" badge tooltip by comparing this value against the separately-fetched configured value (SandboxConfig.shell_permission_mode).
-             * @example auto
-             * @enum {string}
+             * @description ADR-091's platform predicate — whether a kernel sandbox is actually confining processes right now, the fact Auto-approve needs to decide anything: Linux — Landlock applied in enforce mode (`mode: enforce` above), not degraded. macOS — the Seatbelt backend's own active/enabled state, read directly rather than derived from `policy_applied` above, which reports the gateway's OWN confinement and is documented false on macOS by design (Seatbelt confines children only). Windows — always false, no kernel sandbox backend exists. Distinct from `policy_applied`/`kernel_level` above (which describe this process's own sandboxing posture, not specifically whether Auto's pre-flight has anything to check a command against).
+             * @example true
              */
-            effective_mode?: "ask" | "auto" | "god";
+            kernel_sandbox_active?: boolean;
+            /**
+             * @description This gateway's current GLOBAL default for Auto-approve (mirrors SandboxConfig.auto_approve; reported here too so the chat-header badge doesn't need a second round-trip to Settings). This is the gateway-wide default, not a per-agent or per-chat resolution — this endpoint carries neither an agent nor a session, so it cannot see a per-agent `auto_approve_disabled` override or a chat's own session_mode_update modifier. The SPA composes the actual badge for one chat from three inputs: this field (the baseline), the active agent's `auto_approve_disabled` (from GET /agents/{id}), and the session's own resolved value once a session_mode_updated frame arrives (asyncapi.yaml).
+             *     What the badge renders, keyed off this field and kernel_sandbox_active together (before any per-agent/per-chat override is folded in):
+             *       - auto_approve_effective=false → "Ask": every tool currently
+             *         resolved to "ask" always prompts, regardless of the kernel
+             *         sandbox. kernel_sandbox_active is irrelevant to this reading.
+             *       - auto_approve_effective=true, kernel_sandbox_active=true →
+             *         "Auto": an "ask" tool call the kernel sandbox can positively
+             *         confine auto-approves; anything it cannot still prompts.
+             *       - auto_approve_effective=true, kernel_sandbox_active=false →
+             *         "Auto → Ask" with a tooltip: Auto is configured on, but with no
+             *         kernel sandbox to check a command against, the pre-flight can
+             *         never positively clear anything, so every "ask" tool call
+             *         prompts exactly as if Auto were off — a real, user-visible
+             *         consequence of the platform/degradation state, not a bug.
+             * @example true
+             */
+            auto_approve_effective?: boolean;
         };
         /**
          * AuditEntry
@@ -10503,7 +10540,7 @@ export interface components {
              */
             ref?: string;
         };
-        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_permission_mode are hot-reloaded. This endpoint is the routing target for ADR-091's global shell-permission mode write (shell_permission_mode below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use (ADR-091 FR-045). No new auth mechanism; the requirement is routing the mode write through this handler rather than a bespoke endpoint that bypasses it. */
+        /** @description Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-091's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it. */
         SandboxConfigUpdate: {
             /**
              * @description Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
@@ -10553,12 +10590,11 @@ export interface components {
                 allow_internal?: string[];
             };
             /**
-             * @description Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies already exposes ("ask"/"allow" respectively — no new storage, FR-001); "god" additionally sets the same GodMode state the existing POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
-             *     Per-agent and per-chat modes tighten only, and are NOT set here: an agent's mode is `tool_policy_changes.set.bash` on PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped modifier is the session_mode_update WS frame (asyncapi.yaml). A per-agent or per-chat write looser than this value is rejected 4xx by its own writer (FR-003).
-             * @example auto
-             * @enum {string}
+             * @description Set the ADR-091 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+             *     Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+             * @example true
              */
-            shell_permission_mode?: "ask" | "auto" | "god";
+            auto_approve?: boolean;
             /**
              * @description ADR-068 §6. Turns the IN-PROCESS bash workspace path guard on or off. Distinct from `mode`, which is the kernel sandbox — the two are separate boundaries and setting one has no effect on the other (UAT defect 002 was operators expecting otherwise). When true, a WRITE outside the agent's working directory needs an approved workspace mount; reads outside it are allowed either way. Restart-gated: it resolves into AgentDefaults.RestrictToWorkspace at boot. Ignored at runtime while OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE is set, which outranks it — see workspace_path_guard_env_override on the GET response.
              * @example false

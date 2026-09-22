@@ -570,14 +570,13 @@ export interface SessionCloseAckFrame {
 export interface SessionModeUpdateFrame {
   type: "session_mode_update";
   session_id: string;
-  mode: "ask" | "auto" | "inherit";
+  auto_approve: boolean;
 }
 
 export interface SessionModeUpdatedFrame {
   type: "session_mode_updated";
   session_id: string;
-  effective_mode: "ask" | "auto" | "god";
-  custom_override?: boolean;
+  auto_approve_effective: boolean;
 }
 
 export interface DevicePairingRequestFrame {

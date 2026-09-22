@@ -6878,27 +6878,6 @@ func (e SandboxConfigMode) Valid() bool {
 	}
 }
 
-// Defines values for SandboxConfigShellPermissionMode.
-const (
-	SandboxConfigShellPermissionModeAsk  SandboxConfigShellPermissionMode = "ask"
-	SandboxConfigShellPermissionModeAuto SandboxConfigShellPermissionMode = "auto"
-	SandboxConfigShellPermissionModeGod  SandboxConfigShellPermissionMode = "god"
-)
-
-// Valid indicates whether the value is a known member of the SandboxConfigShellPermissionMode enum.
-func (e SandboxConfigShellPermissionMode) Valid() bool {
-	switch e {
-	case SandboxConfigShellPermissionModeAsk:
-		return true
-	case SandboxConfigShellPermissionModeAuto:
-		return true
-	case SandboxConfigShellPermissionModeGod:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for SandboxConfigUpdateFilesystemModel.
 const (
 	SandboxConfigUpdateFilesystemModelConfined SandboxConfigUpdateFilesystemModel = "confined"
@@ -6932,48 +6911,6 @@ func (e SandboxConfigUpdateMode) Valid() bool {
 	case SandboxConfigUpdateModeOff:
 		return true
 	case SandboxConfigUpdateModePermissive:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SandboxConfigUpdateShellPermissionMode.
-const (
-	SandboxConfigUpdateShellPermissionModeAsk  SandboxConfigUpdateShellPermissionMode = "ask"
-	SandboxConfigUpdateShellPermissionModeAuto SandboxConfigUpdateShellPermissionMode = "auto"
-	SandboxConfigUpdateShellPermissionModeGod  SandboxConfigUpdateShellPermissionMode = "god"
-)
-
-// Valid indicates whether the value is a known member of the SandboxConfigUpdateShellPermissionMode enum.
-func (e SandboxConfigUpdateShellPermissionMode) Valid() bool {
-	switch e {
-	case SandboxConfigUpdateShellPermissionModeAsk:
-		return true
-	case SandboxConfigUpdateShellPermissionModeAuto:
-		return true
-	case SandboxConfigUpdateShellPermissionModeGod:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for SandboxStatusEffectiveMode.
-const (
-	SandboxStatusEffectiveModeAsk  SandboxStatusEffectiveMode = "ask"
-	SandboxStatusEffectiveModeAuto SandboxStatusEffectiveMode = "auto"
-	SandboxStatusEffectiveModeGod  SandboxStatusEffectiveMode = "god"
-)
-
-// Valid indicates whether the value is a known member of the SandboxStatusEffectiveMode enum.
-func (e SandboxStatusEffectiveMode) Valid() bool {
-	switch e {
-	case SandboxStatusEffectiveModeAsk:
-		return true
-	case SandboxStatusEffectiveModeAuto:
-		return true
-	case SandboxStatusEffectiveModeGod:
 		return true
 	default:
 		return false
@@ -11181,7 +11118,10 @@ type ActivityEventsResponseEventsType string
 type Agent struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
-	ChangedFields    *[]string              `json:"changed_fields,omitempty"`
+
+	// AutoApproveDisabled ADR-091 per-agent override of the global Auto-approve default (SandboxConfig.auto_approve). Off-only, by construction: this field can only ever mean "force Auto off for this agent's ask-policy tool calls" — there is no value meaning "force it on," so a per-agent write can never loosen past the global default (tighten-only, matching every scope except the per-chat session modifier, SessionModeUpdateFrame). false (the default) means this agent inherits the global default unchanged. Distinct from `tools_cfg.builtin.policies`, which is unchanged by ADR-091 and still governs the ordinary allow/deny/ask value per tool — this field only ever narrows what "ask" DOES for this agent's tools, never which tools are allow/deny/ask.
+	AutoApproveDisabled *bool     `json:"auto_approve_disabled,omitempty"`
+	ChangedFields       *[]string `json:"changed_fields,omitempty"`
 
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
@@ -11381,6 +11321,9 @@ type AgentCreateRequest struct {
 
 // AgentCreateRequestMain Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
 type AgentCreateRequestMain struct {
+	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-091) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
+
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
 
@@ -11468,6 +11411,9 @@ type AgentCreateRequestMainType string
 
 // AgentCreateRequestSubagent Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
 type AgentCreateRequestSubagent struct {
+	// AutoApproveDisabled Initial per-agent override forcing Auto-approve off (ADR-091) for this agent, regardless of the global default (SandboxConfig.auto_approve). Off-only — omit or send false to inherit the global default. Distinct from `tools_cfg`, which is unchanged and still governs allow/deny/ask per tool.
+	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
+
 	// Color Hex color code for the agent avatar.
 	Color *string `json:"color,omitempty"`
 
@@ -11900,6 +11846,9 @@ type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
 // AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
 type AgentUpdateRequest struct {
+	// AutoApproveDisabled Force Auto-approve off for this agent (ADR-091), overriding the global default (SandboxConfig.auto_approve) for every tool this agent resolves to "ask". Off-only: true disables Auto for this agent; false (or omitting the field, which leaves the stored value unchanged) does not loosen past the global default — there is no value here that turns Auto on when the global default has it off. Distinct from `tool_policy_changes`, which is unchanged and still governs allow/deny/ask per tool.
+	AutoApproveDisabled *bool `json:"auto_approve_disabled,omitempty"`
+
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
@@ -18454,11 +18403,16 @@ type SandboxConfig struct {
 	// AppliedMode The mode the gateway is currently enforcing. Differs from `mode` when the operator saved a change but has not restarted yet.
 	AppliedMode *string `json:"applied_mode,omitempty"`
 
+	// AutoApprove ADR-091's global default for Auto-approve (fresh-install default: true). Auto is NOT a tool-policy value — every tool, including bash, keeps the ordinary three-value policy ("allow" runs unprompted with none of this machinery, "deny" makes the tool invisible to the agent, "ask" is where Auto applies). For every tool currently resolved to "ask", Auto-approve ON auto-approves the cases the pre-flight/rule matcher can positively clear against the kernel sandbox (ADR-091 D3/D7/D8) and still prompts for everything else; Auto-approve OFF means an "ask" tool always prompts. Auto never touches an "allow" or "deny" tool, and never reaches past what the kernel sandbox can actually confine (no active kernel sandbox ⇒ nothing can be positively cleared ⇒ every "ask" call prompts regardless of this setting — see SandboxStatus.kernel_sandbox_active).
+	// This is the GLOBAL default only. Two narrower scopes layer on top, neither stored here: a per-agent setting (Agent.auto_approve_disabled) that may only turn Auto OFF for that agent, and a per-chat session modifier (SessionModeUpdateFrame, asyncapi.yaml) that may turn Auto ON OR OFF for that one chat — deliberately allowed to loosen, since a human is present in that session; every other scope in this contract is tighten-only.
+	// Deliberately named `auto_approve`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide. Hot-reloaded, like the rest of this handler's fields — no restart required.
+	AutoApprove *bool `json:"auto_approve,omitempty"`
+
 	// FilesystemModel The ADR-062 filesystem model this installation is configured for. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set. It never changes what an agent may WRITE — writes are confined to the workspace and its mounts under both models.
 	// Reported here, and settable via SandboxConfigUpdate, because the two postures are indistinguishable from outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because that path happened to be on the enumerated list. Without a control, the only way to change it was to hand-edit config.json.
 	FilesystemModel *SandboxConfigFilesystemModel `json:"filesystem_model,omitempty"`
 
-	// GodMode O14 global god-mode ("bypass-permissions") runtime state — ADR-091 D1's "God Mode" of the three shell-permission modes (Ask/Auto/God Mode). When true, every agent's bash tool-policy ceiling is floored at "allow", the kernel sandbox is off, and network egress is open (D6). Operator `deny` command rules (ADR-091 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable.
+	// GodMode O14 global god-mode ("bypass-permissions") runtime state. When true, every agent's tool-policy ceiling is floored at "allow" (for every tool, not just bash) — which also makes `auto_approve` below moot for that agent, since Auto only ever applies to a tool resolved to "ask" and nothing is left in "ask" state once the ceiling is floored. The kernel sandbox is off and network egress is open. Operator `deny` command rules (ADR-091 D3) still apply — the floor cannot erase them. Audit logging, the prompt-injection guard, and rate limiting stay on. Toggled via POST /api/v1/gateway/god-mode (password step-up). Always false when god mode is unavailable. Independent of `auto_approve` — the two are separate mechanisms.
 	GodMode *bool `json:"god_mode,omitempty"`
 
 	// GodModeAvailable Whether god mode CAN be enabled in this gateway: the build supports it (not compiled with the nogodmode tag) AND --allow-god-mode was passed at boot. The runtime god_mode switch is a no-op when this is false.
@@ -18472,10 +18426,6 @@ type SandboxConfig struct {
 
 	// Saved Present in PUT responses. Always true on success.
 	Saved *bool `json:"saved,omitempty"`
-
-	// ShellPermissionMode ADR-091 D1's configured global shell-permission mode. "ask" — every bash call shows the approval dialog. "auto" (fresh-install default) — commands run while a kernel sandbox confines them; anything needing more asks (Auto behaves like Ask where no kernel sandbox is active, FR-008). "god" — no approvals, no kernel sandbox, no network egress filter (mirrors `god_mode`/`god_mode_available` below).
-	// This is a convenience presentation, not independent storage (ADR-091 D1/FR-001): "ask" reads/writes the same underlying value as the global `bash` entry in GET/PUT /api/v1/security/tool-policies ("ask"), "auto" the same underlying value ("allow"), distinguished from "god" by the `god_mode` flag above. Deliberately named `shell_permission_mode`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide.
-	ShellPermissionMode *SandboxConfigShellPermissionMode `json:"shell_permission_mode,omitempty"`
 
 	// Ssrf Nested SSRF config block for backward-compatible clients.
 	Ssrf *struct {
@@ -18503,11 +18453,7 @@ type SandboxConfigFilesystemModel string
 // SandboxConfigMode Configured sandbox enforcement mode.
 type SandboxConfigMode string
 
-// SandboxConfigShellPermissionMode ADR-091 D1's configured global shell-permission mode. "ask" — every bash call shows the approval dialog. "auto" (fresh-install default) — commands run while a kernel sandbox confines them; anything needing more asks (Auto behaves like Ask where no kernel sandbox is active, FR-008). "god" — no approvals, no kernel sandbox, no network egress filter (mirrors `god_mode`/`god_mode_available` below).
-// This is a convenience presentation, not independent storage (ADR-091 D1/FR-001): "ask" reads/writes the same underlying value as the global `bash` entry in GET/PUT /api/v1/security/tool-policies ("ask"), "auto" the same underlying value ("allow"), distinguished from "god" by the `god_mode` flag above. Deliberately named `shell_permission_mode`, not `mode` — this schema's existing `mode` field is the unrelated kernel sandbox enforcement mode (off/permissive/enforce); reusing that key for a different value domain would collide.
-type SandboxConfigShellPermissionMode string
-
-// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and shell_permission_mode are hot-reloaded. This endpoint is the routing target for ADR-091's global shell-permission mode write (shell_permission_mode below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use (ADR-091 FR-045). No new auth mechanism; the requirement is routing the mode write through this handler rather than a bespoke endpoint that bypasses it.
+// SandboxConfigUpdate Partial-update body for PUT /security/sandbox-config. All fields are optional — only fields present in the request are updated. At least one field must be supplied (the server returns 400 otherwise). Flat fields take precedence over nested equivalents when both are present in the same request body. mode and allowed_paths are restart-gated (the response includes requires_restart=true when either changes). ssrf.allow_internal and auto_approve are hot-reloaded. This endpoint is the routing target for ADR-091's global Auto-approve default write (auto_approve below) specifically because it already gates every write behind requireReAuth (see putSandboxConfig -> authenticateAndDecode in pkg/gateway/rest_sandbox_config.go) — the same password step-up God Mode and credential writes use. No new auth mechanism; the requirement is routing the write through this handler rather than a bespoke endpoint that bypasses it.
 type SandboxConfigUpdate struct {
 	// AllowNetworkOutbound Allow agent tool calls to make outbound network connections.
 	AllowNetworkOutbound *bool `json:"allow_network_outbound,omitempty"`
@@ -18515,16 +18461,16 @@ type SandboxConfigUpdate struct {
 	// AllowedPaths List of host filesystem paths the agent is allowed to read/write. Restart-gated. Must be absolute paths; empty list clears all exceptions.
 	AllowedPaths *[]string `json:"allowed_paths,omitempty"`
 
+	// AutoApprove Set the ADR-091 global default for Auto-approve. Auto is a SEPARATE setting from tool policy — it only has meaning for a tool currently resolved to "ask" (see SandboxConfig.auto_approve for the full behavioural description) and applies to every such tool, not only bash. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
+	// Per-agent and per-chat Auto settings are NOT set here: a per-agent override is `auto_approve_disabled` on PUT /agents/{id} (AgentUpdateRequest) — off-only, tighten-only. A chat's session modifier is the session_mode_update WS frame (asyncapi.yaml, SessionModeUpdateFrame) — the one place in this contract allowed to LOOSEN (turn Auto on for that chat even when the agent or this global default has it off), because a human is present in that session. The per-agent field is tighten-only relative to this global default; this global default has no scope above it to tighten against.
+	AutoApprove *bool `json:"auto_approve,omitempty"`
+
 	// FilesystemModel Switch the ADR-062 filesystem model. "confined" restricts reads and execution to enumerated paths; "open" leaves both unrestricted apart from the secret set. Neither model changes what may be WRITTEN.
 	// Restart-gated, like `mode`: the running kernel profile was installed at boot and is not rebuilt in place, so the change is persisted and takes effect on the next start. Omit the field to leave the model unchanged.
 	FilesystemModel *SandboxConfigUpdateFilesystemModel `json:"filesystem_model,omitempty"`
 
 	// Mode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 	Mode *SandboxConfigUpdateMode `json:"mode,omitempty"`
-
-	// ShellPermissionMode Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies already exposes ("ask"/"allow" respectively — no new storage, FR-001); "god" additionally sets the same GodMode state the existing POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
-	// Per-agent and per-chat modes tighten only, and are NOT set here: an agent's mode is `tool_policy_changes.set.bash` on PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped modifier is the session_mode_update WS frame (asyncapi.yaml). A per-agent or per-chat write looser than this value is rejected 4xx by its own writer (FR-003).
-	ShellPermissionMode *SandboxConfigUpdateShellPermissionMode `json:"shell_permission_mode,omitempty"`
 
 	// Ssrf Nested SSRF configuration sub-object. Flat fields take precedence.
 	Ssrf *struct {
@@ -18549,10 +18495,6 @@ type SandboxConfigUpdateFilesystemModel string
 // SandboxConfigUpdateMode Kernel sandbox enforcement mode. "off" = no kernel enforcement (god-mode). "permissive" = log violations but allow. "enforce" = block violations. Restart-gated.
 type SandboxConfigUpdateMode string
 
-// SandboxConfigUpdateShellPermissionMode Set the ADR-091 D1 global shell-permission mode. "ask"/"auto" write the same underlying `bash` entry GET/PUT /api/v1/security/tool-policies already exposes ("ask"/"allow" respectively — no new storage, FR-001); "god" additionally sets the same GodMode state the existing POST /api/v1/gateway/god-mode toggle controls. Hot-reloaded — takes effect immediately, no restart required. Deliberately not named `mode` — that key above is the unrelated kernel sandbox enforcement mode (off/permissive/enforce).
-// Per-agent and per-chat modes tighten only, and are NOT set here: an agent's mode is `tool_policy_changes.set.bash` on PUT /agents/{id} (AgentUpdateRequest); a chat's session-scoped modifier is the session_mode_update WS frame (asyncapi.yaml). A per-agent or per-chat write looser than this value is rejected 4xx by its own writer (FR-003).
-type SandboxConfigUpdateShellPermissionMode string
-
 // SandboxStatus Runtime sandbox backend status returned by GET /api/v1/security/sandbox-status.
 type SandboxStatus struct {
 	// AbiVersion Landlock ABI version. Present on Linux with Landlock support.
@@ -18560,6 +18502,22 @@ type SandboxStatus struct {
 
 	// AuditOnly True when the sandbox is in permissive (audit-only) mode — policy violations are logged but not blocked.
 	AuditOnly *bool `json:"audit_only,omitempty"`
+
+	// AutoApproveEffective This gateway's current GLOBAL default for Auto-approve (mirrors SandboxConfig.auto_approve; reported here too so the chat-header badge doesn't need a second round-trip to Settings). This is the gateway-wide default, not a per-agent or per-chat resolution — this endpoint carries neither an agent nor a session, so it cannot see a per-agent `auto_approve_disabled` override or a chat's own session_mode_update modifier. The SPA composes the actual badge for one chat from three inputs: this field (the baseline), the active agent's `auto_approve_disabled` (from GET /agents/{id}), and the session's own resolved value once a session_mode_updated frame arrives (asyncapi.yaml).
+	// What the badge renders, keyed off this field and kernel_sandbox_active together (before any per-agent/per-chat override is folded in):
+	//   - auto_approve_effective=false → "Ask": every tool currently
+	//     resolved to "ask" always prompts, regardless of the kernel
+	//     sandbox. kernel_sandbox_active is irrelevant to this reading.
+	//   - auto_approve_effective=true, kernel_sandbox_active=true →
+	//     "Auto": an "ask" tool call the kernel sandbox can positively
+	//     confine auto-approves; anything it cannot still prompts.
+	//   - auto_approve_effective=true, kernel_sandbox_active=false →
+	//     "Auto → Ask" with a tooltip: Auto is configured on, but with no
+	//     kernel sandbox to check a command against, the pre-flight can
+	//     never positively clear anything, so every "ask" tool call
+	//     prompts exactly as if Auto were off — a real, user-visible
+	//     consequence of the platform/degradation state, not a bug.
+	AutoApproveEffective *bool `json:"auto_approve_effective,omitempty"`
 
 	// Available Whether the backend is available on this platform.
 	Available bool `json:"available"`
@@ -18576,9 +18534,6 @@ type SandboxStatus struct {
 	// DisabledBy Reason the sandbox is disabled, if applicable. E.g. "config" or "kernel".
 	DisabledBy *string `json:"disabled_by,omitempty"`
 
-	// EffectiveMode ADR-091 D1's resolved shell-permission mode for this gateway's global default — the chat-header badge's read target. "ask" and "auto"/"god" are a presentation over the existing bash tool-policy ceiling value ("ask" vs "allow") and the existing GodMode flag respectively; no second kernel_sandbox_active derivation is added here — this field already folds in the FR-007 platform predicate (Linux: Landlock enforce, not degraded; macOS: Seatbelt's own active/enabled state, read directly rather than via policy_applied, which is documented false on macOS by design; Windows: never) and FR-008's Auto-to-Ask fallback, so a configured "auto" with no active kernel sandbox is reported here as "ask". The SPA renders the "Auto → Ask" badge tooltip by comparing this value against the separately-fetched configured value (SandboxConfig.shell_permission_mode).
-	EffectiveMode *SandboxStatusEffectiveMode `json:"effective_mode,omitempty"`
-
 	// FilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 	FilesystemModel *SandboxStatusFilesystemModel `json:"filesystem_model,omitempty"`
 
@@ -18587,6 +18542,9 @@ type SandboxStatus struct {
 
 	// KernelLevel Whether the backend can enforce at the kernel level. True for Landlock on Linux 5.13+. False for the fallback (app-level) backend.
 	KernelLevel bool `json:"kernel_level"`
+
+	// KernelSandboxActive ADR-091's platform predicate — whether a kernel sandbox is actually confining processes right now, the fact Auto-approve needs to decide anything: Linux — Landlock applied in enforce mode (`mode: enforce` above), not degraded. macOS — the Seatbelt backend's own active/enabled state, read directly rather than derived from `policy_applied` above, which reports the gateway's OWN confinement and is documented false on macOS by design (Seatbelt confines children only). Windows — always false, no kernel sandbox backend exists. Distinct from `policy_applied`/`kernel_level` above (which describe this process's own sandboxing posture, not specifically whether Auto's pre-flight has anything to check a command against).
+	KernelSandboxActive *bool `json:"kernel_sandbox_active,omitempty"`
 
 	// LandlockEnforced Whether Landlock file-system access rules are enforced.
 	LandlockEnforced *bool `json:"landlock_enforced,omitempty"`
@@ -18609,9 +18567,6 @@ type SandboxStatus struct {
 	// SeccompEnforced Whether seccomp syscall filtering is enforced.
 	SeccompEnforced *bool `json:"seccomp_enforced,omitempty"`
 }
-
-// SandboxStatusEffectiveMode ADR-091 D1's resolved shell-permission mode for this gateway's global default — the chat-header badge's read target. "ask" and "auto"/"god" are a presentation over the existing bash tool-policy ceiling value ("ask" vs "allow") and the existing GodMode flag respectively; no second kernel_sandbox_active derivation is added here — this field already folds in the FR-007 platform predicate (Linux: Landlock enforce, not degraded; macOS: Seatbelt's own active/enabled state, read directly rather than via policy_applied, which is documented false on macOS by design; Windows: never) and FR-008's Auto-to-Ask fallback, so a configured "auto" with no active kernel sandbox is reported here as "ask". The SPA renders the "Auto → Ask" badge tooltip by comparing this value against the separately-fetched configured value (SandboxConfig.shell_permission_mode).
-type SandboxStatusEffectiveMode string
 
 // SandboxStatusFilesystemModel Which ADR-062 filesystem model is active. "confined" enumerates the paths that may be read and executed; "open" leaves reads and execution unrestricted apart from the secret set, and confines writes exactly as "confined" does. This never affects what an agent may WRITE. Surfaced because the two postures are indistinguishable from the outside: an operator cannot tell from behaviour whether a read succeeded because the model is open or because the path happened to be on the enumerated list.
 type SandboxStatusFilesystemModel string

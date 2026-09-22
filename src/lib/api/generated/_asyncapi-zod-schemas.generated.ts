@@ -623,7 +623,7 @@ export const SessionModeUpdateFrame = z
   .object({
     type: z.literal("session_mode_update"),
     session_id: z.string().min(1),
-    mode: z.enum(["ask", "auto", "inherit"]),
+    auto_approve: z.boolean(),
   })
   .strict();
 
@@ -631,8 +631,7 @@ export const SessionModeUpdatedFrame = z
   .object({
     type: z.literal("session_mode_updated"),
     session_id: z.string().min(1),
-    effective_mode: z.enum(["ask", "auto", "god"]),
-    custom_override: z.boolean().optional(),
+    auto_approve_effective: z.boolean(),
   })
   .strict();
 
