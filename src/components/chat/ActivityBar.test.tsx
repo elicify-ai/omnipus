@@ -60,12 +60,21 @@ function makeAssistantMessage(spans: SubagentSpan[]): ChatMessage {
   } as ChatMessage
 }
 
+// ADR-091 D7/FR-E-005 (cross-family review finding 20): `lifecycleState`
+// defaults to 'running' here, not just `status` — the pill/avatar stack now
+// key off `lifecycleState === 'running'` exactly (a span can be
+// `status: 'running'` — the parent's "still open" flag — while queued or
+// already lifecycle-terminal; see
+// useRunningActivity.runningChildren-lifecycle.test.ts for that distinction
+// pinned directly). A test that wants a queued/lifecycle-terminal-but-open
+// span for THIS specific gap passes `lifecycleState` as an override.
 function runningSpan(overrides: Partial<SubagentSpan> = {}): SubagentSpan {
   return {
     spanId: 's1',
     parentCallId: 'c1',
     taskLabel: 'digging into logs',
     status: 'running',
+    lifecycleState: 'running',
     ...overrides,
   } as SubagentSpan
 }

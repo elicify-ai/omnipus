@@ -169,20 +169,43 @@ export type ActivityItem = AgentActivityItem | BashActivityItem | JudgeActivityI
 export interface RunningActivity {
   runningCount: number
   /**
-   * ADR-091 D7/FR-E-005 (founder decision, round 8): the open session's
-   * direct AGENT children currently `running` — excludes background shell
-   * jobs, which `runningCount` still includes (bash-job visibility/count
-   * elsewhere is unchanged). This is what the Activity Bar's pill reads:
-   * "The SPA must not count shell jobs in the pill, because the pill
-   * answers 'how many sub-agents are running'" (WP-E spec, explicit
-   * prohibitions). A grandchild counts in its own parent's `running` set
-   * only when that parent's own session is the one open — this hook is
-   * already scoped to the active session (file header), so that scoping
-   * falls out for free.
+   * ADR-091 D7/FR-E-005 (founder decision, round 8; cross-family review
+   * finding 20): the open session's direct AGENT children whose
+   * `lifecycleState` (the ADR-053 eight-state domain reduced from
+   * `subagent_state`) is exactly `'running'` — excludes background shell
+   * jobs (`runningCount` still includes those), a QUEUED child (`span.status`
+   * is already `'running'` from the moment `subagent_start` fires, before
+   * the child has actually started — D7 table), and a child whose
+   * lifecycleState already reached a terminal value (`completed`, `failed`,
+   * …) via an earlier `subagent_state` even though its `subagent_end` (which
+   * flips `span.status`) hasn't arrived yet. Also excludes a span with no
+   * lifecycleState at all yet (subagent_start received, no subagent_state
+   * received) — "how many sub-agents are running" answers `'running'`
+   * exactly, not "started and not yet known to have stopped". This is what
+   * the Activity Bar's pill AND avatar stack read (`runningChildItems`
+   * below): "The SPA must not count shell jobs in the pill, because the
+   * pill answers 'how many sub-agents are running'" (WP-E spec, explicit
+   * prohibitions). A grandchild counts in its own parent's set only when
+   * that parent's own session is the one open — this hook is already
+   * scoped to the active session (file header), so that scoping falls out
+   * for free.
    */
   runningChildren: number
+  /**
+   * The actual `AgentActivityItem`s backing `runningChildren` above — same
+   * `lifecycleState === 'running'` filter, exposed as a list (not just a
+   * count) so the Activity Bar's avatar stack shows the SAME agents the
+   * pill's number describes, rather than the broader `running` list (which
+   * mixes in queued/lifecycle-terminal spans and shell jobs).
+   */
+  runningChildItems: AgentActivityItem[]
   running: ActivityItem[]
   recentlyFinished: ActivityItem[]
+}
+
+/** True when `item` is a direct agent child whose lifecycleState is exactly 'running' — see `RunningActivity.runningChildren`'s doc comment. */
+function isRunningAgentChild(item: ActivityItem): item is AgentActivityItem {
+  return item.kind === 'agent' && item.lifecycleState === 'running'
 }
 
 /** Cap on how many finished items are retained for display (most-recent-first). */
@@ -657,9 +680,12 @@ export function useRunningActivity(): RunningActivity {
     finishedCandidates.push({ item, time: Date.parse(verdict.judged_at), seq: finishedSeq++ })
   }
 
+  const runningChildItems = running.filter(isRunningAgentChild)
+
   return {
     runningCount: running.length,
-    runningChildren: running.filter((item) => item.kind === 'agent').length,
+    runningChildren: runningChildItems.length,
+    runningChildItems,
     running,
     recentlyFinished: mergeAndCapFinished(finishedCandidates),
   }
