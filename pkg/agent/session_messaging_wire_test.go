@@ -273,6 +273,10 @@ func TestSessionMessagingConsumer_Steer_LandsInChildSteeringQueue(t *testing.T) 
 	if err := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
 		TargetSessionID: "child-sess-2",
 		Message:         steer,
+		// ADR-091 I-5 "Bus route authority" (R17, FR-B-015): the consumer now
+		// re-verifies the publisher's Principal against the target's edge —
+		// the direct parent (ParentDurableKey) is a genuine ancestor.
+		Principal: session.Principal{Kind: session.PrincipalKindAgent, ID: "parent-of-child-2"},
 	}); err != nil {
 		t.Fatalf("PublishSessionMessage: %v", err)
 	}
@@ -346,6 +350,11 @@ func TestSessionMessagingConsumer_MessageParentDirectPath_ReachesInbox(t *testin
 		ParentDurableKey: "owner-direct-1",
 	})
 	al.SetSessionMessagingStores(inbox, ls)
+	// ADR-091 I-5: message_parent.go now depends on a single injected
+	// steer.UpwardDeliverer — wire the real one, mirroring production's
+	// gateway_boot.go sequence, or the auto-registered tool stays
+	// fail-closed (deliverer nil).
+	al.SetSteerAudienceDeps(NewSteerAudienceResolver(NewSteerRecordClassifier(ls, al.GetSessionStore())), nil, NewSteerUpwardDeliverer())
 
 	// The default agent now has a LIVE message_parent tool (reconstructed with
 	// the real stores by wireSessionMessagingForAgent).

@@ -256,6 +256,38 @@ func streamReplay(
 				"session_id", sr.sessionID, "entry_id", entry.ID)
 		}
 
+		// ADR-091 D7/I-4: a persisted subagent_message/subagent_state entry
+		// (steer_frames.go's deliverSubagentMessage/deliverSubagentState,
+		// written into the PARENT's own transcript) replays as the SAME
+		// frame type the live push sent, discriminated on the stamped
+		// entry.SystemSubtype — never Content — with the entry's own ID as
+		// message_id, mirroring goal_outcome's identical contract two
+		// blocks above. subagent_start/subagent_end are NOT handled here —
+		// they keep the existing tool-call-structure reconstruction
+		// (buildSubagentStart below), per D7's "stay exactly what they
+		// are"; see this lane's final report for why persisted
+		// start/end entries are written but not yet read back here.
+		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
+			if entry.SubagentMessage != nil {
+				if err2 := emitFrame(*entry.SubagentMessage); err2 != nil {
+					return framesEmitted, err2
+				}
+				continue
+			}
+			slog.Warn("replay: subagent_message transcript entry carries no frame — replaying it as a plain entry",
+				"session_id", sr.sessionID, "entry_id", entry.ID)
+		}
+		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
+			if entry.SubagentState != nil {
+				if err2 := emitFrame(*entry.SubagentState); err2 != nil {
+					return framesEmitted, err2
+				}
+				continue
+			}
+			slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
+				"session_id", sr.sessionID, "entry_id", entry.ID)
+		}
+
 		// Update the running fallback agent ID.
 		if entry.AgentID != "" {
 			sr.lastSeenAgentID = entry.AgentID
@@ -378,27 +410,18 @@ func streamReplay(
 					return framesEmitted, err2
 				}
 
-				// Emit all nested tool calls (children with ParentToolCallID == tc.ID).
-				// emitNestedToolCalls returns an aggregate (totalDurationMS,
-				// aggregateStatus) computed by summing/rolling up its own child
-				// tool calls — historically THIS CALLER (not the function
-				// itself) used that aggregate to set the outer span's own
-				// Status/DurationMs on the subagent_end frame below. Wave 3 fix
-				// 5b replaced that with tc's own persisted Status/DurationMS
-				// (see the comment there), so the aggregate is now discarded
-				// here (`_, _`) — deliberately, not an oversight. This call is
-				// still required regardless: it's what emits the individual
-				// nested child tool_call_start/tool_call_result frames. These
-				// are always emitted, even when stillActive — they are
-				// historical, already-completed child tool calls; only the
-				// OUTER span's own terminal frames are conditionally withheld
-				// below.
-				_, _, nestedErr := emitNestedToolCalls(
-					ctx, sr.sessionID, sr.tcID, sr.entries, sr.latestByID, sr.effectiveAgentID, emitFrame, sr.toolStore,
-				)
-				if nestedErr != nil {
-					return framesEmitted, nestedErr
-				}
+				// ADR-091 D7: "the nesting of child steps into parent
+				// transcripts (replay.go::emitNestedToolCalls) become dead
+				// and are deleted" — a delegated/task child now owns its
+				// OWN store-backed session (D1), so its tool calls are
+				// NEVER recorded with ParentToolCallID under this outer
+				// span in the PARENT's own transcript any more; there is
+				// nothing left here for emitNestedToolCalls to find. A
+				// pre-ADR-091 transcript that DOES carry nested child tool
+				// calls this way loses their nested replay (greenfield
+				// migration, §6: old delegate sessions stay readable as
+				// history, not full-fidelity) — the outer span's own
+				// start/end brackets below are unaffected.
 
 				if sr.stillActive {
 					// Withhold subagent_end + the outer tool_call_result: the
@@ -736,8 +759,14 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	sr.isOrphan = sr.isNested && !parentIsSpawn
 
 	if sr.isNested && parentIsSpawn {
-		// This tool call will be emitted by emitNestedToolCalls when its
-		// parent spawn is processed.  Skip it here to avoid double-emission.
+		// ADR-091 D7: emitNestedToolCalls (which used to emit this call
+		// nested under its parent span) is deleted — a delegated/task
+		// child owns its own transcript now (D1), so this branch is dead
+		// for any transcript ADR-091's real launcher produced. Still
+		// skipped here (not re-processed as a top-level call) for a
+		// pre-ADR-091 transcript that DOES carry a nested recording —
+		// greenfield migration, §6: it is simply dropped from replay
+		// rather than mis-rendered as a flat top-level call.
 		return streamReplayStateContinue
 	}
 
@@ -762,13 +791,15 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 		sr.effectiveAgentID = sr.lastSeenAgentID
 	}
 
-	// isDelegateSpawnCall identifies a spawn/delegate tool call (the
-	// two names checked mirror buildSpawnIDsWithChildren's own
-	// ADR-036 rename note). Used below both to resolve span-level
-	// agent-id and to gate the still-active liveness check — a
-	// terminal snapshot is only ever withheld for THIS call kind,
-	// never for an ordinary tool call.
-	isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate"
+	// isDelegateSpawnCall identifies a spawn/delegate/create_task tool call
+	// (the two legacy names checked mirror buildSpawnIDsWithChildren's own
+	// ADR-036 rename note; create_task added by ADR-091 D7/I-4 — "learns
+	// create_task alongside delegate", both fronts sharing one bracketing
+	// rule since both are steered sessions now). Used below both to
+	// resolve span-level agent-id and to gate the still-active liveness
+	// check — a terminal snapshot is only ever withheld for THIS call
+	// kind, never for an ordinary tool call.
+	isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate" || tc.Tool == "create_task"
 
 	// Finding C (A-I4 round 4): every spawn/delegate call gets a
 	// subagent_start/subagent_end bracket on replay, matching live
@@ -826,6 +857,18 @@ func (sr *streamReplayState) buildSubagentStart(tc session.ToolCall) {
 	if sr.spanAgentID != "" {
 		agentIDCopy := sr.spanAgentID
 		sr.subStart.AgentId = &agentIDCopy
+	}
+	// ADR-091 I-4: "gains one optional field, child_session_id, so the
+	// open control knows where to go". Best-effort extraction from the
+	// persisted tool-call result — the delegate/create_task tool's own
+	// result shape is WP-C's, not this lane's; a missing/differently-keyed
+	// result simply leaves ChildSessionId nil (the open control degrades
+	// gracefully, per the field's own "optional" contract).
+	if tc.Result != nil {
+		if sid, ok := tc.Result["session_id"].(string); ok && sid != "" {
+			sidCopy := sid
+			sr.subStart.ChildSessionId = &sidCopy
+		}
 	}
 }
 
@@ -967,12 +1010,14 @@ func buildMediaFrame(
 // transcripts recorded before the merge still carry tool=="spawn" — this must
 // keep matching for those sessions to replay correctly. New transcripts carry
 // tool=="delegate" instead, so both names are checked here.
+// ADR-091 D7/I-4 adds "create_task": a task child is bracketed by the same
+// subagent span rule as a delegate child now (both fronts, one launcher).
 func buildSpawnIDsWithChildren(entries []session.TranscriptEntry) map[string]bool {
-	// Pass 1: collect all spawn/delegate tool call IDs.
+	// Pass 1: collect all spawn/delegate/create_task tool call IDs.
 	isSpawn := make(map[string]struct{})
 	for _, entry := range entries {
 		for _, tc := range entry.ToolCalls {
-			if (tc.Tool == "spawn" || tc.Tool == "delegate") && tc.ID != "" {
+			if (tc.Tool == "spawn" || tc.Tool == "delegate" || tc.Tool == "create_task") && tc.ID != "" {
 				isSpawn[string(tc.ID)] = struct{}{}
 			}
 		}
@@ -1048,100 +1093,13 @@ func buildSpanRealAgentIDs(entries []session.TranscriptEntry, withChildren map[s
 
 type tcAddr struct{ entryIdx, tcIdx int }
 
-// emitNestedToolCalls emits all tool calls across all entries whose
-// ParentToolCallID == parentID.  It respects dedup (latestByID), emits
-// start+result pairs, and returns the aggregate duration and status.
-func emitNestedToolCalls(
-	ctx context.Context,
-	sessionID string,
-	parentID string,
-	entries []session.TranscriptEntry,
-	latestByID map[string]tcAddr,
-	agentID string,
-	emitFrame func(any) error,
-	toolStore *toolResultStore,
-) (totalDurationMS int64, aggregateStatus string, err error) {
-	aggregateStatus = "success"
-
-	for ei, entry := range entries {
-		for ti, tc := range entry.ToolCalls {
-			if string(tc.ParentToolCallID) != parentID {
-				continue
-			}
-			if tc.ID == "" {
-				continue
-			}
-			tcID := string(tc.ID)
-			// Dedup.
-			if latest := latestByID[tcID]; latest.entryIdx != ei || latest.tcIdx != ti {
-				continue
-			}
-
-			if ctx.Err() != nil {
-				return totalDurationMS, aggregateStatus, ctx.Err()
-			}
-
-			// Coerce nil params to empty map (schema: params required, must be object).
-			params := tc.Parameters
-			if params == nil {
-				params = map[string]any{}
-			}
-			startFrame := generated.ToolCallStartFrame{
-				Type:      string(generated.WsFrameTypeToolCallStart),
-				SessionId: sessionID,
-				CallId:    tcID,
-				Tool:      tc.Tool,
-				Params:    params,
-			}
-			effectiveAgentID := entry.AgentID
-			if effectiveAgentID == "" {
-				effectiveAgentID = agentID
-			}
-			if effectiveAgentID != "" {
-				agentIDCopy := effectiveAgentID
-				startFrame.AgentId = &agentIDCopy
-			}
-			startFrame.ParentCallId = &parentID
-			if err2 := emitFrame(startFrame); err2 != nil {
-				return totalDurationMS, aggregateStatus, err2
-			}
-
-			resultPayload := truncateResult(sessionID, tc, toolStore)
-			status := toolCallResultStatus(tc.Status)
-			durationMs := int(tc.DurationMS)
-			resultFrame := generated.ToolCallResultFrame{
-				Type:         string(generated.WsFrameTypeToolCallResult),
-				SessionId:    sessionID,
-				CallId:       tcID,
-				Tool:         tc.Tool,
-				Result:       resultPayload,
-				Status:       status,
-				DurationMs:   &durationMs,
-				ParentCallId: &parentID,
-			}
-			if effectiveAgentID != "" {
-				agentIDCopy := effectiveAgentID
-				resultFrame.AgentId = &agentIDCopy
-			}
-			// Same treatment as the top-level builder. This path emits the
-			// tool calls a DELEGATED worker made — the exact calls this whole
-			// change set is named after — and it previously set no Error at
-			// all, neither RC-5c's copy nor W5's parse. A delegated worker's
-			// failed write showed its reason live and a bare failure after a
-			// reload.
-			applyPersistedFailureReason(&resultFrame, tc)
-			if err2 := emitFrame(resultFrame); err2 != nil {
-				return totalDurationMS, aggregateStatus, err2
-			}
-
-			totalDurationMS += tc.DurationMS
-			if status == "error" {
-				aggregateStatus = "error"
-			}
-		}
-	}
-	return totalDurationMS, aggregateStatus, nil
-}
+// emitNestedToolCalls (formerly here) is DELETED — ADR-091 D7: "the nesting
+// of child steps into parent transcripts (replay.go::emitNestedToolCalls)
+// become dead and are deleted". A delegated/task child owns its own
+// store-backed session (D1), so its tool calls are never recorded with
+// ParentToolCallID under an outer span in the PARENT's own transcript any
+// more — see classifyToolCall's and buildSubagentStart's call sites above
+// for where this function used to be invoked.
 
 // applyPersistedFailureReason restores live/replay parity for a failed tool
 // call's reason. It is shared by BOTH frame builders deliberately: they are
@@ -1569,7 +1527,7 @@ func computeReplayStats(entries []session.TranscriptEntry) replayStats {
 	seenSpawnIDs := make(map[string]bool)
 	for _, entry := range entries {
 		for _, tc := range entry.ToolCalls {
-			if (tc.Tool == "spawn" || tc.Tool == "delegate") && tc.ID != "" {
+			if (tc.Tool == "spawn" || tc.Tool == "delegate" || tc.Tool == "create_task") && tc.ID != "" {
 				seenSpawnIDs[string(tc.ID)] = true
 			}
 		}

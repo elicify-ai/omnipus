@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 const (
@@ -129,6 +130,16 @@ type Manager struct {
 	streamFallback    bus.StreamDelegate // optional fallback for channels not in m.channels (e.g., webchat WebSocket)
 	failedChannels    []ChannelInitError // enabled channels that failed to start
 	cancelInterceptor CancelInterceptor  // set after construction via SetCancelInterceptor; may be nil
+
+	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
+	// (landing order §2: "injected into every package that hosts a
+	// boundary ... pkg/channels for boundary 7"). Nil until
+	// SetSteerAudienceResolver is called — GetStreamer then falls back to
+	// today's parentSpawnCallID-only suppression.
+	steerAudience steer.AudienceResolver
+	// steerObserver is the paired steer.BoundaryObserver; defaults to
+	// steer.NopBoundaryObserver{} once steerAudience is wired.
+	steerObserver steer.BoundaryObserver
 
 	// pairingObserver, if set before StartAll, is wired into every channel that
 	// implements PairingObservable so linked-device pairing updates (QR/status)
@@ -420,12 +431,28 @@ func (m *Manager) SetCancelInterceptor(ci CancelInterceptor) {
 	m.mu.Unlock()
 }
 
+// SetSteerAudienceResolver injects ADR-091 I-5's steer.AudienceResolver and
+// steer.BoundaryObserver (boundary 7, FR-B-001/FR-B-014). A nil observer
+// defaults to steer.NopBoundaryObserver{}. Mirrors SetCancelInterceptor's
+// "set after construction, last write wins" contract — GetStreamer reads it
+// live, so no already-open stream needs re-wiring.
+func (m *Manager) SetSteerAudienceResolver(resolver steer.AudienceResolver, observer steer.BoundaryObserver) {
+	if observer == nil {
+		observer = steer.NopBoundaryObserver{}
+	}
+	m.mu.Lock()
+	m.steerAudience = resolver
+	m.steerObserver = observer
+	m.mu.Unlock()
+}
+
 // GetStreamer implements bus.StreamDelegate.
 // It checks if the named channel supports streaming and returns a Streamer.
 // Falls back to streamFallback for channels not in the Manager (e.g., webchat).
 func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionID string) (bus.Streamer, bool) {
 	m.mu.RLock()
 	ch, exists := m.channels[channelName]
+	resolver, observer := m.steerAudience, m.steerObserver
 	m.mu.RUnlock()
 
 	if !exists {
@@ -454,13 +481,33 @@ func (m *Manager) GetStreamer(ctx context.Context, channelName, chatID, sessionI
 		return nil, false
 	}
 
+	// ADR-091 boundary 7 (landing order §6, FR-B-001): a steered session's
+	// audience is resolved ONCE here (not per Update call — the resolver is
+	// a store read, and this is the hot streaming path) and stamped onto
+	// the wrapper below, alongside today's parentSpawnCallID suppression.
+	// audienceFor also calls steer.BoundaryObserver.Observe before this
+	// decision is acted on (FR-B-014).
+	audience := steer.AudienceUser
+	if resolver != nil && sessionID != "" {
+		if observer == nil {
+			observer = steer.NopBoundaryObserver{}
+		}
+		resolved, _, aerr := resolver.Audience(ctx, sessionID)
+		if aerr != nil {
+			resolved = steer.AudienceNone
+		}
+		observer.Observe(steer.BoundaryExternalChannelStreaming, sessionID, resolved)
+		audience = resolved
+	}
+
 	// Mark completed root streams so preSend knows to clean up the placeholder.
-	// Streams stamped with a non-empty parentSpawnCallID are suppressed by the
-	// wrapper and never marked active.
+	// Streams stamped with a non-empty parentSpawnCallID, OR whose audience
+	// is not the user, are suppressed by the wrapper and never marked active.
 	key := channelName + ":" + chatID
 	return &finalizeHookStreamer{
 		Streamer:   streamer,
 		onFinalize: func() { m.streamActive.Store(key, streamEntry{createdAt: time.Now()}) },
+		audience:   audience,
 	}, true
 }
 
@@ -469,6 +516,9 @@ type finalizeHookStreamer struct {
 	Streamer
 	onFinalize        func()
 	parentSpawnCallID string
+	// audience is ADR-091 boundary 7's resolved audience (steer.AudienceUser
+	// by default when steering is not wired) — see GetStreamer.
+	audience steer.Audience
 }
 
 // SetParentSpawnCallID receives the turn's existing delegation-nesting
@@ -478,15 +528,22 @@ func (s *finalizeHookStreamer) SetParentSpawnCallID(parentSpawnCallID string) {
 	s.parentSpawnCallID = parentSpawnCallID
 }
 
+// suppressed reports whether this stream is contained — either today's
+// delegation-nesting stamp, or (ADR-091) a resolved audience that is not
+// the user.
+func (s *finalizeHookStreamer) suppressed() bool {
+	return s.parentSpawnCallID != "" || (s.audience != "" && s.audience != steer.AudienceUser)
+}
+
 func (s *finalizeHookStreamer) Update(ctx context.Context, content string) error {
-	if s.parentSpawnCallID != "" {
+	if s.suppressed() {
 		return nil
 	}
 	return s.Streamer.Update(ctx, content)
 }
 
 func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) error {
-	if s.parentSpawnCallID != "" {
+	if s.suppressed() {
 		return nil
 	}
 	if err := s.Streamer.Finalize(ctx, content); err != nil {
@@ -497,7 +554,7 @@ func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) err
 }
 
 func (s *finalizeHookStreamer) Cancel(ctx context.Context) {
-	if s.parentSpawnCallID != "" {
+	if s.suppressed() {
 		return
 	}
 	s.Streamer.Cancel(ctx)

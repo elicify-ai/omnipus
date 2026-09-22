@@ -14,6 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // agentLoopRunTurnResponseCallLLMWithRetries carries the shared state of callLLMWithRetries across its stages.
@@ -509,7 +510,12 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryTimeout(retry int) ag
 				Backoff:    backoff,
 			},
 		)
-		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) {
+		// ADR-091 boundary 5 (landing order §6, FR-B-001): a steered
+		// session's retry notice is never the user's audience.
+		// audienceFor also calls steer.BoundaryObserver.Observe before this
+		// decision is acted on (FR-B-014).
+		retryAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
+		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && retryAudience == steer.AudienceUser {
 			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
 				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
 				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,
@@ -569,7 +575,12 @@ func (cr *agentLoopRunTurnResponseCallLLMWithRetries) retryContextOverflow(retry
 			},
 		)
 
-		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) {
+		// ADR-091 boundary 5 (landing order §6, FR-B-001): a steered
+		// session's retry notice is never the user's audience.
+		// audienceFor also calls steer.BoundaryObserver.Observe before this
+		// decision is acted on (FR-B-014).
+		overflowAudience := cr.rr.rq.ri.rf.rt.al.audienceFor(cr.rr.rq.ri.rf.rt.turnCtx, steer.BoundaryRetryNotice, cr.rr.rq.ri.rf.rt.ts.transcriptSessionID)
+		if retry == 0 && !constants.IsInternalChannel(cr.rr.rq.ri.rf.rt.ts.channel) && overflowAudience == steer.AudienceUser {
 			if notifyErr := cr.rr.rq.ri.rf.rt.al.bus.PublishOutbound(cr.rr.rq.ri.rf.rt.turnCtx, bus.OutboundMessage{
 				Channel: cr.rr.rq.ri.rf.rt.ts.channel,
 				ChatID:  cr.rr.rq.ri.rf.rt.ts.chatID,

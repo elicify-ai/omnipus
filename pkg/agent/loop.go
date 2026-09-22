@@ -33,6 +33,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/state"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -405,6 +406,20 @@ type AgentLoop struct {
 	// way approvalGrants is, per the spec's Clarifications. Always non-nil
 	// after NewAgentLoop.
 	asyncNotifier *asyncNotifierImpl
+
+	// audienceResolver, boundaryObserver, upwardDeliverer are ADR-091 I-5's
+	// injected pkg/steer dependencies (landing order I-5, boundary
+	// inventory §6). Nil until SetSteerAudienceDeps is called (post-boot,
+	// once gateway_boot.go::wireSteerDeps has built the real
+	// implementations) — every boundary reads them through steer_boundary.go's
+	// audienceFor, which treats a nil resolver as AudienceUser (today's
+	// unrestricted behaviour) so a bare test AgentLoop that never wires
+	// steering is unaffected. Guarded by steerDepsMu (late-bound, mirroring
+	// askUserRegistry/askUserRegistryMu).
+	audienceResolver steer.AudienceResolver
+	boundaryObserver steer.BoundaryObserver
+	upwardDeliverer  steer.UpwardDeliverer
+	steerDepsMu      sync.RWMutex
 
 	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/
 	// used for all new sessions (joined session model). Legacy per-agent stores
@@ -1525,36 +1540,24 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 	})
 }
 
-// u9ToolExecSessionIDs computes the two identity fields ADR-057's W4 stamping
+// u9ToolExecSessionIDs computes the identity field ADR-057's W4 stamping
 // contract requires on the wire for a session-scoped frame, for the two Go
-// event payloads events.go (U23) gave a ProducingSessionID field —
-// ToolExecStartPayload and ToolExecEndPayload, the only two of the 19
-// SESSION_SCOPED_FRAME_TYPES classified as needing it at the Go-payload
-// level today (class (a) per the W5 audit, FR-089/BDD-16: a child turn
-// genuinely emits tool_call_start/tool_call_result, so the wire frame
-// carries both ids). Factored into one function, called from both
-// construction sites below, so this file has exactly one place that answers
-// "what goes on the wire" rather than two independently-maintained copies of
-// the same two-field contract.
+// event payloads ToolExecStartPayload and ToolExecEndPayload.
 //
-//   - sessionID (FR-011/FR-012): the ROUTING identity — the id inherited
-//     verbatim from the root of the delegation subtree — never this turn's
-//     own transcriptSessionID, which for a delegated child differs from the
-//     root's.
-//   - producingSessionID (FR-013): the zero value when ts IS the routing
-//     session (producing == routing — the common non-delegated case, and
-//     every root turn), so the WS forwarder (pkg/gateway/websocket.go, U11)
-//     can implement the "present iff it differs from session_id" rule with a
-//     plain non-empty-and-unequal check before stamping the wire's optional
-//     producing_session_id. Otherwise this turn's own real, store-backed
-//     session id — see ToolExecStartPayload.ProducingSessionID's doc comment
-//     (events.go) for the full rationale.
-func u9ToolExecSessionIDs(ts *turnState) (sessionID string, producingSessionID session.SessionID) {
-	sessionID = string(ts.routingSessionID)
-	if ts.transcriptSessionID == sessionID {
-		return sessionID, ""
-	}
-	return sessionID, session.SessionID(ts.transcriptSessionID)
+// ADR-091 D7/I-4: ProducingSessionID — the workaround field this function
+// used to ALSO compute, so the WS forwarder could stamp an optional
+// producing_session_id "present iff it differs from session_id" — is
+// deleted (events.go), and this function now returns only sessionID.
+// SessionID here is still the ROUTING identity (FR-011/FR-012 — the id
+// inherited verbatim from the root of the delegation subtree), unchanged by
+// this deletion: fully realizing I-4's "every frame carries its own
+// session_id (the producing session)" for these two payloads requires
+// turnState.routingSessionID's identity contract itself to change, which
+// this lane's brief scopes as "stop reading/setting" the workaround field,
+// not a redesign of routingSessionID — see this lane's final report for the
+// residual gap this leaves.
+func u9ToolExecSessionIDs(ts *turnState) (sessionID string) {
+	return string(ts.routingSessionID)
 }
 
 func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDecision) error {
@@ -2115,7 +2118,15 @@ func (al *AgentLoop) runAgentLoop(
 		}
 	}
 
-	if opts.SendResponse && result.finalContent != "" {
+	// ADR-091 boundary 3 (landing order §6, FR-B-001): a steered session's
+	// final reply is never the user's audience, regardless of
+	// SendResponse — this is the re-entered-delegate leak D11 contained by
+	// hand (`processSystemMessage`'s SendResponse deny) before this ADR;
+	// the permanent form is asking the audience here. audienceFor also
+	// calls steer.BoundaryObserver.Observe before this decision is acted on
+	// (FR-B-014).
+	finalReplyAudience := al.audienceFor(ctx, steer.BoundaryFinalReply, opts.TranscriptSessionID)
+	if opts.SendResponse && result.finalContent != "" && finalReplyAudience == steer.AudienceUser {
 		// ADR-082 D6/FR-011: carry the transcript session id so
 		// webchatChannel.Send (pkg/gateway/webchat_channel.go) can resolve
 		// delivery targets by session id first, chat id second — the fix for
@@ -2536,14 +2547,25 @@ func (al *AgentLoop) emitTurnErrorFrame(
 
 // emitDelegatedTaskLimitNotice keeps publication ownership coherent by
 // deriving both destinations from sourceTS: live delivery uses the child's
-// inherited routing identity, and replay persistence walks that same child's
-// canonical parent chain to the root conversation transcript.
+// own event identity, and persistence writes to that SAME child's own
+// transcript.
+//
+// ADR-091 boundary 11 (landing order §6): this used to walk
+// rootTurnState(sourceTS) and persist there — "always tell the top of the
+// tree" is exactly the hardcoded audience decision D3 replaces. A steered
+// child's own view is where R1 ("errors visible in the session's own view
+// and transcript") puts this; the upward half (the parent's side panel
+// status line) is subturn_result.go::emitSubTurnIterationLimitNotice's own
+// added Deliver call, not this shared helper — subTurnTimedOutResult's own
+// call site does not duplicate that upward delivery, since a timeout is
+// already one of I-5's terminal Outcomes, delivered once via turn
+// reconstruction (I-3, WP-A).
 func (al *AgentLoop) emitDelegatedTaskLimitNotice(
 	sourceTS *turnState, meta EventMeta, notice delegatedTaskLimitNotice,
 ) {
 	llm := notice.llmError()
 	al.emitErrorEvent(sourceTS, meta, string(notice.stage), llm)
-	rootTurnState(sourceTS).appendDelegatedTaskLimitNotice(notice)
+	sourceTS.appendDelegatedTaskLimitNotice(notice)
 }
 
 func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {

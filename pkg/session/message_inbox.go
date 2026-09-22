@@ -141,6 +141,11 @@ type envelopePeek struct {
 	Direction       string  `json:"direction"`
 	Depth           int     `json:"depth"`
 	CorrelationID   string  `json:"correlation_id"`
+	// Fatal is only meaningful (and only ever present) on kind=error — see
+	// wakeEligibleForAdmission, which needs it to tell a fatal error (I-5
+	// wake-eligible) from a non-fatal one (not wake-eligible). Absent/false
+	// on every other kind, which is the correct default for them too.
+	Fatal bool `json:"fatal"`
 }
 
 // messageInboxPeekEnvelopeCalls counts peekEnvelope invocations process-wide
@@ -176,6 +181,26 @@ func peekEnvelope(msg generated.SessionMessage) (envelopePeek, []byte, error) {
 // matching the spec's literal "question+blocker" phrasing).
 func questionOrBlockerKind(kind string) bool {
 	return kind == "question" || kind == "blocker"
+}
+
+// wakeEligibleForAdmission mirrors ADR-091 landing order I-5's
+// wake-eligibility table (handback, question, blocker, fatal error,
+// goal_status) for ADMISSION purposes only (FR-B-010: "wake-eligible kinds
+// are always admitted ... and bypass allowWake"): these kinds bypass the
+// unacked-cap and per-minute rate checks in Append below, so a terminal or
+// otherwise wake-eligible outcome can never be silently dropped under load.
+// The D15 per-type (question/blocker) ceiling is a SEPARATE, narrower abuse
+// guard against a misbehaving child and is deliberately NOT bypassed here —
+// it still applies to every kind, wake-eligible or not.
+func wakeEligibleForAdmission(peek envelopePeek) bool {
+	switch peek.Kind {
+	case "handback", "question", "blocker", "goal_status":
+		return true
+	case "error":
+		return peek.Fatal
+	default:
+		return false
+	}
 }
 
 // AppendResult reports the outcome of a successful (non-error) Append.
@@ -439,7 +464,13 @@ func (s *MessageInboxStore) rateAllow(ownerKey, childSessionID string) bool {
 // question+blocker unacked ceiling, the per-child inbox-wide unacked cap,
 // and the child-send rate cap. A non-nil error is ALWAYS one of this file's
 // sentinel Err* values (wrapped) — never-silent-drop (FR-125): the caller
-// (pkg/tools/message_parent.go) turns it into a tool error the child sees.
+// (pkg/tools/message_parent.go, or steer.UpwardDeliverer for a turn-outcome
+// event) turns it into a tool error / a real error, never a silent drop.
+//
+// ADR-091 FR-B-010 (I-5): a wake-eligible kind — handback, question,
+// blocker, a FATAL error, or goal_status (wakeEligibleForAdmission) — is
+// always admitted: it bypasses the unacked-cap and rate checks (but never
+// the D15 per-type ceiling, which still bounds every kind).
 func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage) (*AppendResult, error) {
 	if strings.TrimSpace(ownerKey) == "" {
 		return nil, ErrInboxEmptyOwnerKey
@@ -525,20 +556,27 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 			return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxPerChildCeiling, openTypeCount, ceiling, peek.SessionID)
 		}
 	}
-	unackedMax := s.InboxUnackedMax
-	if unackedMax <= 0 {
-		unackedMax = DefaultInboxUnackedMax
-	}
-	if openTotalCount >= unackedMax {
-		return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxSessionFull, openTotalCount, unackedMax, peek.SessionID)
-	}
 
-	if !s.rateAllow(ownerKey, peek.SessionID) {
-		limit := s.ChildSendRatePerMinute
-		if limit <= 0 {
-			limit = DefaultChildSendRatePerMinute
+	// FR-B-010 (I-5): a wake-eligible kind bypasses the unacked-cap and rate
+	// checks below entirely — it never even consults them, so it also never
+	// consumes a rate-window slot that would otherwise count against an
+	// unrelated later message. The D15 per-type ceiling above is untouched.
+	if !wakeEligibleForAdmission(peek) {
+		unackedMax := s.InboxUnackedMax
+		if unackedMax <= 0 {
+			unackedMax = DefaultInboxUnackedMax
 		}
-		return nil, fmt.Errorf("%w (%d/min for session %s)", ErrInboxRateLimited, limit, peek.SessionID)
+		if openTotalCount >= unackedMax {
+			return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxSessionFull, openTotalCount, unackedMax, peek.SessionID)
+		}
+
+		if !s.rateAllow(ownerKey, peek.SessionID) {
+			limit := s.ChildSendRatePerMinute
+			if limit <= 0 {
+				limit = DefaultChildSendRatePerMinute
+			}
+			return nil, fmt.Errorf("%w (%d/min for session %s)", ErrInboxRateLimited, limit, peek.SessionID)
+		}
 	}
 
 	entry := InboxEntry{Kind: InboxEntryMessage, Seq: nextSeqAfter(entries), Message: &msg, CreatedAt: s.now().UTC()}

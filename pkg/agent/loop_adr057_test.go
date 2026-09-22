@@ -114,40 +114,24 @@ func TestU9ToolExecSessionIDs_RootTurn(t *testing.T) {
 	al.registerActiveTurn(ts)
 	t.Cleanup(func() { al.clearActiveTurnStateEntry(ts.sessionKey, ts) })
 
-	sid, psid := u9ToolExecSessionIDs(ts)
+	sid := u9ToolExecSessionIDs(ts)
 	assert.Equal(t, rootSessionID, sid, "root turn: wire session_id must be the turn's own session")
-	assert.Empty(t, psid, "root turn: producing_session_id must be absent (producing == routing)")
 }
 
-// TestU9ToolExecSessionIDs_ChildTurn is this unit's flagship red/green pin
-// for FR-011/FR-012/FR-013's WS-payload stamping contract. Simulates the
-// exact post-D1 shape U7's spawnSubTurn (Wave F) is contracted to produce: a
-// child turn with its OWN real, distinct transcriptSessionID, but with
-// routingSessionID inherited verbatim from the root (turn.go's
-// routingSessionID field doc comment: "childTS.routingSessionID =
-// parentTS.routingSessionID").
+// TestU9ToolExecSessionIDs_ChildTurn pins the surviving half of this unit's
+// FR-011/FR-012 WS-payload stamping contract: a child turn with its OWN
+// real, distinct transcriptSessionID, but with routingSessionID inherited
+// verbatim from the root (turn.go's routingSessionID field doc comment:
+// "childTS.routingSessionID = parentTS.routingSessionID"), still stamps the
+// wire session_id with the ROUTING (root) id, never the child's own.
 //
-// RED/GREEN EVIDENCE (required by this unit's task; the actual terminal
-// output from performing this by hand is quoted in this dispatch's report).
-// Temporarily reverting u9ToolExecSessionIDs (pkg/agent/loop.go) to
-//
-//	func u9ToolExecSessionIDs(ts *turnState) (string, session.SessionID) {
-//	    return ts.transcriptSessionID, ""
-//	}
-//
-// (the pre-ADR-057 shape: stamps the CHILD's own id as session_id and never
-// populates producing_session_id — "left unstamped") makes this test's
-// first assertion fail: got the child's own id where the root's was wanted.
-// Reverting instead to
-//
-//	func u9ToolExecSessionIDs(ts *turnState) (string, session.SessionID) {
-//	    r := string(ts.routingSessionID)
-//	    return r, session.SessionID(r)
-//	}
-//
-// ("stamped with the routing id") makes the SECOND assertion fail: got the
-// root's id where the child's own, distinct id was wanted. Restoring the
-// correct two-branch function makes both pass.
+// ADR-091 D7/I-4 deleted the producing_session_id half of this contract —
+// "every frame carries its own session_id (the producing session) ...
+// producing_session_id — the workaround — is deleted from every schema
+// that carries it". u9ToolExecSessionIDs no longer computes it (see that
+// function's own doc comment, loop.go, for the residual gap this leaves:
+// SessionID here is still the routing id, not yet the true producing
+// session).
 func TestU9ToolExecSessionIDs_ChildTurn(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
@@ -169,13 +153,9 @@ func TestU9ToolExecSessionIDs_ChildTurn(t *testing.T) {
 	al.registerActiveTurn(child)
 	t.Cleanup(func() { al.clearActiveTurnStateEntry(child.sessionKey, child) })
 
-	sid, psid := u9ToolExecSessionIDs(child)
+	sid := u9ToolExecSessionIDs(child)
 	assert.Equal(t, rootSessionID, sid,
 		"delegated child: wire session_id must be the ROUTING (root) id, never the child's own")
-	assert.Equal(t, session.SessionID(childSessionID), psid,
-		"delegated child: producing_session_id must be the child's OWN real session")
-	assert.NotEqual(t, session.SessionID(rootSessionID), psid,
-		"producing_session_id must never be stamped with the routing id")
 }
 
 // u9StubTool is a minimal test-only tool implementing tools.Tool, mirroring
@@ -281,12 +261,10 @@ func TestToolExecPayloads_RealRootTurn_StampsRoutingKeyOnly(t *testing.T) {
 			sawStart = true
 			assert.Equal(t, sessionID, p.SessionID,
 				"ToolExecStartPayload.SessionID must be the routing (== own, at root) session id")
-			assert.Empty(t, p.ProducingSessionID, "ToolExecStartPayload.ProducingSessionID must be absent at root")
 		case ToolExecEndPayload:
 			sawEnd = true
 			assert.Equal(t, sessionID, p.SessionID,
 				"ToolExecEndPayload.SessionID must be the routing (== own, at root) session id")
-			assert.Empty(t, p.ProducingSessionID, "ToolExecEndPayload.ProducingSessionID must be absent at root")
 		case TurnEndPayload:
 			sawTurnEnd = true
 			assert.Equal(t, sessionID, p.SessionID,

@@ -11,8 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -213,13 +215,6 @@ func delegatedTaskNoticeIdentity(childTS *turnState, taskLabel, taskID, childSes
 	return fmt.Sprintf("Label: %s\nTask ID: %s\nSession: %s", taskLabel, taskID, childSessionID)
 }
 
-func rootTurnState(ts *turnState) *turnState {
-	for ts != nil && ts.parentTurnState != nil {
-		ts = ts.parentTurnState
-	}
-	return ts
-}
-
 func newDelegatedIterationLimitNotice(childTS *turnState, cfg SubTurnConfig) delegatedTaskLimitNotice {
 	childSessionID := cfg.DelegateSessionID
 	if childSessionID == "" {
@@ -236,12 +231,44 @@ func newDelegatedIterationLimitNotice(childTS *turnState, cfg SubTurnConfig) del
 	}
 }
 
+// emitSubTurnIterationLimitNotice implements ADR-091 boundary 11 (landing
+// order §6): the max-iterations notice is contained to the child's own
+// view/transcript (emitDelegatedTaskLimitNotice, loop.go) AND delivered
+// upward as a non-fatal `error` inbox entry to the child's steering
+// session (steer.OutcomeLifecycleNotice) — never a bare bubble in the root
+// chat. This notice is mid-flight, not terminal (the child keeps running
+// after hitting max_tool_iterations), so it is NOT one of I-5's five
+// terminal Outcomes; the upward delivery here is this function's own, not
+// a duplicate of turn-outcome reconstruction (I-3, WP-A).
 func emitSubTurnIterationLimitNotice(al *AgentLoop, childTS *turnState, cfg SubTurnConfig) {
-	al.emitDelegatedTaskLimitNotice(
-		childTS,
-		childTS.eventMeta("spawnSubTurn", "subturn.limit"),
-		newDelegatedIterationLimitNotice(childTS, cfg),
-	)
+	notice := newDelegatedIterationLimitNotice(childTS, cfg)
+	al.emitDelegatedTaskLimitNotice(childTS, childTS.eventMeta("spawnSubTurn", "subturn.limit"), notice)
+
+	deliverer := al.getUpwardDeliverer()
+	childSessionID := string(childTS.transcriptSessionID)
+	if deliverer == nil || childSessionID == "" {
+		return
+	}
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageError(generated.SessionMessageError{
+		MessageId:      fmt.Sprintf("%s-limit-%s-%d", childSessionID, notice.stage, time.Now().UnixNano()),
+		SessionId:      childSessionID,
+		CreatedAt:      time.Now().UTC(),
+		Depth:          1,
+		SenderIdentity: childTS.agentID,
+		Fatal:          false,
+		Text:           notice.message,
+	}); err != nil {
+		logger.WarnCF("agent", "emitSubTurnIterationLimitNotice: encode failed",
+			map[string]any{"session_id": childSessionID, "error": err.Error()})
+		return
+	}
+	if _, derr := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+		ChildSessionID: childSessionID, Outcome: steer.OutcomeLifecycleNotice, Message: sm,
+	}); derr != nil {
+		logger.WarnCF("agent", "emitSubTurnIterationLimitNotice: Deliver failed",
+			map[string]any{"session_id": childSessionID, "error": derr.Error()})
+	}
 }
 
 // updateToolCallStatusRetryDelays is the bounded backoff schedule

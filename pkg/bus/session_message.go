@@ -13,6 +13,7 @@ import (
 	"context"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // sessionMessageBufferSize mirrors defaultBusBufferSize — the session-
@@ -42,6 +43,15 @@ type SessionMessageEvent struct {
 	//     routing (Phase-2 consumer).
 	TargetSessionID string
 	Message         generated.SessionMessage
+	// Principal is ADR-091 I-5's "Bus route authority" (R17, FR-B-015): who
+	// the PUBLISHER verified is acting — set by the publisher AFTER it
+	// verified authority (tools: pkg/tools/delegate.go::verifyCallerOwnsSession;
+	// a human: the gateway's authenticated identity, never constructed by a
+	// tool). pkg/agent/session_messaging_wire.go::deliverParentToChild
+	// RE-VERIFIES this against the target's edge before injecting a
+	// parent_to_child kind — a valid child naming another valid child (or an
+	// event with no principal at all) is refused.
+	Principal session.Principal
 }
 
 // PublishSessionMessage publishes evt on the bus's dedicated session-message

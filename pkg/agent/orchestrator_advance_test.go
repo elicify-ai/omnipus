@@ -7,8 +7,6 @@ package agent
 import (
 	"context"
 	"path/filepath"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -270,116 +268,17 @@ func createChild(t *testing.T, store *task.Store, parentID, status string) *task
 	return got
 }
 
-// TestParentFollowUp_ConcurrentSiblings_ExactlyOne is the duplicate-parent-
-// follow-up race regression test. N sibling-completion callbacks fire
-// concurrently for the same in_progress parent with all children already done;
-// the atomic ClaimParentFollowUp must ensure the parent follow-up fires exactly once.
-//
-// Traces to: wave spec — ClaimParentFollowUp exactly-once under concurrent siblings.
-func TestParentFollowUp_ConcurrentSiblings_ExactlyOne(t *testing.T) {
-	te, store := newTestTaskExecutor(t)
-
-	// Parent in "in_progress" state.
-	parent := &task.Task{
-		Title:       "parent",
-		Prompt:      "p",
-		AgentID:     "jim",
-		Priority:    3,
-		Action:      task.ActionLLM,
-		Status:      task.StatusNext,
-		WorkspaceID: "default",
-	}
-	if err := store.Create(parent); err != nil {
-		t.Fatalf("create parent: %v", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := store.Update(
-		parent.ID,
-		task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now},
-	); err != nil {
-		t.Fatalf("parent→in_progress: %v", err)
-	}
-
-	// All children already completed (so every concurrent caller observes allDone).
-	const numChildren = 8
-	for i := 0; i < numChildren; i++ {
-		createChild(t, store, parent.ID, "completed")
-	}
-
-	// Wire the test seam to count follow-up fires.
-	var fires int64
-	te.parentFollowUp = func(parentID string) {
-		atomic.AddInt64(&fires, 1)
-	}
-
-	// Fire N concurrent sibling-completion notifications for the same parent.
-	const N = 16
-	var wg sync.WaitGroup
-	wg.Add(N)
-	start := make(chan struct{})
-	for i := 0; i < N; i++ {
-		go func() {
-			defer wg.Done()
-			<-start
-			te.notifyParentIfAllSiblingsDone(parent.ID)
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	if got := atomic.LoadInt64(&fires); got != 1 {
-		t.Fatalf("parent follow-up fired %d times, want exactly 1", got)
-	}
-
-	// The parent must be flagged FollowedUp on disk.
-	reloaded, err := store.Get(parent.ID)
-	if err != nil {
-		t.Fatalf("get parent: %v", err)
-	}
-	if !reloaded.FollowedUp {
-		t.Fatal("parent FollowedUp must be true after the follow-up fired")
-	}
-}
-
-// TestParentFollowUp_NotAllSiblingsDone verifies no follow-up fires while a
-// sibling is still in_progress.
-//
-// Traces to: wave spec — parent follow-up: only fires when ALL siblings are terminal.
-func TestParentFollowUp_NotAllSiblingsDone(t *testing.T) {
-	te, store := newTestTaskExecutor(t)
-
-	parent := &task.Task{
-		Title:       "parent",
-		Prompt:      "p",
-		AgentID:     "jim",
-		Priority:    3,
-		Action:      task.ActionLLM,
-		Status:      task.StatusNext,
-		WorkspaceID: "default",
-	}
-	if err := store.Create(parent); err != nil {
-		t.Fatalf("create parent: %v", err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := store.Update(
-		parent.ID,
-		task.Patch{Status: ptrStatus(task.StatusInProgress), StartedAt: &now},
-	); err != nil {
-		t.Fatalf("parent→in_progress: %v", err)
-	}
-
-	createChild(t, store, parent.ID, "completed")
-	createChild(t, store, parent.ID, "running") // still running → not all done
-
-	var fires int64
-	te.parentFollowUp = func(string) { atomic.AddInt64(&fires, 1) }
-
-	te.notifyParentIfAllSiblingsDone(parent.ID)
-
-	if got := atomic.LoadInt64(&fires); got != 0 {
-		t.Fatalf("follow-up fired %d times while a sibling is still in_progress, want 0", got)
-	}
-}
+// notifyParentIfAllSiblingsDone — and the "wait for every sibling to be
+// terminal before waking the parent" behavior its two former regression
+// tests here guarded (TestParentFollowUp_ConcurrentSiblings_ExactlyOne,
+// TestParentFollowUp_NotAllSiblingsDone) — is DELETED by ADR-091 D3:
+// "the system MUST NOT batch a child's completion behind its siblings,
+// because a slow sibling would hide a finished result (founder decision
+// Q5)"; FR-B-003: "the system MUST wake per child;
+// task_executor_judge.go::notifyParentIfAllSiblingsDone is deleted." Its
+// replacement, deliverTaskCompletionUpward (task_executor_judge.go), fires
+// per child, immediately, through steer.UpwardDeliverer.Deliver — there is
+// no sibling-wait state left to race or to leave unfired.
 
 // TestDispatchSema_TaskExecutor_ExecuteTask_SemaRejection verifies that
 // ExecuteTask respects the dispatch semaphore cap.

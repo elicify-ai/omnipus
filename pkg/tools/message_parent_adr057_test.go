@@ -61,7 +61,7 @@ func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
 
-	mp := NewMessageParentTool(inbox, lc)
+	mp := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	mp.SetSessionMessagingEnabled(func() bool { return true })
 
 	const chatA = "u14-mp-chat-A"
@@ -136,7 +136,7 @@ func TestPerChildMessageCeiling_IsPerDirectParent(t *testing.T) {
 	const ceiling = 2
 	inbox.InboxPerTypeCeiling = ceiling // small, deterministic test ceiling
 
-	mp := NewMessageParentTool(inbox, lc)
+	mp := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	mp.SetSessionMessagingEnabled(func() bool { return true })
 
 	const chatA = "u14-ceiling-chat-A"

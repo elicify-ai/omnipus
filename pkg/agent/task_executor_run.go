@@ -72,7 +72,7 @@ func (te *TaskExecutor) runTask(
 	// removed — there is no backstop besides this goroutine's own top-level
 	// recover (matching the pattern in session_end.go's runRecap,
 	// subturn.go's spawnSubTurn, hooks.go's runObserver, and this file's own
-	// notifyParentIfAllSiblingsDone). A panic here that left an open TaskRun
+	// deliverTaskCompletionUpward). A panic here that left an open TaskRun
 	// un-closed would strand it in_progress forever. Logs and returns rather
 	// than re-panicking — this goroutine has no caller to propagate to
 	// (launched via `go te.runTask(...)`).
@@ -321,7 +321,7 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 // Fix 2, 2026-07-20): runTask's own top-level panic-recovery defer
 // (~line 218) closes over the SAME *activeRun completeTaskWithResult already
 // closed, and re-invokes closeRun if a panic occurs in POST-completion
-// housekeeping (onTaskComplete / notifyParentIfAllSiblingsDone) that runs
+// housekeeping (onTaskComplete / deliverTaskCompletionUpward) that runs
 // AFTER completeTaskWithResult's own successful closeRun call. That second
 // call hits task.ErrRunAlreadyClosed — the record is correctly terminal, not
 // stranded — so it is logged at Info, not Error: an ERROR log here reading

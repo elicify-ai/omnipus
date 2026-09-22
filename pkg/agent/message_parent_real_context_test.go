@@ -187,7 +187,11 @@ func TestMessageParent_RealSpawnSubTurnContext_ChildCanMessageParent(t *testing.
 	)
 	al.RegisterTool(delegateTool)
 
-	messageParentTool := tools.NewMessageParentTool(inboxStore, lifecycleStore)
+	// ADR-091 I-5: message_parent.go now depends on a single injected
+	// steer.UpwardDeliverer (Deliver replaces the former inbox+waker pair).
+	al.SetSessionMessagingStores(inboxStore, lifecycleStore)
+	al.SetSteerAudienceDeps(NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycleStore, al.GetSessionStore())), nil, NewSteerUpwardDeliverer())
+	messageParentTool := tools.NewMessageParentTool(al.getUpwardDeliverer(), lifecycleStore)
 	messageParentTool.SetSessionMessagingEnabled(func() bool { return true })
 	al.RegisterTool(messageParentTool)
 
