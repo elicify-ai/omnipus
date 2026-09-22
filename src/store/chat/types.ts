@@ -277,6 +277,12 @@ export interface SessionChatState {
   isReplaying: boolean
   /** Set when a done frame arrives while isReplaying was true. */
   replayCompletedForSession: string | null
+  /**
+   * Issue #822: a real turn done arrived during replay before catch-up opened
+   * any assistant bubble. The next token is the completed catch-up snapshot,
+   * not a new live stream. Optional for hand-built fixture compatibility.
+   */
+  terminalCatchUpPending?: boolean
   sessionTokens: number
   sessionCost: number
   rateLimitEvent: RateLimitEventData | null

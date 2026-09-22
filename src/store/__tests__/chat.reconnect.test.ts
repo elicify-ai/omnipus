@@ -402,6 +402,32 @@ describe('chat.reconnect — turn finished during replay (real done races ahead 
   })
 })
 
+// Issue #822: a turn can finish after attach_session snapshots its partial
+// text but before replay diversion is armed. The real done then reaches the
+// SPA first; replay's catch-up token arrives later with no second terminal
+// frame. The store must treat that late catch-up as the already-finished
+// answer, not reopen a permanently running bubble.
+describe('chat.reconnect — turn finishes before catch-up reaches the SPA (#822)', () => {
+  it('renders a late catch-up token as one finished assistant message after the real done already landed', () => {
+    beginAttach()
+    act(() => {
+      useChatStore.getState().handleFrame(sessionStateWithActiveTurn())
+      useChatStore.getState().handleFrame(turnDone())
+      useChatStore.getState().handleFrame(replayMessage(0))
+      useChatStore.getState().handleFrame(replayTerminatorDone(1))
+      useChatStore.getState().handleFrame(catchUpOrLiveToken('final answer completed while offline'))
+    })
+
+    const msgs = assistantMessages()
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0].content).toBe('final answer completed while offline')
+    expect(msgs[0].status).toBe('done')
+    expect(msgs[0].isStreaming).toBe(false)
+    expect(bucket()?.isStreaming).toBe(false)
+    expect(useChatStore.getState().isStreaming).toBe(false)
+  })
+})
+
 // Review finding S6 (MED): a hard WS disconnect mid-replay (before either
 // done ever arrives) must not leave isReplaying wedged true forever —
 // nothing else clears it once the connection is gone.
