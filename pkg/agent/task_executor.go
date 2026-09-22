@@ -1060,6 +1060,9 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	if gateErr := te.requirePlanExecuting(t); gateErr != nil {
 		return "", gateErr
 	}
+	if te.launcher != nil {
+		return te.startTaskNowViaLauncher(ctx, t)
+	}
 
 	// Idempotency guard: if a session already exists, don't create another one.
 	if t.SessionID != "" {
@@ -1201,6 +1204,102 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 	te.wg.Add(1)
 	go te.runTaskFromInProgress(taskCtx, t, taskSessionID, cancel, release)
 	return taskSessionID, nil
+}
+
+// startTaskNowViaLauncher is FR-A-010's single task front: Launch+Dispatch
+// for a task without a session and Dispatch alone for an existing session.
+func (te *TaskExecutor) startTaskNowViaLauncher(ctx context.Context, t *task.Task) (string, error) {
+	if t.SessionID != "" {
+		generation := 1
+		if lifecycle := te.getLifecycleStore(); lifecycle != nil {
+			if rec, err := lifecycle.Load(t.SessionID); err == nil {
+				generation = rec.Generation
+			}
+		}
+		if _, err := te.launcher.Dispatch(ctx, t.SessionID, generation); err != nil {
+			return "", fmt.Errorf("task_executor: StartTaskNow: dispatch existing session: %w", err)
+		}
+		return t.SessionID, nil
+	}
+
+	steeringSessionID := ""
+	if t.OriginSessionID != "" {
+		if sessions := te.agentLoop.GetSessionStore(); sessions != nil {
+			if _, err := sessions.GetMeta(t.OriginSessionID); err == nil {
+				steeringSessionID = t.OriginSessionID
+			}
+		}
+	}
+	req := steer.LaunchRequest{
+		SteeringSessionID: steeringSessionID,
+		TargetAgentID:     t.AgentID,
+		Label:             t.Title,
+		Task:              te.buildPrompt(t),
+		Origin: steer.Origin{
+			Kind:   steer.OriginKindTask,
+			CallID: t.OriginCallID,
+			TaskID: t.ID,
+		},
+		PlanID: t.PlanID,
+	}
+	if steeringSessionID == "" {
+		req.WorkspaceID = t.WorkspaceID
+		req.Owner = t.Owner
+	}
+	launched, err := te.launcher.Launch(ctx, req)
+	if err != nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow: launch: %w", err)
+	}
+	updated, err := te.store.Update(t.ID, task.Patch{SessionID: &launched.SessionID})
+	if err != nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow: persist session id: %w", err)
+	}
+	_ = te.activateTaskGoal(updated, launched.SessionID)
+	if _, err := te.launcher.Dispatch(ctx, launched.SessionID, launched.Generation); err != nil {
+		return "", fmt.Errorf("task_executor: StartTaskNow: dispatch: %w", err)
+	}
+	return launched.SessionID, nil
+}
+
+// dispatchLaunchedTask enters the existing task orchestration after the
+// shared steer admission gate has accepted a task-origin session.
+func (te *TaskExecutor) dispatchLaunchedTask(rec *session.LifecycleRecord, release func()) error {
+	if rec == nil || rec.Origin == nil || rec.Origin.TaskID == "" {
+		return fmt.Errorf("task_executor: dispatched task session has no task origin")
+	}
+	t, err := te.store.Get(rec.Origin.TaskID)
+	if err != nil {
+		return fmt.Errorf("task_executor: load launched task %q: %w", rec.Origin.TaskID, err)
+	}
+	if !te.enterDispatch() {
+		return ErrExecutorDraining
+	}
+
+	te.mu.Lock()
+	if _, exists := te.running[t.ID]; exists {
+		te.mu.Unlock()
+		te.wg.Done()
+		return fmt.Errorf("task_executor: task %q already running", t.ID)
+	}
+	taskCtx, cancel := context.WithCancel(context.Background())
+	te.running[t.ID] = &taskSlot{cancel: cancel}
+	te.mu.Unlock()
+
+	if t.SessionID != rec.SessionID {
+		updated, updateErr := te.store.Update(t.ID, task.Patch{SessionID: &rec.SessionID})
+		if updateErr != nil {
+			cancel()
+			te.mu.Lock()
+			delete(te.running, t.ID)
+			te.mu.Unlock()
+			te.wg.Done()
+			return fmt.Errorf("task_executor: bind launched session: %w", updateErr)
+		}
+		t = updated
+	}
+	te.emitStatusChanged(t, task.StatusInProgress)
+	go te.runTaskFromInProgress(taskCtx, t, rec.SessionID, cancel, release)
+	return nil
 }
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just

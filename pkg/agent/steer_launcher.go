@@ -176,11 +176,18 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 	}
 
 	origin := req.Origin
+	ownerKind := session.OwnerScopeHuman
+	ownerID := ""
+	if req.PlanID != "" {
+		ownerKind = session.OwnerScopePlan
+		ownerID = req.PlanID
+	}
 	rec := &session.LifecycleRecord{
 		SessionID:      childID,
 		Generation:     1,
 		State:          session.LifecycleQueued,
-		OwnerScopeKind: session.OwnerScopeHuman,
+		OwnerScopeKind: ownerKind,
+		OwnerScopeID:   ownerID,
 		WorkspaceID:    req.WorkspaceID,
 		AgentID:        req.TargetAgentID,
 		Origin:         &origin,
@@ -315,6 +322,10 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 	req steer.LaunchRequest,
 ) error {
 	patch := session.MetaPatch{Title: &title}
+	if req.Origin.TaskID != "" {
+		taskID := req.Origin.TaskID
+		patch.TaskID = &taskID
+	}
 	if workspaceID != "" {
 		patch.WorkspaceID = &workspaceID
 	}
@@ -465,6 +476,20 @@ func (al *AgentLoop) dispatchSteeredSession(ctx context.Context, sessionID strin
 			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
 		}
 		return steer.DispatchResult{State: steer.DispatchQueued, QueuePosition: position, Generation: gen}, nil
+	}
+
+	if rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask && al.taskExecutor != nil {
+		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(rec, func() {
+			al.steerAdmission().release(sessionID)
+		}); dispatchErr != nil {
+			al.steerAdmission().release(sessionID)
+			return steer.DispatchResult{}, dispatchErr
+		}
+		rec.State = session.LifecycleRunning
+		if persistErr := lifecycle.Persist(rec); persistErr != nil {
+			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
+		}
+		return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 	}
 
 	ts, buildErr := al.reconstructSteeredTurn(rec, nil)
