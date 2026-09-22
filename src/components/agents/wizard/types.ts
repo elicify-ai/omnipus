@@ -82,11 +82,6 @@ export interface AdvancedFields {
     temperature?: number
     max_tokens?: number
   }
-  // Shell hardening (Main + Subagent only).
-  shell_policy?: {
-    enable_deny_patterns?: boolean
-    custom_deny_patterns?: string[]
-  }
   rate_limits?: {
     use_global_defaults?: boolean
     max_llm_calls_per_hour?: number

@@ -31,7 +31,6 @@ import {
 import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SaveStatus, useSaveStatus } from './SaveStatus'
-import { ShellDenyPatternsEditor } from '@/components/agents/ShellDenyPatternsEditor'
 import { isReAuthCancelled } from './useReAuthGate'
 import { useStepUp } from './useStepUp'
 import { AllowedPathsEditor } from './AllowedPathsEditor'
@@ -72,14 +71,6 @@ function listsMatch(a: string[], b: readonly string[]): boolean {
   const sortedA = [...a].sort()
   const sortedB = [...b].sort()
   return sortedA.every((v, i) => v === sortedB[i])
-}
-
-// Reads the canonical backend key (shell_deny_patterns) off a sandbox-config
-// response — see pkg/gateway/rest_sandbox_config.go GET response. Shared by
-// the configData→state hydration effect and the re-auth-cancel revert so
-// both read the server value the same way.
-function extractShellDenyPatterns(data: { shell_deny_patterns?: string[] } | undefined | null): string[] {
-  return Array.isArray(data?.shell_deny_patterns) ? data.shell_deny_patterns : []
 }
 
 // ── Workspace file limit (ADR-068 §6) ─────────────────────────────────────────
@@ -346,67 +337,6 @@ export function SandboxSection(): React.ReactElement {
     queryKey: ['sandbox-config'],
     queryFn: fetchSandboxConfig,
   })
-
-  // ── Global shell deny patterns (independent autosave) ──────────────────────
-  const [globalDenyPatterns, setGlobalDenyPatterns] = useState<string[]>([])
-  const [denyPatternsSaving, setDenyPatternsSaving] = useState(false)
-
-  const { mutateAsync: saveDenyPatterns } = useMutation({
-    mutationFn: async (data: { shell_deny_patterns: string[]; token?: string }) => {
-      // Persist via PUT /api/v1/security/sandbox-config under the canonical
-      // backend key (shell_deny_patterns) defined in
-      // pkg/gateway/rest_sandbox_config.go::sandboxConfigPutBody.
-      await updateSandboxConfig(
-        { shell_deny_patterns: data.shell_deny_patterns },
-        data.token,
-      )
-    },
-    onMutate: () => setDenyPatternsSaving(true),
-    onSuccess: () => {
-      setDenyPatternsSaving(false)
-      void queryClient.invalidateQueries({ queryKey: ['sandbox-config'] })
-    },
-    onError: (err: Error) => {
-      setDenyPatternsSaving(false)
-      addToast({ message: getErrorMessage(err, 'Failed to save deny patterns'), variant: 'error' })
-    },
-  })
-
-  // Sync globalDenyPatterns from configData.
-  useEffect(() => {
-    if (!configData) return
-    setGlobalDenyPatterns(extractShellDenyPatterns(configData))
-  }, [configData])
-
-  // Debounced autosave for the global deny patterns. The flag distinguishes
-  // hydration writes (where the effect should NOT fire a PUT) from user
-  // edits. Without the debounce, ShellDenyPatternsEditor's per-keystroke
-  // onChange would issue one PUT per character.
-  const denyPatternsTouched = useRef(false)
-  const markDenyPatternsTouched = () => { denyPatternsTouched.current = true }
-  useEffect(() => {
-    if (!denyPatternsTouched.current) return
-    const handle = setTimeout(() => {
-      askSandboxConfirm({
-        title: 'Save the shell deny patterns?',
-        body: 'Commands matching these patterns are refused for every agent. Changing the list changes what every agent may run.',
-        confirmLabel: 'Save deny patterns',
-        run: (token) =>
-          saveDenyPatterns({
-            shell_deny_patterns: globalDenyPatterns.filter((x) => x.trim() !== ''),
-            token,
-          }),
-        // Cancelled: put the textarea back to the saved list. The touched flag
-        // is cleared first (same technique the configData hydration effect
-        // uses) so this programmatic revert does not re-trigger the debounce.
-        cancel: () => {
-          denyPatternsTouched.current = false
-          setGlobalDenyPatterns(extractShellDenyPatterns(configData))
-        },
-      })
-    }, 400)
-    return () => clearTimeout(handle)
-  }, [globalDenyPatterns, saveDenyPatterns])
 
   // ── Mode state ─────────────────────────────────────────────────────────────
   const [currentMode, setCurrentMode] = useState<'enforce' | 'permissive' | 'off' | undefined>()
@@ -1287,30 +1217,6 @@ const WORKSPACE_LIMIT_OPTIONS: Array<{ value: 'on' | 'off'; label: string; desc:
                   </p>
                 )}
               </>
-            )}
-          </div>
-
-          {/* ── Global shell deny patterns ── */}
-          <div className="space-y-[var(--space-2-5)] border-t border-[var(--color-border)] pt-[var(--space-3)]">
-            <div className="flex items-center justify-between">
-              <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-secondary)]">Global shell deny patterns</p>
-              {denyPatternsSaving && (
-                <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">Saving...</span>
-              )}
-            </div>
-            <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-              Fallback patterns applied to all agents that do not override them. One regex per line.
-            </p>
-            {configLoading ? (
-              <div className="h-3 w-2/3 rounded bg-[var(--color-border)] animate-pulse" />
-            ) : (
-              <ShellDenyPatternsEditor
-                value={globalDenyPatterns}
-                onChange={(patterns) => {
-                  markDenyPatternsTouched()
-                  setGlobalDenyPatterns(patterns)
-                }}
-              />
             )}
           </div>
         </Card>

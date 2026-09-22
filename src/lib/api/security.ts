@@ -1,4 +1,4 @@
-// security.ts: Credentials, audit log, god-mode, sandbox, exec allowlist and backups
+// security.ts: Credentials, audit log, god-mode, sandbox, and backups
 
 import { maybeDevToast } from '../dev-toast'
 import type { ZodType } from 'zod'
@@ -7,7 +7,6 @@ import {
   AuditLogResponse as AuditLogResponseSchema,
   AuditEntry as AuditEntrySchema,
   BackupEntry as BackupEntrySchema,
-  ExecAllowlist as ExecAllowlistSchema,
   ExecProxyStatus as ExecProxyStatusSchema,
   PendingRestartEntry as PendingRestartEntrySchema,
   PromptGuardResponse as PromptGuardResponseSchema,
@@ -31,7 +30,6 @@ import type {
   SandboxStatus,
   AuditLogResponse,
   BackupEntry,
-  ExecAllowlist,
   ExecProxyStatus,
   SkillTrustResponse,
   PromptGuardResponse,
@@ -224,21 +222,6 @@ export async function fetchAuditLog(): Promise<AuditLogResponse> {
     throw schemaErr
   }
   return parsed.data
-}
-
-// ── Exec Allowlist ────────────────────────────────────────────────────────────
-
-// ExecAllowlist — re-exported from generated openapi-types (no local body needed).
-
-export function fetchExecAllowlist(): Promise<ExecAllowlist> {
-  return request<ExecAllowlist>('/security/exec-allowlist', undefined, ExecAllowlistSchema)
-}
-
-export function updateExecAllowlist(patterns: string[]): Promise<ExecAllowlist> {
-  return request<ExecAllowlist>('/security/exec-allowlist', {
-    method: 'PUT',
-    body: JSON.stringify({ allowed_binaries: patterns }),
-  }, ExecAllowlistSchema)
 }
 
 // ── Security Admin Endpoints ──────────────────────────────────────────────────

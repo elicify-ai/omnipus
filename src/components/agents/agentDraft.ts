@@ -41,7 +41,6 @@ function normalizedBaselineValue(baseline: Agent, field: string): unknown {
   if (field === 'default' && value === undefined) return false
   if (field === 'voice' && value === undefined) return null
   if (field === 'model_params' && value === undefined) return { temperature: 1, max_tokens: 4096 }
-  if (field === 'shell_policy' && value === undefined) return { custom_deny_patterns: [] }
   return value
 }
 

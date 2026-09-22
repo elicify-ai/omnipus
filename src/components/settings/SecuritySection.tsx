@@ -26,7 +26,6 @@
 
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { AuditLogViewer } from './AuditLogViewer'
-import { ExecAllowlistSection } from './ExecAllowlistSection'
 import { PromptGuardSection } from './PromptGuardSection'
 import { ExecProxyStatusCard } from './ExecProxyStatusCard'
 import { SkillTrustSection } from './SkillTrustSection'
@@ -523,11 +522,6 @@ export function SecuritySection() {
                 />
               </div>
             </Card>
-
-            <p className="text-[length:var(--type-utility-xs-size)] font-semibold text-[var(--color-muted)] uppercase tracking-wider mt-[var(--space-3)] mb-[var(--space-2)]">
-              Binary Allowlist
-            </p>
-            <ExecAllowlistSection />
           </section>
 
           <Separator />

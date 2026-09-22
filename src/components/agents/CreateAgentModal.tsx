@@ -162,7 +162,6 @@ function payloadToCreateRequest(
     }
     if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
     if (payload.model_params !== undefined) req.model_params = payload.model_params
-    if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
     if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
     return req
   }
@@ -183,7 +182,6 @@ function payloadToCreateRequest(
   if (payload.skills !== undefined) req.skills = payload.skills
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
-  if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
   if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
   return req
 }

@@ -81,10 +81,6 @@ export interface WizardSubmitPayload {
     temperature?: number
     max_tokens?: number
   }
-  shell_policy?: {
-    enable_deny_patterns?: boolean
-    custom_deny_patterns?: string[]
-  }
   rate_limits?: {
     use_global_defaults?: boolean
     max_llm_calls_per_hour?: number
