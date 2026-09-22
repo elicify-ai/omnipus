@@ -705,10 +705,10 @@ func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, que
 // any, for the caller to dispatch next (FIFO). A release for a sessionID
 // this gate never admitted (e.g. a non-steered turn's ordinary Finish, or a
 // session that was queued rather than admitted) is a harmless no-op.
-func (g *steerAdmission) release(sessionID string) (next steerQueueEntry, hasNext bool) {
+func (g *steerAdmission) release(sessionID string, generation int) (next steerQueueEntry, hasNext bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if _, ok := g.active[sessionID]; !ok {
+	if activeGeneration, ok := g.active[sessionID]; !ok || activeGeneration != generation {
 		return steerQueueEntry{}, false
 	}
 	delete(g.active, sessionID)
@@ -719,6 +719,29 @@ func (g *steerAdmission) release(sessionID string) (next steerQueueEntry, hasNex
 	g.queue = g.queue[1:]
 	g.active[next.sessionID] = next.generation
 	return next, true
+}
+
+// hasReservation reports whether release promoted this exact generation into
+// the active set. A promoted dispatch consumes that reservation by keeping it
+// for the lifetime of the turn; it must not call tryAdmit and requeue itself.
+func (g *steerAdmission) hasReservation(sessionID string, generation int) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.active[sessionID] == generation
+}
+
+// removeQueued rolls back one exact queue entry after its queued-state write
+// fails. It never changes active reservations and therefore cannot release a
+// different turn's slot.
+func (g *steerAdmission) removeQueued(sessionID string, generation int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for i, entry := range g.queue {
+		if entry.sessionID == sessionID && entry.generation == generation {
+			g.queue = append(g.queue[:i], g.queue[i+1:]...)
+			return
+		}
+	}
 }
 
 // activeCount reports the number of turns this gate currently holds a slot
@@ -777,13 +800,13 @@ func (al *AgentLoop) steerAdmission() *steerAdmission {
 // (dispatchSteeredSession), started in a goroutine so Finish (which may be
 // running inside another turn's own goroutine, e.g. a hard-abort cascade)
 // never blocks on the next session's turn.
-func (al *AgentLoop) drainSteerQueue(sessionID string) {
-	next, hasNext := al.steerAdmission().release(sessionID)
+func (al *AgentLoop) drainSteerQueue(sessionID string, generation int) {
+	next, hasNext := al.steerAdmission().release(sessionID, generation)
 	if !hasNext {
 		return
 	}
 	go func() {
-		if _, err := al.dispatchSteeredSession(context.Background(), next.sessionID, next.generation); err != nil {
+		if _, err := al.dispatchSteeredSessionReserved(context.Background(), next.sessionID, next.generation); err != nil {
 			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed",
 				map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
 		}

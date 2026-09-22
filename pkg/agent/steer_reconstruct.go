@@ -56,9 +56,21 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 	if !ok {
 		return nil, fmt.Errorf("steer: reconstruct %q: %w: agent %q", rec.SessionID, steer.ErrAgentUnknown, rec.AgentID)
 	}
+	store := al.GetSessionStore()
+	if store == nil {
+		return nil, fmt.Errorf("steer: reconstruct %q: session store is not wired", rec.SessionID)
+	}
+	meta, err := store.GetMeta(rec.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("steer: reconstruct %q: load child address: %w", rec.SessionID, err)
+	}
 
 	opts := processOptions{
-		SessionKey: rec.SessionID,
+		SessionKey:          rec.SessionID,
+		Channel:             meta.Channel,
+		ChatID:              meta.PeerID,
+		TranscriptSessionID: rec.SessionID,
+		TranscriptStore:     store,
 		// I-5: a steered session has no user audience — reconstruction
 		// never sets SendResponse true for one. An ordinary_root record
 		// (rec.SteeredBy == nil) reaching this path is a revival/re-entry
@@ -68,11 +80,6 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		SendResponse: false,
 		WorkspaceID:  rec.WorkspaceID,
 	}
-	if rec.SteeredBy != nil {
-		opts.Channel = rec.SteeredBy.ReportingTarget.Channel
-		opts.ChatID = rec.SteeredBy.ReportingTarget.ChatID
-	}
-
 	ts := newTurnState(agentInst, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
 	ts.generation = rec.Generation
 	if rec.SteeredBy != nil {

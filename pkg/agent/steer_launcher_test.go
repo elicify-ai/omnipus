@@ -12,12 +12,32 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
+
+type dispatchContextProvider struct {
+	entered chan struct{}
+	once    sync.Once
+	release chan struct{}
+}
+
+func (p *dispatchContextProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	p.once.Do(func() { close(p.entered) })
+	select {
+	case <-p.release:
+		return &providers.LLMResponse{Content: "finished"}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (p *dispatchContextProvider) GetDefaultModel() string { return "dispatch-context-test" }
 
 // newSteerAL is newAL, plus wiring the lifecycle store SessionLauncher
 // needs — newTestAgentLoop's minimal harness never calls
@@ -336,6 +356,74 @@ func TestLaunch_BothFrontDoors_DifferOnlyInOrigin(t *testing.T) {
 	}
 }
 
+// TestLaunch_NestedSameShardDoesNotDeadlock proves that resolving a nested
+// launch's root never re-enters a lifecycle shard lock already held for the
+// direct parent. LifecycleStore deliberately stripes records across a fixed
+// lock pool, so distinct session IDs can share the same mutex.
+func TestLaunch_NestedSameShardDoesNotDeadlock(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	l := NewSteerLauncher(al)
+	lifecycle := al.GetSessionLifecycleStore()
+
+	rootID := newTestSteeringSession(t, al, "ws-1")
+	if err := lifecycle.Persist(&session.LifecycleRecord{
+		SessionID: rootID, Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman, WorkspaceID: "ws-1", AgentID: testDefaultAgentID,
+		Origin: &session.Origin{Kind: steer.OriginKindChat},
+	}); err != nil {
+		t.Fatalf("seed root lifecycle: %v", err)
+	}
+
+	var parentID string
+	for i := 0; i < 512; i++ {
+		candidate := newTestSteeringSession(t, al, "ws-1")
+		if lifecycle.Lock(candidate) == lifecycle.Lock(rootID) {
+			parentID = candidate
+			break
+		}
+	}
+	if parentID == "" {
+		t.Fatal("could not find two session IDs sharing a lifecycle shard")
+	}
+	if err := lifecycle.Persist(&session.LifecycleRecord{
+		SessionID: parentID, Generation: 1, State: session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: rootID,
+		WorkspaceID: "ws-1", AgentID: testDefaultAgentID, ParentAgentID: testDefaultAgentID,
+		Origin: &session.Origin{Kind: steer.OriginKindDelegate},
+		SteeredBy: &session.SteeredBy{
+			SteeringSessionID: rootID,
+			RootSessionID:     rootID,
+			Authorization: session.Authorization{
+				Mode:           session.AuthorizationModeDirect,
+				RemainingDepth: 3,
+			},
+		},
+	}); err != nil {
+		t.Fatalf("seed nested parent lifecycle: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := l.Launch(context.Background(), steer.LaunchRequest{
+			SteeringSessionID: parentID,
+			TargetAgentID:     testDefaultAgentID,
+			Task:              "nested work",
+			Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-nested"},
+		})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("nested Launch: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("nested Launch deadlocked while loading an ancestor on the direct parent's lifecycle shard")
+	}
+}
+
 // ============================== Dispatch ==============================
 
 func TestDispatch_TerminalSessionRefused(t *testing.T) {
@@ -454,5 +542,49 @@ func TestDispatch_AdmitsAndRegistersATurn(t *testing.T) {
 	case <-ts.Finished():
 	case <-time.After(10 * time.Second):
 		t.Fatal("background turn did not finish within 10s")
+	}
+}
+
+func TestDispatch_ChildLifetimeIndependentOfCallerContext(t *testing.T) {
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+	provider := &dispatchContextProvider{entered: make(chan struct{}), release: make(chan struct{})}
+	agentInst, ok := al.GetRegistry().GetAgent(testDefaultAgentID)
+	if !ok {
+		t.Fatal("test agent is not registered")
+	}
+	agentInst.Provider = provider
+
+	launcher := NewSteerLauncher(al)
+	steerer := newTestSteeringSession(t, al, "ws-1")
+	launched, err := launcher.Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer,
+		TargetAgentID: testDefaultAgentID,
+		Task:          "keep running after the delegate tool returns",
+		Origin:        steer.Origin{Kind: steer.OriginKindDelegate},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	callerCtx, cancelCaller := context.WithCancel(context.Background())
+	cancelCaller()
+	if _, err := launcher.Dispatch(callerCtx, launched.SessionID, launched.Generation); err != nil {
+		t.Fatalf("Dispatch with canceled caller context: %v", err)
+	}
+	select {
+	case <-provider.entered:
+		// The application-owned child context reached the provider.
+	case <-time.After(3 * time.Second):
+		t.Fatal("child never reached its provider after the caller context was canceled")
+	}
+	close(provider.release)
+	ts := al.getActiveTurnState(launched.SessionID)
+	if ts != nil {
+		select {
+		case <-ts.Finished():
+		case <-time.After(3 * time.Second):
+			t.Fatal("child did not finish after the provider was released")
+		}
 	}
 }
