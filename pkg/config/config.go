@@ -355,12 +355,9 @@ type PerformanceConfig struct {
 
 	// MaxDelegationDepth is ADR-091 D9's config fold: the single source of
 	// truth for the onward-delegation depth ceiling, replacing
-	// agents.defaults.subturn.max_depth (the SubTurnConfig field stays
-	// declared — see its own doc comment — because subturn.go's ring/
-	// spawnSubTurn mechanism it also fed is still live for the delegate
-	// follow-up/resume path; this key is what every reader of the GLOBAL
-	// ceiling now resolves through instead, so there is exactly one
-	// number, never two disagreeing ones). 0 means unset — the same
+	// agents.defaults.subturn.max_depth. Every reader of the global ceiling
+	// resolves through this key, so there is exactly one number. 0 means
+	// unset — the same
 	// defaultMaxSubTurnDepth backstop resolveEffectiveDelegationDepth
 	// already falls back to applies unchanged. A negative value is a
 	// configuration error (EffectiveMaxDelegationDepth returns it,

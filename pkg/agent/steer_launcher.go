@@ -7,17 +7,10 @@
 // shape of task_executor.go::createTaskSessionSync +
 // mintTaskLifecycleRecord, generalised with the steered-by edge (I-1).
 //
-// Scope note (stated once here, restated in the phase-2 report): Dispatch
-// admits a session and starts its first turn by constructing a turnState
-// directly (newTurnState + registerTurnIfAbsent + al.runTurn in a
-// goroutine) rather than by rewiring subturn.go::spawnSubTurn's live
-// synchronous execution path. Landing order CP-5 assigns "WP-C's delegate
-// uses the launcher" to WP-C, not WP-A — the actual `delegate` tool
-// call-site rewiring (and the accompanying deletion of
-// subturn.go::createChildSession, the ephemeralSessionStore ring, and
-// SubTurnConfig.Async) is deferred to that checkpoint, coupled to WP-G's
-// still-incomplete 49-file test classification (only 3/49 rows were filled
-// in as of this session — see the phase-2 report).
+// Dispatch admits a session and starts its first turn by constructing a
+// turnState directly (newTurnState + registerTurnIfAbsent + al.runTurn in a
+// goroutine). All delegate and task call sites use this launcher; the former
+// in-chat subturn execution path has been deleted.
 package agent
 
 import (
@@ -551,12 +544,9 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 // ITS launch) when it is itself steered, else the effective global
 // delegation-depth ceiling for a first hop off a root.
 //
-// Reads the SAME config key (Agents.Defaults.SubTurn.MaxDepth) subturn.go's
-// getSubTurnConfig still reads today — the D9 config-fold ("MaxDepth" moves
-// to performance.max_delegation_depth) is deferred to land together with
-// that file's own ring/spawnSubTurn deletion (see this file's package
-// doc), so as not to split the single source of truth
-// resolveEffectiveDelegationDepth's own doc comment requires.
+// The global budget comes from performance.max_delegation_depth, the sole
+// source of truth after the retired subturn-specific depth setting was folded
+// into the shared performance configuration.
 func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord) int {
 	if steererRec.SteeredBy != nil {
 		return steererRec.SteeredBy.Authorization.RemainingDepth

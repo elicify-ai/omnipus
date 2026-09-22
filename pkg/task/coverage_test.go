@@ -18,7 +18,6 @@
 //   - SpawnReset: in-progress guard (ErrAlreadyRunning), clears run fields,
 //     sets status=next
 //   - ClaimForRun concurrent N-goroutine race: exactly one wins
-//   - ClaimParentFollowUp N-goroutine race: exactly one wins
 //   - AppendTodo: atomic append, validates text limits, persists
 //   - AddDependency: idempotent, same-graph cycle guard, cross-workspace allowed
 //   - DAG depth-50 chain triggers ErrBlockedByDepthExceeded
