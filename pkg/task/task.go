@@ -271,8 +271,11 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// in contracts/. Empty on every card created before this field existed —
 	// a session-scoped caller simply does not match those legacy cards.
 	OriginSessionID string `json:"origin_session_id,omitempty"`
-	Action          Action `json:"action"`
-	Status          Status `json:"status"`
+	// OriginCallID is the creating tool call. It is disk-only launch metadata
+	// and is deliberately absent from the REST contract.
+	OriginCallID string `json:"origin_call_id,omitempty"`
+	Action       Action `json:"action"`
+	Status       Status `json:"status"`
 	// CancelReason is set on a Status=failed task cancelled via a user Stop
 	// (ADR-052 FR-028); empty for a genuine failure (e.g. attempt-limit
 	// exhaustion) and for every non-failed status. Cleared on restart/re-run.

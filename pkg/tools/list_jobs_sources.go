@@ -422,7 +422,17 @@ func collectSubagentRows(
 	// cannot leak, and a budget spent before that re-check would re-open the
 	// undercount half of the same hole. It also makes `present` mean the same
 	// thing for all three kinds: the caller's own records, post-supersession.
-	newest := newestGenerations(records, principal)
+	// Task-origin sessions are represented by collectTaskRows. Exclude them
+	// before lineage collapse and the scan ceiling so one durable session can
+	// never consume both a task row and a subagent row (ADR-091 FR-C-010).
+	nonTask := records[:0]
+	for i := range records {
+		if records[i].Origin != nil && records[i].Origin.Kind == session.OriginKindTask {
+			continue
+		}
+		nonTask = append(nonTask, records[i])
+	}
+	newest := newestGenerations(nonTask, principal)
 	kept, scanned, present, truncated := applyScanCeiling(newest, ceiling)
 	res := collectResult{
 		unreadable:    skipped,
@@ -498,35 +508,14 @@ func collectSubagentRows(
 		}
 	}
 
-	// Exactly ONE resolver call for the whole batch, never one per row —
-	// same FR-028 contention rule as the session resolver immediately below,
-	// and the same underlying index (see JobLabelResolver's doc comment).
-	var customLabels map[string]string
-	if labelResolver != nil {
-		customLabels = labelResolver.ResolvableLabels(ids)
-	}
-	// Exactly ONE resolver call for the whole batch, never one per row.
-	var resolvable map[string]bool
-	if resolver != nil {
-		resolvable = resolver.ResolvableSessionIDs(ids)
-	}
+	_ = resolver
+	_ = labelResolver
+	_ = ids
 	for i := range rows {
-		// Terminal rows are never actionable, for every kind. A subagent row
-		// is additionally not actionable when its session no longer resolves
-		// in this process — a durable record survives a restart, the in-memory
-		// index does not. With no delegate tool wired, nothing resolves, which
-		// is the honest answer rather than an error.
-		rows[i].Actionable = !terminalStatus(rows[i].Status) && resolvable[rows[i].ID]
-
-		// [UAT M3 fix] label_contains must match the label the CALLER set,
-		// when one is still resolvable, not unconditionally the agent name.
-		// Redacted the same way Label is (FR-019a: the filter must never see
-		// unredacted free text) — never truncated, because filterLabel is
-		// never serialized (truncation exists only to bound the JSON payload
-		// Label/NativeStatus contribute).
-		if custom := strings.TrimSpace(customLabels[rows[i].ID]); custom != "" {
-			rows[i].filterLabel = red.redact(custom)
-		}
+		// The lifecycle record is the durable authority after restart. Whether
+		// an old in-memory delegate index happens to contain the id cannot make
+		// a running or parked session unactionable.
+		rows[i].Actionable = !terminalStatus(rows[i].Status)
 	}
 	res.rows = rows
 	return res

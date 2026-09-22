@@ -191,14 +191,10 @@ func findDelegationEdge(
 	}
 }
 
-// EdgeModeCategory maps the delegate tool's real 3-value runtime parameter
-// (config.DelegationMode: Await/Background/Task) down to the trust edge's
-// collapsed 2-value vocabulary (workspace.DelegationMode: Direct/Task). Task
-// maps 1:1 to workspace.ModeTask; both Await and Background — the sync-vs-async
-// choice is a delegate-tool call parameter, not something the trust edge gates
-// separately — map to workspace.ModeDirect. This is the single authority for
-// that collapse at the enforcement gate; the inverse expansion (Direct back to
-// both Await and Background for system-prompt advertising) lives in
+// EdgeModeCategory maps the delegate tool's background/task runtime parameter
+// down to the trust edge's direct/task vocabulary. Task maps 1:1 to
+// workspace.ModeTask; Background maps to workspace.ModeDirect. The inverse
+// translation for system-prompt advertising lives in
 // wireDelegationInjectors (pkg/agent/loop_env.go), and defaultWorkspaceDelegationEdges
 // (pkg/gateway/rest_workspace_delegation.go) calls this function directly for
 // the collapse-on-seed case — pkg/gateway already imports pkg/agent extensively
@@ -220,7 +216,7 @@ func EdgeModeCategory(mode config.DelegationMode) workspace.DelegationMode {
 	switch mode {
 	case config.DelegationModeTask:
 		return workspace.ModeTask
-	case config.DelegationModeAwait, config.DelegationModeBackground:
+	case config.DelegationModeBackground:
 		return workspace.ModeDirect
 	default:
 		logger.WarnCF("agent",
@@ -461,10 +457,8 @@ func buildDelegationDenyChecker(
 }
 
 // buildDelegationDenyCheckerForDelegate is the wiring-site constructor for the
-// `delegate` tool's background and await gates. It bakes in selfAssignmentExempt=false:
-// delegate(agent_id=self) spawns a real sub-turn instance, so it IS delegation and a
-// self-target is ALWAYS denied. Use this — never the raw core with a literal false —
-// so the security-critical exempt value can never be flipped wrong at a call site.
+// `delegate` tool's direct gate. Self-targeting creates a new session and is
+// permitted; depth and concurrency remain the recursion bounds.
 // agentExists is an optional trailing arg (variadic — see findDelegationEdge's
 // own doc comment for why): a read-only existence probe against the live
 // agent registry, consulted only to distinguish "target agent doesn't exist"
@@ -478,7 +472,7 @@ func buildDelegationDenyCheckerForDelegate(
 	mode config.DelegationMode,
 	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false, agentExists...)
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true, agentExists...)
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the

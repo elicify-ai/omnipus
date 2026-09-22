@@ -14,19 +14,19 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // ADR-036 / docs/internal/specs/agent-delegation-spec.md — `delegate` is the
-// single, unified delegation tool. It replaces the formerly-separate `spawn`
-// (async/background), `run_subagent` (sync/await), and `check_spawn_status`
-// tools with one tool, one schema, and one piece of task-status state.
+// single, unified delegation tool. It replaces the formerly-separate `spawn`,
+// `run_subagent`, and `check_spawn_status` tools with one tool and one schema.
 //
 // FR-D2 (the bug this merge exists to fix): before this merge, `spawn` called
 // SubTurnSpawner.SpawnSubTurn directly in a goroutine, entirely bypassing the
 // legacy SubagentManager.tasks map that `check_spawn_status` read from —
 // checking on a spawn-created task always reported "no subagents have been
 // spawned yet." DelegateTool's own `tasks` map is now the SINGLE state store
-// both the async path writes to and `action: "status"` reads from — no
+// both the run path writes to and `action: "status"` reads from — no
 // second, disconnected data structure exists.
 
 // SubTurnSpawner is an interface for spawning sub-turns.
@@ -36,10 +36,9 @@ type SubTurnSpawner interface {
 }
 
 // SubTurnConfig holds configuration for spawning a sub-turn. This is the
-// shared underlying primitive DelegateTool's async and sync paths both call
-// (Async is the only differentiator) — unchanged in shape from the
-// pre-merge spawn/run_subagent split, since pkg/agent/subturn.go converts
-// this field-by-field into its own agent.SubTurnConfig.
+// legacy underlying primitive retained while session launching moves behind
+// steer.SessionLauncher. pkg/agent/subturn.go converts it field-by-field into
+// its own agent.SubTurnConfig.
 type SubTurnConfig struct {
 	Model              string
 	Tools              []Tool
@@ -342,6 +341,7 @@ type DelegateProgressReader interface {
 type DelegateTool struct {
 	BaseTool
 
+	launcher     steer.SessionLauncher
 	spawner      SubTurnSpawner
 	defaultModel string
 	maxTokens    int
@@ -432,12 +432,6 @@ type DelegateTool struct {
 	// legacy trust-only allowlistCheck fallback — it was only ever consulted
 	// when this was nil, which never happens in production wiring).
 	delegationDenyBackground func(ctx context.Context, targetAgentID string) *DelegationDenial
-	// delegationDenyAwait applies the full delegation-policy gate (FR-6.2:
-	// trust set + mode("await") + depth) for async=false calls. This is the
-	// ONLY gate for the await mode (ADR-037 retired the legacy trust-only
-	// delegateChecker fallback — same reasoning as delegationDenyBackground).
-	delegationDenyAwait func(ctx context.Context, targetAgentID string) *DelegationDenial
-
 	// delegationDepthResolver, when non-nil, resolves the effective onward-
 	// delegation depth cap for a specific target — the SAME cap the deny
 	// checker above already authorized this call against. Returns nil for "no
@@ -546,6 +540,12 @@ type DelegateTool struct {
 
 	// now is overridable for deterministic tests.
 	now func() time.Time
+}
+
+// SetSessionLauncher installs ADR-091's one session-launch primitive. The
+// delegate run front refuses to launch while this dependency is absent.
+func (t *DelegateTool) SetSessionLauncher(launcher steer.SessionLauncher) {
+	t.launcher = launcher
 }
 
 // Compile-time check: DelegateTool implements AsyncExecutor.
@@ -973,7 +973,7 @@ func isTerminalDelegateStatus(status string) bool {
 // still within its TTL window (BDD-52's "But" clause, test #93) — which
 // would otherwise break a caller's next action:"status" poll for it.
 // Callers MUST already hold t.mu. Runs as part of the tool's own
-// bookkeeping (every new task registration in executeAsync/executeSync) —
+// bookkeeping (every new corrective-run registration) —
 // FR-045 requires no external caller/ticker, and this satisfies it without
 // adding a goroutine to manage.
 //
@@ -1039,15 +1039,6 @@ func (t *DelegateTool) SetDelegationDenyCheckerBackground(
 	t.delegationDenyBackground = check
 }
 
-// SetDelegationDenyCheckerAwait installs the full delegation-policy gate
-// (FR-6.2: trust set + mode("await") + depth) applied when async=false.
-// Mirrors the pre-merge SubagentTool.SetDelegationDenyChecker exactly.
-func (t *DelegateTool) SetDelegationDenyCheckerAwait(
-	check func(ctx context.Context, targetAgentID string) *DelegationDenial,
-) {
-	t.delegationDenyAwait = check
-}
-
 // SetDelegationDepthResolver installs the effective-depth-cap resolver (#477).
 // See the delegationDepthResolver field doc. Name pinned — relied on by
 // pkg/agent/loop.go's registration wiring.
@@ -1067,9 +1058,8 @@ func (t *DelegateTool) Description() string {
 		"members declare write_sets that plan-lint checks for overlap before anything runs, and the whole " +
 		"plan is judged against one Definition of Done and can be stopped as a unit; parallel delegate " +
 		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
-		"action=\"run\" (default) delegates a new task — by default in the background " +
-		"(async=true), returning immediately with a task_id/session_id; set async=false to " +
-		"block and receive the result inline. A delegation is force-cancelled after " +
+		"action=\"run\" (default) launches a session and returns its session_id and " +
+		"running or queued state immediately. A delegation is force-cancelled after " +
 		"timeout_seconds (default 300s / 5 min) if it has not finished by then. " +
 		"action=\"status\" checks on a previously-delegated task/session; with no " +
 		"task_id/session_id given, it lists all tasks currently visible to you instead — " +
@@ -1111,12 +1101,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 				"type": "string",
 				"description": "Optional: the id of a specific agent to delegate to (must be in your " +
 					"delegation allowlist). Omit to run a generic subagent under your own agent.",
-			},
-			"async": map[string]any{
-				"type": "boolean",
-				"description": "Whether to run in the background (true, the default) and return immediately " +
-					"with a task_id, or block until the delegated turn completes (false) and return its " +
-					"result inline.",
 			},
 			"action": map[string]any{
 				"type": "string",
@@ -1171,11 +1155,6 @@ func (t *DelegateTool) Parameters() map[string]any {
 			"critical": map[string]any{
 				"type":        "boolean",
 				"description": "Optional (action=\"run\" only): continue running after the parent finishes gracefully.",
-			},
-			"allow_blocking_question": map[string]any{
-				"type": "boolean",
-				"description": "Optional (action=\"run\" with wait/async=false only): permit a bounded human-" +
-					"routed wait on a child question instead of the default rejection.",
 			},
 			"message_ids": map[string]any{
 				"type":        "array",
@@ -1324,6 +1303,23 @@ func callerOwnerKey(ctx context.Context) string {
 	return strings.TrimSpace(ToolTranscriptSessionID(ctx))
 }
 
+type delegatePrincipalContextKey struct{}
+
+// WithDelegatePrincipal carries an already-authenticated human principal from
+// the gateway into a delegate steering action. Tools never manufacture human
+// identity: callers that do not supply this value are evaluated as agents.
+func WithDelegatePrincipal(ctx context.Context, principal steer.Principal) context.Context {
+	return context.WithValue(ctx, delegatePrincipalContextKey{}, principal)
+}
+
+func delegateHumanPrincipal(ctx context.Context) (steer.Principal, bool) {
+	principal, ok := ctx.Value(delegatePrincipalContextKey{}).(steer.Principal)
+	if !ok || principal.Kind != steer.PrincipalKindHuman || strings.TrimSpace(principal.ID) == "" {
+		return steer.Principal{}, false
+	}
+	return principal, true
+}
+
 // verifyCallerOwnsSession (ADR-057 W12/FR-039/FR-040) rejects a gated
 // delegate action whose caller is not an ANCESTOR of rec — a direct parent,
 // grandparent, and so on up to the configured max delegation depth
@@ -1354,18 +1350,37 @@ func callerOwnerKey(ctx context.Context) string {
 // which is exactly the terminal, no-match case; a Load failure is never
 // treated as an ownership match).
 func (t *DelegateTool) verifyCallerOwnsSession(ctx context.Context, rec *session.LifecycleRecord) error {
+	_, err := t.verifyCallerPrincipal(ctx, rec)
+	return err
+}
+
+// verifyCallerPrincipal proves steering authority and returns the identity
+// that must accompany the resulting action. An authenticated human is global
+// steering authority. An agent must be the target's direct or transitive
+// steering ancestor, walked exclusively through the durable SteeredBy edge.
+func (t *DelegateTool) verifyCallerPrincipal(ctx context.Context, rec *session.LifecycleRecord) (steer.Principal, error) {
+	if principal, ok := delegateHumanPrincipal(ctx); ok {
+		return principal, nil
+	}
 	caller := callerOwnerKey(ctx)
 	if caller == "" {
-		return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
+		return steer.Principal{}, fmt.Errorf("session %s is not steered by the calling principal", rec.SessionID)
 	}
-	ancestor := strings.TrimSpace(rec.ParentDurableKey)
+	ancestor := ""
+	if rec.SteeredBy != nil {
+		ancestor = strings.TrimSpace(rec.SteeredBy.SteeringSessionID)
+	}
 	maxDepth := t.ownershipMaxDepth()
 	for depth := 0; depth < maxDepth; depth++ {
 		if ancestor == "" {
 			break
 		}
 		if ancestor == caller {
-			return nil
+			principalID := strings.TrimSpace(ToolAgentID(ctx))
+			if principalID == "" {
+				principalID = caller
+			}
+			return steer.Principal{Kind: steer.PrincipalKindAgent, ID: principalID}, nil
 		}
 		if t.lifecycle == nil {
 			break
@@ -1395,7 +1410,10 @@ func (t *DelegateTool) verifyCallerOwnsSession(ctx context.Context, rec *session
 			// failure of ANY kind is never treated as an ownership match.
 			break
 		}
-		ancestor = strings.TrimSpace(parentRec.ParentDurableKey)
+		if parentRec.SteeredBy == nil {
+			break
+		}
+		ancestor = strings.TrimSpace(parentRec.SteeredBy.SteeringSessionID)
 	}
-	return fmt.Errorf("session %s is not owned by the calling session", rec.SessionID)
+	return steer.Principal{}, fmt.Errorf("session %s is not steered by the calling principal", rec.SessionID)
 }
