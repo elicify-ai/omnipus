@@ -1,0 +1,36 @@
+# Temporary: reports the kernel version and Landlock ABI on GitHub's runner
+# images, to find one that reproduces issue #85(c) (Landlock ABI v1, kernel
+# 5.13-5.18). Delete this branch when the check is done.
+name: kernel probe
+
+on:
+  push:
+    branches:
+      - ci/ui-browser-mdns
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, ubuntu-24.04, ubuntu-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Report kernel and Landlock ABI
+        run: |
+          set -x
+          uname -r
+          cat /etc/os-release | head -2
+          cat /sys/kernel/security/lsm 2>/dev/null || echo "no lsm file"
+          python3 - <<'PY'
+          import ctypes, os
+          libc = ctypes.CDLL("libc.so.6", use_errno=True)
+          # landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION=1)
+          NR = 444
+          res = libc.syscall(NR, None, 0, 1)
+          print("landlock ABI probe ->", res, "errno", ctypes.get_errno())
+          PY
