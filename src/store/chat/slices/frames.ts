@@ -97,15 +97,42 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
       const frameSessionId =
         (frame as { session_id?: string }).session_id ??
         (frame as { card?: { session_id?: string } }).card?.session_id
+
+      // ADR-091 D7/FR-E-002 (cross-family review finding 18): the required-
+      // session check runs FIRST, before anything else — timestamp advance,
+      // handleReplayAndStatusFrame, the cancel-ack disambiguation below, and
+      // every switch-case reducer — and returns from `handleFrame` itself.
+      // A session-scoped frame identifies its own session; when it doesn't,
+      // that is a routing error, never a "guess the session" situation, so
+      // it is dropped outright — never filed under whatever happens to be
+      // foreground, and never reassigned to some OTHER session either (see
+      // the CANCEL_ACK_FRAME_TYPES note below, which is why that mechanism
+      // is scoped to non-session-scoped frame types only). Doing this here,
+      // before the switch, is what makes every session-scoped case arm
+      // downstream able to assume `targetSid` is non-null once reached —
+      // upstream fallbacks (`rate_limit`'s `targetSid ?? getActiveSid()`,
+      // `tool_approval_required`'s unconditional `enqueue(frame)`) were the
+      // two production paths that used to file such a frame anyway.
+      if (SESSION_SCOPED_FRAME_TYPES.has(frame.type) && !frameSessionId) {
+        console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
+        logDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
+        useConnectionStore.getState().setConnectionError(
+          'internal: server frame missing session_id — please reload'
+        )
+        return
+      }
+
       const activeSid = getActiveSid()
 
-      // F-S1: Route to the correct bucket.
-      // Session-scoped frames missing session_id are treated differently per environment.
+      // F-S1: Route to the correct bucket. By this point a session-scoped
+      // frame is guaranteed to carry frameSessionId (the branch above
+      // returned otherwise), so only a GLOBAL frame (error, ping, pong,
+      // device_pairing_*, session_state) can still be missing one.
       const targetSid: string | null = (() => {
         if (frame.type === 'session_started') return activeSid // handled below, value unused
         if (frameSessionId) return frameSessionId
         // F-S3 (UAT, browser-panel "Take over"): an untagged (no session_id)
-        // token/done/error frame that is really the server's cancellation
+        // `error` frame that is really the server's cancellation
         // acknowledgment for a BACKGROUND session (cancelStream(sessionId),
         // e.g. the browser panel's "Take over" pausing its own pinned
         // session while a different chat is foreground) must not be
@@ -119,23 +146,16 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         // pending one IS the active session — the ordinary single-session
         // Stop-button flow) falls through unchanged to the existing
         // behaviour below.
+        //
+        // CANCEL_ACK_FRAME_TYPES no longer includes `token`/`done`: both are
+        // session-scoped (SESSION_SCOPED_FRAME_TYPES), so a missing-id
+        // instance of either already returned above — this disambiguation
+        // can only ever apply to `error`, which is global. Reassigning a
+        // session-scoped frame to a guessed session (rather than dropping
+        // it) is exactly the bug cross-family review finding 18 reported.
         if (CANCEL_ACK_FRAME_TYPES.has(frame.type) && pendingCancelAckSids.size === 1) {
           const [onlyPendingSid] = pendingCancelAckSids
           if (onlyPendingSid !== activeSid) return onlyPendingSid
-        }
-        if (SESSION_SCOPED_FRAME_TYPES.has(frame.type)) {
-          // ADR-091 D7/FR-E-002: the test-mode active-session fallback is
-          // deleted — a session-scoped frame missing session_id is dropped
-          // in every environment, never filed under whatever happens to be
-          // foreground. That fallback is exactly the mechanism that let a
-          // relabelled child frame (the ADR-057 workaround this ADR
-          // removes) pass a weak fixture without a real session_id.
-          console.error('[chat] server frame missing session_id — dropping', { type: frame.type })
-          logDiagnostic('chatFrameMissingSessionId', { frameType: frame.type })
-          useConnectionStore.getState().setConnectionError(
-            'internal: server frame missing session_id — please reload'
-          )
-          return null
         }
         // Global frame (error, ping, pong, device_pairing_*, session_state) — use active.
         return activeSid
@@ -182,7 +202,7 @@ export function createFrameSlice({ set, get, getActiveSid, bucketToForeground, w
         }
       }
 
-      if (handleReplayAndStatusFrame({ frame, targetSid, get, getActiveSid, withBucket, armRateLimitClear })) {
+      if (handleReplayAndStatusFrame({ frame, targetSid, get, withBucket, armRateLimitClear })) {
         syncForeground()
         return
       }

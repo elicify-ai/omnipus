@@ -7,7 +7,7 @@ import { useSessionStore } from '@/store/session'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
 import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
-import { EMPTY_BUCKET, FALLBACK_SID, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
+import { EMPTY_BUCKET, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
 import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
@@ -33,10 +33,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
   // ── Internal helpers that mutate a named session bucket ─────────────────────
   // These read/write sessionsById[sid] and then re-sync foreground fields.
 
-  // F-S2: returns null in production when no session is active.
-  // In test mode returns FALLBACK_SID ('__default') for test compatibility.
+  // ADR-091 D7/FR-E-002: returns null when no session is active, in every
+  // environment — the test-mode FALLBACK_SID ('__default') fallback is
+  // deleted (cross-family review finding 18). Frame writers must
+  // early-return on null.
   function getActiveSid(): string | null {
-    return useSessionStore.getState().activeSessionId ?? FALLBACK_SID
+    return useSessionStore.getState().activeSessionId
   }
 
   /**
@@ -747,7 +749,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
 // Avoiding a direct import of the session store here to keep the cycle-break intact.
 export function syncChatForeground(): void {
   // Re-read active session from the session store and sync foreground fields.
-  const activeSid = useSessionStore.getState().activeSessionId ?? FALLBACK_SID
+  const activeSid = useSessionStore.getState().activeSessionId
   useChatStore.setState((state) => {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
     // Project messageOrder+messagesById → messages for foreground consumers
