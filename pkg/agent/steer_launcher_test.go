@@ -95,8 +95,8 @@ func TestLaunch_UnknownAgentRefused(t *testing.T) {
 
 func TestLaunch_SteeredEmptyParentAgentHonorsFailClosedSwitch(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		strict bool
+		name    string
+		strict  bool
 		wantErr bool
 	}{
 		{name: "strict default refuses", strict: true, wantErr: true},
@@ -270,6 +270,51 @@ func TestLaunch_Steered_WritesEdgeAndRootRecordForSteerer(t *testing.T) {
 	}
 	if steererRec.Origin == nil || steererRec.Origin.Kind != steer.OriginKindChat {
 		t.Errorf("steerer Origin = %+v, want {Kind: chat} (its own UnifiedMeta.Type)", steererRec.Origin)
+	}
+}
+
+func TestLaunch_DepthBudgetUsesEdgeAndPerformancePrecedence(t *testing.T) {
+	tests := []struct {
+		name          string
+		edgeDepth     int
+		globalDepth   int
+		wantRemaining int
+	}{
+		{name: "edge tighter", edgeDepth: 2, globalDepth: 7, wantRemaining: 1},
+		{name: "performance tighter", edgeDepth: 10, globalDepth: 2, wantRemaining: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			const workspaceID = "01JLAUNCHDEPTH00000000001"
+			const parentAgentID = "depth-parent"
+			seedWorkspaceGraph(t, workspaceID, true, []graphEdge{
+				edge(parentAgentID, testDefaultAgentID, []string{"direct"}, intPtr(tc.edgeDepth)),
+			})
+			al, cleanup := newSteerAL(t)
+			defer cleanup()
+			al.GetConfig().Performance.MaxDelegationDepth = tc.globalDepth
+
+			parentID := newTestSteeringSession(t, al, workspaceID)
+			if err := al.GetSessionStore().SwitchAgent(parentID, parentAgentID); err != nil {
+				t.Fatalf("SwitchAgent(parent): %v", err)
+			}
+			result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+				SteeringSessionID: parentID,
+				TargetAgentID:     testDefaultAgentID,
+				Task:              "depth precedence",
+				Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-depth"},
+			})
+			if err != nil {
+				t.Fatalf("Launch: %v", err)
+			}
+			rec, err := al.GetSessionLifecycleStore().Load(result.SessionID)
+			if err != nil {
+				t.Fatalf("Load(child): %v", err)
+			}
+			if got := rec.SteeredBy.Authorization.RemainingDepth; got != tc.wantRemaining {
+				t.Fatalf("remaining depth = %d, want %d (edge=%d performance=%d)", got, tc.wantRemaining, tc.edgeDepth, tc.globalDepth)
+			}
+		})
 	}
 }
 

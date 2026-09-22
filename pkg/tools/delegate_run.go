@@ -1,4 +1,4 @@
-// delegate_run.go: Run a delegation, sync or async, and return its result — including ending one early by timeout or cancel.
+// delegate_run.go: launch and manage durable delegated sessions.
 
 package tools
 
@@ -17,11 +17,8 @@ import (
 )
 
 // ErrRequestedSkillDenied and ErrRequestedSkillNotFound are the two distinct
-// dispatch-time failure sentinels a SubTurnSpawner implementation (in
-// practice, pkg/agent's spawnSubTurn) returns for a `delegate.run` call's
-// RequestedSkill (ADR-072 D9, spec FR-053/FR-054). Declared here — in
-// pkg/tools, the lower package in the tools<->agent duplication this file's
-// own ContextSnapshot/SubTurnConfig doc comments already describe — rather
+// dispatch-time failure sentinels returned when a `delegate.run` call requests
+// a skill (ADR-072 D9, spec FR-053/FR-054). Declared here in pkg/tools rather
 // than in pkg/agent, so the corrective dispatch below can distinguish them
 // with a plain errors.Is with no import cycle: pkg/agent already imports
 // pkg/tools and MUST return these exact sentinel values (wrapped with %w),
@@ -166,7 +163,6 @@ type delegateToolExecuteRun struct {
 	timeout           time.Duration
 	requestedSkill    string
 	snap              *ContextSnapshot
-	resolvedMaxDepth  *int
 	delegateSessionID string
 	goal              *steer.GoalSpec
 }
@@ -300,13 +296,8 @@ func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
 		}
 	}
 
-	// timeout_seconds was documented in the schema but never actually read
-	// anywhere — every delegated sub-turn silently used the hardcoded
-	// defaultSubTurnTimeout (5 minutes, pkg/agent/subturn.go) regardless of
-	// what the caller requested. 0/absent means "no override — use the
-	// spawner's own default", matching the schema's "0 = default (5 min)"
-	// wording; a nonzero value is bounds-checked and threaded into
-	// SubTurnConfig.Timeout below.
+	// 0/absent means "use the configured delegation timeout"; a nonzero
+	// value is bounds-checked and passed to the launcher.
 	var timeoutErr error
 	dt.timeout, timeoutErr = resolveDelegateTimeoutSeconds(dt.args)
 	if timeoutErr != nil {
@@ -391,13 +382,6 @@ func (dt *delegateToolExecuteRun) authorizeDelegation() (*ToolResult, bool) {
 		}), true
 	}
 
-	// #477: resolve the effective depth cap the gate above just authorized
-	// this call against, so the spawner's own depth check does not
-	// independently re-derive a different (possibly stricter) default.
-
-	if dt.t.delegationDepthResolver != nil {
-		dt.resolvedMaxDepth = dt.t.delegationDepthResolver(dt.ctx, dt.agentID)
-	}
 	return nil, false
 }
 
@@ -548,8 +532,8 @@ func (t *DelegateTool) killChildBackgroundShells(sessionID string) (killed, fail
 // This mirrors agent.CollectDescendantSessionIDs (pkg/agent/cancel.go)
 // byte-for-byte in walk semantics and error contract, duplicated here rather
 // than called directly because pkg/tools cannot import pkg/agent (pkg/agent
-// already imports pkg/tools — see AgentLoopSpawner/SubTurnConfig — so the
-// dependency can only run that direction). This is the same class of
+// already imports pkg/tools, so the dependency can only run that direction).
+// This is the same class of
 // cross-package duplication cancel.go's own CollectDescendantSessionIDs doc
 // comment describes for the (now-hoisted) pkg/gateway/websocket.go copy.
 //

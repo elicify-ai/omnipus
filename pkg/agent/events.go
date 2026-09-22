@@ -463,13 +463,8 @@ const (
 	// explicitly claimed — i.e. RequestCancel targeted the sub-turn
 	// directly (childTS.cancelFired == true when its context was
 	// canceled), not merely inherited via a parent's hard-abort cascade.
-	// Reachable, if narrow (FIX 4, 7-reviewer-gate follow-up on the Wave 3
-	// fix pass — see spawnSubTurn's cleanup defer, pkg/agent/subturn.go):
-	// a Critical:true sub-turn survives a graceful parent finish by design
-	// (SubTurnConfig.Critical) and keeps running under its own session ID;
-	// a later RequestCancel against that same session (GetActiveTurnHookForSession's
-	// fallback match, pkg/agent/turn.go) can find and cancel the sub-turn
-	// itself once its parent has already finished. Distinct from
+	// A later RequestCancel against that same session can find and cancel the
+	// active turn directly. This is distinct from
 	// SubTurnStatusInterrupted below, which covers the cascade case
 	// (childTS.cancelFired stays false there — the parent's Finish(true)
 	// cascades via Finish(true) directly on children, bypassing

@@ -353,9 +353,8 @@ type PerformanceConfig struct {
 	// configured — see clampParallelExplicit.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
 
-	// MaxDelegationDepth is ADR-091 D9's config fold: the single source of
-	// truth for the onward-delegation depth ceiling, replacing
-	// agents.defaults.subturn.max_depth. Every reader of the global ceiling
+	// MaxDelegationDepth is ADR-091 D9's single source of truth for the
+	// onward-delegation depth ceiling. Every reader of the global ceiling
 	// resolves through this key, so there is exactly one number. 0 means
 	// unset — the same
 	// defaultMaxSubTurnDepth backstop resolveEffectiveDelegationDepth
@@ -364,9 +363,8 @@ type PerformanceConfig struct {
 	// never silently reinterpreted).
 	MaxDelegationDepth int `json:"max_delegation_depth,omitempty" env:"OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH"`
 
-	// DelegationTimeoutMinutes is D9's fold for
-	// agents.defaults.subturn.default_timeout_minutes — same rationale as
-	// MaxDelegationDepth above. 0 means unset (the existing
+	// DelegationTimeoutMinutes is the shared timeout for a delegated session.
+	// 0 means unset (the existing
 	// defaultSubTurnTimeout backstop applies); negative is a
 	// configuration error.
 	DelegationTimeoutMinutes int `json:"delegation_timeout_minutes,omitempty" env:"OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES"`

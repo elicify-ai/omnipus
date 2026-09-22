@@ -315,15 +315,6 @@ type DelegateTool struct {
 	// legacy trust-only allowlistCheck fallback — it was only ever consulted
 	// when this was nil, which never happens in production wiring).
 	delegationDenyBackground func(ctx context.Context, targetAgentID string) *DelegationDenial
-	// delegationDepthResolver, when non-nil, resolves the effective onward-
-	// delegation depth cap for a specific target — the SAME cap the deny
-	// checker above already authorized this call against. Returns nil for "no
-	// override" (fall back to the spawner's own default depth resolution) or
-	// a pointer to the resolved cap. Threaded into SubTurnConfig.ResolvedMaxDepth
-	// so the spawn-time depth check never independently re-derives a different
-	// number than the one this gate already authorized (#477). Field name and
-	// setter name are pinned — do not rename (relied on by pkg/agent/loop.go).
-	delegationDepthResolver func(ctx context.Context, targetAgentID string) *int
 
 	// --- ADR-053 §5.1 corrected delegate action set (run|status|inbox|
 	// inbox_ack|steer|respond|cancel|follow_up|peek) ---
@@ -674,11 +665,8 @@ func (t *DelegateTool) SetSessionManager(sm *SessionManager) {
 // defaultOwnershipWalkMaxDepth bounds the ancestor-chain walk
 // verifyCallerOwnsSession performs (FR-039/BDD-43) when
 // SetOwnershipWalkMaxDepth is never called. pkg/tools cannot reference
-// pkg/agent's own safety-backstop delegation-depth default
-// (defaultMaxSubTurnDepth, currently 3) directly — that package boundary
-// already exists for every other AgentLoop capability this tool consumes
-// via a setter (see delegationDepthResolver) — so this is a same-valued,
-// independently-declared constant, not a shared symbol.
+// pkg/agent's own safety-backstop delegation-depth default directly, so this
+// is a same-valued, independently-declared constant.
 const defaultOwnershipWalkMaxDepth = 3
 
 // SetOwnershipWalkMaxDepth overrides the ancestor-chain walk's depth bound
@@ -826,13 +814,6 @@ func (t *DelegateTool) SetDelegationDenyCheckerBackground(
 	check func(ctx context.Context, targetAgentID string) *DelegationDenial,
 ) {
 	t.delegationDenyBackground = check
-}
-
-// SetDelegationDepthResolver installs the effective-depth-cap resolver (#477).
-// See the delegationDepthResolver field doc. Name pinned — relied on by
-// pkg/agent/loop.go's registration wiring.
-func (t *DelegateTool) SetDelegationDepthResolver(resolve func(ctx context.Context, targetAgentID string) *int) {
-	t.delegationDepthResolver = resolve
 }
 
 func (t *DelegateTool) Name() string {

@@ -821,17 +821,6 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
-		// gates above just authorized against into spawnSubTurn's own
-		// depth check — the resolver is mode-agnostic (sourced only from
-		// the matched edge's own Depth, shared by both the background and
-		// await gates) — so the spawn-time backstop does not
-		// independently re-derive (and silently override) an explicit
-		// per-edge Depth.
-		delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
-			currentAgentID, rw.cfg.Performance,
-		))
-
 		// ADR-057: derive the ownership-walk bound from the SAME operator
 		// setting that bounds delegation depth. Left unwired, the walk used
 		// a hardcoded 3 while delegation depth stayed configurable — so

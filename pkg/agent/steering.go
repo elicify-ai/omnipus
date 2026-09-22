@@ -736,8 +736,8 @@ func (al *AgentLoop) collectLiveDescendantTurnStates(rootTurnID string) []*turnS
 	})
 
 	// Fixed-point BFS from rootTurnID over the in-memory snapshot's
-	// parentTurnID edges. N (concurrently active turns) is small (bounded by
-	// agents.defaults.subturn.max_concurrent), so the repeated O(N) passes
+	// parentTurnID edges. N is bounded by the shared performance admission
+	// limit, so the repeated O(N) passes
 	// below cost nothing in practice.
 	reached := map[string]bool{rootTurnID: true}
 	var result []*turnState

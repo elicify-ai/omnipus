@@ -305,12 +305,10 @@ func enforceEdgeModeAndDepth(
 	// Otherwise enforce the effective depth cap: the tighter of the per-edge
 	// cap (edge.Depth, nil = inherit) and the performance depth ceiling,
 	// falling back to the safety-backstop default when NEITHER source
-	// expresses an explicit value. Resolved via resolveEffectiveDelegationDepth
-	// — the SAME shared function spawnSubTurn's own depth check
-	// (SubTurnConfig.ResolvedMaxDepth, threaded via buildDelegationDepthResolver)
-	// and the delegation system-prompt builder (wireDelegationInjectors) use, so
-	// this gate's decision and the eventual spawn-time enforcement are never
-	// computed independently (#477, FR-D9/FR-D10).
+	// expresses an explicit value. resolveEffectiveDelegationDepth is also used
+	// by the session launcher and delegation system-prompt builder, so the gate,
+	// durable depth budget, and advertised cap are never computed independently
+	// (#477, FR-D9/FR-D10).
 	depthCap := resolveEffectiveDelegationDepth(edge.Depth, globalDepthCap)
 	if d := currentDelegationDepth(ctx); d >= depthCap {
 		logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
