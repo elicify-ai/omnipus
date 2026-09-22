@@ -26,8 +26,11 @@ import (
 	"fmt"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // maxLaunchAncestorWalk bounds Launch's root-verification walk — mirrors
@@ -190,6 +193,16 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		rollback()
 		return steer.LaunchResult{}, err
 	}
+	goalID, goalErr := l.createLaunchGoal(req, childID, title, req.TargetAgentID)
+	if goalErr != nil {
+		rollback()
+		return steer.LaunchResult{}, goalErr
+	}
+	rollbackGoal := func() {
+		if goalID != "" {
+			_ = resolveGoalRecordStore().Delete(goalID)
+		}
+	}
 
 	origin := req.Origin
 	ownerKind := session.OwnerScopeHuman
@@ -204,11 +217,14 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		State:          session.LifecycleQueued,
 		OwnerScopeKind: ownerKind,
 		OwnerScopeID:   ownerID,
+		Title:          title,
+		GoalRef:        goalID,
 		WorkspaceID:    req.WorkspaceID,
 		AgentID:        req.TargetAgentID,
 		Origin:         &origin,
 	}
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		rollbackGoal()
 		rollback()
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %v", steer.ErrStoreWrite, persistErr)
 	}
@@ -266,6 +282,7 @@ func (l *SteerLauncher) launchSteered(
 	}
 
 	var resultGen int
+	var goalID string
 	pubErr := lifecycle.PublishChildUnderParentLock(req.SteeringSessionID,
 		func(parentRec *session.LifecycleRecord, existed bool) (*session.LifecycleRecord, error) {
 			if existed != preParentExisted || (existed && !sameSteeringEdge(parentRec, preParent)) {
@@ -301,9 +318,10 @@ func (l *SteerLauncher) launchSteered(
 				ReportingTarget: session.ReportingTarget{
 					SessionID: req.SteeringSessionID,
 					Channel:   steererMeta.Channel,
+					ChatID:    steererMeta.PeerID,
 				},
 				Authorization: session.Authorization{
-					Mode:           session.AuthorizationModeDirect,
+					Mode:           launchAuthorizationMode(req.Origin.Kind),
 					RemainingDepth: remainingDepth - 1,
 				},
 				Limits:         req.Limits,
@@ -324,6 +342,12 @@ func (l *SteerLauncher) launchSteered(
 				_ = sessions.DeleteSession(childID)
 				return nil, err
 			}
+			var goalErr error
+			goalID, goalErr = l.createLaunchGoal(req, childID, title, steererMeta.ActiveAgentID)
+			if goalErr != nil {
+				_ = sessions.DeleteSession(childID)
+				return nil, goalErr
+			}
 
 			origin := req.Origin
 			resultGen = 1
@@ -333,8 +357,11 @@ func (l *SteerLauncher) launchSteered(
 				State:          session.LifecycleQueued,
 				OwnerScopeKind: session.OwnerScopeParentSession,
 				OwnerScopeID:   req.SteeringSessionID,
+				Title:          title,
+				GoalRef:        goalID,
 				WorkspaceID:    workspaceID,
 				AgentID:        req.TargetAgentID,
+				ParentAgentID:  steererMeta.ActiveAgentID,
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
 				Stop:           stopStamp,
@@ -346,9 +373,88 @@ func (l *SteerLauncher) launchSteered(
 		// writes. The unified session was staged inside the callback, so it has
 		// a separate compensating delete on every publication failure.
 		_ = sessions.DeleteSession(childID)
+		if goalID != "" {
+			_ = resolveGoalRecordStore().Delete(goalID)
+		}
 		return steer.LaunchResult{}, pubErr
 	}
 	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+}
+
+func launchAuthorizationMode(kind steer.OriginKind) session.AuthorizationMode {
+	if kind == steer.OriginKindTask {
+		return session.AuthorizationModeTask
+	}
+	return session.AuthorizationModeDirect
+}
+
+func (l *SteerLauncher) createLaunchGoal(
+	req steer.LaunchRequest,
+	childID string,
+	title string,
+	authorAgentID string,
+) (string, error) {
+	if req.Goal == nil {
+		return "", nil
+	}
+	if authorAgentID == "" {
+		return "", fmt.Errorf("steer: launch: %w: goal author agent is empty", steer.ErrStoreWrite)
+	}
+	criteria := launchGoalCriteria(req.Goal.Criteria, authorAgentID)
+	dod := launchGoalCriteria(req.Goal.DoD, authorAgentID)
+	source := generated.GoalSourceChatCompiled
+	if req.Origin.Kind == steer.OriginKindTask {
+		source = generated.GoalSourceTaskExplicit
+	}
+	now := time.Now().UTC()
+	g, err := goal.New(
+		generated.GoalOwnerKindSession,
+		childID,
+		source,
+		title,
+		"",
+		criteria,
+		dod,
+		goalTryLimit(l.al),
+		now,
+	)
+	if err != nil {
+		return "", fmt.Errorf("steer: launch: %w: goal: %v", steer.ErrStoreWrite, err)
+	}
+	store := resolveGoalRecordStore()
+	if err := store.Create(g); err != nil {
+		return "", fmt.Errorf("steer: launch: %w: create goal: %v", steer.ErrStoreWrite, err)
+	}
+	if _, err := store.Update(g.GoalID, func(current *goal.Goal) error {
+		return current.Activate(childID, now)
+	}); err != nil {
+		_ = store.Delete(g.GoalID)
+		return "", fmt.Errorf("steer: launch: %w: activate goal: %v", steer.ErrStoreWrite, err)
+	}
+	return g.GoalID, nil
+}
+
+func launchGoalCriteria(in []steer.Criterion, authorAgentID string) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(in))
+	for _, criterion := range in {
+		mapped := task.AcceptanceCriterion{
+			Kind:     task.CriterionKind(criterion.Kind),
+			Judgment: task.JudgmentKind(criterion.Judgment),
+			Text:     criterion.Text,
+			Author: task.CriterionAuthor{
+				Kind: task.AuthorKindAgent,
+				ID:   authorAgentID,
+			},
+		}
+		if criterion.Check != nil {
+			mapped.Check = &task.CriterionCheck{
+				Command:          criterion.Check.Command,
+				ExpectedExitCode: criterion.Check.ExpectedExitCode,
+			}
+		}
+		out = append(out, mapped)
+	}
+	return out
 }
 
 // sameSteeringEdge compares only the immutable hierarchy identity that was

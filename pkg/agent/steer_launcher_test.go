@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -225,6 +226,72 @@ func TestLaunch_Steered_WritesEdgeAndRootRecordForSteerer(t *testing.T) {
 	}
 	if steererRec.Origin == nil || steererRec.Origin.Kind != steer.OriginKindChat {
 		t.Errorf("steerer Origin = %+v, want {Kind: chat} (its own UnifiedMeta.Type)", steererRec.Origin)
+	}
+}
+
+func TestLaunch_SteeredPersistsRequiredMetadataAndActiveGoal(t *testing.T) {
+	goalHome := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", goalHome)
+	al, cleanup := newSteerAL(t)
+	defer cleanup()
+
+	steererMeta, err := al.GetSessionStore().NewChannelSession(
+		"webchat", "webchat.default", "chat-42", testDefaultAgentID, "Parent conversation")
+	if err != nil {
+		t.Fatalf("NewChannelSession(steerer): %v", err)
+	}
+	workspaceID := "ws-1"
+	if err := al.GetSessionStore().SetMeta(steererMeta.ID, session.MetaPatch{WorkspaceID: &workspaceID}); err != nil {
+		t.Fatalf("SetMeta(steerer).WorkspaceID: %v", err)
+	}
+
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steererMeta.ID,
+		TargetAgentID:     testDefaultAgentID,
+		Label:             "Check the launch contract",
+		Task:              "Verify every required launch field.",
+		Origin:            steer.Origin{Kind: steer.OriginKindTask, CallID: "call-goal", TaskID: "task-goal"},
+		Goal: &steer.GoalSpec{
+			Criteria: []steer.Criterion{{Text: "The launch metadata is complete"}},
+			DoD:      []steer.Criterion{{Text: "The goal is active for the child session"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	rec, err := al.GetSessionLifecycleStore().Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	if rec.Title != "Check the launch contract" {
+		t.Errorf("Title = %q, want lifecycle title", rec.Title)
+	}
+	if rec.ParentAgentID != testDefaultAgentID {
+		t.Errorf("ParentAgentID = %q, want %q", rec.ParentAgentID, testDefaultAgentID)
+	}
+	if rec.GoalRef == "" {
+		t.Fatal("GoalRef is empty")
+	}
+	if rec.SteeredBy == nil {
+		t.Fatal("SteeredBy is nil")
+	}
+	if rec.SteeredBy.ReportingTarget.ChatID != "chat-42" {
+		t.Errorf("ReportingTarget.ChatID = %q, want chat-42", rec.SteeredBy.ReportingTarget.ChatID)
+	}
+	if rec.SteeredBy.Authorization.Mode != session.AuthorizationModeTask {
+		t.Errorf("Authorization.Mode = %q, want task", rec.SteeredBy.Authorization.Mode)
+	}
+
+	g, err := resolveGoalRecordStore().Get(rec.GoalRef)
+	if err != nil {
+		t.Fatalf("Get(goal): %v", err)
+	}
+	if g.State != generated.GoalStateActive || g.ActiveSessionID != res.SessionID {
+		t.Errorf("goal state/session = %q/%q, want active/%q", g.State, g.ActiveSessionID, res.SessionID)
+	}
+	if g.OwnerKind != generated.GoalOwnerKindSession || g.OwnerID != res.SessionID {
+		t.Errorf("goal owner = %q/%q, want session/%q", g.OwnerKind, g.OwnerID, res.SessionID)
 	}
 }
 

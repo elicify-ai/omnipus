@@ -209,6 +209,10 @@ type LifecycleRecord struct {
 	// correction on the named plan.
 	OwnsPlanID string `json:"owns_plan_id,omitempty"`
 
+	// Title is the launch-time lifecycle label. It is kept on the durable
+	// record so status/listing paths do not have to reopen mutable session
+	// metadata merely to name a child.
+	Title       string `json:"title,omitempty"`
 	GoalRef     string `json:"goal_ref,omitempty"`
 	WorkspaceID string `json:"workspace_id"`
 	AgentID     string `json:"agent_id"`
