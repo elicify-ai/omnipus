@@ -12,6 +12,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -109,5 +110,28 @@ func TestAudienceFor_ResolverError_AnswersNone(t *testing.T) {
 	}
 	if len(obs.calls) != 1 || obs.calls[0].audience != steer.AudienceNone {
 		t.Fatalf("expected exactly one Observe(..., none) call, got %+v", obs.calls)
+	}
+}
+
+func TestEmitErrorEvent_UsesProducerIdentityAndBoundaryGate(t *testing.T) {
+	al := newSteerBoundaryTestLoop(t)
+	obs := &recordingBoundaryObserver{}
+	al.SetSteerAudienceDeps(NewSteerAudienceResolver(&fakeAgentClassifier{class: steer.ClassSteered}), obs, NewSteerUpwardDeliverer())
+	sub := al.eventBus.Subscribe(1)
+	defer al.eventBus.Unsubscribe(sub.ID)
+	ts := &turnState{sessionKey: "child-1", transcriptSessionID: "child-1"}
+
+	al.emitErrorEvent(ts, EventMeta{}, "provider", LLMError{Code: CodeProviderRejected, Message: "failed"})
+	select {
+	case event := <-sub.C:
+		payload, ok := event.Payload.(ErrorPayload)
+		if event.Kind != EventKindError || !ok || payload.SessionID != "child-1" {
+			t.Fatalf("typed error event = %+v, want child-owned ErrorPayload", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("typed error event was not emitted")
+	}
+	if len(obs.calls) != 1 || obs.calls[0].boundary != steer.BoundaryTypedErrorFrame || obs.calls[0].session != "child-1" {
+		t.Fatalf("boundary observations = %+v, want typed_error_frame for child-1", obs.calls)
 	}
 }

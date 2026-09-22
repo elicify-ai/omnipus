@@ -1549,16 +1549,16 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 // used to ALSO compute, so the WS forwarder could stamp an optional
 // producing_session_id "present iff it differs from session_id" — is
 // deleted (events.go), and this function now returns only sessionID.
-// SessionID here is still the ROUTING identity (FR-011/FR-012 — the id
-// inherited verbatim from the root of the delegation subtree), unchanged by
-// this deletion: fully realizing I-4's "every frame carries its own
-// session_id (the producing session)" for these two payloads requires
-// turnState.routingSessionID's identity contract itself to change, which
-// this lane's brief scopes as "stop reading/setting" the workaround field,
-// not a redesign of routingSessionID — see this lane's final report for the
-// residual gap this leaves.
+// SessionID is the producer's own transcript identity. routingSessionID is
+// retained only for cascade cancellation and is never a frame destination.
 func u9ToolExecSessionIDs(ts *turnState) (sessionID string) {
-	return string(ts.routingSessionID)
+	if ts == nil {
+		return ""
+	}
+	if ts.transcriptSessionID != "" {
+		return ts.transcriptSessionID
+	}
+	return ts.sessionKey
 }
 
 func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDecision) error {
@@ -2570,12 +2570,16 @@ func (al *AgentLoop) emitDelegatedTaskLimitNotice(
 }
 
 func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {
+	sessionID := u9ToolExecSessionIDs(ts)
+	if al.audienceFor(context.Background(), steer.BoundaryTypedErrorFrame, sessionID) == steer.AudienceNone {
+		return
+	}
 	al.emitEvent(EventKindError, meta, ErrorPayload{
 		Stage:     stage,
 		ChatID:    ts.opts.ChatID,
 		Code:      string(llm.Code),
 		Message:   llm.Message,
-		SessionID: string(ts.routingSessionID),
+		SessionID: sessionID,
 	})
 }
 

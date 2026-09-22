@@ -133,6 +133,15 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	egress := al.buildContentEgressFilter()
 	needInputTTL := al.sessionMessagingNeedsInputTTL()
 
+	// Boundary 8 lives in pkg/tools. Re-apply both dependencies here on every
+	// boot/hot-reload wire pass because registerSharedTools replaces the
+	// MessageTool instance on reload.
+	if tool, ok := agent.Tools.Get("send_message"); ok {
+		if mt, mtOK := tool.(*tools.MessageTool); mtOK && mt != nil {
+			mt.SetSteerAudienceResolver(al.getSteerAudienceResolver(), al.getBoundaryObserver())
+		}
+	}
+
 	// --- delegate tool: inject the S2/S3 stores + the steering sink + cancel
 	// hooks. SetSteeringSink/SetCancelHooks/SetMessageInbox/SetLifecycleStore
 	// are idempotent in-place setters (delegate was registered by

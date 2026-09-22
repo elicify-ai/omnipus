@@ -43,10 +43,11 @@ type MessageTool struct {
 	// matching every other boundary's "never wired = today's behaviour"
 	// posture.
 	steerAudience steer.AudienceResolver
+	steerObserver steer.BoundaryObserver
 }
 
 func NewMessageTool() *MessageTool {
-	return &MessageTool{}
+	return &MessageTool{steerObserver: steer.NopBoundaryObserver{}}
 }
 
 // SetChannelOwnership injects the resolver used to decide whether the acting
@@ -59,7 +60,13 @@ func (t *MessageTool) SetChannelOwnership(o ChannelOwnership) { t.ownership = o 
 
 // SetSteerAudienceResolver injects ADR-091 I-5's steer.AudienceResolver
 // (boundary 8, FR-B-009). See steerAudience's field doc comment.
-func (t *MessageTool) SetSteerAudienceResolver(r steer.AudienceResolver) { t.steerAudience = r }
+func (t *MessageTool) SetSteerAudienceResolver(r steer.AudienceResolver, observers ...steer.BoundaryObserver) {
+	t.steerAudience = r
+	t.steerObserver = steer.NopBoundaryObserver{}
+	if len(observers) > 0 && observers[0] != nil {
+		t.steerObserver = observers[0]
+	}
+}
 
 func (t *MessageTool) Name() string {
 	return "send_message"
@@ -270,10 +277,18 @@ func (t *MessageTool) denySteeredSessionOffOwnChat(ctx context.Context, channel,
 		return nil
 	}
 	audience, _, err := t.steerAudience.Audience(ctx, sessionID)
-	if err != nil || audience != steer.AudienceSteeringSession {
+	if err != nil {
+		audience = steer.AudienceNone
+	}
+	observer := t.steerObserver
+	if observer == nil {
+		observer = steer.NopBoundaryObserver{}
+	}
+	observer.Observe(steer.BoundaryAgentRequestedMessage, sessionID, audience)
+	if audience == steer.AudienceUser {
 		return nil
 	}
-	if channel == turnChannel && (chatID == turnChat || chatID == "") {
+	if audience == steer.AudienceSteeringSession && channel == turnChannel && (chatID == turnChat || chatID == "") {
 		return nil
 	}
 	return &ToolResult{
