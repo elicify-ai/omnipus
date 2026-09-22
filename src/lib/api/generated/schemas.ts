@@ -14280,7 +14280,7 @@ export const SubagentStateFrame = z
       correlation_id: z.string(),
       applied_at: z.string(),
     })
-    .strict().optional(),
+    .strict().nullable().optional(),
     created_at: z.string(),
   })
   .strict();
@@ -14301,7 +14301,7 @@ export const TaskRunStatusFrame = z
     type: z.literal("task_run_status"),
     task_id: z.string().min(1),
     run_id: z.string().min(1),
-    occurrence_ms: z.number().int().optional(),
+    occurrence_ms: z.number().int().nullable().optional(),
     status: z.enum(["in_progress", "done", "failed", "skipped"]),
   })
   .strict();
@@ -14581,7 +14581,7 @@ export const SessionModeUpdateFrame = z
   .object({
     type: z.literal("session_mode_update"),
     session_id: z.string().min(1),
-    auto_approve: z.boolean(),
+    auto_approve: z.boolean().nullable(),
   })
   .strict();
 

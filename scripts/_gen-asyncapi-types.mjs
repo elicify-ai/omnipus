@@ -114,6 +114,20 @@ const schemas = doc.components?.schemas ?? {};
 function schemaToTs(schema, indent = 0, schemaName = "") {
   if (!schema) return "unknown";
 
+  // nullable: true — JSON Schema (OpenAPI 3.0-style) nullable marker, not a
+  // JSON Schema keyword this generator otherwise interprets. Handled once,
+  // generically, for every type shape below (primitive/array/object/enum/
+  // $ref) by stripping the marker and unioning the base type with `null`,
+  // rather than threading nullable-awareness through every branch — every
+  // pre-existing `nullable: true` field in contracts/asyncapi.yaml
+  // (SubagentStateFrame.steering_receipt, TaskRunStatusFrame.occurrence_ms)
+  // silently generated as non-nullable before this, which ADR-091's
+  // auto_approve field (also nullable: true) surfaced.
+  if (schema.nullable) {
+    const { nullable, ...rest } = schema;
+    return `${schemaToTs(rest, indent, schemaName)} | null`;
+  }
+
   const pad = "  ".repeat(indent);
   const inner = "  ".repeat(indent + 1);
 
@@ -187,6 +201,13 @@ function schemaToTs(schema, indent = 0, schemaName = "") {
  */
 function schemaToZod(schema, indent = 0) {
   if (!schema) return "z.unknown()";
+
+  // nullable: true — see the matching comment in schemaToTs; same generic
+  // strip-and-wrap handling here, via Zod's own .nullable().
+  if (schema.nullable) {
+    const { nullable, ...rest } = schema;
+    return `${schemaToZod(rest, indent)}.nullable()`;
+  }
 
   const pad = " ".repeat(indent);
   const propPad = " ".repeat(indent + 4);
@@ -384,42 +405,77 @@ frameNames.forEach((name, i) => {
 });
 lines.push("");
 
-// ── Client→server frame union ─────────────────────────────────────────────────
-const clientFrames = [
-  "AuthFrame",
-  "MessageFrame",
-  "CancelFrame",
-  "PingFrame",
-  "AttachSessionFrame",
-  "DevicePairingResponseFrame",
-  "SessionCloseFrame",
-  "WhatsAppPairingSubscribeFrame",
-  // AskUserQuestion card submission/cancel (askuserquestion-tool-spec v3 §3)
-  // — client (SPA) → server on the chat channel.
-  "AskUserAnswerFrame",
-  // Browser live channel (ADR-038) — client → server frames.
-  "BrowserAttachFrame",
-  "BrowserInputFrame",
-  "BrowserControlFrame",
-  "BrowserDetachFrame",
-  // Browser WebRTC signaling (ADR-047 D1/D4) — client (SPA) → server frame
-  // on the SPA-facing `browser` channel.
-  "BrowserWebRTCOfferFrame",
-  "BrowserInputOfferFrame",
-  // NOTE: BrowserCapture*Frame schemas (browser_capture_hello/offer/answer/
-  // control) belong to the loopback-only browserCaptureIngest channel
-  // between the gateway and the capture extension's encoder page — the SPA
-  // never connects to that channel. This script has no per-channel scoping
-  // (it unions every components.schemas entry into one flat WsFrame/
-  // ServerFrame/ClientFrame set regardless of channel, same as every prior
-  // schema), so those 4 names are NOT listed here — deliberately, so they
-  // fall into `serverFrames` below and are therefore NEVER treated as a
-  // valid client-direction type the SPA's own outbound path could construct.
-  // They still appear as inert exported types/Zod schemas in the generated
-  // SPA files (dead code, never imported by ws.ts/browserLiveWs.ts) because
-  // the generator has no "exclude from SPA channels" bucket — see ADR-047
-  // W1-D notes.
-];
+// ── Client→server frame union — DERIVED from contracts/asyncapi.yaml's own
+// operations (action: send/receive), not hand-maintained ───────────────────
+// This used to be a hand-written array sitting next to the authoritative
+// source, and it silently drifted: at the point this derivation replaced it,
+// THREE real client→server frames were missing from the array and therefore
+// misclassified as ServerFrame-only — SessionModeUpdateFrame (ADR-091, the
+// bug that forced this fix — L6 correctly refused to cast around
+// connection.send() taking a ClientFrame it wasn't in) and two independent,
+// pre-existing misses, BrowserTabActionFrame and BrowserViewportFrame (both
+// `action: send` on the `browser` channel — ADR-041/live-view tab switching
+// and viewport reporting were exposed to the exact same bug shape, unnoticed
+// until this derivation was written). A hand-maintained list next to an
+// authoritative source is exactly how bugs like this happen and recur; this
+// derivation is the fix for the class, not just the one instance.
+//
+// SPA_CLIENT_CHANNELS is an ALLOWLIST, not a denylist, deliberately: the SPA
+// (ws.ts / browserLiveWs.ts) connects to exactly the `chat` and `browser`
+// channels today. `browserCaptureIngest` is a loopback-only channel between
+// the gateway and the capture extension's encoder page that the SPA never
+// touches — its `action: send` operations (sendBrowserCaptureHello/Offer/
+// Control) must NOT make those frames constructable via ws.ts's
+// ClientFrame/CLIENT_FRAME_TYPES. An allowlist fails CLOSED for a future
+// loopback-only channel (its send-frames stay out of ClientFrame until
+// someone deliberately adds the channel here); a denylist would fail OPEN —
+// silently leaking a new loopback channel's frames into ClientFrame, the
+// same class of bug this replaces the array to prevent. A schema-registered
+// frame with no `action: send` operation on either channel simply never
+// enters `sendFrameNames` and falls through to `serverFrames` below, exactly
+// as the BrowserCapture*Frame schemas do today.
+const SPA_CLIENT_CHANNELS = new Set(["chat", "browser"]);
+
+function channelNameFromRef(ref) {
+  const m = /^#\/channels\/([^/]+)$/.exec(ref ?? "");
+  if (!m) {
+    throw new Error(
+      `operation channel ref "${ref}" is not in the expected "#/channels/<name>" form`
+    );
+  }
+  return m[1];
+}
+
+function frameNameFromMessageRef(ref) {
+  const parts = (ref ?? "").split("/");
+  const name = parts[parts.length - 1];
+  if (!name) {
+    throw new Error(`operation message ref "${ref}" has no trailing frame name`);
+  }
+  return name;
+}
+
+const sendFrameNames = new Set();
+for (const [opName, op] of Object.entries(doc.operations ?? {})) {
+  if (op.action !== "send") continue;
+  const channelName = channelNameFromRef(op.channel?.$ref);
+  if (!SPA_CLIENT_CHANNELS.has(channelName)) continue;
+  for (const msg of op.messages ?? []) {
+    const frameName = frameNameFromMessageRef(msg.$ref);
+    if (!(frameName in schemas)) {
+      throw new Error(
+        `operation "${opName}" (action: send, channel: ${channelName}) references message ` +
+          `"${frameName}" which has no matching entry under components.schemas`
+      );
+    }
+    sendFrameNames.add(frameName);
+  }
+}
+
+// Preserve components.schemas declaration order (frameNames' own order),
+// filtered to the send-derived set, so the emitted union is deterministic
+// and stable across regenerations of the same spec.
+const clientFrames = frameNames.filter((name) => sendFrameNames.has(name));
 
 lines.push("// ── Client → server frames ──────────────────────────────────────────────────");
 lines.push("");

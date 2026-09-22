@@ -326,7 +326,7 @@ export interface SubagentStateFrame {
   steering_receipt?: {
     correlation_id: string;
     applied_at: string;
-  };
+  } | null;
   created_at: string;
 }
 
@@ -343,7 +343,7 @@ export interface TaskRunStatusFrame {
   type: "task_run_status";
   task_id: string;
   run_id: string;
-  occurrence_ms?: number;
+  occurrence_ms?: number | null;
   status: "in_progress" | "done" | "failed" | "skipped";
 }
 
@@ -570,7 +570,7 @@ export interface SessionCloseAckFrame {
 export interface SessionModeUpdateFrame {
   type: "session_mode_update";
   session_id: string;
-  auto_approve: boolean;
+  auto_approve: boolean | null;
 }
 
 export interface SessionModeUpdatedFrame {
@@ -1081,20 +1081,23 @@ export type ClientFrame =
   | PingFrame
   | AttachSessionFrame
   | DevicePairingResponseFrame
+  | AskUserAnswerFrame
+  | SessionModeUpdateFrame
   | SessionCloseFrame
   | WhatsAppPairingSubscribeFrame
-  | AskUserAnswerFrame
   | BrowserAttachFrame
   | BrowserInputFrame
   | BrowserControlFrame
   | BrowserDetachFrame
+  | BrowserViewportFrame
+  | BrowserTabActionFrame
   | BrowserWebRTCOfferFrame
   | BrowserInputOfferFrame;
 
 // ── ClientFrameTypes constant — generated from spec, not hand-written ─────────
 // Import this in ws.ts to build CLIENT_FRAME_TYPES set. Never edit directly.
 
-export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "session_close", "whatsapp_pairing_subscribe", "ask_user_answer", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_webrtc_offer", "browser_input_offer"] as const
+export const ClientFrameTypes = ["auth", "message", "cancel", "ping", "attach_session", "device_pairing_response", "ask_user_answer", "session_mode_update", "session_close", "whatsapp_pairing_subscribe", "browser_attach", "browser_input", "browser_control", "browser_detach", "browser_viewport", "browser_tab_action", "browser_webrtc_offer", "browser_input_offer"] as const
 
 // ── Server → client frames ──────────────────────────────────────────────────
 
@@ -1128,14 +1131,11 @@ export type ServerFrame =
   | ReplayWarningFrame
   | CancelStageFrame
   | SessionCloseAckFrame
-  | SessionModeUpdateFrame
   | SessionModeUpdatedFrame
   | DevicePairingRequestFrame
   | WhatsAppPairingFrame
   | NotificationFrame
   | BrowserStatusFrame
-  | BrowserViewportFrame
-  | BrowserTabActionFrame
   | BrowserTabsFrame
   | BrowserWebRTCAnswerFrame
   | BrowserWebRTCStateFrame
