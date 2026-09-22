@@ -127,7 +127,7 @@
 
 /* Out-of-range days (previous/next month overflow) */
 .fc .fc-day-other {
-  background: rgba(255, 255, 255, 0.015) !important;
+  background: color-mix(in srgb, var(--color-surface-paper) 1.5%, transparent) !important;
 }
 
 .fc .fc-day-other .fc-daygrid-day-number {
@@ -277,7 +277,7 @@
 
 .fc .fc-timegrid-slot-minor {
   border-top-style: dotted;
-  border-color: rgba(255, 255, 255, 0.04);
+  border-color: color-mix(in srgb, var(--color-surface-paper) 4%, transparent);
 }
 
 .fc .fc-timegrid-slot-label-cushion {

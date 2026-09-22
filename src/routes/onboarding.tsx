@@ -1121,8 +1121,10 @@ function ProviderStep({
   // LOCAL_PROVIDER_CREDENTIAL for the typed key on this path, so this only
   // drives copy — never the Finish gate below (see keyMissing).
   const isLocal = entry?.locality === 'local'
+  // The connection probe's own state (idle/testing/success/error), not a task status.
+  const isProbeError = probeStatus === 'error'
   const missingCli =
-    signIn && probeStatus === 'error' && probeErrorIsMissingCli(probeError)
+    signIn && isProbeError && probeErrorIsMissingCli(probeError)
       ? cliBinaryName(entry)
       : undefined
 
@@ -1299,7 +1301,7 @@ function ProviderStep({
             </p>
           )}
 
-          {probeStatus === 'error' && (
+          {isProbeError && (
             <div
               data-testid="onboarding-error"
               role="alert"

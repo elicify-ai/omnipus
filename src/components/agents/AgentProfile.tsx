@@ -2267,28 +2267,40 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       />
                     </div>
                     {agent?.context_window_effective !== undefined && (
-                      <p
-                        data-testid="agent-context-window-effective"
-                        className="pl-[188px] text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
-                      >
-                        Effective window: {formatWindowTokens(agent.context_window_effective)} tokens
-                        {agent.context_window_source
-                          ? ` · Source: ${CONTEXT_WINDOW_SOURCE_LABEL[agent.context_window_source]}`
-                          : ''}
-                      </p>
+                      <div className="flex items-start gap-[var(--space-2-5)]">
+                        {/* Spacer matches the row's Label column (w-44 shrink-0 +
+                            gap-2.5) so this description sits under the Input
+                            column without a magic pl-[...] offset. */}
+                        <span className="w-44 shrink-0" aria-hidden="true" />
+                        <p
+                          data-testid="agent-context-window-effective"
+                          className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]"
+                        >
+                          Effective window: {formatWindowTokens(agent.context_window_effective)} tokens
+                          {agent.context_window_source
+                            ? ` · Source: ${CONTEXT_WINDOW_SOURCE_LABEL[agent.context_window_source]}`
+                            : ''}
+                        </p>
+                      </div>
                     )}
                     {agent?.context_window_clamped && (
-                      <p
-                        data-testid="agent-context-window-clamped"
-                        role="status"
-                        className="pl-[188px] text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
-                      >
-                        Override clamped to the model's limit
-                        {agent.context_window_effective !== undefined
-                          ? ` (${formatWindowTokens(agent.context_window_effective)} tokens)`
-                          : ''}
-                        {' '}— the value above is higher than this model supports.
-                      </p>
+                      <div className="flex items-start gap-[var(--space-2-5)]">
+                        {/* Spacer matches the row's Label column (w-44 shrink-0 +
+                            gap-2.5) so this description sits under the Input
+                            column without a magic pl-[...] offset. */}
+                        <span className="w-44 shrink-0" aria-hidden="true" />
+                        <p
+                          data-testid="agent-context-window-clamped"
+                          role="status"
+                          className="text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
+                        >
+                          Override clamped to the model's limit
+                          {agent.context_window_effective !== undefined
+                            ? ` (${formatWindowTokens(agent.context_window_effective)} tokens)`
+                            : ''}
+                          {' '}— the value above is higher than this model supports.
+                        </p>
+                      </div>
                     )}
                   </div>
                 )}

@@ -163,6 +163,8 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
 
   // 1s tick drives the countdown line; only armed while one is visible.
   const hasCountdown = card.status === 'pending' && Boolean(card.default_safe_at)
+  // The card's own answer state (pending/answered/cancelled), not a task status.
+  const isCancelledCard = card.status === 'cancelled'
   useEffect(() => {
     if (!hasCountdown) return
     const t = setInterval(() => setNow(Date.now()), 1000)
@@ -225,7 +227,7 @@ export function AskUserQuestionCard({ card }: { card: AskUserCard }) {
               </span>
             </div>
           ))}
-        {card.status === 'cancelled' && (
+        {isCancelledCard && (
           <p className="text-[var(--color-muted)]">Questions dismissed — no answers were sent.</p>
         )}
       </div>

@@ -37,6 +37,9 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
   const openEditAgentSlideOver = useUiStore((s) => s.openEditAgentSlideOver)
   const handleOpen = onClick ?? (() => openEditAgentSlideOver(agent.id))
   const bindingCopy = providerBindingCopy(agent)
+  // Agent.status is the agent's own lifecycle (draft/active/error), not a task status.
+  const isDraftAgent = agent.status === 'draft'
+  const isErrorAgent = agent.status === 'error'
 
   return (
     <div className="relative group/card h-full">
@@ -99,9 +102,9 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
               {agent.description || 'No description'}
             </p>
             <div className="flex items-center gap-[var(--space-2)] flex-wrap">
-              {agent.status === 'draft' ? (
+              {isDraftAgent ? (
                 <Badge variant="warning" className="text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10">draft</Badge>
-              ) : agent.status === 'error' ? (
+              ) : isErrorAgent ? (
                 <Badge variant="destructive" className="text-[var(--color-error)] border-[var(--color-error)]/30 bg-[var(--color-error)]/10">error</Badge>
               ) : (
                 <Badge variant={badgeVariantFor(agent.type)} className="font-[var(--font-weight-regular)]">
@@ -126,12 +129,12 @@ export function AgentCard({ agent, onClick, onSetDefault }: AgentCardProps) {
                 </Badge>
               )}
             </div>
-            {agent.status === 'draft' && agent.type === 'Main' && (
+            {isDraftAgent && agent.type === 'Main' && (
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)]/70 mt-[var(--space-1)]">
                 Set up SOUL.md to activate this agent
               </p>
             )}
-            {agent.status === 'error' && (
+            {isErrorAgent && (
               <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]/70 mt-[var(--space-1)]">
                 Agent encountered an error — check the activity log
               </p>

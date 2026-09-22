@@ -85,7 +85,7 @@ function LettermarkChip({ slug, size, className }: LettermarkChipProps) {
         fontFamily: 'var(--font-family-heading)',
         fontWeight: 'var(--font-weight-bold)',
         fontSize,
-        lineHeight: 1,
+        lineHeight: 'var(--font-line-height-none)',
         userSelect: 'none',
         flexShrink: 0,
       }}

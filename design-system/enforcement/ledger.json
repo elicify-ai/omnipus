@@ -2,15 +2,6 @@
   "version": 1,
   "entries": [
     {
-      "fingerprint": "014129b5ae71e17fa9f7226feed2258790eff16b04e547a29756d83a682b65e3",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "rgb(255,255,255,0.015)",
-      "owner": "C1 Lane 2: Calendar and workspace management/team/settings",
-      "replacement": "Replace raw colour literal `rgb(255,255,255,0.015)` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "0383e1d412d2b2b86056edb29111541ef5883830628a615078b65785495fea4a",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/mermaid-renderer.tsx",
@@ -38,15 +29,6 @@
       "expiryCheckpoint": "C6"
     },
     {
-      "fingerprint": "07011c0328b9f9c91d87f259c03740cdbef44267014e26f188f7dc5886f4f322",
-      "ruleId": "spacing/off-scale",
-      "path": "src/components/agents/AgentProfile.tsx",
-      "syntax": "pl-[188px]",
-      "owner": "C1 Lane 5: Agents and skills",
-      "replacement": "Move `pl-[188px]` onto the registered 4px/8px spacing scale using the nearest governed token that preserves the rendered value (hairline/1px exception only where justified).",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "07364295d501f80f8bbe13e46ae2f2ca37e003966deaf7d723d4c44a9920d8bb",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/library/LibraryEntryRow.tsx",
@@ -63,15 +45,6 @@
       "owner": "Frontend lead—reviewed hand-built-control retention (2026-09-22), was: C2 Lane 2: Calendar and workspace management/team/settings",
       "replacement": "No replacement planned: this is the AgentNode React Flow drag surface, holding connection Handles and nested IconButton actions (edit/remove) plus AgentDelegatePicker. A native <button> cannot contain nested interactive buttons per the HTML content model, so the Button primitive cannot wrap this root. Reviewed and retained, not scheduled debt.",
       "expiryCheckpoint": "C6"
-    },
-    {
-      "fingerprint": "090dc63868cddf90a976dd1b4767e886656b4bc0e29e74c8d7f7727be01068de",
-      "ruleId": "css-colors/raw-color",
-      "path": "src/styles/fullcalendar-theme.css",
-      "syntax": "rgb(255,255,255,0.04)",
-      "owner": "C1 Lane 2: Calendar and workspace management/team/settings",
-      "replacement": "Replace raw colour literal `rgb(255,255,255,0.04)` in this stylesheet with the registered design-system colour token for the same role; if no registered token resolves to the rendered value, propose a token through the lead instead of keeping the literal.",
-      "expiryCheckpoint": "C1"
     },
     {
       "fingerprint": "09558d55b753db26aae2937ab383d732a82094a757e8d0f3025b35f6e4eb2c4f",
@@ -317,15 +290,6 @@
       "expiryCheckpoint": "C6"
     },
     {
-      "fingerprint": "398aa3436639597e4de0b3ea8a7970dd71f53d8cf52391edaa21e28dc7049d05",
-      "ruleId": "typography/line-height-arbitrary",
-      "path": "src/components/ui/brand-icon.tsx",
-      "syntax": "lineHeight: 1",
-      "owner": "C1 Lead—shared foundations: Catalog foundation/primitive/composite internals",
-      "replacement": "Replace arbitrary line-height `lineHeight: 1` with the registered lineHeight token for this role.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "3a56e2e00fd634cfb923554dd1d7f22c5235d4e83c1015461e0fce6a5d2f0414",
       "ruleId": "ts-colors/raw-color",
       "path": "src/components/chat/AttachmentCard.tsx",
@@ -441,15 +405,6 @@
       "owner": "C5 Lane 5: Agents and skills",
       "replacement": "Relocate `import { ModelSelector } from \"src/components/ui/model-selector\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
       "expiryCheckpoint": "C5"
-    },
-    {
-      "fingerprint": "4b55f0192be6742199e0b2efa8e7ee474eb539ddc41bd51a86d56740110a7040",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/chat/AskUserQuestionCard.tsx",
-      "syntax": "\"text-[var(--color-muted)]\"",
-      "owner": "C1 Lane 3: Chat, sessions and conversation surfaces",
-      "replacement": "Align `\"text-[var(--color-muted)]\"` with the D4 status map: use the governed status token for the state instead of the off-palette literal.",
-      "expiryCheckpoint": "C1"
     },
     {
       "fingerprint": "4b5964a5d55eedd8fb76e7e62d468d88e4c67d1703d585c32e4eab07cf7eaeca",
@@ -749,15 +704,6 @@
       "expiryCheckpoint": "C5"
     },
     {
-      "fingerprint": "84455be2a8259228e5cdccab28ec972604b481cb1d942f7484166476309ba65f",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/routes/onboarding.tsx",
-      "syntax": "{ color: \"var(--color-muted)\" }",
-      "owner": "C1 Lane 1: Workspace board, list, graph and task/plan controls",
-      "replacement": "Align `{ color: \"var(--color-muted)\" }` with the D4 status map: use the governed status token for the state instead of the off-palette literal.",
-      "expiryCheckpoint": "C1"
-    },
-    {
       "fingerprint": "8d306b7abc54a2bc173760d3a75ae50a07507a00e342cd43c7819800bbbb3d44",
       "ruleId": "controls/shadcn-low-level-import",
       "path": "src/components/layout/AppShell.tsx",
@@ -819,15 +765,6 @@
       "owner": "C5 Lane 1: Workspace board, list, graph and task/plan controls",
       "replacement": "Relocate `import { type ModelCatalogGroup, ModelSelector } from \"src/components/ui/model-selector\"`: import the public primitive/composite from the library entry instead of the low-level shadcn/ui internal; if the required public part does not exist yet, propose it through the lead.",
       "expiryCheckpoint": "C5"
-    },
-    {
-      "fingerprint": "92af25bdb51fe8a1d10473eee1efc3f2cd53baf95c7b4483ac8a947486128c72",
-      "ruleId": "design-system/status-mismatch",
-      "path": "src/components/agents/AgentCard.tsx",
-      "syntax": "\"text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10\"",
-      "owner": "C1 Lane 5: Agents and skills",
-      "replacement": "Align `\"text-[var(--color-warning)] border-[var(--color-warning)]/30 bg-[var(--color-warning)]/10\"` with the D4 status map: use the governed status token for the state instead of the off-palette literal.",
-      "expiryCheckpoint": "C1"
     },
     {
       "fingerprint": "932fde530c9329df96aaf1db73e6b9083b2fdea8959d3c4e16584f3e9efbb308",
