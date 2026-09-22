@@ -16822,6 +16822,19 @@ export interface operations {
                     "application/json": {
                         /** @example true */
                         success: boolean;
+                        /** @description ADR-091 I-6. Every session the cascade stamped with a Stop marker (the stopped session and each reachable non-terminal descendant). */
+                        reached?: string[];
+                        /** @description ADR-091 I-6. Descendants the cascade could not reach, with why. */
+                        unreachable?: {
+                            id: string;
+                            reason: string;
+                        }[];
+                        /** @description ADR-091 I-6. Sessions whose live turn belonged to a newer generation than the one stamped (a revival landed first); their cancel was refused. */
+                        skipped_newer_generation?: string[];
+                        /** @description ADR-091 I-6. Terminal descendants, left unwritten. */
+                        skipped_terminal?: string[];
+                        /** @description ADR-091 I-6. True when `unreachable` is non-empty. */
+                        partial?: boolean;
                     };
                 };
             };

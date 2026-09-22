@@ -11935,7 +11935,16 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         schema: z.string(),
       },
     ],
-    response: z.object({ success: z.boolean() }).passthrough(),
+    response: z.object({
+      success: z.boolean(),
+      reached: z.array(z.string()).optional(),
+      unreachable: z
+        .array(z.object({ id: z.string().min(1), reason: z.string() }))
+        .optional(),
+      skipped_newer_generation: z.array(z.string()).optional(),
+      skipped_terminal: z.array(z.string()).optional(),
+      partial: z.boolean().optional(),
+    }),
     errors: [
       {
         status: 400,
