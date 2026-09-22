@@ -2,10 +2,18 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
+
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
+
+// ErrSteeredSessionOwnChatOnly is denySteeredSessionOffOwnChat's sentinel
+// (ADR-091 boundary 8, FR-B-009): a steered session's message tool may
+// target only its own session's conversation.
+var ErrSteeredSessionOwnChatOnly = errors.New("steered_session_own_chat_only")
 
 // SendOrigin identifies the agent and workspace a send came from, so an
 // outbound message carries its provenance instead of arriving anonymously
@@ -26,6 +34,15 @@ type MessageTool struct {
 	sendCallback SendCallback
 	ownership    ChannelOwnership
 	sentInRound  atomic.Bool // Tracks whether a message was sent in the current processing round
+
+	// steerAudience is ADR-091 I-5's injected steer.AudienceResolver
+	// (landing order §2: "injected into every package that hosts a
+	// boundary ... pkg/tools for boundary 8"). Nil until
+	// SetSteerAudienceResolver is called — a bare/unwired tool enforces
+	// nothing beyond today's ADR-065 ownership rule (denyUnownedTarget),
+	// matching every other boundary's "never wired = today's behaviour"
+	// posture.
+	steerAudience steer.AudienceResolver
 }
 
 func NewMessageTool() *MessageTool {
@@ -39,6 +56,10 @@ func NewMessageTool() *MessageTool {
 // then falls back to the turn's own conversation and refuses any OTHER target,
 // rather than pretending to have checked something it could not.
 func (t *MessageTool) SetChannelOwnership(o ChannelOwnership) { t.ownership = o }
+
+// SetSteerAudienceResolver injects ADR-091 I-5's steer.AudienceResolver
+// (boundary 8, FR-B-009). See steerAudience's field doc comment.
+func (t *MessageTool) SetSteerAudienceResolver(r steer.AudienceResolver) { t.steerAudience = r }
 
 func (t *MessageTool) Name() string {
 	return "send_message"
@@ -130,6 +151,15 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		channel = resolved
 	}
 
+	// ADR-091 boundary 8 (landing order §6, FR-B-009): a steered session's
+	// own-chat-only rule is checked FIRST and independently of ADR-065
+	// ownership — it must refuse a target that denyUnownedTarget alone
+	// would allow (an unbound/unconfigured channel, e.g. the shared
+	// webchat, per that function's own "unbound = unenforced" rule).
+	if denied := t.denySteeredSessionOffOwnChat(ctx, channel, chatID, turnChannel, turnChat); denied != nil {
+		return denied
+	}
+
 	if denied := t.denyUnownedTarget(channel, chatID, turnChannel, turnChat, workspaceID, actingAgent); denied != nil {
 		return denied
 	}
@@ -214,6 +244,44 @@ func (t *MessageTool) resolveOwnChannel(workspaceID, actingAgent string) (string
 				"in the channel argument", strings.Join(owned, ", ")),
 			IsError: true,
 		}
+	}
+}
+
+// denySteeredSessionOffOwnChat implements ADR-091 boundary 8 (landing order
+// §6, FR-B-009, founder decision round 8): a steered session's message tool
+// may target only its own session's conversation — every other target
+// (the root's webchat id, another agent's session, any external channel)
+// is refused with ErrSteeredSessionOwnChatOnly, REGARDLESS of ADR-065
+// ownership/binding. This deliberately overrides denyUnownedTarget's
+// "unbound = unenforced" rule: webchat is shared by operator decision, so
+// ownership alone cannot stop a child from naming the root's chat id and
+// reaching the operator — closing exactly that hole (D3, C1 in Appendix C).
+//
+// Enforced only when the CALLING session classifies as steered
+// (steer.AudienceSteeringSession) — an ordinary root, or a session this
+// resolver has any doubt about, is unaffected (D3's audience answers are
+// user/steering_session/none; only the middle one triggers this rule).
+func (t *MessageTool) denySteeredSessionOffOwnChat(ctx context.Context, channel, chatID, turnChannel, turnChat string) *ToolResult {
+	if t.steerAudience == nil {
+		return nil
+	}
+	sessionID := ToolTranscriptSessionID(ctx)
+	if sessionID == "" {
+		return nil
+	}
+	audience, _, err := t.steerAudience.Audience(ctx, sessionID)
+	if err != nil || audience != steer.AudienceSteeringSession {
+		return nil
+	}
+	if channel == turnChannel && (chatID == turnChat || chatID == "") {
+		return nil
+	}
+	return &ToolResult{
+		ForLLM: "steered_session_own_chat_only: a delegated session may message only its own " +
+			"conversation — use message_parent to reach your parent, or the steering surface to " +
+			"report progress/results",
+		IsError: true,
+		Err:     ErrSteeredSessionOwnChatOnly,
 	}
 }
 
