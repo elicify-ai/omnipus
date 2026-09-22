@@ -227,3 +227,52 @@ func validateAgainstAsyncAPISchemaRawJSON(t *testing.T, schemaName string, jsonD
 	}
 	return validateAgainstAsyncAPISchema(t, schemaName, data)
 }
+
+func TestContract_ADR091_CancelStageFrameStopReport(t *testing.T) {
+	// The Stop report rides on the existing cancel_stage frame (ADR-091 I-6) — no new frame type.
+	jsonData := []byte(`{
+		"type": "cancel_stage",
+		"session_id": "sid-root",
+		"stage": "detached",
+		"reached": ["sid-root", "sid-a"],
+		"unreachable": [{"id": "sid-b", "reason": "lifecycle record unreadable"}],
+		"skipped_newer_generation": ["sid-c"],
+		"skipped_terminal": ["sid-d"],
+		"partial": true
+	}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "CancelStageFrame", jsonData)
+	require.NoError(t, err, "a partial Stop report must be accepted on cancel_stage")
+}
+
+func TestContract_ADR091_CancelStageFrameRejectsUnreachableWithoutReason(t *testing.T) {
+	// Control: the validator must bite — an unreachable entry without its reason is refused.
+	jsonData := []byte(`{
+		"type": "cancel_stage",
+		"session_id": "sid-root",
+		"stage": "detached",
+		"unreachable": [{"id": "sid-b"}],
+		"partial": true
+	}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "CancelStageFrame", jsonData)
+	require.Error(t, err, "an unreachable entry must name its reason")
+}
+
+func TestContract_ADR091_SessionLifecycleRecordRejectsUnknownOriginKind(t *testing.T) {
+	// Control: origin.kind is a closed enum (landing order I-1).
+	jsonData := []byte(`{
+		"session_id": "sid-123",
+		"generation": 1,
+		"state": "running",
+		"terminal": false,
+		"owner_scope_kind": "human",
+		"workspace_id": "ws-123",
+		"agent_id": "agent-1",
+		"is_3p": false,
+		"undelivered_message_ids": [],
+		"created_at": "2026-07-22T10:00:00Z",
+		"updated_at": "2026-07-22T10:00:00Z",
+		"origin": {"kind": "subagent", "call_id": "call_1"}
+	}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "SessionLifecycleRecord", jsonData)
+	require.Error(t, err, "an origin kind outside the I-1 enum must be refused")
+}

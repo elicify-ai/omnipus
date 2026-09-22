@@ -14723,6 +14723,16 @@ export const CancelStageFrame = z
     session_id: z.string().min(1),
     stage: z.enum(["graceful", "hard", "detached"]),
     producing_session_id: z.string().min(1).optional(),
+    reached: z.array(z.string()).optional(),
+    unreachable: z.array(z
+    .object({
+      id: z.string().min(1),
+      reason: z.string(),
+    })
+    .strict()).optional(),
+    skipped_newer_generation: z.array(z.string()).optional(),
+    skipped_terminal: z.array(z.string()).optional(),
+    partial: z.boolean().optional(),
   })
   .strict();
 

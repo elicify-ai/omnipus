@@ -3913,6 +3913,44 @@ components:
           description: >
             ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
             (FR-089) — see this frame's description.
+        reached:
+          type: array
+          items:
+            type: string
+          description: >
+            ADR-091 I-6. Present on the `detached` stage of a Stop: every session the
+            cascade stamped with a Stop marker (the stopped session and each reachable
+            non-terminal descendant).
+        unreachable:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required:
+              - id
+              - reason
+            properties:
+              id:
+                type: string
+                minLength: 1
+              reason:
+                type: string
+          description: ADR-091 I-6. Descendants the cascade could not reach, with why.
+        skipped_newer_generation:
+          type: array
+          items:
+            type: string
+          description: >
+            ADR-091 I-6. Sessions whose live turn belonged to a newer generation than
+            the one stamped (a revival landed first); their cancel was refused.
+        skipped_terminal:
+          type: array
+          items:
+            type: string
+          description: ADR-091 I-6. Terminal descendants, left unwritten.
+        partial:
+          type: boolean
+          description: ADR-091 I-6. True when `unreachable` is non-empty.
     SessionCloseAckFrame:
       title: SessionCloseAckFrame
       description: >

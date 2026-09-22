@@ -537,6 +537,14 @@ export interface CancelStageFrame {
   session_id: string;
   stage: "graceful" | "hard" | "detached";
   producing_session_id?: string;
+  reached?: Array<string>;
+  unreachable?: Array<{
+    id: string;
+    reason: string;
+  }>;
+  skipped_newer_generation?: Array<string>;
+  skipped_terminal?: Array<string>;
+  partial?: boolean;
 }
 
 export interface SessionCloseAckFrame {
