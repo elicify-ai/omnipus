@@ -39,4 +39,6 @@ side.
 ## Tests
 
 CI group `components-misc` (pattern includes `src/components/connectors/`).
-Local: `npx vitest run src/components/connectors/`.
+Local: `npx vitest run src/components/connectors/`. A test file matching no
+group pattern runs in NO CI job while CI stays green;
+`scripts/check-vitest-coverage.mjs` is the tripwire.

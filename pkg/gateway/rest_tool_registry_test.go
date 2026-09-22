@@ -125,6 +125,10 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 	// newTestRestAPIWithHomeAndAgent variant (rest_tasks_occurrences_test.go)
 	// which seeds a real chat-target agent ("mia") instead.
 	api := newTestRestAPIWithHomeAndAgent(t)
+	// ADR-090 §5.2: the per-agent tools view now reads back the agent's
+	// canonical revision from the entity store — production boot persists
+	// every seeded agent (persistSeededCoreAgents), so the harness must too.
+	seedAgentEntities(t, api.homePath, api.agentLoop.GetConfig().Agents.List)
 
 	agentID := "mia"
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agentID+"/tools", nil)
@@ -170,6 +174,9 @@ func TestREST_GetAgentTools_FilteredView(t *testing.T) {
 // Traces to: tool-manifest-optimization-2026-06.md Gap 3.
 func TestREST_GetAgentTools_ManifestTierValues(t *testing.T) {
 	api := newTestRestAPIWithHomeAndAgent(t)
+	// The tools view reads the agent revision from the entity store (ADR-090
+	// §5.2); persist mia as production boot would.
+	seedAgentEntities(t, api.homePath, api.agentLoop.GetConfig().Agents.List)
 
 	agentID := "mia"
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/"+agentID+"/tools", nil)

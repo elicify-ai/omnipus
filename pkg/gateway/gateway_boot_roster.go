@@ -493,7 +493,7 @@ func deleteOrphanedDefineDoneDir(skillsGlobalDir string, markers []string) (dele
 
 	defineGoalDir := filepath.Join(skillsGlobalDir, "define-goal")
 	if _, statErr := os.Stat(defineGoalDir); statErr != nil {
-		if os.IsNotExist(statErr) {
+		if errors.Is(statErr, os.ErrNotExist) {
 			return false, fmt.Errorf(
 				"replacement define-goal/ skill directory not found at %s (SeedDefaults may have failed) "+
 					"— preserving define-done/ rather than deleting it", defineGoalDir)
@@ -503,7 +503,7 @@ func deleteOrphanedDefineDoneDir(skillsGlobalDir string, markers []string) (dele
 
 	orphanedDir := filepath.Join(skillsGlobalDir, "define-done")
 	if _, statErr := os.Stat(orphanedDir); statErr != nil {
-		if os.IsNotExist(statErr) {
+		if errors.Is(statErr, os.ErrNotExist) {
 			return false, nil // already deleted (or never existed) — clean no-op
 		}
 		return false, fmt.Errorf("could not stat orphaned define-done skill directory %s: %w", orphanedDir, statErr)

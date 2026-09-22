@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -121,8 +122,7 @@ func TestPreprovision_ValidPATHCandidate_NoManagedInstallDirCreated(t *testing.T
 	assert.Equal(t, chromiumPath, got)
 
 	_, statErr := os.Stat(installRootFor(cfg))
-	assert.True(t, os.IsNotExist(statErr),
-		"Preprovision must not create the managed install dir when a PATH candidate resolves")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "Preprovision must not create the managed install dir when a PATH candidate resolves")
 }
 
 // TestPreprovision_BrokenPATH_PreSeededManagedBinary_NoNetwork verifies
@@ -198,12 +198,15 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	// Deliberately no cftFullChromeDownloadID entry: on linux this exercises
-	// EnsureChromiumBuild's "preferred build missing from manifest" fallback
-	// to chrome-headless-shell (selectDownloadBuild requests full chrome
-	// first); off linux, selectDownloadBuild already requests
-	// chrome-headless-shell directly. Either way resolution lands on the
-	// headless-shell zip fixture below.
+	// Squad K (founder ruling 2026-09-19): selectDownloadBuild defaults to
+	// full chrome on linux AND darwin; on any other platform it picks
+	// headless-shell. The test forces headless-shell selection via the
+	// selectDownloadBuildGOOS seam (just below) so the test exercises the
+	// DOWNLOAD path on a headless-shell zip fixture, host-agnostically.
+	// The manifest therefore only needs the headless-shell entry — the
+	// (prior commit's) full-chrome entry was cosmetic dead config because
+	// the test never asks for the full build, and (per the A4 advisory)
+	// it has been removed.
 	manifest := cftManifest{
 		Channels: map[string]struct {
 			Version   string                              `json:"version"`
@@ -226,6 +229,18 @@ func TestPreprovision_BrokenPATH_EmptyInstallRoot_Downloads(t *testing.T) {
 	prev := globalManifestURLForTesting
 	globalManifestURLForTesting = srv.URL + "/manifest"
 	defer func() { globalManifestURLForTesting = prev }()
+
+	// Squad K (founder ruling 2026-09-19): selectDownloadBuild defaults to
+	// full chrome on linux AND darwin; on any other platform it picks
+	// headless-shell. This test's zip fixture is a headless-shell zip, so
+	// force headless-shell via the selectDownloadBuildGOOS seam
+	// (mirrors goosForCapability / layoutsGOOS usage in the same file).
+	// The DOWNLOAD mechanism is what this test exercises, not the
+	// build-resolution policy; the seam is the documented way to make
+	// this test pass on any host.
+	prevBuildOS := selectDownloadBuildGOOS
+	selectDownloadBuildGOOS = "windows"
+	t.Cleanup(func() { selectDownloadBuildGOOS = prevBuildOS })
 
 	cfg := newExecPathTestConfig(t, t.TempDir())
 	m := &BrowserManager{cfg: cfg}

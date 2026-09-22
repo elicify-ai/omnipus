@@ -421,7 +421,7 @@ func TestOnboarding_Probe_FreeStringID(t *testing.T) {
 	t.Run("row 15: a cloud-IAM row is refused with the catalog's own reason", func(t *testing.T) {
 		api := newOnboardingTestAPI(t, t.TempDir(), nil)
 
-		w := postProbe(t, api, `{"id":"amazon-bedrock","auth":"api_key","api_key":"sk-k"}`)
+		w := postProbe(t, api, `{"id":"cloud-iam-example","auth":"api_key","api_key":"sk-k"}`)
 
 		require.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Contains(t, w.Body.String(), "cloud-iam",

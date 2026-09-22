@@ -161,6 +161,14 @@ func TestWithRateLimit_ReadSizedLimiterNeverGetsCompanionBudget(t *testing.T) {
 // companion budget would make that number dead. Limiters that guard writes,
 // pre-auth traffic, or mixed read/write routes keep the D-109 companion
 // budget (configLimiter is the D-109 limiter itself).
+//
+// platformAuthSessionLimiter/platformAuthStartLimiter/platformAuthClaimLimiter
+// used to appear in these maps; ADR-0010 WP2 phase 2 moved them out of this
+// package entirely (they are now editions/platform.Provider's own
+// Host.NewRateLimiter/NewReadSizedRateLimiter-built instances, not this
+// package's *apiRateLimiter) — their read-sized/write-sized classification
+// is pinned by that package's own TestProvider_RateLimiterCeilings and by
+// the seam proof in signin_provider_test.go instead.
 func TestAPIRateLimiters_ReadSizedClassification(t *testing.T) {
 	readSized := map[string]*apiRateLimiter{
 		"taskReadLimiter":            taskReadLimiter,

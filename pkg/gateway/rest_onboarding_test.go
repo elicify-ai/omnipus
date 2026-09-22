@@ -110,14 +110,29 @@ func hermeticOnboardBody(t *testing.T, body string) string {
 	return withProviderEndpoint(body, startFakeProviderUpstream(t))
 }
 
+// signedIn returns r carrying the authenticated account that withAuth puts in
+// the context in production. POST /onboarding/complete runs AFTER sign-in
+// (ADR-0008 rulings 1 and 2), so a completion request without this is a 401 —
+// a fact pinned on the production route table in
+// rest_onboarding_authority_test.go, and assumed by every test below that is
+// about something other than authentication.
+//
+// The username is an EMAIL because that is what a platform account's
+// gateway.users row is keyed by.
+func signedIn(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(
+		r.Context(), UserContextKey{}, &config.UserConfig{Username: "operator@example.com"}))
+}
+
 // --- HandleCompleteOnboarding tests ---
 
 // TestHandleCompleteOnboarding_Success verifies that POST /api/v1/onboarding/complete
-// with valid provider and admin credentials returns 200 with a token.
-// BDD: Given a fresh install (onboarding not complete),
-// When POST /api/v1/onboarding/complete {"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}} is called,
-// Then 200 with {"token":"<token>","role":"admin","username":"admin"}.
+// with a valid provider returns 200 for the signed-in account.
+// BDD: Given a fresh install (onboarding not complete) and a signed-in account,
+// When POST /api/v1/onboarding/complete {"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"}} is called,
+// Then 200 with {"username":"<the authenticated account>"} and NO token.
 func TestHandleCompleteOnboarding_Success(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -139,19 +154,22 @@ func TestHandleCompleteOnboarding_Success(t *testing.T) {
 	// Verify onboarding is not complete yet
 	require.False(t, api.onboardingMgr.IsComplete(), "onboarding should not be complete initially")
 
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["token"], "token must be non-empty")
-	assert.Equal(t, "admin", resp["username"])
+	assert.NotContains(t, resp, "token",
+		"completion mints no bearer token — the caller already holds a session")
+	assert.Equal(t, "operator@example.com", resp["username"],
+		"the response echoes the authenticated account")
 }
 
 // TestHandleCompleteOnboarding_AlreadyComplete verifies that POST /api/v1/onboarding/complete
@@ -160,6 +178,7 @@ func TestHandleCompleteOnboarding_Success(t *testing.T) {
 // When POST /api/v1/onboarding/complete is called again,
 // Then 409 Conflict with {"error":"onboarding already complete"}.
 func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -188,12 +207,13 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 	// Mark onboarding as complete
 	require.NoError(t, onboardingMgr.CompleteOnboarding())
 
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	assert.Equal(t, http.StatusConflict, w.Code)
 	var resp map[string]any
@@ -207,14 +227,16 @@ func TestHandleCompleteOnboarding_AlreadyComplete(t *testing.T) {
 // When POST /api/v1/onboarding/complete is called,
 // Then 400 with {"error":"provider.api_key is required"}.
 func TestHandleCompleteOnboarding_MissingAPIKey(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	api := newTestRestAPIWithHomeAuth(t)
 
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":""},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":""},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp map[string]any
@@ -228,138 +250,21 @@ func TestHandleCompleteOnboarding_MissingAPIKey(t *testing.T) {
 // When POST /api/v1/onboarding/complete is called,
 // Then 400 with {"error":"provider.id is required"}.
 func TestHandleCompleteOnboarding_MissingProviderID(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	api := newTestRestAPIWithHomeAuth(t)
 
-	body := `{"provider":{"auth_method":"api_key","id":"","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"","api_key":"sk-test"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "provider.id is required", resp["error"])
-}
-
-// TestHandleCompleteOnboarding_MissingAdminUsername verifies that POST /api/v1/onboarding/complete
-// with empty admin.username returns 400.
-// BDD: Given admin.username is empty,
-// When POST /api/v1/onboarding/complete is called,
-// Then 400 with {"error":"admin.username is required"}.
-func TestHandleCompleteOnboarding_MissingAdminUsername(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleCompleteOnboarding(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "admin.username is required", resp["error"])
-}
-
-// TestHandleCompleteOnboarding_MissingAdminPassword verifies that POST /api/v1/onboarding/complete
-// with empty admin.password returns 400.
-// BDD: Given admin.password is empty,
-// When POST /api/v1/onboarding/complete is called,
-// Then 400 with {"error":"admin.password is required"}.
-func TestHandleCompleteOnboarding_MissingAdminPassword(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":""}}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleCompleteOnboarding(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "admin.password is required", resp["error"])
-}
-
-// TestHandleCompleteOnboarding_RejectsInvalidUsername verifies that POST /api/v1/onboarding/complete
-// rejects usernames that fail usernameRE validation with 400.
-// BDD: Given an admin.username that violates the username constraints,
-// When POST /api/v1/onboarding/complete is called,
-// Then 400 with an error containing "username".
-func TestHandleCompleteOnboarding_RejectsInvalidUsername(t *testing.T) {
-	invalidCases := []struct {
-		name     string
-		username string
-	}{
-		{"too short (single char)", "a"},
-		{"starts with dot", ".admin"},
-		{"contains space", "admin user"},
-	}
-
-	for _, tc := range invalidCases {
-		t.Run(tc.name, func(t *testing.T) {
-			api := newTestRestAPIWithHomeAuth(t)
-
-			body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"` + tc.username + `","password":"secret123"}}`
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-
-			api.HandleCompleteOnboarding(w, req)
-
-			assert.Equal(t, http.StatusBadRequest, w.Code, "username %q should be rejected", tc.username)
-			var resp map[string]any
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-			errMsg, _ := resp["error"].(string)
-			assert.Contains(t, errMsg, "username", "error should mention username for input %q", tc.username)
-		})
-	}
-
-	// Positive case: a valid 2-char username must NOT be rejected by username validation.
-	// It may fail for other reasons (e.g. provider validation) but must not return usernameInvalidMsg.
-	t.Run("valid 2-char username passes username check", func(t *testing.T) {
-		api := newTestRestAPIWithHomeAuth(t)
-
-		body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"ab","password":"secret123"}}`
-		req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		w := httptest.NewRecorder()
-
-		api.HandleCompleteOnboarding(w, req)
-
-		if w.Code == http.StatusBadRequest {
-			var resp map[string]any
-			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-			errMsg, _ := resp["error"].(string)
-			assert.NotEqual(t, usernameInvalidMsg, errMsg,
-				"valid username 'ab' must not be rejected by username validation")
-		}
-	})
-}
-
-// TestHandleCompleteOnboarding_WeakPassword verifies that POST /api/v1/onboarding/complete
-// with a password shorter than 8 characters returns 400.
-// BDD: Given admin.password is "short" (less than 8 characters),
-// When POST /api/v1/onboarding/complete is called,
-// Then 400 with {"error":"admin.password must be at least 8 characters"}.
-func TestHandleCompleteOnboarding_WeakPassword(t *testing.T) {
-	api := newTestRestAPIWithHomeAuth(t)
-
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"short"}}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-
-	api.HandleCompleteOnboarding(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "admin.password must be at least 8 characters", resp["error"])
 }
 
 // TestHandleCompleteOnboarding_MethodNotAllowed verifies that GET /api/v1/onboarding/complete
@@ -368,105 +273,32 @@ func TestHandleCompleteOnboarding_WeakPassword(t *testing.T) {
 // When the request is processed,
 // Then 405 Method Not Allowed is returned.
 func TestHandleCompleteOnboarding_MethodNotAllowed(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	api := newTestRestAPIWithHomeAuth(t)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/onboarding/complete", nil)
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
-// --- Integration: onboarding -> login -> validate ---
+// --- What completion is, and is not, allowed to write ---
 
-// TestHandleCompleteOnboarding_ThenLogin verifies the full onboarding flow:
-// 1. Complete onboarding (returns token)
-// 2. Login with the admin credentials (returns another token)
-// 3. Validate the login token (returns user info).
-// BDD: Given a fresh install,
-// When the onboarding flow completes and login is attempted with the admin credentials,
-// Then login succeeds and the returned token validates successfully.
-func TestHandleCompleteOnboarding_ThenLogin(t *testing.T) {
-	tmpDir := t.TempDir()
-	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:         tmpDir,
-				DefaultModel: config.DefaultModel{Model: "test-model"},
-				MaxTokens:    4096,
-			},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := newOnboardingTestAPI(t, tmpDir, al)
-
-	// Step 1: Complete onboarding
-	onboardingBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
-	onboardingBody = hermeticOnboardBody(t, onboardingBody)
-	onboardingReq := httptest.NewRequest(
-		http.MethodPost,
-		"/api/v1/onboarding/complete",
-		strings.NewReader(onboardingBody),
-	)
-	onboardingReq.Header.Set("Content-Type", "application/json")
-	onboardingW := httptest.NewRecorder()
-	api.HandleCompleteOnboarding(onboardingW, onboardingReq)
-	require.Equal(t, http.StatusOK, onboardingW.Code)
-	var onboardingResp map[string]any
-	require.NoError(t, json.Unmarshal(onboardingW.Body.Bytes(), &onboardingResp))
-	onboardingToken, onboardingTokenOk := onboardingResp["token"].(string)
-	require.True(t, onboardingTokenOk, "onboarding response token must be a string")
-	assert.NotEmpty(t, onboardingToken, "onboarding must return a token")
-
-	// Step 2: Login with the admin credentials
-	loginBody := `{"username":"admin","password":"secret123"}`
-	loginReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(loginBody))
-	loginReq.Header.Set("Content-Type", "application/json")
-	loginW := httptest.NewRecorder()
-	api.HandleLogin(loginW, loginReq)
-	require.Equal(t, http.StatusOK, loginW.Code)
-	var loginResp map[string]any
-	require.NoError(t, json.Unmarshal(loginW.Body.Bytes(), &loginResp))
-	loginToken, loginTokenOk := loginResp["token"].(string)
-	require.True(t, loginTokenOk, "login response token must be a string")
-	assert.NotEmpty(t, loginToken, "login must return a token")
-
-	// Step 3: Validate the login token.
-	// HandleValidateToken expects UserContextKey set by withAuth middleware.
-	// In unit tests we inject it manually, simulating what withAuth does.
-	adminUser := &config.UserConfig{Username: "admin"}
-	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
-	validateReq.Header.Set("Authorization", "Bearer "+loginToken)
-	validateReq = validateReq.WithContext(context.WithValue(validateReq.Context(), UserContextKey{}, adminUser))
-	validateW := httptest.NewRecorder()
-	api.HandleValidateToken(validateW, validateReq)
-
-	assert.Equal(t, http.StatusOK, validateW.Code)
-	var validateResp map[string]any
-	require.NoError(t, json.Unmarshal(validateW.Body.Bytes(), &validateResp))
-	assert.Equal(t, "admin", validateResp["username"])
-
-	// Onboarding token should also be valid (same user)
-	validateReq2 := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
-	validateReq2.Header.Set("Authorization", "Bearer "+onboardingToken)
-	validateReq2 = validateReq2.WithContext(context.WithValue(validateReq2.Context(), UserContextKey{}, adminUser))
-	validateW2 := httptest.NewRecorder()
-	api.HandleValidateToken(validateW2, validateReq2)
-	assert.Equal(t, http.StatusOK, validateW2.Code)
-}
-
-// TestHandleCompleteOnboarding_PersistsAdmin verifies that the admin user created
-// during onboarding persists in config.json and can be used to login after restart.
-// BDD: Given onboarding completes and creates admin user,
-// When config.json is read directly,
-// Then it contains the admin user with a password_hash and token_hash.
-func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
+// TestHandleCompleteOnboarding_CreatesNoAccount is the disk-level statement of
+// ADR-0008 ruling 2. This test used to assert the opposite — that completion
+// persisted an admin row with a password_hash and a bearer token — and it is
+// inverted rather than deleted because the file it writes to is the same one,
+// and "what is in gateway.users after onboarding" is still exactly the
+// question worth asking.
+//
+// BDD: Given a signed-in account and a fresh install,
+// When onboarding completes,
+// Then config.json has NO gateway.users entry created by it, no password hash
+// and no bearer token — the provider is the only thing the route wrote.
+func TestHandleCompleteOnboarding_CreatesNoAccount(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -486,39 +318,34 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	// Complete onboarding
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 	require.Equal(t, http.StatusOK, w.Code)
 
-	// Read config.json directly and verify admin user is persisted
+	// Read config.json directly: no account may have appeared.
 	configData, err := os.ReadFile(tmpDir + "/config.json")
 	require.NoError(t, err)
 	var configMap map[string]any
 	require.NoError(t, json.Unmarshal(configData, &configMap))
 
-	gateway, ok := configMap["gateway"].(map[string]any)
-	require.True(t, ok, "config must have gateway key")
-	users, ok := gateway["users"].([]any)
-	require.True(t, ok, "gateway must have users array")
-	require.Len(t, users, 1, "must have exactly 1 user")
+	if gateway, ok := configMap["gateway"].(map[string]any); ok {
+		users, _ := gateway["users"].([]any)
+		assert.Empty(t, users,
+			"completion must create NO account — the fixture had none and it must still have none")
+	}
 
-	user, ok := users[0].(map[string]any)
-	require.True(t, ok, "user must be a map")
-	assert.Equal(t, "admin", user["username"])
-	assert.NotEmpty(t, user["password_hash"], "password_hash must be set")
-	// SEC-1 / UAT #399: onboarding now issues the admin's bearer token into the
-	// token SET, not the legacy single token_hash.
-	tokens, ok := user["tokens"].([]any)
-	require.True(t, ok, "tokens set must be written by onboarding")
-	require.Len(t, tokens, 1, "onboarding issues exactly one bearer token")
-	entry, entryOk := tokens[0].(map[string]any)
-	require.True(t, entryOk, "tokens[0] must be an object")
-	assert.NotEmpty(t, entry["hash"], "token entry hash must be set")
-	assert.NotEmpty(t, entry["id"], "token entry id must be set")
+	// And the thing it IS for did land.
+	providers, ok := configMap["providers"].([]any)
+	require.True(t, ok, "providers must be an array")
+	require.Len(t, providers, 1, "the chosen provider is what completion persists")
+	entry, entryOk := providers[0].(map[string]any)
+	require.True(t, entryOk)
+	assert.Equal(t, "openai", entry["provider"])
 }
 
 // TestHandleCompleteOnboarding_WritesActualModelAsAlias verifies the fix for
@@ -538,6 +365,7 @@ func TestHandleCompleteOnboarding_PersistsAdmin(t *testing.T) {
 //	AND config.agents.defaults.model_name == "z-ai/glm-5v-turbo"
 //	AND the provider entry keeps provider="openrouter" for API routing.
 func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -556,12 +384,12 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := `{"provider":{"auth_method":"api_key","id":"openrouter","api_key":"sk-or-v1-test","model":"z-ai/glm-5v-turbo"},` +
-		`"admin":{"username":"admin","password":"secret123"}}`
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 	require.Equal(t, http.StatusOK, w.Code, "onboarding must succeed (body=%s)", w.Body.String())
 
 	configData, err := os.ReadFile(tmpDir + "/config.json")
@@ -611,6 +439,7 @@ func TestHandleCompleteOnboarding_WritesActualModelAsAlias(t *testing.T) {
 // In practice users don't re-run onboarding; the same invariant guards the
 // Settings → Providers UI that adds a second model from the same provider.
 func TestHandleCompleteOnboarding_SecondModelSameProviderCreatesNewEntry(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	// Pre-populate config with one openrouter entry to simulate a prior onboarding.
 	existing := []byte(`{"version":1,"agents":{"defaults":{"model_name":"z-ai/glm-5v-turbo"},"list":[]},` +
@@ -632,12 +461,12 @@ func TestHandleCompleteOnboarding_SecondModelSameProviderCreatesNewEntry(t *test
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := `{"provider":{"auth_method":"api_key","id":"openrouter","api_key":"sk-or-v1-test","model":"anthropic/claude-sonnet-4.6"},` +
-		`"admin":{"username":"admin","password":"secret123"}}`
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	body = hermeticOnboardBody(t, body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 	require.Equal(t, http.StatusOK, w.Code, "onboarding must succeed (body=%s)", w.Body.String())
 
 	configData, err := os.ReadFile(tmpDir + "/config.json")
@@ -670,8 +499,9 @@ func TestHandleCompleteOnboarding_SecondModelSameProviderCreatesNewEntry(t *test
 // BDD: Given multiple concurrent POST /api/v1/onboarding/complete requests,
 // When all are handled simultaneously,
 // Then each either succeeds (200) or gets Conflict (409), and config.json
-// is not corrupted (has exactly one admin user).
+// is not corrupted (exactly one provider entry, no duplicates).
 func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -715,12 +545,13 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+			body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},` +
+				`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 			body = withProviderEndpoint(body, upstream)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			api.HandleCompleteOnboarding(w, req)
+			api.HandleCompleteOnboarding(w, signedIn(req))
 			codes[idx] = w.Code
 		}(i)
 	}
@@ -736,105 +567,23 @@ func TestHandleCompleteOnboarding_Concurrent(t *testing.T) {
 	}
 	assert.True(t, has200, "at least one concurrent request must succeed with 200")
 
-	// After all concurrent requests, config.json should have exactly 1 user (no corruption)
+	// After all concurrent requests, config.json must hold exactly one
+	// provider entry — the reservation is what makes the write single-shot,
+	// and a duplicate here would mean two callers both got through it.
 	configData, err := os.ReadFile(tmpDir + "/config.json")
 	require.NoError(t, err)
 	var configMap map[string]any
 	require.NoError(t, json.Unmarshal(configData, &configMap))
 
-	gateway, gatewayOk := configMap["gateway"].(map[string]any)
-	require.True(t, gatewayOk, "config.gateway must be an object")
-	users, usersOk := gateway["users"].([]any)
-	require.True(t, usersOk, "config.gateway.users must be an array")
-	assert.Len(t, users, 1, "config.json must have exactly 1 admin user after concurrent calls (no duplication)")
-}
+	providers, providersOk := configMap["providers"].([]any)
+	require.True(t, providersOk, "config.providers must be an array")
+	assert.Len(t, providers, 1,
+		"config.json must have exactly 1 provider entry after concurrent calls (no duplication)")
 
-// TestHandleCompleteOnboarding_ConcurrentDifferentUsers verifies that when
-// concurrent requests try to create different usernames, only one succeeds
-// (the one that acquires the lock first) and the others get 409 or 500.
-func TestHandleCompleteOnboarding_ConcurrentDifferentUsers(t *testing.T) {
-	tmpDir := t.TempDir()
-	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
-	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
-
-	// Set up a credential store so the onboarding can persist API keys (SEC-23).
-	masterKey := "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
-	t.Setenv("OMNIPUS_MASTER_KEY", masterKey)
-	credStore := credentials.NewStore(tmpDir + "/credentials.json")
-	require.NoError(t, credentials.Unlock(credStore))
-
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:         tmpDir,
-				DefaultModel: config.DefaultModel{Model: "test-model"},
-				MaxTokens:    4096,
-			},
-		},
+	if gateway, gatewayOk := configMap["gateway"].(map[string]any); gatewayOk {
+		users, _ := gateway["users"].([]any)
+		assert.Empty(t, users, "and no account may be created by any of them")
 	}
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{
-		agentLoop:     al,
-		homePath:      tmpDir,
-		allowedOrigin: "http://localhost:3000",
-		onboardingMgr: onboarding.NewManager(tmpDir),
-		taskStore:     task.New(tmpDir + "/tasks"),
-		credStore:     credStore,
-	}
-
-	// One shared stand-in provider for all n goroutines: startFakeProviderUpstream
-	// registers a t.Cleanup, which must not be called from inside a goroutine.
-	upstream := startFakeProviderUpstream(t)
-
-	const n = 5
-	codes := make([]int, n)
-	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test-` + string(
-				rune('0'+idx),
-			) + `"},"admin":{"username":"admin` + string(
-				rune('0'+idx),
-			) + `","password":"secret123"}}`
-			body = withProviderEndpoint(body, upstream)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			w := httptest.NewRecorder()
-			api.HandleCompleteOnboarding(w, req)
-			codes[idx] = w.Code
-		}(i)
-	}
-	wg.Wait()
-
-	// At least one must succeed
-	hasSuccess := false
-	for _, code := range codes {
-		if code == http.StatusOK {
-			hasSuccess = true
-			break
-		}
-	}
-	assert.True(t, hasSuccess, "at least one concurrent request must succeed")
-
-	// Config should not be corrupted — should have exactly 1 user
-	configData, err := os.ReadFile(tmpDir + "/config.json")
-	require.NoError(t, err)
-	var configMap map[string]any
-	require.NoError(t, json.Unmarshal(configData, &configMap))
-
-	gateway, gatewayOk := configMap["gateway"].(map[string]any)
-	require.True(t, gatewayOk, "config.gateway must be an object")
-	usersRaw := gateway["users"]
-	if usersRaw == nil {
-		t.Fatal("gateway.users should not be nil")
-	}
-	users, usersOk := usersRaw.([]any)
-	require.True(t, usersOk, "config.gateway.users must be an array")
-	assert.Len(t, users, 1, "config.json must have exactly 1 user after concurrent calls")
 }
 
 // --- HandleOnboardingProbeProvider tests ---
@@ -884,6 +633,7 @@ func probeProviderWithUpstream(t *testing.T, upstream string, body string, api *
 // touching disk — is unchanged, and the "no outbound listing" half is now
 // asserted directly instead of being implied.
 func TestHandleOnboardingProbeProvider_SuccessWithModels(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	var modelsGETs int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -938,6 +688,7 @@ func TestHandleOnboardingProbeProvider_SuccessWithModels(t *testing.T) {
 // from the upstream is surfaced as success=false with an error message,
 // matching the existing POST /providers/{id}/test contract.
 func TestHandleOnboardingProbeProvider_UpstreamUnauthorized(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -973,6 +724,7 @@ func TestHandleOnboardingProbeProvider_UpstreamUnauthorized(t *testing.T) {
 // onboarding is marked complete, the endpoint returns HTTP 409 to steer
 // admins to the normal provider-management flow.
 func TestHandleOnboardingProbeProvider_AlreadyComplete(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -998,6 +750,7 @@ func TestHandleOnboardingProbeProvider_AlreadyComplete(t *testing.T) {
 // validation branches — empty id, empty api_key, and an unknown provider
 // without api_base override must all return 400.
 func TestHandleOnboardingProbeProvider_MissingFields(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 
@@ -1026,7 +779,7 @@ func TestHandleOnboardingProbeProvider_MissingFields(t *testing.T) {
 // so that a subsequent valid attempt can succeed.
 //
 // BDD: Given a fresh install (onboarding not complete),
-// When POST /api/v1/onboarding/complete with a missing admin.username (400 path),
+// When POST /api/v1/onboarding/complete with an empty provider.api_key (400 path),
 // Then: (a) HTTP 400 is returned, AND
 //
 //	(b) the onboarding manager is not in the "reserved" state so a second
@@ -1036,6 +789,7 @@ func TestHandleOnboardingProbeProvider_MissingFields(t *testing.T) {
 // (reservation held permanently after a 400) and PASS on the fixed code
 // (defer releases reservation on every non-committed return path).
 func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -1054,17 +808,18 @@ func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
-	// Step 1: Send a bad request — admin.username is empty, which triggers a 400
-	// before the config write. The reservation must be released in the defer.
-	badBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"","password":"secret123"}}`
+	// Step 1: Send a bad request — provider.api_key is empty, which triggers a
+	// 400 before the config write. The reservation must be released in the defer.
+	badBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":""},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	badReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(badBody))
 	badReq.Header.Set("Content-Type", "application/json")
 	badW := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(badW, badReq)
+	api.HandleCompleteOnboarding(badW, signedIn(badReq))
 
 	require.Equal(t, http.StatusBadRequest, badW.Code,
-		"bad request with empty username must return 400")
+		"bad request with an empty api_key must return 400")
 
 	// Step 2: Verify the reservation was released by confirming IsComplete is still
 	// false and a second valid request succeeds with 200 (not 409).
@@ -1073,13 +828,14 @@ func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
 	require.False(t, api.onboardingMgr.IsComplete(),
 		"onboarding must NOT be complete after a 400 response")
 
-	goodBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`
+	goodBody := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	goodBody = hermeticOnboardBody(t, goodBody)
 	goodReq := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(goodBody))
 	goodReq.Header.Set("Content-Type", "application/json")
 	goodW := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(goodW, goodReq)
+	api.HandleCompleteOnboarding(goodW, signedIn(goodReq))
 
 	require.Equal(t, http.StatusOK, goodW.Code,
 		"second valid onboarding request must succeed after reservation released (got %s)", goodW.Body.String())
@@ -1087,6 +843,7 @@ func TestHandleCompleteOnboarding_BadRequest_ReleasesReservation(t *testing.T) {
 
 // TestHandleOnboardingProbeProvider_WrongMethod ensures non-POST verbs are rejected.
 func TestHandleOnboardingProbeProvider_WrongMethod(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	api := newOnboardingTestAPI(t, tmpDir, nil)
 
@@ -1114,6 +871,7 @@ func TestHandleOnboardingProbeProvider_WrongMethod(t *testing.T) {
 // Then the response is HTTP 200 with success=false, validation.outcome="invalid_key",
 // and the error does NOT contain the raw upstream body or the API key (SEC-16).
 func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/models"):
@@ -1169,6 +927,7 @@ func TestHandleOnboardingProbeProvider_PublicModelsBadKey(t *testing.T) {
 // When POST /api/v1/onboarding/probe-provider {"id":"openai","auth":"api_key","api_key":"good-key"} is called,
 // Then the response is HTTP 200 with {"success":true,"models":[...]}.
 func TestHandleOnboardingProbeProvider_PublicModelsGoodKey(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/models"):
@@ -1236,6 +995,7 @@ func captureSlog(t *testing.T) *bytes.Buffer {
 //
 //	upstream is never contacted.
 func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	var hits int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++ // must remain 0 — the SSRF gate blocks before any request
@@ -1270,6 +1030,7 @@ func TestHandleOnboardingProbeProvider_SSRFBlocksInternalEndpoint(t *testing.T) 
 // gate does not over-block: when 127.0.0.1 is explicitly allowlisted the probe
 // proceeds and reaches the (loopback) upstream, returning the model list.
 func TestHandleOnboardingProbeProvider_SSRFAllowsAllowlistedLoopback(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/models"):
@@ -1331,6 +1092,7 @@ func newProviderTestAPI(t *testing.T, tmpDir, configJSON string) *restAPI {
 // When POST /api/v1/providers/openai/test is called,
 // Then the /chat/completions probe hits the configured base and success=true.
 func TestProviderTest_HonorsConfiguredAPIBase(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	var probedPath string
 	var probedHost bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1367,6 +1129,7 @@ func TestProviderTest_HonorsConfiguredAPIBase(t *testing.T) {
 // TestProviderTest_ConfiguredAPIBaseRejectsBadKey proves the configured-base probe
 // actually validates the key: an api_base server that returns 401 yields success=false.
 func TestProviderTest_ConfiguredAPIBaseRejectsBadKey(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"bad key"}`))
@@ -1402,6 +1165,7 @@ func TestProviderTest_ConfiguredAPIBaseRejectsBadKey(t *testing.T) {
 // configured api_base pointing at an internal address is blocked before any
 // outbound call when SSRF is active and the address is not allowlisted.
 func TestProviderTest_SSRFBlocksInternalAPIBase(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	var hits int
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -1438,6 +1202,7 @@ func TestProviderTest_SSRFBlocksInternalAPIBase(t *testing.T) {
 // When POST /api/v1/providers/openai/test is called,
 // Then success=false with an error mentioning the credential vault could not be read.
 func TestProviderTest_CredentialVaultUnreadable(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	cfgJSON := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[` +
 		`{"provider":"openai","model":"gpt-4","model_name":"gpt-4",` +
@@ -1493,6 +1258,7 @@ func TestProviderTest_CredentialVaultUnreadable(t *testing.T) {
 // Then success=false with an error saying the ref no longer exists — never "unlock and
 // retry".
 func TestProviderTest_CredentialRefNotFound(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	cfgJSON := `{"version":1,"agents":{"defaults":{},"list":[]},"providers":[` +
 		`{"provider":"openai","model":"gpt-4","model_name":"gpt-4",` +
@@ -1550,6 +1316,7 @@ func TestProviderTest_CredentialRefNotFound(t *testing.T) {
 // flag, never the literal id "custom") is now the case that genuinely has no
 // catalog models, so it is the one that must warn.
 func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -1606,6 +1373,7 @@ func TestHandleOnboardingProbeProvider_EmptyModelsWarns(t *testing.T) {
 // When POST /api/v1/onboarding/complete is called,
 // Then 200, no warning, and the key is in the encrypted credential store.
 func TestHandleCompleteOnboarding_ValidKeyAccepted(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -1623,19 +1391,20 @@ func TestHandleCompleteOnboarding_ValidKeyAccepted(t *testing.T) {
 	// A provider that answers the probe successfully — i.e. says the key is good.
 	upstream := startFakeProviderUpstream(t)
 	body := withProviderEndpoint(
-		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-good-key"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-good-key"},`+
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
 		upstream,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	require.Equal(t, http.StatusOK, w.Code, "a key the provider accepts must complete onboarding (body=%s)", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["token"])
+	assert.NotContains(t, resp, "token", "completion mints no bearer token")
 	assert.Nil(t, resp["warning"], "a valid key must not produce a warning")
 
 	stored, err := api.credStore.Get("openai_API_KEY")
@@ -1653,6 +1422,7 @@ func TestHandleCompleteOnboarding_ValidKeyAccepted(t *testing.T) {
 // gain the entry, onboarding is NOT marked complete, and no admin user is
 // written to config.json — so the operator can retry with a corrected key.
 func TestHandleCompleteOnboarding_InvalidKeyRejectedAndNotStored(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -1684,14 +1454,15 @@ func TestHandleCompleteOnboarding_InvalidKeyRejectedAndNotStored(t *testing.T) {
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := withProviderEndpoint(
-		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-typo"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-typo"},`+
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
 		upstreamSrv.URL,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"a key the provider rejects must not complete onboarding (body=%s)", w.Body.String())
@@ -1728,6 +1499,7 @@ func TestHandleCompleteOnboarding_InvalidKeyRejectedAndNotStored(t *testing.T) {
 // Then 200, the key is stored as entered, and the response carries a warning
 // saying the key could not be checked — never an "invalid key" rejection.
 func TestHandleCompleteOnboarding_UnreachableProviderStillCompletes(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -1750,20 +1522,22 @@ func TestHandleCompleteOnboarding_UnreachableProviderStillCompletes(t *testing.T
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := withProviderEndpoint(
-		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-cannot-check"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-cannot-check"},`+
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
 		deadURL,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	require.Equal(t, http.StatusOK, w.Code,
 		"an unreachable provider must NOT block first-run setup (body=%s)", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["token"], "onboarding must still issue a token")
+	assert.Equal(t, "operator@example.com", resp["username"],
+		"onboarding must still complete for the signed-in account")
 
 	warning, _ := resp["warning"].(string)
 	require.NotEmpty(t, warning, "the operator must be told the key could not be checked")
@@ -1797,6 +1571,7 @@ func TestHandleCompleteOnboarding_UnreachableProviderStillCompletes(t *testing.T
 // resolves to "". There is nothing to probe — no outbound call is possible,
 // hermetic by construction.
 func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -1817,18 +1592,20 @@ func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t 
 	t.Cleanup(func() { _ = auditLogger.Close() })
 	api.auditor = auditLogger
 
-	body := `{"provider":{"auth_method":"api_key","id":"azure","api_key":"sk-azure-key"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"azure","api_key":"sk-azure-key"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	require.Equal(t, http.StatusOK, w.Code,
 		"a provider with no resolvable endpoint must NOT block first-run setup (body=%s)", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["token"], "onboarding must still issue a token")
+	assert.Equal(t, "operator@example.com", resp["username"],
+		"onboarding must still complete for the signed-in account")
 
 	warning, _ := resp["warning"].(string)
 	require.NotEmpty(t, warning,
@@ -1873,6 +1650,7 @@ func TestHandleCompleteOnboarding_NoEndpointResolvedStillCompletesWithWarning(t 
 // hermetic by construction, and it proves the catalog-default branch resolves
 // to a real, loopback-shaped base rather than the empty string.
 func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -1896,18 +1674,20 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 	api.auditor = auditLogger
 
 	// No `endpoint` field at all — probeBase must come from providers.APIBaseFor.
-	body := `{"provider":{"auth_method":"api_key","id":"ollama","api_key":"sk-ollama-key"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"ollama","api_key":"sk-ollama-key"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	require.Equal(t, http.StatusOK, w.Code,
 		"an SSRF-blocked probe must NOT block first-run setup (body=%s)", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["token"], "onboarding must still issue a token")
+	assert.Equal(t, "operator@example.com", resp["username"],
+		"onboarding must still complete for the signed-in account")
 
 	warning, _ := resp["warning"].(string)
 	require.NotEmpty(t, warning,
@@ -1958,6 +1738,7 @@ func TestHandleCompleteOnboarding_SSRFBlockedProbeStillCompletesWithWarning(t *t
 // it and complete onboarding with NO warning (OutcomeValid) — not a false
 // Unreachable from stopping at the first, stale candidate.
 func TestHandleCompleteOnboarding_ProbeModelFallsThroughCatalogCandidates(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -2012,14 +1793,15 @@ func TestHandleCompleteOnboarding_ProbeModelFallsThroughCatalogCandidates(t *tes
 	api := newOnboardingTestAPI(t, tmpDir, al)
 
 	body := withProviderEndpoint(
-		`{"provider":{"auth_method":"api_key","id":"openrouter","api_key":"sk-or-v1-still-good"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openrouter","api_key":"sk-or-v1-still-good"},`+
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
 		upstream.URL,
 	)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 
 	require.Equal(t, http.StatusOK, w.Code,
 		"a good key must still complete onboarding even when the catalog's first probe candidate 404s (body=%s)", w.Body.String())

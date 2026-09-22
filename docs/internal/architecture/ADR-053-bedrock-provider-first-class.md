@@ -1,11 +1,41 @@
 # ADR-053: Should AWS Bedrock stop being build-tag-gated and become a first-class provider?
 
-- **Status:** **Proposed — 2026-07-21.** Not ratified. The operator has made no
-  decision; nothing in this ADR is licence to change code.
+- **Status:** **Accepted — 2026-09-21.** Superseded implementation details are
+  retained below as historical evidence; the accepted decision in the next
+  section is authoritative.
 - **Deciders:** Daniel Piatkowski (operator); architect (recommendation).
 - **Evidence level:** 1 — every claim below is cited to a file:line, a git object,
   or a measurement taken on this machine and reproduced in-document. No claim is
   carried over from prior analysis without re-verification.
+
+## Accepted decision (2026-09-21)
+
+The founder decided: **include Bedrock and remove the build flag; it is a normal
+provider.** Issue #800 narrows the implementation to the same credential shape
+as Omnipus's other hosted providers:
+
+- Authentication is **API key only**, sent as `Authorization: Bearer <key>` to
+  Bedrock Runtime's Converse endpoint.
+- The API key is stored through the existing encrypted credential-store path.
+- AWS SSO, IAM role assumption, instance roles, named profiles, and the AWS
+  default credential chain are explicitly excluded and deferred to roadmap
+  issue #801.
+- The runtime integration uses plain HTTPS and local JSON request/response
+  types. No AWS SDK module remains in the dependency graph.
+- The regional endpoint form is
+  `https://bedrock-runtime.<region>.amazonaws.com`; `us-east-1` is the catalog
+  default and an explicit provider `api_base` may select another regional
+  endpoint (or a region string through the protocol factory).
+- The existing Converse behavior is retained: system/user/assistant message
+  mapping, merged tool results, tool definitions and calls, image blocks,
+  stop reasons, and usage accounting.
+- Bedrock participates in ADR-067's catalog-driven protocol dispatch through
+  the `bedrock` protocol. It is not a vendor-id branch in the factory.
+
+This decision replaces the earlier Option C recommendation and the draft
+credential-archetype specification that assumed AWS credential-chain and
+control-plane SDK support. Those capabilities are roadmap #801, not part of
+the accepted issue #800 design.
 
 ## Why this ADR exists
 
@@ -404,7 +434,7 @@ as its own v0.3 item — not smuggled in as "while we're here".
 **Confidence: Medium-Low** on adopting E *now* (scope discipline); **High** that
 `auth_kind` is the correct eventual model.
 
-## Recommendation
+## Historical recommendation (superseded by the accepted decision above)
 
 **Adopt C, scheduled into v0.3, with E's `auth_kind` shape used for the
 credential work so C does not calcify a Bedrock-specific special case. Hold at A

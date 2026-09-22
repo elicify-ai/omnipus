@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -56,7 +57,7 @@ func TestStartCatalogRefreshLoop_ShutdownCancelsWaitsAndNeverPersists(t *testing
 	// The pull returned a valid, newer document AFTER cancellation. It must
 	// not have been persisted.
 	_, err := os.Stat(filepath.Join(home, catalog.PersistedFileName))
-	require.True(t, os.IsNotExist(err), "providers_catalog.json must not be written after shutdown cancel; stat: %v", err)
+	require.True(t, errors.Is(err, os.ErrNotExist), "providers_catalog.json must not be written after shutdown cancel; stat: %v", err)
 }
 
 // TestSkipStartupPull_Window is the FR-008 skip predicate on its own: only a

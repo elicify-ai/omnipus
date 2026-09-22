@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,7 +436,7 @@ func TestRememberTool_TwoAgents_ShareCallerIndependentAgent(t *testing.T) {
 func readAuditEntriesMemRL(t *testing.T, path string) []map[string]any {
 	t.Helper()
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

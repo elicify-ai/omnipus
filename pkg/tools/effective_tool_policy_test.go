@@ -353,22 +353,39 @@ func TestEffectiveToolPolicy_FilterParity(t *testing.T) {
 	}
 }
 
-// TestEffectiveToolPolicy_GodModeFloorsAllow proves the god-mode override still
-// floors every tool's verdict at "allow" through the primitive (so the gateway
-// exec gate honors god mode identically to the loop).
-func TestEffectiveToolPolicy_GodModeFloorsAllow(t *testing.T) {
+// TestEffectiveToolPolicy_GodModeFloorsGlobalNotAgent proves the god-mode
+// override reaches the primitive (so the gateway exec gate honors god mode
+// identically to the loop) AND that it floors only the GLOBAL layer: a tool the
+// AGENT denies is still denied, while a tool only the GLOBAL ceiling denied is
+// released. Both halves are asserted through the primitive and through
+// FilterToolsByPolicy, because the two must never disagree.
+func TestEffectiveToolPolicy_GodModeFloorsGlobalNotAgent(t *testing.T) {
 	cfg := &ToolPolicyCfg{
+		// "exec" is denied by the agent itself → god mode must not lift it.
+		// "read_file" is denied only globally → god mode must lift it.
 		Policies:       map[string]config.ToolPolicy{"exec": "deny"},
-		GlobalPolicies: map[string]config.ToolPolicy{"exec": "deny"},
+		GlobalPolicies: map[string]config.ToolPolicy{"exec": "deny", "read_file": "deny"},
 		GodMode:        true,
 	}
-	// Even a doubly-denied ScopeCore tool on a custom agent is allowed under god mode.
+	// A ScopeCore tool on a custom agent that the AGENT denies stays denied.
+	assert.Equal(t, "deny",
+		EffectiveToolPolicy(cfg, ScopeCore, "custom", "exec"),
+		"god mode floors the global layer at allow; global allow x agent deny is still deny")
+	// A tool denied ONLY by the global ceiling is released by god mode.
 	assert.Equal(t, "allow",
-		EffectiveToolPolicy(cfg, ScopeCore, "custom", "exec"))
-	// And it agrees with the filter.
-	filtered, polMap := FilterToolsByPolicy([]Tool{makeScopedTool("exec", ScopeCore)}, "custom", cfg)
+		EffectiveToolPolicy(cfg, ScopeGeneral, "custom", "read_file"),
+		"god mode lifts the operator's global ceiling for a tool the agent has no opinion on")
+
+	// And both agree with the filter: the agent-denied tool is dropped, the
+	// globally-denied one is kept with the identical verdict.
+	filtered, polMap := FilterToolsByPolicy(
+		[]Tool{makeScopedTool("exec", ScopeCore), makeScopedTool("read_file", ScopeGeneral)},
+		"custom", cfg)
 	assert.Len(t, filtered, 1)
-	assert.Equal(t, "allow", polMap["exec"])
+	assert.Equal(t, "read_file", filtered[0].Name())
+	assert.Equal(t, "allow", polMap["read_file"])
+	_, inMap := polMap["exec"]
+	assert.False(t, inMap, "an agent-denied tool must not survive god mode in the policy map either")
 }
 
 // TestEffectiveToolPolicy_NilCfg verifies nil-cfg handling matches

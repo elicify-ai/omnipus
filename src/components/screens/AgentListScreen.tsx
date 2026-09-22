@@ -324,7 +324,7 @@ function AgentsLibraryView({
                         Built-in roster
                       </h2>
                       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-                        Core agents — Mia, Jim, Ava, Ray and any other locked system roster.
+                        Built-in colleagues — Mia, Jim, Ava and Admin. Their identity and base instructions are protected; their capabilities are configurable.
                       </p>
                     </div>
                   </AccordionTrigger>
@@ -524,7 +524,7 @@ function AgentsLibraryView({
                         System
                       </h2>
                       <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] mt-[var(--space-0-5)]">
-                        System agents — locked, run out-of-turn (Judge). Not a chat target, not delegable.
+                        System agents — Judge and Plan Supervisor. Their instructions are editable and their capabilities are fixed. They cannot be selected for chat or delegation.
                       </p>
                     </div>
                   </AccordionTrigger>
@@ -560,6 +560,7 @@ export function AgentListScreen() {
   const { data: agents = [], isLoading: agentsLoading, isError: agentsError, refetch: refetchAgents } = useQuery({
     queryKey: ['agents'],
     queryFn: fetchAgents,
+    refetchInterval: 5_000,
   })
 
   const { data: workspaces = [] } = useQuery({
@@ -615,7 +616,7 @@ export function AgentListScreen() {
 
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agent: Agent) =>
-      updateAgent(agent.id, { default: true, updated_at: agent.updated_at }),
+      updateAgent(agent.id, { revision: agent.revision, default: true }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
       addToast({ message: 'Default agent updated', variant: 'success' })
@@ -623,7 +624,7 @@ export function AgentListScreen() {
     onError: (err: unknown) => {
       if (isApiError(err) && err.status === 409) {
         addToast({
-          message: 'Agent was changed elsewhere. Retrying…',
+          message: 'Agent was changed elsewhere. Reload and review before trying again.',
           variant: 'error',
         })
         queryClient.invalidateQueries({ queryKey: ['agents'] })

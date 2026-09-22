@@ -55,6 +55,16 @@ func GeneralBuiltinMetadata() []Tool {
 		out = append(out, execTool)
 	}
 
+	// --- environment_setup (CategoryPlatform) — ADR-090 ES-FR-01: the
+	// agent-supplied installation command/script tool. Metadata-only here
+	// (zero deps; never Execute()d in this catalog — the per-agent registry
+	// in pkg/agent/instance.go registers the live instance). It MUST appear
+	// here so the Constraint #6 coverage universe (pkg/gateway's
+	// buildKnownBuiltinToolNames walks this catalog) and GET /api/v1/tools
+	// see it — a tool seeded into policy but absent from the catalog is the
+	// vault-records failure mode CLAUDE.md's Definition of Done exists for.
+	out = append(out, NewEnvironmentSetupTool(EnvironmentSetupToolDeps{}))
+
 	// --- File system tools (CategoryFilesystem) ---
 	out = append(out, NewReadFileTool("", false, 0))
 	out = append(out, NewWriteFileTool("", false))

@@ -20,7 +20,7 @@ import (
 //
 // The whole point of ADR-067 D11 is that adding a provider is a CATALOG ROW,
 // not a Go case. That property is invisible to a behavioural test: a factory
-// with forty vendor cases and a factory with five protocol cases both build
+// with forty vendor cases and a factory with six protocol cases both build
 // the right transport for `zai`. Only the source shape distinguishes them,
 // so the source shape is what this asserts — on the AST, not with a grep,
 // because a grep cannot tell a `case` from a comment that mentions one.
@@ -51,6 +51,7 @@ func TestFactory_NoVendorCases(t *testing.T) {
 	got := caseExprs(fset, switches[0])
 	want := []string{
 		"catalog.ProtocolAnthropic",
+		"catalog.ProtocolBedrock",
 		"catalog.ProtocolCLI",
 		"catalog.ProtocolGoogle",
 		"catalog.ProtocolOllama",

@@ -15,6 +15,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,7 +33,7 @@ func lifecycleFilesOnDisk(t *testing.T, lc *session.LifecycleStore) []string {
 	t.Helper()
 	entries, err := os.ReadDir(lc.Dir())
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		t.Fatalf("read lifecycle dir: %v", err)

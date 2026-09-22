@@ -5,6 +5,7 @@
 package systools
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -80,7 +81,7 @@ func TestDeleteEntity_HoldsFlock_NoResurrection(t *testing.T) {
 		t.Fatalf("final deleteEntity: %v", err)
 	}
 	path := entityPath(dir, id)
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("entity file still present after final delete (resurrection): stat err=%v", err)
 	}
 }
@@ -96,7 +97,7 @@ func TestDeleteEntity_Idempotent_MissingFile(t *testing.T) {
 	if err := deleteEntity(dir, id); err != nil {
 		t.Fatalf("deleteEntity on missing file must succeed, got: %v", err)
 	}
-	if _, err := os.Stat(entityPath(dir, id)); !os.IsNotExist(err) {
+	if _, err := os.Stat(entityPath(dir, id)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("deleteEntity on missing file must not leave a file behind: stat err=%v", err)
 	}
 }

@@ -51,8 +51,8 @@ describe('fetchWorkspaces', () => {
     // Then GET /api/v1/workspaces is requested and 2 workspaces are returned.
     // Traces to: wave4-level1-project-task-mgmt spec — fetchWorkspaces shape
     const payload = [
-      { id: 'p1', name: 'Project Alpha', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
-      { id: 'p2', name: 'Project Beta', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' },
+      { revision: '0'.repeat(64), id: 'p1', name: 'Project Alpha', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
+      { revision: '0'.repeat(64), id: 'p2', name: 'Project Beta', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-01-02T00:00:00Z', updated_at: '2026-01-02T00:00:00Z' },
     ]
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(payload))
 
@@ -97,6 +97,7 @@ describe('createWorkspace', () => {
     // And the created workspace is returned.
     // Traces to: wave4-level1-project-task-mgmt spec — createWorkspace shape
     const created = {
+      revision: 'b'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['workspace'],
       id: 'new-proj-id',
       name: 'Test',
       status: 'active',
@@ -129,8 +130,8 @@ describe('createWorkspace', () => {
   it('differentiation test: creating two different workspaces returns different ids', async () => {
     // Anti-hardcode: two POST calls with different names must produce different results.
     // Traces to: wave4-level1-project-task-mgmt spec — createWorkspace differentiation
-    const created1 = { id: 'id-alpha', name: 'Alpha', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' }
-    const created2 = { id: 'id-beta', name: 'Beta', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:01Z', updated_at: '2026-06-01T00:00:01Z' }
+    const created1 = { revision: 'b'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['workspace'], id: 'id-alpha', name: 'Alpha', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-01T00:00:00Z' }
+    const created2 = { revision: 'c'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['workspace'], id: 'id-beta', name: 'Beta', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:01Z', updated_at: '2026-06-01T00:00:01Z' }
 
     fetchSpy
       .mockResolvedValueOnce(makeJsonResponse(created1, 201))
@@ -156,16 +157,17 @@ describe('deleteWorkspace', () => {
     // Then DELETE /api/v1/workspaces/id is requested.
     // Note: request() always calls res.json(); mock returns {} so it parses cleanly.
     // Traces to: wave4-level1-project-task-mgmt spec — deleteWorkspace shape
-    fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse({ revision: 'a'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['workspace'] }, 200))
 
     const { deleteWorkspace } = await import('./api')
-    // deleteWorkspace returns void — should not throw.
-    await expect(deleteWorkspace('test-id')).resolves.not.toThrow()
+    await expect(deleteWorkspace('test-id', 'a'.repeat(64))).resolves.toMatchObject({ persistence_status: 'complete' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('/api/v1/workspaces/test-id')
     expect((init as RequestInit).method).toBe('DELETE')
+    expect(url).toContain(`revision=${'a'.repeat(64)}`)
+    expect((init as RequestInit).body).toBeUndefined()
   })
 
   it('sends the correct encoded id in the URL', async () => {
@@ -173,10 +175,10 @@ describe('deleteWorkspace', () => {
     // When deleteWorkspace is called,
     // Then the URL contains the id.
     // Traces to: wave4-level1-project-task-mgmt spec — deleteWorkspace URL encoding
-    fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse({ revision: 'a'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['workspace'] }, 200))
 
     const { deleteWorkspace } = await import('./api')
-    await deleteWorkspace('proj-xyz-001')
+    await deleteWorkspace('proj-xyz-001', 'a'.repeat(64))
 
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toContain('proj-xyz-001')
@@ -197,7 +199,7 @@ describe('deleteWorkspace', () => {
     const { deleteWorkspace, ApiError, isApiError } = await import('./api')
     let thrown: unknown
     try {
-      await deleteWorkspace('missing-id')
+      await deleteWorkspace('missing-id', 'a'.repeat(64))
     } catch (err) {
       thrown = err
     }
@@ -216,6 +218,7 @@ describe('updateWorkspace', () => {
     // And the updated workspace is returned.
     // Traces to: project-task-management-level1-spec.md — updateWorkspace shape
     const updated = {
+      revision: 'b'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['name'],
       id: 'proj-123',
       name: 'Renamed',
       status: 'active',
@@ -228,7 +231,7 @@ describe('updateWorkspace', () => {
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(updated))
 
     const { updateWorkspace } = await import('./api')
-    const result = await updateWorkspace('proj-123', { name: 'Renamed' })
+    const result = await updateWorkspace('proj-123', { revision: 'a'.repeat(64), name: 'Renamed' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -238,6 +241,7 @@ describe('updateWorkspace', () => {
     // Verify request body contains the update fields.
     const body = JSON.parse((init as RequestInit).body as string)
     expect(body.name).toBe('Renamed')
+    expect(body.revision).toBe('a'.repeat(64))
 
     // Verify returned project has the updated fields.
     expect(result.id).toBe('proj-123')
@@ -248,16 +252,16 @@ describe('updateWorkspace', () => {
   it('differentiation test: updating two different projects returns different results', async () => {
     // Anti-hardcode: two PUT calls with different ids and bodies must produce different results.
     // Traces to: project-task-management-level1-spec.md — updateWorkspace differentiation
-    const first = { id: 'id-one', name: 'First Updated', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T01:00:00Z' }
-    const second = { id: 'id-two', name: 'Archived Project', status: 'archived', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T02:00:00Z' }
+    const first = { revision: 'b'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['name'], id: 'id-one', name: 'First Updated', status: 'active', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T01:00:00Z' }
+    const second = { revision: 'c'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['status'], id: 'id-two', name: 'Archived Project', status: 'archived', pinned: false, pin_order: 0, task_count: 0, created_at: '2026-06-01T00:00:00Z', updated_at: '2026-06-08T02:00:00Z' }
 
     fetchSpy
       .mockResolvedValueOnce(makeJsonResponse(first))
       .mockResolvedValueOnce(makeJsonResponse(second))
 
     const { updateWorkspace } = await import('./api')
-    const r1 = await updateWorkspace('id-one', { name: 'First Updated' })
-    const r2 = await updateWorkspace('id-two', { status: 'archived' })
+    const r1 = await updateWorkspace('id-one', { revision: 'a'.repeat(64), name: 'First Updated' })
+    const r2 = await updateWorkspace('id-two', { revision: 'b'.repeat(64), status: 'archived' })
 
     expect(r1.id).toBe('id-one')
     expect(r2.id).toBe('id-two')
@@ -280,7 +284,7 @@ describe('updateWorkspace', () => {
     const { updateWorkspace, ApiError, isApiError } = await import('./api')
     let thrown: unknown
     try {
-      await updateWorkspace('missing-id', { name: 'Ghost' })
+      await updateWorkspace('missing-id', { revision: 'a'.repeat(64), name: 'Ghost' })
     } catch (err) {
       thrown = err
     }

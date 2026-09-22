@@ -1002,7 +1002,7 @@ func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
 		if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				// M15: log non-IsNotExist walk errors.
-				if !os.IsNotExist(walkErr) {
+				if !errors.Is(walkErr, os.ErrNotExist) {
 					logger.WarnCF("agent", "cache baseline: WalkDir error",
 						map[string]any{"root": root, "path": path, "error": walkErr.Error()})
 				}
@@ -1017,7 +1017,7 @@ func (cb *ContextBuilder) buildCacheBaseline() cacheBaseline {
 				}
 			}
 			return nil
-		}); err != nil && !os.IsNotExist(err) {
+		}); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("agent", "cache baseline: WalkDir returned error",
 				map[string]any{"root": root, "error": err.Error()})
 		}
@@ -1121,7 +1121,7 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				// Treat unexpected walk errors as changed to avoid stale cache.
-				if !os.IsNotExist(walkErr) {
+				if !errors.Is(walkErr, os.ErrNotExist) {
 					changed = true
 					return errWalkStop
 				}
@@ -1140,7 +1140,7 @@ func skillFilesChangedSince(skillRoots []string, filesAtCache map[string]time.Ti
 		if changed {
 			return true
 		}
-		if err != nil && !errors.Is(err, errWalkStop) && !os.IsNotExist(err) {
+		if err != nil && !errors.Is(err, errWalkStop) && !errors.Is(err, os.ErrNotExist) {
 			logger.DebugCF("agent", "skills walk error", map[string]any{"error": err.Error()})
 			return true
 		}
@@ -1183,7 +1183,7 @@ func (cb *ContextBuilder) loadBootstrapFilesWithDef(agentDefinition AgentContext
 		filePath := filepath.Join(cb.workspace, "IDENTITY.md")
 		if data, err := os.ReadFile(filePath); err == nil {
 			fmt.Fprintf(&sb, "## %s\n\n%s\n\n", "IDENTITY.md", data)
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("agent", "Could not read IDENTITY.md",
 				map[string]any{"path": filePath, "error": err.Error()})
 		}

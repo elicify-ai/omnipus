@@ -10,7 +10,11 @@ package browser
 // marker+pidAlive staleness check in coordinator.go (takeLaunchLock), which
 // removes it and retries once.
 
-import "os"
+import (
+	"errors"
+
+	"os"
+)
 
 const launchLockReleasedOnExit = false
 
@@ -22,7 +26,7 @@ const launchLockReleasedOnExit = false
 func acquireLaunchLock(path string) (*os.File, bool, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
-		if os.IsExist(err) {
+		if errors.Is(err, os.ErrExist) {
 			return nil, false, nil
 		}
 		return nil, false, err

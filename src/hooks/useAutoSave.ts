@@ -271,6 +271,7 @@ export function useAutoSave<T>(
     // queued re-run could have already moved past 'saved' by the time we
     // get there).
     let savedSuccessfully = false
+    let revisionConflict = false
     try {
       await saveFnRef.current(inFlightData)
       // Only NOW is the data durable — advance the saved marker so
@@ -306,7 +307,8 @@ export function useAutoSave<T>(
         setError(undefined)
         return
       }
-      setStatus('error')
+      revisionConflict = isApiError(err) && err.status === 409
+      setStatus(revisionConflict ? 'conflict' : 'error')
       setError(isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err))
     } finally {
       // FIX 3: release the guard, then honor any re-run queued while this
@@ -315,6 +317,7 @@ export function useAutoSave<T>(
       // so a queued re-run that this save's own outcome already covers
       // doesn't fire a redundant no-op PUT.
       isSavingRef.current = false
+      if (revisionConflict) rerunPendingRef.current = false
       if (rerunPendingRef.current) {
         rerunPendingRef.current = false
         if (JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current) {
@@ -460,39 +463,12 @@ export function useAutoSave<T>(
   // used by the ~6 other callers that only ever write one endpoint.
   const flushBeacon = useCallback(() => {
     if ((!flushUrl && !beaconFlush) || !initializedRef.current || !hasPendingChanges()) return
-    // FIX 5 (7-reviewer-gate finding, supersedes FIX 4 below): FIX 4 gated
-    // this beacon fetch behind isSavingRef to close an overlapping-PUT race
-    // — correct in isolation, but it traded that race for a worse
-    // regression. flushBeacon only ever runs from
-    // visibilitychange/beforeunload/pagehide — exactly the moment a real
-    // tab-close might happen — and gating the keepalive fetch behind
-    // isSavingRef meant a save-in-flight-at-unload got NO keepalive fetch at
-    // all: the newest edit was queued through doSave()'s own `finally`
-    // block instead, which fires a non-keepalive fetch once the in-flight
-    // save settles — but a non-keepalive fetch has no guarantee of
-    // completing after the page has genuinely unloaded. Net effect: closing
-    // the tab within ~500ms of an edit (while a debounced save happens to be
-    // in flight) had a plausible path to silently drop the newest edit
-    // entirely — the exact class of data-loss bug this whole track exists
-    // to fix, just moved to a narrower trigger condition.
-    //
-    // Fix: fire the keepalive fetch (or the caller-supplied `beaconFlush`,
-    // which carries the same keepalive-on-unload contract — see its option
-    // doc comment) with the LATEST data regardless of whether a save is
-    // already in flight. Accepting a possible duplicate/overlapping
-    // keepalive write is strictly safer for data durability on genuine
-    // unload than guaranteeing none goes out (the backend's optimistic-
-    // concurrency handling, plus the `updated_at`-precision fix landing
-    // alongside this one, makes an overlapping pair of writes recoverable;
-    // a guaranteed-lost edit on tab-close is not). Still queue a re-run
-    // through doSave() too — belt-and-braces for the visibilitychange case,
-    // where the tab may just be backgrounded rather than genuinely closing,
-    // so a normal serialized save (with response handling / status update /
-    // `lastSavedJsonRef` advancement, none of which this raw fetch does)
-    // still happens once the in-flight one settles. This is a DELIBERATE
-    // divergence from the unmount-cleanup site's guard below (which still
-    // skips firing when a save is in flight) — see that comment for the
-    // full 4-site invariant and keep the two in sync on any future change.
+    // On page exit, send the latest snapshot even while a regular save is
+    // pending: its queued non-keepalive request may never run after unload.
+    // Revision validation prevents overwriting newer server state, but this
+    // best-effort flush cannot confirm delivery or recover a conflict.
+    // Also queue the regular save for a tab that is merely backgrounded.
+    // Unmount cleanup below intentionally avoids an overlapping request.
     if (isSavingRef.current) {
       rerunPendingRef.current = true
     }

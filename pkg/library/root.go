@@ -535,7 +535,7 @@ func CountVisibleRootEntries(home, workspaceID string) (int, error) {
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("library: count root entries: %w", err)
@@ -561,7 +561,7 @@ func translateErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return ErrNotFound
 	}
 	if strings.Contains(err.Error(), "escapes from parent") {

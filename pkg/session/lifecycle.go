@@ -346,7 +346,7 @@ func (s *LifecycleStore) Lock(sessionID string) *sync.Mutex {
 func (s *LifecycleStore) tail(sessionID string) (rec *LifecycleRecord, found bool, err error) {
 	f, err := os.Open(s.path(sessionID))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, false, nil
 		}
 		return nil, false, fmt.Errorf("session: lifecycle: open %q: %w", sessionID, err)
@@ -627,7 +627,7 @@ func (f LifecycleFilter) matches(r *LifecycleRecord) bool {
 func (s *LifecycleStore) scanSessionIDs() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("session: lifecycle: read dir: %w", err)

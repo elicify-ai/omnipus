@@ -89,7 +89,7 @@ func (a *restAPI) HandleSystemFolders(w http.ResponseWriter, r *http.Request) {
 	// is how "/tmp" and "/private/tmp" end up disagreeing on macOS.
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(requested))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			jsonErr(w, http.StatusNotFound, "no such directory")
 			return
 		}

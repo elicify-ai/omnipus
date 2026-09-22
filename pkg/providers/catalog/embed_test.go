@@ -10,8 +10,7 @@ package catalog
 //	                                                custom row; cli_kind on every cli row
 //	                                                (FR-026)
 //	T19 TestEmbeddedSnapshot_UnsupportedHaveReason — every unsupported row carries a
-//	                                                reason; amazon-bedrock = cloud-iam,
-//	                                                azure = deployment-url (US-8.AC2)
+//	                                                reason; azure = deployment-url
 //
 // The snapshot under test is the committed pkg/providers/catalog/data/
 // providers_catalog.json — the assembly repository's release document
@@ -19,6 +18,7 @@ package catalog
 
 import (
 	"bytes"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -165,17 +165,31 @@ func TestEmbeddedSnapshot_UnsupportedHaveReason(t *testing.T) {
 		reasons[p.ID] = p.UnsupportedReason
 	}
 
-	// US-8.AC2: cloud-IAM is listed, visible-disabled with its reason.
-	if got, ok := reasons["amazon-bedrock"]; !ok {
-		t.Error("amazon-bedrock missing from the unsupported tier")
-	} else if got != "cloud-iam" {
-		t.Errorf("amazon-bedrock unsupported_reason = %q, want cloud-iam", got)
-	}
 	if got, ok := reasons["azure"]; !ok {
 		t.Error("azure missing from the unsupported tier")
 	} else if got != "deployment-url" {
 		t.Errorf("azure unsupported_reason = %q, want deployment-url", got)
 	}
+}
+
+// Issue #800 — the founder accepted API-key-only Bedrock as a normal provider.
+// The embedded catalog is the onboarding source, so this assertion is the
+// reachability proof that the picker no longer receives a disabled row.
+func TestEmbeddedSnapshot_BedrockIsNormalAPIKeyProvider(t *testing.T) {
+	doc := parseEmbedded(t)
+	for _, provider := range doc.Providers {
+		if provider.ID != "amazon-bedrock" {
+			continue
+		}
+		assert.Equal(t, TierStandard, provider.Tier)
+		assert.Equal(t, ProtocolBedrock, provider.Protocol)
+		assert.Equal(t, "https://bedrock-runtime.us-east-1.amazonaws.com", provider.API)
+		assert.Equal(t, "us-east-1", provider.Region)
+		assert.Equal(t, []AuthMethod{AuthAPIKey}, provider.AuthMethods)
+		assert.Empty(t, provider.UnsupportedReason)
+		return
+	}
+	t.Fatal("amazon-bedrock missing from the embedded catalog")
 }
 
 // TestSingleCatalogEmbedUnderProviders (T16, FR-005, SC-008) is the
@@ -223,8 +237,7 @@ func TestSingleCatalogEmbedUnderProviders(t *testing.T) {
 // file is not itself a hit.
 func TestCapabilitiesPackageGone(t *testing.T) {
 	_, err := os.Stat(filepath.Join("..", "capabilities"))
-	assert.True(t, os.IsNotExist(err),
-		"pkg/providers/capabilities must not exist (FR-005, SC-008)")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "pkg/providers/capabilities must not exist (FR-005, SC-008)")
 
 	// Assembled, never written whole: a literal here would make this file its
 	// own first hit.

@@ -1,8 +1,7 @@
 # CLAUDE.md — CI worker cluster (app `ci-omnipus-1`)
 
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
-whenever a file in this directory (or a descendant) is read. See the root `CLAUDE.md`'s
-"Local PR-runner" pointer for the short version.
+whenever a file in this directory (or a descendant) is read.
 
 ## ⚠️ "ALL GATES GREEN" from this worker does NOT mean races were checked
 
@@ -11,7 +10,7 @@ false sense of completeness (2026-07-26 — a green worker verdict was reported 
 as if it were a full pass):
 
 1. ~~**There is no `-race` gate here at all.**~~ **Fixed 2026-08-10 — there is now a `go-race`
-   gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 900s`,
+   gate**, and it is included in `all`. It copies pr.yml's package list, `-timeout 2700s`,
    `CGO_ENABLED=1` and DATA RACE carve-out verbatim; keep the two in lockstep, because a worker
    gate that measures something GitHub does not is how a green local verdict stops predicting the
    real one — including pr.yml's **flake filter**, which the gate initially shipped without and which
@@ -75,11 +74,11 @@ concurrency. For race coverage, push and read GitHub CI.
 
 ## Local PR-runner (the `ci-omnipus-1` Fly cluster)
 
-The Go test/build suite is run on a dedicated Fly worker cluster, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Testing & building — CI is the authority" section). The cluster is sized, on-demand boxes with persistent caches, driven via `flyctl ssh console`.
+The Go test/build suite is run on a dedicated Fly worker cluster, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Build, test, and quality gates" section). The cluster is sized, on-demand boxes with persistent caches, driven via `flyctl ssh console`.
 
 - **App**: `ci-omnipus-1` (`sin` region) — **ONE app, several machines**. Each machine is a tier with its own `performance-8x/16GB` VM, its own persistent `/cache` volume (go-build/mod cache, npm cache, the cloned repo), and its own `/tmp/runci.lock`. The former standalone worker apps were **destroyed** by founder decision (2026-09-16) — do not reference or recreate them. Machines are addressed **by id**, and machine ids are provisioned by the harness, so they are DATA in `ci-cluster.sh` / its env vars, never hardcoded.
 - **Source of truth**: `deploy/ci-worker/runci.sh` (in this repo) **and** the deployed copy at `/cache/runci.sh` on **every** machine. **Editing the repo file does NOT update any executing copy** — see "Redeploying runci.sh" below.
-- **Trigger — full cluster (preferred)**: `deploy/ci-worker/ci-cluster.sh <ref>` fans the gates out one tier per machine, concurrently, and stops every machine it started on the way out (see "CI cluster dispatcher" below and `docs/internal/architecture/ci-cluster-design.md`).
+- **Trigger — full cluster (preferred)**: `deploy/ci-worker/ci-cluster.sh <ref>` fans the gates out one tier per machine, concurrently, collects every machine's logs (verified, see trap 8), and stops every machine it started on the way out (see "CI cluster dispatcher" below and `docs/internal/architecture/ci-cluster-design.md`).
 - **Trigger — one gate on one machine**:
   ```bash
   fly ssh console --app ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> <gate>"
@@ -219,10 +218,14 @@ is actually SSH-reachable, md5-verifies `/cache/runci.sh` against the repo copy 
 machine before dispatching anything (refuses on mismatch — tiers must not run different
 script versions), dispatches one tier per machine with each gate's output captured to its own
 log file, parses every log for the `RESULT` markers (never the SSH wrapper's exit code),
-asserts every machine's `HEAD:` sha matches the requested ref, and **stops every machine it
-started on every exit path — success, failure, pre-flight refusal, and Ctrl-C** (machines
-that were already running when it arrived are used but never stopped — another session may
-own them). Tier→machine→gates is data at the top of the script (env: `CI_CLUSTER_APP`,
+asserts every machine's `HEAD:` sha matches the requested ref, **collects every dispatched
+gate's run log off its machine and verifies the copy (`fly ssh sftp get`; non-zero size +
+the run's `HEAD:` line) BEFORE stopping anything — a machine whose evidence cannot be
+secured is LEFT RUNNING and named in the summary with its hand-retrieval command (trap
+8)**, and **stops every machine it started on every exit path — success, failure,
+pre-flight refusal, and Ctrl-C**, but only after that machine's logs are verified local
+(machines that were already running when it arrived are used but never stopped — another
+session may own them). Tier→machine→gates is data at the top of the script (env: `CI_CLUSTER_APP`,
 `CI_CLUSTER_GO_MACHINE`/`_NODE_`/`_XPLAT_`, or a whole-map `CI_CLUSTER_TIERS` override); the
 dispatcher works with one, two, or three machines present. Full rationale, tier map, and the
 performance-vs-shared-cpu sizing question: `docs/internal/architecture/ci-cluster-design.md`.
@@ -246,9 +249,11 @@ Two things to know before trusting a cluster run:
    a failure as a regression, re-run the ONE spec with `E2E_SPECS=…` (no contention) and
    compare durations.
 
-Detached runs (`nohup … > /tmp/ci-run.log &` over the console) survive an SSH drop and a
-session restart; resume by reading `/tmp/ci-run.log` and `ps -eo pid,etime,cmd | grep
-'[r]unci.sh'`. A second `runci.sh` pid with the same argv and a younger `etime` is the shard
+Detached runs (`nohup … > /cache/logs/ci-run.log &` over the console — never `/tmp`, which
+dies with the machine, trap 8; each run is ALSO tee'd automatically to its own
+`/cache/logs/<gate>@<ref>-<stamp>.log`) survive an SSH drop and a session restart; resume by
+reading `/cache/logs/ci-run.log` and `ps -eo pid,etime,cmd | grep '[r]unci.sh'`. A second
+`runci.sh` pid with the same argv and a younger `etime` is the shard
 runner's forked subshell, not a duplicate run.
 
 **Trap 6 — leftover `/cache/tmp/Test*` directories are post-shutdown writers.** Go's
@@ -264,3 +269,5 @@ occasionally the write lands mid-`RemoveAll` and fails an otherwise green test w
 **Cost / lifecycle**: machines are stopped when idle (no public service; a stopped machine's `/cache` volume still bills — stopping saves compute, not storage). Prefer `deploy/ci-worker/ci-cluster.sh <ref>`, which starts and stops the machines it needs itself. For a manual single-machine run, if `fly machine status <id> --app ci-omnipus-1` shows `stopped`, run `fly machine start <id> --app ci-omnipus-1` once before invoking `runci.sh` — and remember to stop it again; the SSH console may auto-start a stopped machine, which leaves it running unattended. Watch each machine's persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus-1 --machine <id> -C 'df -h /cache'`.
 
 **Trap 7 — stopping a run: kill the exact pid, never a process group.** `ps -o pgid` can print `0` for a nohup'd `runci.sh`; `kill -TERM -0` then signals every process on the VM, including init, and the Fly machine stops (2026-09-14, observed on a since-destroyed worker app, recovered with `fly machine start <id> --app ci-omnipus-1`; `/cache` survived). Stop a superseded run with `kill -TERM <runci pid>` and, if its children linger, `pkill -TERM -P <runci pid>`. Note also that a GATE FAILURE in `go-build` does not end the run: the remaining gates still execute, so a superseded run holds the machine's lock for the full duration unless stopped.
+
+**Trap 8 — logs in `/tmp` die with the machine; collect before stopping.** A Fly machine's root filesystem — `/tmp` included — is destroyed when the machine stops; only the mounted `/cache` volume survives. On 2026-09-16 three gates ran on three machines and all three failed with real defects (4 data races, 10 SPA test failures, 1 e2e shard); the dispatcher then stopped the machines, and every stack trace, failing test name and race report — all written to `/tmp` — was destroyed before anyone read one. Only the summary counts survived, in a terminal scrollback. Two fixes, both load-bearing since: `runci.sh` tee's each whole run to `/cache/logs/<gate>@<ref>-<stamp>.log` (newest 3 per gate kept, named by gate and ref — a stopped machine can still be interrogated), and `ci-cluster.sh` runs a collection phase before it stops ANY machine it started: `fly ssh sftp get` per gate log, verified non-zero size and carrying the run's `HEAD:` line. A machine whose evidence cannot be secured is LEFT RUNNING and named in the summary with its hand-retrieval command — a running machine costs money; destroyed evidence costs a night. The same rule applies to you: never stop a machine you have not collected from.

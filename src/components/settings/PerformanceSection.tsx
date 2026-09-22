@@ -7,9 +7,10 @@
  * Admin-only; backed by GET/PUT /api/v1/performance.
  *
  * Autosave: changes are applied automatically after a short debounce.
- * Because PUT /api/v1/performance is re-auth gated (Spec-6 FR-12.2 /
- * Spec-3 FR-6.6), the ReAuthDialog is opened automatically once the
- * debounced value settles on a valid input — the Save button is gone.
+ * Performance settings are one of ADR-0008 ruling 6's six controls, so a
+ * confirmation naming the change opens once the debounced value settles on a
+ * valid input — the Save button is gone, and the password prompt that used to
+ * sit here is gone with it.
  *
  * Both max_parallel_agents and tools_on_demand are sent together on every
  * PUT so neither field silently reverts when only one is changed.
@@ -32,7 +33,8 @@ import {
 import { useUiStore } from '@/store/ui'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import type { AutoSaveStatus } from '@/hooks/useAutoSave'
-import { ReAuthDialog } from './ReAuthDialog'
+import { isReAuthCancelled } from './useReAuthGate'
+import { useStepUp } from './useStepUp'
 
 // ── Skeleton ──────────────────────────────────────────────────────────────────
 
@@ -63,7 +65,7 @@ function Skeleton() {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-// Autosave debounce: wait 600 ms of inactivity before opening the reauth dialog.
+// Autosave debounce: wait 600 ms of inactivity before opening the confirmation.
 const AUTOSAVE_DEBOUNCE_MS = 600
 
 // Validation message shared by every path that rejects an invalid
@@ -108,6 +110,7 @@ const INVALID_GOAL_MAX_ROUNDS_MESSAGE =
 export function PerformanceSection(): React.ReactElement {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
+  const stepUp = useStepUp()
   const [saveStatus, setSaveStatus] = useState<AutoSaveStatus>('idle')
   const [inputValue, setInputValue] = useState<string>('')
   // toolsOnDemand mirrors the tools_on_demand field. true = load on demand (default).
@@ -125,9 +128,8 @@ export function PerformanceSection(): React.ReactElement {
   const [goalMaxRoundsInput, setGoalMaxRoundsInput] = useState<string>('')
   const [goalDirty, setGoalDirty] = useState(false)
 
-  // The change waiting on a re-auth consent token, and whether the dialog is
-  // open. PUT /api/v1/performance is re-auth gated (Spec-6 FR-12.2 / Spec-3
-  // FR-6.6); the token is replayed via updatePerformanceSettings's header arg.
+  // The change waiting on the operator's confirmation, and whether the
+  // confirmation is open (ADR-0008 ruling 6).
   // Shared across all three controls on this screen — only one save can be
   // in flight (and one dialog open) at a time.
   //
@@ -144,7 +146,8 @@ export function PerformanceSection(): React.ReactElement {
   // it all run outside the render they were created in, where a state
   // snapshot would be stale.
   const pendingRef = useRef<PerformanceSettingsUpdate | null>(null)
-  const [reauthOpen, setReauthOpen] = useState(false)
+  // True from gate-open until the gate settles; see openStepUp.
+  const gateInFlightRef = useRef(false)
 
   // Single writer for the pending slot.
   const setPendingPatch = useCallback((next: PerformanceSettingsUpdate | null) => {
@@ -197,7 +200,7 @@ export function PerformanceSection(): React.ReactElement {
   }, [data, goalDirty])
 
   const mutation = useMutation({
-    mutationFn: ({ body, token }: { body: PerformanceSettingsUpdate; token: string }) =>
+    mutationFn: ({ body, token }: { body: PerformanceSettingsUpdate; token?: string }) =>
       updatePerformanceSettings(body, token),
     onSuccess: (_result, variables) => {
       setSaveStatus('saved')
@@ -216,7 +219,7 @@ export function PerformanceSection(): React.ReactElement {
       if ('goal_max_rounds' in saved && !(queued !== null && 'goal_max_rounds' in queued)) {
         setGoalDirty(false)
       }
-      // The slot was emptied when the body was handed over (onReAuthConfirmed),
+      // The slot was emptied when the body was handed over (onConfirmed),
       // so anything sitting in it now is a NEWER edit — leave it queued.
       void queryClient.invalidateQueries({ queryKey: ['performance-settings'] })
       // Reset to 'idle' after showing 'saved' briefly.
@@ -264,8 +267,77 @@ export function PerformanceSection(): React.ReactElement {
     return { goal_max_rounds: parsed }
   }, [])
 
-  // triggerSave validates the current input and opens the ReAuthDialog.
-  // The actual PUT fires from onReAuthConfirmed once the consent token is minted.
+  // openStepUp hands the queued patch (pendingRef, accumulated by
+  // enqueuePending above) to the step-up gate (ADR-0010 WP3): ReAuthDialog +
+  // a replayed consent token in local mode, ConfirmDialog with no token in
+  // platform mode. The `stepUp.open` guard mirrors the old `!confirmOpen`
+  // check the escape-hatch buttons below still use: while a dialog is
+  // already visible, a further debounced edit merges into pendingRef (via
+  // enqueuePending) instead of opening a second, overlapping prompt — the
+  // one dialog, when confirmed, reads whatever is in the slot AT THAT TIME.
+  const openStepUp = useCallback(() => {
+    // Two guards, one per timing: `stepUp.open` is state and lags a render,
+    // so two debounces landing in the same tick would both see it false —
+    // gateInFlightRef is set synchronously and closes that window. A second
+    // edit while a gate is in flight has already merged into pendingRef via
+    // enqueuePending; the one open dialog reads the slot at confirm time.
+    if (stepUp.open || gateInFlightRef.current) return
+    gateInFlightRef.current = true
+    // capturedBody is read from the pending slot lazily, on run()'s FIRST
+    // invocation — never here, synchronously, at gate-open time. Two
+    // reasons this has to be lazy, one per mode:
+    //   - confirm mode: run() fires once, at the operator's actual confirm
+    //     click, which may be well after a SECOND debounced edit has already
+    //     merged into pendingRef (review finding 15 — one shared slot, two
+    //     independent 600ms debounces). Reading eagerly here would miss it.
+    //   - password mode: useStepUp opens ReAuthDialog first and calls run()
+    //     exactly once, with the minted token, at the operator's confirm —
+    //     the same late moment as confirm mode.
+    // "Read once, on first invocation, reuse after" keeps a retry (should a
+    // gate ever call run() twice) submitting the SAME body.
+    let captured = false
+    let capturedBody: PerformanceSettingsUpdate | null = null
+    const runOnce = (token?: string) => {
+      if (!captured) {
+        captured = true
+        capturedBody = pendingRef.current
+        // Empty the slot as the body is handed over, so an edit made while
+        // this gate/PUT cycle is in flight accumulates on its own and is
+        // not cleared by this PUT's onSuccess.
+        setPendingPatch(null)
+      }
+      if (!capturedBody) return Promise.resolve(undefined)
+      return mutation.mutateAsync({ body: capturedBody, token })
+    }
+    void stepUp
+      .gate(
+        runOnce,
+        {
+          title: 'Change the performance settings?',
+          body: 'This changes how many agents Omnipus runs at once, whether tools are loaded on demand, and how many tries a goal gets. It takes effect on the next message; nothing needs restarting.',
+          confirmLabel: 'Change performance settings',
+        },
+      )
+      .catch((err: unknown) => {
+        if (isReAuthCancelled(err)) {
+          // Cancelling means the pending change was never sent. Clear dirty
+          // so the sync effect above (`data && !dirty`) re-applies the
+          // last-known-good server values — otherwise the switch/input would
+          // keep showing the unsaved edit indefinitely, until the user
+          // happened to change it again.
+          setSaveStatus('idle')
+          setDirty(false)
+          setGoalDirty(false)
+        }
+        // A real save failure already surfaced its toast via the mutation's
+        // onError above.
+      })
+      .finally(() => {
+        gateInFlightRef.current = false
+      })
+  }, [stepUp, mutation, setPendingPatch])
+
+  // triggerSave validates the current input and opens the step-up gate.
   const triggerSave = useCallback(() => {
     const body = buildBody(inputValue, toolsOnDemand)
     if (!body) {
@@ -273,8 +345,8 @@ export function PerformanceSection(): React.ReactElement {
       return
     }
     enqueuePending(body)
-    setReauthOpen(true)
-  }, [inputValue, toolsOnDemand, buildBody, addToast, enqueuePending])
+    openStepUp()
+  }, [inputValue, toolsOnDemand, buildBody, addToast, enqueuePending, openStepUp])
 
   // triggerGoalSave mirrors triggerSave for the independent goal-round-budget
   // control — the keyboard-accessible escape hatch for its own sr-only button.
@@ -285,10 +357,10 @@ export function PerformanceSection(): React.ReactElement {
       return
     }
     enqueuePending(body)
-    setReauthOpen(true)
-  }, [goalMaxRoundsInput, buildGoalBody, addToast, enqueuePending])
+    openStepUp()
+  }, [goalMaxRoundsInput, buildGoalBody, addToast, enqueuePending, openStepUp])
 
-  // Autosave: debounce on input change then open the reauth dialog.
+  // Autosave: debounce on input change then open the step-up gate.
   function handleInputChange(value: string) {
     setInputValue(value)
     setDirty(true)
@@ -299,7 +371,7 @@ export function PerformanceSection(): React.ReactElement {
       if (body) {
         setSaveStatus('saving')
         enqueuePending(body)
-        setReauthOpen(true)
+        openStepUp()
       } else {
         // max_parallel_agents settled out of range — this path never goes
         // through triggerSave, so without this branch the debounce would
@@ -324,7 +396,7 @@ export function PerformanceSection(): React.ReactElement {
       if (body) {
         setSaveStatus('saving')
         enqueuePending(body)
-        setReauthOpen(true)
+        openStepUp()
       } else {
         setSaveStatus('idle')
         addToast({ variant: 'error', message: INVALID_GOAL_MAX_ROUNDS_MESSAGE })
@@ -343,7 +415,7 @@ export function PerformanceSection(): React.ReactElement {
     if (body) {
       setSaveStatus('saving')
       enqueuePending(body)
-      setReauthOpen(true)
+      openStepUp()
     } else {
       // max_parallel_agents is out of range — the toggle can't proceed until
       // the numeric field is fixed. Revert the switch (it was optimistically
@@ -362,17 +434,6 @@ export function PerformanceSection(): React.ReactElement {
       if (goalDebounceRef.current) clearTimeout(goalDebounceRef.current)
     }
   }, [])
-
-  function onReAuthConfirmed(token: string) {
-    const body = pendingRef.current
-    if (!body) return
-    // Empty the slot as the body is handed over, so an edit made while this
-    // PUT is in flight accumulates on its own and is not cleared by this
-    // PUT's onSuccess.
-    setPendingPatch(null)
-    setSaveStatus('saving')
-    mutation.mutate({ body, token })
-  }
 
   if (isLoading) return <Skeleton />
   if (error) {
@@ -476,7 +537,7 @@ export function PerformanceSection(): React.ReactElement {
         <div className="space-y-[var(--space-1)]">
           <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)] leading-relaxed">
             Controls how many tasks and subagents may run concurrently across all agents.
-            Leave blank for no explicit cap — concurrency is then bounded by available memory. Changes apply after re-authentication.
+            Leave blank for no explicit cap — concurrency is then bounded by available memory. Changes apply once you confirm them.
           </p>
           <div className="flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] text-[var(--color-muted)]">
             <Info size={12} />
@@ -569,7 +630,7 @@ export function PerformanceSection(): React.ReactElement {
         {/* Helper text */}
         <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Applies to all agents. Takes effect on the next message — no restart required.
-          Changes apply after re-authentication.
+          Changes apply once you confirm them.
         </p>
       </Card>
 
@@ -610,34 +671,14 @@ export function PerformanceSection(): React.ReactElement {
 
         <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
           Goals already running keep the limit they started with. Saving asks you to
-          re-enter your password to confirm it's really you.
+          confirm the change.
         </p>
       </Card>
 
-      <ReAuthDialog
-        open={reauthOpen}
-        onOpenChange={(o) => {
-          setReauthOpen(o)
-          if (!o) {
-            setPendingPatch(null)
-            if (saveStatus === 'saving') setSaveStatus('idle')
-            // Cancelling re-auth means the pending change (toggle or typed
-            // value) was never persisted. Clear dirty so the sync effect
-            // above (`data && !dirty`) re-applies the last-known-good server
-            // values — otherwise the switch/input would keep showing the
-            // unsaved edit indefinitely, until the user happened to change
-            // it again.
-            setDirty(false)
-            setGoalDirty(false)
-          }
-        }}
-        title="Confirm to change performance settings"
-        description="Re-type your password to save the performance settings."
-        onConfirmed={onReAuthConfirmed}
-      />
+      {stepUp.dialogs}
 
       {/* Escape hatch: manual trigger exposed for keyboard users / edge cases */}
-      {dirty && !reauthOpen && (
+      {dirty && !stepUp.open && (
         <Button
           type="button"
           data-testid="performance-save-btn"
@@ -647,7 +688,7 @@ export function PerformanceSection(): React.ReactElement {
           Save changes
         </Button>
       )}
-      {goalDirty && !reauthOpen && (
+      {goalDirty && !stepUp.open && (
         <Button
           type="button"
           data-testid="performance-goal-save-btn"

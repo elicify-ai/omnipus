@@ -67,16 +67,17 @@ test.beforeEach(async ({ page }) => {
 
 // ────────────────────────────────────────────────────────────────────────────────
 // (a) grandchild refused — Scenario 10, US-3
-// BDD: Given a subagent sub-turn is running
+// BDD: Given a subagent sub-turn is running with a LEAF-ROLE target (Researcher:
+//      no delegate grant, no onward delegation edges — Jim → Researcher is legal)
 //      When the sub-turn's LLM attempts a tool call with name="delegate"
-//      Then the tool dispatcher returns an unknown-tool error to the LLM
+//      Then the tool dispatcher refuses it by policy for that leaf role
 //      And no subagent_start frame with a grandchild parent_call_id is emitted
 //      And the parent's transcript ToolCalls contains exactly one delegate entry
 //
 // Traces to: sprint-h-subagent-block-spec.md TDD row 21, BDD Scenario 10, lines 304-313
 // ────────────────────────────────────────────────────────────────────────────────
 test(
-  '(a) grandchild refused: subagent attempting delegate gets unknown-tool error, no nested block',
+  '(a) grandchild refused: leaf-role subagent (Researcher) attempting delegate is refused, no nested block',
   async ({ page }) => {
     requireApiKey();
     // 420s total: this test triggers TWO LLM round-trips (parent delegate +
@@ -102,20 +103,27 @@ test(
     await expect(input).toBeEnabled({ timeout: 15_000 });
     await waitForConnected(page, { timeout: 15_000 });
 
-    // Deterministic prompt with temperature=0+seed=42 now plumbed into OpenRouter.
-    // Commanding, specific: exact tool name, task, and behavior with no optional phrasing.
+    // Deterministic prompt: commanding, specific — exact tool name, exact target.
+    // Target pinned to Researcher: a LEAF in the delegation graph — Jim → Researcher
+    // is a legal edge (seed.go delegation graph), but the Researcher role holds NO
+    // delegate grant and no onward edges, so its delegate attempt is refused by
+    // policy. Grandchildren are not universally forbidden (Worker holds delegate
+    // with a Worker→Worker same-type helper edge); the refusal under test here is
+    // the LEAF-ROLE one. Keeping the target fixed removes the parent model's
+    // target choice as a variance source.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
+        '  agent_id: "researcher"',
         '  label: "grandchild test"',
-        '  task: "You are the subagent. Your one and only job is to call the `delegate` tool yourself to attempt to delegate to a grandchild subagent with task \\"hello\\". If delegate is not in your available tools, report the exact error you receive. Do not do anything else."',
+        '  task: "You are the subagent. Your one and only job is to call the `delegate` tool yourself to attempt to delegate to a grandchild subagent with task \\"hello\\". If delegate is not available to you, report the exact error you receive. Do not do anything else."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
     // Structural assertion: wait for at least one subagent-collapsed to appear (the parent delegate).
-    // With temperature=0+seed=42 the LLM must comply — if it doesn't, the test fails honestly.
+    // If the parent model does not comply, the test fails honestly.
     // 300s budget: this test needs the parent delegate AND the subagent's failed
     // grandchild-delegate round-trip to both complete; under CI load GLM-5v-turbo
     // can take 150-280s for that pair. 150s gave 4×156s timeouts in CI even
@@ -134,10 +142,10 @@ test(
     // Traces to: BDD Scenario 10 — "no subagent_start frame with a grandchild parent_call_id"
     const nestedCollapsed = expandedBlock.locator('[data-testid="subagent-collapsed"]');
     const nestedCount = await nestedCollapsed.count();
-    expect(nestedCount, 'expanded SubagentBlock must contain zero nested subagent-collapsed elements (grandchildren are forbidden — FR-H-006)').toBe(0);
+    expect(nestedCount, 'expanded SubagentBlock must contain zero nested subagent-collapsed elements (the leaf-role subagent — Researcher holds no delegate grant — must not produce a nested block — FR-H-006)').toBe(0);
 
     // Structural assertion: exactly one parent-level collapsed block.
-    expect(blockCount, 'exactly one SubagentBlock at parent level — grandchild attempt must not create a second block').toBe(1);
+    expect(blockCount, 'exactly one SubagentBlock at parent level — the leaf subagent\'s refused delegate attempt must not create a second block').toBe(1);
 
     // Structural assertion: expanded block has child elements (steps or error message).
     const children = await expandedBlock.locator('> *').count();
@@ -301,10 +309,14 @@ test(
     await waitForConnected(page, { timeout: 15_000 });
 
     // Deterministic prompt: force a single delegate call with a subagent task that mandates ≥3 tool calls.
-    // read_file is always registered and does not require special permissions.
+    // Target pinned to Worker (the execution-role subagent): the subagent runs under the
+    // RESOLVED TARGET's policy and role instructions, not the parent's, so target choice is a
+    // fixture lever even though read_file is allowed for every role. Keeping the target fixed
+    // removes the parent model's target choice as a variance source.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, now, with these arguments:',
+        '  agent_id: "worker"',
         '  label: "multi step counter test"',
         '  task: "You are a subagent. You MUST call the read_file tool exactly THREE times in this exact order. Do not skip any call. Do not reply in prose between them. (1) read_file with path=\\"/etc/hostname\\"; (2) read_file with path=\\"/etc/os-release\\"; (3) read_file with path=\\"/proc/version\\". After all three read_file calls have completed, reply with the single word \\"finished\\"."',
         'Do not call any other tool. Do not reply in prose. Call delegate now.',
@@ -356,7 +368,8 @@ test(
     }
 
     // Hard assertion: the step counter must have reached ≥3 steps.
-    // With temperature=0 the subagent must execute all three read_file calls.
+    // The subagent must execute all three read_file calls — the ≥3-tool-call
+    // oracle is unchanged.
     // If reachedThreeSteps is false, the product did not produce the required steps.
     if (!reachedThreeSteps) {
       // Verify at least the step counter IS rendering (not a missing testid regression).

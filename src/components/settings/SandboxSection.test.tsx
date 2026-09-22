@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 // ── Module mocks ──────────────────────────────────────────────────────────────
@@ -11,7 +11,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSandboxStatus: vi.fn(),
     fetchSandboxConfig: vi.fn(),
     updateSandboxConfig: vi.fn(),
-    reAuth: vi.fn(),
+    fetchAppState: vi.fn(),
   }
 })
 
@@ -20,18 +20,28 @@ vi.mock('@/store/ui', () => ({
   useUiStore: vi.fn(() => ({ addToast: mockAddToast })),
 }))
 
-import { fetchSandboxStatus, fetchSandboxConfig, updateSandboxConfig, reAuth, ApiError } from '@/lib/api'
+import { fetchSandboxStatus, fetchSandboxConfig, updateSandboxConfig, fetchAppState, ApiError } from '@/lib/api'
 import { SandboxSection } from './SandboxSection'
-import type { SandboxStatus, SandboxConfigResponse } from '@/lib/api'
+import type { SandboxStatus, SandboxConfigResponse, AppState } from '@/lib/api'
 
-// reAuth403 is the exact 403 the backend's requireReAuth gate returns. The
-// useReAuthGate hook detects it by body match and opens the consent dialog.
-function reAuth403() {
-  return new ApiError(
-    403,
-    "You don't have permission to perform this action.",
-    { body: '{"error":"this change requires re-typing your password — call POST /api/v1/auth/reauth first"}' },
-  )
+// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
+// ConfirmDialog, no consent token (ADR-0010 WP3). The password-mode (local
+// edition) equivalent lives in SandboxSection.password.test.tsx.
+const PLATFORM_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as AppState
+
+// ADR-0008 ruling 6: every sandbox-config PUT is now preceded by a
+// confirmation naming the change, staged BEFORE the request. Click through it
+// so the save actually fires.
+async function confirmSandboxChange() {
+  const dialog = await screen.findByRole('alertdialog')
+  // The confirm/action button is always the second of the two footer
+  // buttons (Cancel, then Action) — the confirm LABEL differs per setting
+  // (deny patterns / sandbox config / filesystem model / file limit /
+  // sandbox mode), so this helper matches by position, not text.
+  fireEvent.click(within(dialog).getAllByRole('button')[1])
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -73,6 +83,7 @@ beforeEach(() => {
   vi.mocked(fetchSandboxStatus).mockResolvedValue(baseStatus)
   vi.mocked(fetchSandboxConfig).mockResolvedValue(baseConfig)
   vi.mocked(updateSandboxConfig).mockResolvedValue({ ...baseConfig, requires_restart: true })
+  vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
   // Reset localStorage/sessionStorage
   localStorage.clear()
   sessionStorage.clear()
@@ -139,6 +150,8 @@ describe('allowed_paths editor', () => {
       expect(screen.getByText('/c')).toBeInTheDocument()
     })
 
+    await confirmSandboxChange()
+
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalled()
       const [firstArg] = vi.mocked(updateSandboxConfig).mock.calls[0]
@@ -167,6 +180,7 @@ describe('allowed_paths editor', () => {
     const input = screen.getByRole('textbox', { name: /new allowed path/i })
     fireEvent.change(input, { target: { value: '/valid' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       const errors = screen.getAllByText(/must be absolute/i)
@@ -195,12 +209,16 @@ describe('allowed_paths editor', () => {
       expect(screen.getByText('/b')).toBeInTheDocument()
     })
 
+    await confirmSandboxChange()
+
     await waitFor(() => {
-      // The re-auth gate's optimistic first attempt passes token '' as the 2nd arg.
-      expect(updateSandboxConfig).toHaveBeenCalledWith(
+      // Confirm mode (platform edition, ADR-0010 WP3): the second argument
+      // is the consent-token parameter, always undefined here since confirm
+      // mode carries no token.
+      expect(vi.mocked(updateSandboxConfig).mock.calls[0]).toEqual([
         expect.objectContaining({ allowed_paths: ['/b'] }),
-        '',
-      )
+        undefined,
+      ])
     })
   })
 
@@ -242,6 +260,7 @@ describe('SSRF editor', () => {
 
     const rfc1918Btn = screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i })
     fireEvent.click(rfc1918Btn)
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalled()
@@ -340,8 +359,9 @@ describe('SSRF editor', () => {
     // PUT should NOT have fired yet
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    // Click Save anyway — PUT should fire
+    // Click Save anyway — the sandbox-config confirmation follows, then the PUT.
     fireEvent.click(screen.getByRole('button', { name: /save anyway/i }))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalled()
@@ -394,6 +414,7 @@ describe('SSRF editor', () => {
     })
 
     fireEvent.click(screen.getByRole('button', { name: /block all/i }))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalled()
@@ -590,8 +611,9 @@ describe('mode radio', () => {
     })
     expect(updateSandboxConfig).not.toHaveBeenCalled()
 
-    // Confirm — now PUT fires
+    // Confirm — the sandbox-config confirmation follows, then the PUT fires.
     fireEvent.click(screen.getByRole('button', { name: /save anyway/i }))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalled()
@@ -613,6 +635,7 @@ describe('mode radio', () => {
       expect(screen.getByRole('radio', { name: /sandbox mode: permissive/i })).toBeInTheDocument()
     })
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: permissive/i }))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalled()
@@ -659,20 +682,16 @@ describe('mode radio', () => {
   })
 })
 
-// ── describe: re-auth gate (Spec-6 FR-12.2) ─────────────────────────────────────
+// ── describe: sandbox-config confirmation (ADR-0008 ruling 6) ───────────────
 
-describe('sandbox-config re-auth gate', () => {
-  it('opens the re-auth dialog when the gated PUT returns 403, then replays the token', async () => {
+describe('sandbox-config confirmation', () => {
+  // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
+  // the confirm is not the destructive variant.
+  it('shows a confirmation with exactly Cancel and one confirm, and no input', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['/a'],
     })
-    // First attempt (no consent token) is rejected by the re-auth gate; the
-    // second attempt (with the minted token) succeeds.
-    vi.mocked(updateSandboxConfig)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce({ ...baseConfig, allowed_paths: ['/a', '/valid'], requires_restart: true })
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
 
     renderSection()
 
@@ -683,42 +702,58 @@ describe('sandbox-config re-auth gate', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
     fireEvent.click(screen.getByRole('button', { name: /add path/i }))
 
-    // The first PUT (token '') fired and 403'd → consent dialog appears.
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Save the sandbox configuration?')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(screen.getByRole('button', { name: 'Save sandbox configuration' })).toHaveTextContent('Save sandbox configuration')
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Save sandbox configuration' }).className).not.toMatch(/color-error/)
+    // Nothing was sent yet.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
+  })
+
+  it('confirming performs the save', async () => {
+    vi.mocked(fetchSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      allowed_paths: ['/a'],
     })
-    expect(vi.mocked(updateSandboxConfig).mock.calls[0][1]).toBe('')
+    vi.mocked(updateSandboxConfig).mockResolvedValue({
+      ...baseConfig,
+      allowed_paths: ['/a', '/valid'],
+      requires_restart: true,
+    })
 
-    // Re-authenticate; the PUT is replayed with the consent token.
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    renderSection()
 
     await waitFor(() => {
-      expect(reAuth).toHaveBeenCalledWith('mypassword')
-      expect(updateSandboxConfig).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(updateSandboxConfig).mock.calls[1][1]).toBe('reauth_tok')
+      expect(screen.getByRole('textbox', { name: /new allowed path/i })).toBeInTheDocument()
+    })
+
+    fireEvent.change(screen.getByRole('textbox', { name: /new allowed path/i }), { target: { value: '/valid' } })
+    fireEvent.click(screen.getByRole('button', { name: /add path/i }))
+    await confirmSandboxChange()
+
+    await waitFor(() => {
+      expect(vi.mocked(updateSandboxConfig).mock.calls).toEqual([
+        [{ allowed_paths: ['/a', '/valid'], ssrf: { allow_internal: [] } }, undefined],
+      ])
     })
   })
 })
 
-// ── describe: re-auth CANCEL reverts optimistic state (bug #142 regression) ──
+// ── describe: CANCEL reverts optimistic state (bug #142 regression) ─────────
 //
-// Wave 1 added an isReAuthCancelled guard to doSaveMode/saveMutation/
-// saveDenyPatterns so a dismissed password prompt doesn't surface a spurious
-// "save failed" toast. But doSaveMode's cancel branch stopped short of
-// reverting the mode that handleModeChange had already flipped optimistically
-// — leaving the radio pointing at an unsaved target with zero error
-// indicator, and (because handleModeChange early-returns on
-// `mode === currentMode`) no way to even re-click the same radio to retry.
-// These tests exercise cancellation (not a mutation error) via the
-// `reauth-cancel` button and assert the optimistic edit is rolled back.
-describe('re-auth cancel reverts optimistic state', () => {
-  it('cancelling re-auth on a mode change reverts currentMode to the saved mode (not stuck on the unsaved target)', async () => {
+// Most of these controls apply optimistically before the save is staged. If the
+// operator cancels the confirmation, the optimistic edit must be rolled back —
+// otherwise the radio points at an unsaved target with zero error indicator,
+// and (because handleModeChange early-returns on `mode === currentMode`) there
+// is no way to even re-click the same radio to retry.
+describe('cancelling the confirmation reverts optimistic state', () => {
+  it('cancelling a mode change reverts currentMode to the saved mode (not stuck on the unsaved target)', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       mode: 'permissive',
     })
-    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
 
     renderSection()
 
@@ -729,21 +764,23 @@ describe('re-auth cancel reverts optimistic state', () => {
 
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
 
-    // Optimistic UI: "off" is shown as selected immediately, before the PUT settles.
+    // Optimistic UI: "off" is shown as selected immediately, before the PUT
+    // settles. `hidden: true` because the open confirmation aria-hides the
+    // tree behind it.
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).toBeChecked()
+      expect(screen.getByRole('radio', { name: /sandbox mode: off/i, hidden: true })).toBeChecked()
     })
 
-    // First PUT (token '') 403s on the re-auth gate -> consent dialog opens.
+    // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
-    // User dismisses the password prompt instead of confirming.
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    // User cancels instead of confirming.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic "off" selection must revert to the saved mode
@@ -753,26 +790,27 @@ describe('re-auth cancel reverts optimistic state', () => {
       expect(screen.getByRole('radio', { name: /sandbox mode: off/i })).not.toBeChecked()
     })
 
-    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    // No error toast for a user-initiated cancel, and no request fired.
     expect(mockAddToast).not.toHaveBeenCalled()
-    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    // Cancelling means the request was never sent at all.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
     // Recovery check: clicking "off" again must still work now that
     // currentMode is genuinely back at "permissive" (no same-value
     // early-return trap left over from the optimistic update).
     vi.mocked(updateSandboxConfig).mockResolvedValueOnce({ ...baseConfig, mode: 'off', requires_restart: true })
     fireEvent.click(screen.getByRole('radio', { name: /sandbox mode: off/i }))
+    await confirmSandboxChange()
     await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalledTimes(2)
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
   })
 
-  it('cancelling re-auth on an allowed-path add reverts pathList to the saved server list', async () => {
+  it('cancelling an allowed-path add reverts pathList to the saved server list', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       allowed_paths: ['/a'],
     })
-    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
 
     renderSection()
 
@@ -788,15 +826,15 @@ describe('re-auth cancel reverts optimistic state', () => {
       expect(screen.getByText('/valid')).toBeInTheDocument()
     })
 
-    // First PUT (token '') 403s -> consent dialog opens.
+    // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic '/valid' row must be reverted — it was never persisted.
@@ -806,15 +844,15 @@ describe('re-auth cancel reverts optimistic state', () => {
     })
 
     expect(mockAddToast).not.toHaveBeenCalled()
-    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    // Cancelling means the request was never sent at all.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
-  it('cancelling re-auth on a shell-deny-patterns edit reverts the textarea to the saved patterns', async () => {
+  it('cancelling a shell-deny-patterns edit reverts the textarea to the saved patterns', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       shell_deny_patterns: ['^curl\\s'],
     })
-    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
 
     renderSection()
 
@@ -826,18 +864,18 @@ describe('re-auth cancel reverts optimistic state', () => {
       target: { value: '^curl\\s\n^wget\\s' },
     })
 
-    // Debounced autosave (400ms) fires the gated PUT; it 403s -> dialog opens.
+    // Debounced autosave (400ms) stages the save; the confirmation opens.
     await waitFor(
       () => {
-        expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
       },
       { timeout: 3000 },
     )
 
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic '^wget\s' line must be reverted to the saved patterns.
@@ -847,16 +885,16 @@ describe('re-auth cancel reverts optimistic state', () => {
 
     expect(mockAddToast).not.toHaveBeenCalled()
     // Reverting must not itself re-trigger the debounced autosave (which
-    // would silently reopen the re-auth prompt for a no-op save).
-    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    // would silently reopen the confirmation for a no-op save).
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   }, 10_000)
 
   // SsrfEditor (extracted from SandboxSection in Wave 3, same as
   // AllowedPathsEditor) shares revertPathsSsrfToServer with the allowed-paths
-  // editor but had zero re-auth-cancel-revert coverage of its own — the two
+  // editor but had zero cancel-revert coverage of its own — the two
   // other tests in this block exercise the mode radio and
   // ShellDenyPatternsEditor, not SsrfEditor's own optimistic add/revert path.
-  it('cancelling re-auth on an SSRF allow-internal add reverts ssrfList to the saved server list', async () => {
+  it('cancelling an SSRF allow-internal add reverts ssrfList to the saved server list', async () => {
     // A single-entry list matches no SSRF_PRESETS (lengths are 0/2/6), so
     // Advanced mode auto-expands on mount and '127.0.0.1' is visible without
     // needing to click the "Advanced (custom list)" toggle first.
@@ -864,7 +902,6 @@ describe('re-auth cancel reverts optimistic state', () => {
       ...baseConfig,
       ssrf: { allow_internal: ['127.0.0.1'] },
     })
-    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
 
     renderSection()
 
@@ -881,16 +918,16 @@ describe('re-auth cancel reverts optimistic state', () => {
       expect(screen.getByText('10.0.0.0/8')).toBeInTheDocument()
     })
 
-    // First PUT (token '') 403s -> consent dialog opens.
+    // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
-    // User dismisses the password prompt instead of confirming.
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    // User cancels instead of confirming.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic '10.0.0.0/8' entry must be reverted — it was never
@@ -900,24 +937,24 @@ describe('re-auth cancel reverts optimistic state', () => {
       expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
     })
 
-    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    // No error toast for a user-initiated cancel, and no request fired.
     expect(mockAddToast).not.toHaveBeenCalled()
-    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    // Cancelling means the request was never sent at all.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 
   // handlePresetClick routes through the exact same commitPathsSsrfWithWildcardCheck
   // -> commitPathsSsrf -> saveMutation.mutate machinery as handleAddSsrfEntry
   // above (SandboxSection.tsx:524-530), and saveMutation.onError's
-  // isReAuthCancelled branch calls the same revertPathsSsrfToServer() — but
-  // had zero re-auth-cancel-revert coverage of its own.
-  it('cancelling re-auth on a preset click reverts the active SSRF preset to the saved server state', async () => {
+  // cancel branch calls the same revertPathsSsrfToServer() — but had zero
+  // cancel-revert coverage of its own.
+  it('cancelling a preset click reverts the active SSRF preset to the saved server state', async () => {
     // Server state matches "Allow loopback only" — advancedOpen stays
     // collapsed at mount (mirrors the aria-pressed test earlier in this file).
     vi.mocked(fetchSandboxConfig).mockResolvedValue({
       ...baseConfig,
       ssrf: { allow_internal: ['127.0.0.1', '::1'] },
     })
-    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
 
     renderSection()
 
@@ -932,24 +969,41 @@ describe('re-auth cancel reverts optimistic state', () => {
     // fires the same commit/save-mutation machinery as the tested add path.
     fireEvent.click(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i }))
 
-    // Optimistic UI: RFC1918 preset shows pressed immediately, before the PUT settles.
+    // Optimistic UI: RFC1918 preset shows pressed immediately, before the PUT
+    // settles. The confirmation is open at this point, and Radix's AlertDialog
+    // marks every OTHER element in the tree `aria-hidden="true"` (via the
+    // `aria-hidden` package's `hideOthers`, since jsdom has no `inert`
+    // support to prefer instead) so assistive tech only sees the dialog.
+    // Because every SegmentedControlItem is a catalogued `Button` — which
+    // renders its own `aria-live` status span next to it for loading
+    // announcements — `hideOthers` walks past that span's kept ancestor
+    // chain and marks each preset BUTTON aria-hidden individually, not just
+    // a container around the whole group (contrast the merge-base's plain,
+    // status-span-free `<button>` elements, which got one aria-hidden
+    // ancestor and stayed queryable by role). `getByRole(..., { hidden:
+    // true })` only widens which elements COUNT toward the query; it never
+    // reaches dom-testing-library's accessible-name computation
+    // (`dom-accessibility-api`), which still treats an element carrying its
+    // own `aria-hidden="true"` as nameless (accname step 2A) regardless of
+    // that option — so `getByRole('button', { name, hidden: true })` finds
+    // zero matches here even though the button is very much in the DOM.
+    // `getByText` has no such filter (it matches raw text content only), so
+    // it reaches the same button node without depending on accessible-name
+    // computation.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /allow rfc1918 \+ loopback/i })).toHaveAttribute(
-        'aria-pressed',
-        'true',
-      )
+      expect(screen.getByText(/allow rfc1918 \+ loopback/i)).toHaveAttribute('aria-pressed', 'true')
     })
 
-    // First PUT (token '') 403s on the re-auth gate -> consent dialog opens.
+    // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
-    // User dismisses the password prompt instead of confirming.
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    // User cancels instead of confirming.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistic preset switch must revert — active preset goes back to
@@ -965,17 +1019,21 @@ describe('re-auth cancel reverts optimistic state', () => {
       )
     })
 
-    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    // No error toast for a user-initiated cancel, and no request fired.
     expect(mockAddToast).not.toHaveBeenCalled()
-    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    // Cancelling means the request was never sent at all.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
+})
+
+describe('cancelling the confirmation reverts optimistic state — deletes', () => {
 
   // handleDeleteSsrfEntry routes through the exact same commitPathsSsrf ->
   // saveMutation.mutate machinery as handleAddSsrfEntry above
   // (SandboxSection.tsx:532-539), and saveMutation.onError's
-  // isReAuthCancelled branch calls the same revertPathsSsrfToServer() — but
-  // had zero re-auth-cancel-revert coverage of its own.
-  it('cancelling re-auth on an SSRF entry delete restores the deleted entry from the saved server list', async () => {
+  // cancel branch calls the same revertPathsSsrfToServer() — but had zero
+  // cancel-revert coverage of its own.
+  it('cancelling an SSRF entry delete restores the deleted entry from the saved server list', async () => {
     // Two entries that match no SSRF_PRESETS (lengths are 0/2/6), so Advanced
     // mode auto-expands on mount and both entries are visible without
     // clicking the "Advanced (custom list)" toggle first.
@@ -983,7 +1041,6 @@ describe('re-auth cancel reverts optimistic state', () => {
       ...baseConfig,
       ssrf: { allow_internal: ['127.0.0.1', '10.0.0.0/8'] },
     })
-    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
 
     renderSection()
 
@@ -999,16 +1056,16 @@ describe('re-auth cancel reverts optimistic state', () => {
       expect(screen.queryByText('10.0.0.0/8')).not.toBeInTheDocument()
     })
 
-    // First PUT (token '') 403s on the re-auth gate -> consent dialog opens.
+    // The confirmation opens before anything is sent.
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
 
-    // User dismisses the password prompt instead of confirming.
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    // User cancels instead of confirming.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-cancel')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
 
     // The optimistically deleted '10.0.0.0/8' entry must reappear — the
@@ -1018,9 +1075,10 @@ describe('re-auth cancel reverts optimistic state', () => {
       expect(screen.getByText('127.0.0.1')).toBeInTheDocument()
     })
 
-    // No error toast for a user-initiated cancel, and no retry attempt fired.
+    // No error toast for a user-initiated cancel, and no request fired.
     expect(mockAddToast).not.toHaveBeenCalled()
-    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    // Cancelling means the request was never sent at all.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
   })
 })
 
@@ -1076,6 +1134,7 @@ describe('shell workspace limit', () => {
       expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
@@ -1096,6 +1155,7 @@ describe('shell workspace limit', () => {
       expect(screen.getByTestId('sandbox-workspace-limit-off')).toBeChecked()
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-on'))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
@@ -1169,9 +1229,8 @@ describe('shell workspace limit', () => {
 
   // ── Failure paths ──────────────────────────────────────────────────────────
 
-  it('cancelling re-auth reverts the optimistic selection, and the change can be retried afterwards', async () => {
+  it('cancelling reverts the optimistic selection, and the change can be retried afterwards', async () => {
     vi.mocked(fetchSandboxConfig).mockResolvedValue(configWithWorkspaceLimit(true))
-    vi.mocked(updateSandboxConfig).mockRejectedValue(reAuth403())
 
     renderSection()
 
@@ -1186,9 +1245,9 @@ describe('shell workspace limit', () => {
     })
 
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
     })
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     // Reverted to the saved server value — otherwise the radio sits on an
     // unsaved value with no error shown, and the equality guard in the handler
@@ -1198,13 +1257,15 @@ describe('shell workspace limit', () => {
     })
     expect(screen.getByTestId('sandbox-workspace-limit-off')).not.toBeChecked()
     expect(mockAddToast).not.toHaveBeenCalled()
-    expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
+    // Cancelling means the request was never sent at all.
+    expect(updateSandboxConfig).not.toHaveBeenCalled()
 
     // Recovery: the same change must be attemptable again.
     vi.mocked(updateSandboxConfig).mockResolvedValueOnce(configWithWorkspaceLimit(false))
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+    await confirmSandboxChange()
     await waitFor(() => {
-      expect(updateSandboxConfig).toHaveBeenCalledTimes(2)
+      expect(updateSandboxConfig).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -1218,6 +1279,7 @@ describe('shell workspace limit', () => {
       expect(screen.getByTestId('sandbox-workspace-limit-on')).toBeChecked()
     })
     fireEvent.click(screen.getByTestId('sandbox-workspace-limit-off'))
+    await confirmSandboxChange()
 
     await waitFor(() => {
       expect(mockAddToast).toHaveBeenCalledWith(

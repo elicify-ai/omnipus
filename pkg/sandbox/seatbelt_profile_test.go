@@ -233,6 +233,25 @@ func TestRenderSeatbeltProfile(t *testing.T) {
 	})
 }
 
+func TestRenderSeatbeltProfile_UnixSocketPathIsScopedAndKeepsTCPRules(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	allowed := filepath.Join(root, "work")
+	outside := filepath.Join(filepath.Dir(allowed), "outside")
+	out, err := renderSeatbeltProfile(SandboxPolicy{
+		FilesystemRules:  []PathRule{{Path: allowed, Access: AccessRead | AccessWrite}},
+		BindPortRules:    []NetPortRule{{Port: 8080}},
+		ConnectPortRules: []NetPortRule{{Port: 443}},
+		UnixSocketRules:  []UnixSocketRule{{Path: allowed, Bind: true, Connect: true}},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, out, `(allow network-bind (subpath "`+allowed+`"))`)
+	assert.Contains(t, out, `(allow network-outbound (subpath "`+allowed+`"))`)
+	assert.NotContains(t, out, outside)
+	assert.Contains(t, out, `(allow network-bind (local tcp "*:8080"))`)
+	assert.Contains(t, out, `(allow network-outbound (remote tcp "*:443"))`)
+}
+
 // TestRenderSeatbeltProfile_DeterministicOrder verifies that two calls with
 // the same policy produce byte-identical output. Seatbelt profile ordering is
 // deterministic (rules emitted in policy order), which matters for caching

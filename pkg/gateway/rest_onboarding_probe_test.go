@@ -28,6 +28,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -37,11 +38,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -250,6 +254,11 @@ func installProbeCatalog(t *testing.T, cat *catalog.Catalog) {
 // exactly the pair the SSRF row needs.
 func newProbeAPI(t *testing.T) *restAPI {
 	t.Helper()
+	// HandleOnboardingProbeProvider's gate now dispatches by
+	// config.EditionAuthMode() (WP5, ADR-0010); every caller of this helper
+	// (including rest_signin_copilot_probe_wording_test.go) means the
+	// PLATFORM-mode gate, so pin it here rather than at every call site.
+	withEdition(t, config.EditionHosted)
 	api, _ := newAuthMethodOnboardingAPI(t)
 	cat := probeTestCatalog(t)
 	api.providerCatalog = cat
@@ -267,7 +276,7 @@ func newProbeAPI(t *testing.T) *restAPI {
 // which owns the fake-CLI scaffolding; the sign-in rows that are decided by
 // catalog data alone — a provider that does not OFFER sign-in — are here.
 func TestProbeProviderID_Validation(t *testing.T) {
-	up := startProbeUpstream(t)
+	up := startProbeUpstream(t) // mode pinned inside newProbeAPI below
 
 	cases := []struct {
 		name string
@@ -541,6 +550,7 @@ func TestProbeProviderID_Validation(t *testing.T) {
 // model_not_found would report a DIFFERENT model as working and hand the
 // operator a green probe for a model they never picked (FR-029).
 func TestProbeProviderID_VerbatimModelDoesNotFallThrough(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	up := startProbeUpstream(t)
 	api := newProbeAPI(t)
 
@@ -572,6 +582,7 @@ func TestProbeProviderID_VerbatimModelDoesNotFallThrough(t *testing.T) {
 // walks the whole candidate list and the recorded completions ARE the
 // ordered Recommended list.
 func TestProbeProviderID_RecommendedOrder(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	var mu sync.Mutex
 	var asked []string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -620,6 +631,7 @@ func TestProbeProviderID_RecommendedOrder(t *testing.T) {
 // provider would make the probe unusable exactly when the operator most needs
 // it. The other rules still apply.
 func TestProbeProviderID_NoCatalogAdmitsAnyID(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	up := startProbeUpstream(t)
 	api := newProbeAPI(t)
 	// catalog.New() is a catalog with no document — the E7 state.
@@ -651,9 +663,10 @@ func TestProbeProviderID_NoCatalogAdmitsAnyID(t *testing.T) {
 //     `probed_model` names the model actually exercised — identical in shape to
 //     the api_key path, so the SPA needs one code path for both (FR-029).
 //
-// The mechanism is catalog data, never an id list: `cli_kind` (codex |
-// copilot) spends one subprocess run, `token_source: codex-auth-json` spends
-// one ordinary completion carrying the Codex CLI's saved token.
+// The mechanism is catalog data plus the device-code ownership rule, never a
+// duplicated route list: `cli_kind` (codex | copilot) spends one subprocess
+// run, while an Omnipus-owned device-code row spends one ordinary completion
+// carrying the token from the encrypted credential store.
 
 // fakeCLIDir returns a fresh directory to drop stub vendor binaries into.
 func fakeCLIDir(t *testing.T) string {
@@ -715,7 +728,54 @@ echo '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"o
 	return args
 }
 
+func testProbeProviderOpenAIEncryptedOAuth(t *testing.T) {
+	signedOutCodexHome(t)
+	var mu sync.Mutex
+	var seenAuth []string
+	var seenModels []string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		seenAuth = append(seenAuth, r.Header.Get("Authorization"))
+		seenModels = append(seenModels, req.Model)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+	}))
+	defer up.Close()
+
+	api := newProbeAPI(t)
+	store, err := api.resolveSignInCredStore()
+	require.NoError(t, err)
+	require.NoError(t, providers.WriteStoreOAuthCredential("openai-chatgpt", store, providers.OAuthCredential{
+		AccessToken: "saved-device-code-token",
+		AccountID:   "acct-1",
+		ExpiresAt:   time.Now().Add(time.Hour),
+	}))
+	w := postProbe(t, api, fmt.Sprintf(
+		`{"id":"openai-chatgpt","auth":"sign_in","api_base":%q,"model":"gpt-5.4"}`, up.URL))
+
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	var resp gen.ProbeProviderResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Success)
+	require.NotNil(t, resp.ProbedModel)
+	assert.Equal(t, "gpt-5.4", *resp.ProbedModel)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"gpt-5.4"}, seenModels,
+		"exactly one completion, with the operator's pick")
+	require.Len(t, seenAuth, 1)
+	assert.True(t, seenAuth[0] == "Bearer saved-device-code-token",
+		"the encrypted-store token is what authenticates the probe (issue #799)")
+}
+
 func TestProbeProvider_SignIn(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake vendor CLIs are POSIX shell stubs")
 	}
@@ -774,8 +834,7 @@ func TestProbeProvider_SignIn(t *testing.T) {
 		assert.Equal(t, "not signed in", body["error"])
 
 		_, err := os.Stat(argv)
-		assert.True(t, os.IsNotExist(err),
-			"a probe with no login must not spend a subprocess run")
+		assert.True(t, errors.Is(err, os.ErrNotExist), "a probe with no login must not spend a subprocess run")
 	})
 
 	t.Run("codex-cli signed in but the vendor rejects the model is success=false", func(t *testing.T) {
@@ -802,49 +861,17 @@ exit 1
 		assert.NotContains(t, w.Body.String(), "stream error")
 	})
 
-	t.Run("openai-chatgpt with a fresh auth.json probes with the saved token", func(t *testing.T) {
-		signedInCodexHome(t)
-		var mu sync.Mutex
-		var seenAuth []string
-		var seenModels []string
-		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var req struct {
-				Model string `json:"model"`
-			}
-			_ = json.NewDecoder(r.Body).Decode(&req)
-			mu.Lock()
-			seenAuth = append(seenAuth, r.Header.Get("Authorization"))
-			seenModels = append(seenModels, req.Model)
-			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
-		}))
-		defer up.Close()
-
-		api := newProbeAPI(t)
-		w := postProbe(t, api, fmt.Sprintf(
-			`{"id":"openai-chatgpt","auth":"sign_in","api_base":%q,"model":"gpt-5.4"}`, up.URL))
-
-		require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-		var resp gen.ProbeProviderResponse
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.True(t, resp.Success)
-		require.NotNil(t, resp.ProbedModel)
-		assert.Equal(t, "gpt-5.4", *resp.ProbedModel)
-
-		mu.Lock()
-		defer mu.Unlock()
-		require.Equal(t, []string{"gpt-5.4"}, seenModels,
-			"exactly one completion, with the operator's pick")
-		require.Len(t, seenAuth, 1)
-		assert.Equal(t, "Bearer saved-codex-token", seenAuth[0],
-			"the saved token is what authenticates the probe (FR-007)")
-	})
+	t.Run("openai-chatgpt with an encrypted OAuth entry probes with the saved token",
+		testProbeProviderOpenAIEncryptedOAuth)
 
 	t.Run("openai-chatgpt with no saved login is 400 on auth", func(t *testing.T) {
 		signedOutCodexHome(t)
 		up := startProbeUpstream(t)
 		api := newProbeAPI(t)
+		store := credentials.NewStore(api.credentialsStorePath())
+		require.NoError(t, credentials.Unlock(store))
+		_, err := store.Get(credentials.OAuthEntryName("openai"))
+		require.Error(t, err, "precondition: no encrypted OAuth entry exists")
 
 		before := up.requests()
 		w := postProbe(t, api, fmt.Sprintf(

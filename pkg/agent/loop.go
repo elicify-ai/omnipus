@@ -29,7 +29,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
-	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -121,6 +120,10 @@ type AgentLoop struct {
 	// Turn tracking
 	turnSeq        atomic.Uint64
 	activeRequests sync.WaitGroup
+	// delegatedRateLimitSleep is a per-loop test seam. Production leaves it
+	// nil and callProvider uses sleepWithContext; tests can record the exact
+	// retry delays without a wall-clock assertion or process-global mutation.
+	delegatedRateLimitSleep func(context.Context, time.Duration) error
 
 	// mediaRefsDropped counts media refs that could not be resolved (unknown ref
 	// or file missing on disk). Observable via GetMediaRefsDropped for tests and
@@ -585,7 +588,7 @@ type processOptions struct {
 	InitialSteeringMessages []providers.Message   // Steering messages from refactor/agent
 	DefaultResponse         string                // Response when LLM returns empty
 	SendResponse            bool                  // Whether to send response via bus
-	SuppressToolFeedback    bool                  // Whether to suppress inline tool feedback messages
+	SuppressToolFeedback    bool                  // Whether to suppress inline tool call and result feedback
 	NoHistory               bool                  // If true, don't load session history (for heartbeat)
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
@@ -2231,106 +2234,6 @@ func isMessagingChannel(channel string) bool {
 	return false
 }
 
-// agentLoopRunTurn carries the shared state of runTurn across its stages.
-type agentLoopRunTurn struct {
-	al                 *AgentLoop
-	ts                 *turnState
-	turnCtx            context.Context
-	activeCandidates   []providers.FallbackCandidate
-	activeProvider     providers.LLMProvider
-	iteration          int
-	llmOpts            map[string]any
-	llmModel           string
-	onToolCallProgress protocoltypes.OnToolCallProgress
-}
-
-// agentLoopRunTurnFallbacks carries the shared state of runTurn across its stages.
-type agentLoopRunTurnFallbacks struct {
-	rt               *agentLoopRunTurn
-	providerToolDefs []providers.ToolDefinition
-	callMessages     []providers.Message
-	callLLM          func(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error)
-	response         *providers.LLMResponse
-	err              error
-}
-
-// agentLoopRunTurnIteration carries the shared state of runTurn across its stages.
-type agentLoopRunTurnIteration struct {
-	rf                           *agentLoopRunTurnFallbacks
-	turnMediaStore               media.MediaStore
-	turnCatalog                  *catalog.Catalog
-	turnRefcounter               *sessionRefcounter
-	turnStatus                   TurnEndStatus
-	wsDir                        string
-	messages                     []providers.Message
-	cfg                          *config.Config
-	maxMediaSize                 int
-	activeModel                  string
-	pendingMessages              []providers.Message
-	toolCallTruncationRepairUsed bool
-	gracefulTerminal             bool
-	ret0                         turnResult
-	ret1                         error
-}
-
-// agentLoopRunTurnRequest carries the shared state of runTurn across its stages.
-type agentLoopRunTurnRequest struct {
-	ri                  *agentLoopRunTurnIteration
-	policyFilteredTools []tools.Tool
-	filterTimePolicyMap map[string]string
-	goalForce           goalForcingDecision
-	useNativeSearch     bool
-	offeredTools        offeredToolSet
-	ret0                turnResult
-	ret1                error
-}
-
-// agentLoopRunTurnResponse carries the shared state of runTurn across its stages.
-type agentLoopRunTurnResponse struct {
-	rq                  *agentLoopRunTurnRequest
-	citationTracker     *citationTracker
-	continuationChain   []providers.Message
-	orphanMarkup        providers.OrphanToolMarkup
-	hasOrphanMarkup     bool
-	normalizedToolCalls []providers.ToolCall
-	ret0                turnResult
-	ret1                error
-}
-
-// agentLoopRunTurnTools carries the shared state of runTurn across its stages.
-type agentLoopRunTurnTools struct {
-	ctx                context.Context
-	rr                 *agentLoopRunTurnResponse
-	turnChannelManager *channels.Manager
-	finalContent       string
-	midTurnGuardErr    error
-	ret0               turnResult
-	ret1               error
-}
-
-// agentLoopRunTurnConductor carries the shared state of runTurn across its stages.
-type agentLoopRunTurnConductor struct {
-	rx         *agentLoopRunTurnTools
-	turnCancel context.CancelFunc
-	ret0       turnResult
-	ret1       error
-}
-
-// agentLoopRunTurnConductorFlow reports how a block stage of agentLoopRunTurnConductor wants the conductor to proceed.
-type agentLoopRunTurnConductorFlow int
-
-const (
-	agentLoopRunTurnConductorNext agentLoopRunTurnConductorFlow = iota
-	agentLoopRunTurnConductorReturn
-	agentLoopRunTurnConductorContinue
-	agentLoopRunTurnConductorBreak
-)
-
-// agentLoopRunTurnFinalize carries the shared state of runTurn across its stages.
-type agentLoopRunTurnFinalize struct {
-	rc *agentLoopRunTurnConductor
-}
-
 func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
 	rz := &agentLoopRunTurnFinalize{}
 
@@ -2553,7 +2456,7 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 // EventKindError and no transcript entry, so the user saw nothing and the
 // session worker rendered the "we can't tell why" copy.
 //
-// Every typed exit produces the three SC-006 artefacts:
+// A root-turn typed exit produces the three SC-006 artefacts:
 //   - one log line carrying the typed code AND the raw cause (operator triage),
 //   - one EventKindError carrying the typed code (live wire; the deferred
 //     EventKindTurnEnd in runTurn fires on return with the status returned
@@ -2561,6 +2464,13 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 //     action and must not mark the turn failed; TurnEndStatusError for a
 //     timeout),
 //   - one transcript entry with the typed code (replay).
+//
+// A delegated child timeout is the exception: typedTurnExit records the
+// child-local transcript entry but leaves live publication to spawnSubTurn.
+// The coordinator waits until it has either disarmed the delegation timer or
+// observed its completed callback before choosing either the generic
+// child-timeout frame or the identified delegated-task-limit frame. That
+// ordering prevents a timer callback racing this exit from publishing both.
 //
 // The returned error wraps BOTH the sentinel (ErrTurnCanceled /
 // ErrTurnTimedOut) and the raw cause, so runAgentLoop / processMessage /
@@ -2590,7 +2500,13 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
+	if code == CodeTurnTimedOut && ts.parentTurnState != nil {
+		// The delegation coordinator owns live publication after it settles
+		// timer ownership. Keep the child's private terminal record here.
+		ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	} else {
+		al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
+	}
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,
@@ -2606,27 +2522,38 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 // reload re-renders it. payloadStage is the frame's Stage; transcriptStage is
 // the transcript entry's stage.
 //
-// ADR-057 FR-014: this is a WS-payload-stamping consumer of routingSessionID.
-// The frame's SessionID is ts.routingSessionID — the session a second tab or a
-// reload is attached to; a webchat ChatID alone is a dead per-connection id —
-// and the value never leaves this function. Two exits share it: typedTurnExit
-// (a turn cancelled, timed out, or out of context) and subturn.go's
-// subTurnTimedOutResult (a delegation force-cancelled at its time limit, the
-// exit a timed-out child took through typedTurnExit before the force-cancel
-// existed). Code that needs the id for any other purpose must read the field
-// itself and justify that read against the consumer-set test
-// (routing_session_id_consumer_set_adr057_test.go).
+// ADR-057 FR-014: emitErrorEvent is the WS-payload-stamping consumer of
+// routingSessionID. The frame's SessionID is the routing session a second tab
+// or reload is attached to; a webchat ChatID alone is a dead per-connection
+// id. Code that needs the id for another purpose must justify that read
+// against routing_session_id_consumer_set_adr057_test.go.
 func (al *AgentLoop) emitTurnErrorFrame(
 	ts *turnState, meta EventMeta, payloadStage, transcriptStage string, llm LLMError,
 ) {
+	al.emitErrorEvent(ts, meta, payloadStage, llm)
+	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
+}
+
+// emitDelegatedTaskLimitNotice keeps publication ownership coherent by
+// deriving both destinations from sourceTS: live delivery uses the child's
+// inherited routing identity, and replay persistence walks that same child's
+// canonical parent chain to the root conversation transcript.
+func (al *AgentLoop) emitDelegatedTaskLimitNotice(
+	sourceTS *turnState, meta EventMeta, notice delegatedTaskLimitNotice,
+) {
+	llm := notice.llmError()
+	al.emitErrorEvent(sourceTS, meta, string(notice.stage), llm)
+	rootTurnState(sourceTS).appendDelegatedTaskLimitNotice(notice)
+}
+
+func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {
 	al.emitEvent(EventKindError, meta, ErrorPayload{
-		Stage:     payloadStage,
+		Stage:     stage,
 		ChatID:    ts.opts.ChatID,
 		Code:      string(llm.Code),
 		Message:   llm.Message,
 		SessionID: string(ts.routingSessionID),
 	})
-	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 
 // abortTurn finalizes a hard-aborted turn. It differentiates two cases by

@@ -16,6 +16,33 @@ REF="${1:-HEAD}"
 GATE="${2:-all}"
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
 
+# --- per-run log on the persistent volume ---------------------------------
+# /tmp DOES NOT survive a machine stop — Fly destroys the root overlay a
+# stopped machine booted from, and with it every log written under /tmp. On
+# 2026-09-16 three gates on three machines failed with real defects (4 data
+# races, 10 SPA test failures, 1 e2e shard), the dispatcher then stopped the
+# machines, and every stack trace, failing test name and race report was
+# destroyed unread; only the summary counts survived, in a terminal scrollback.
+# /cache is the mounted volume that survives stop/start (the same convention
+# as TMPDIR=/cache/tmp and E2E_DIR=/cache/e2e below), so the WHOLE run is
+# tee'd to /cache/logs/<gate>@<ref>-<utc-stamp>.log — named by gate and ref so
+# a stopped machine can still be interrogated for its last runs. Retention:
+# newest 3 per gate (the minimum a post-mortem needs is the last one; two
+# older ones allow an A/B comparison). ci-cluster.sh's collection phase copies
+# this file off BEFORE stopping the machine; the `RUNLOG:` line below is what
+# it parses to find the exact path on the machine.
+RUNLOG_DIR=/cache/logs
+mkdir -p "$RUNLOG_DIR" || { echo "cannot create $RUNLOG_DIR — no persistent run log possible"; exit 2; }
+safe_ref="$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')"
+RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
+# Prune BEFORE the tee opens the new file: keep the newest 2 existing logs for
+# THIS gate (today's file becomes the 3rd). `@` separates gate from ref — gate
+# names contain `-` (go-test), so a `-` there would make `go-*` also match
+# go-test's logs. xargs -r is GNU-only; this script runs on the Linux worker.
+( cd "$RUNLOG_DIR" && ls -t "${GATE}@"*.log 2>/dev/null | tail -n +3 | xargs -r rm -f -- ) || true
+exec > >(tee -a "$RUNLOG") 2>&1
+echo "RUNLOG: $RUNLOG"
+
 # --- whole-run mutex ------------------------------------------------------
 # This worker is SHARED: every operator/session drives the same machine, and a
 # run's state is keyed by shard NAME, not by run. Two overlapping runs therefore
@@ -285,7 +312,7 @@ run_gorace() {
     echo "testing the intended packages. (Mirrors the same guard in .github/workflows/pr.yml.)" >&2
     return 1
   fi
-  out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 900s \
+  out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -p 2 -timeout 2700s \
     "${race_pkgs[@]}" 2>&1)
   local code=$?
   echo "$out"
@@ -374,8 +401,8 @@ run_gorace() {
     # re-run must measure the SAME thing, or a package that only "fails" here
     # because it launched a real Chrome would be re-run without one and
     # stamped a flake — or vice versa.
-    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
-       && ! grep -aq "DATA RACE" "/tmp/rr_race_$(echo "$p" | tr '/' '_').log"; then
+    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+       && ! grep -aq "DATA RACE" "$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log"; then
       # Excused — but say WHAT was excused. After the `--- FAIL` carve-out
       # above, reaching this point means the contended run produced a bare
       # `FAIL <pkg>` with NO named test failure (the hang/timeout signature),
@@ -390,7 +417,7 @@ run_gorace() {
       # Per-package log: a single shared path was overwritten each iteration,
       # so on a multi-package failure only the last package's output survived
       # for post-mortem.
-      grep -aE '^--- FAIL|DATA RACE' "/tmp/rr_race_$(echo "$p" | tr '/' '_').log" | head
+      grep -aE '^--- FAIL|DATA RACE' "$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" | head
       rc=1
     fi
   done
@@ -416,17 +443,17 @@ run_gotest() {
   # refused to excuse it (it failed both runs), which is exactly why the gate
   # must not measure something GitHub does not.
   #
-  # -timeout 1800s is REQUIRED: go test's default is 10m PER PACKAGE TEST
+  # -timeout 2700s is REQUIRED: go test's default is 10m PER PACKAGE TEST
   # BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s) on
   # an UNCONTENDED machine — this gate runs it under -p 2 (two package
   # binaries sharing CPU/disk), which is worse. Without an explicit override
   # the 10m default fires first and panics naming whatever test happened to
   # be in flight at that instant, not the actual slow package — observed on
   # this worker as a false lead that sent an investigation chasing an
-  # innocent test with nothing to do with the real timing. 1800s matches
-  # run_gorace's 900s with the extra margin plain (non-race) execution
-  # doesn't strictly need but a loaded shared worker does.
-  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 2 ./... 2>&1)
+  # innocent test with nothing to do with the real timing. 2700s matches
+  # run_gorace's 45-minute package budget so a loaded shared worker measures
+  # the same finite ceiling as GitHub CI.
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -509,12 +536,12 @@ run_gotest() {
     # CI=true here too: the isolated re-run must measure the same thing as the
     # contended run, or a package that only failed because it launched a real
     # Chrome would be re-run without one and stamped a flake (or vice versa).
-    # -timeout 1800s: same reasoning as the contended run above — an
+    # -timeout 2700s: same reasoning as the contended run above — an
     # isolated -p 1 re-run of a slow package (e.g. pkg/agent, ~19min
     # uncontended) is just as exposed to go test's 10m-per-binary default,
     # and this IS the exact re-run that would otherwise stamp such a package
     # a REAL FAILURE on a timeout artifact rather than a genuine repeat.
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >/tmp/rr.log 2>&1; then
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 2700s -p 1 "$p" >"$TMPDIR/rr.log" 2>&1; then
       # Excused — but say WHAT was excused. Reaching this point means the
       # contended run produced a bare `FAIL <pkg>` with no named test failure,
       # i.e. the hang/timeout signature, and the package passed alone.
@@ -525,7 +552,7 @@ run_gotest() {
       # Failed contended AND failed alone. Whether the isolated run names
       # specific tests or times out again, twice is not a flake.
       echo "REAL FAILURE (failed contended AND isolated): $p"
-      local run2; run2=$(grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' /tmp/rr.log | awk '{print $3}' | sort -u)
+      local run2; run2=$(grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' "$TMPDIR/rr.log" | awk '{print $3}' | sort -u)
       if [ -n "$run2" ]; then
         echo "  isolated run named these failing tests (the contended run named none — it hung or timed out):"
         echo "$run2" | sed 's/^/    /'
@@ -536,7 +563,7 @@ run_gotest() {
       # discards the indented failure message, which is the only thing that
       # makes a failure diagnosable from CI output.
       echo "  --- isolated-run detail ---"
-      grep -aA 12 -E '^\s*--- FAIL|^panic:|test timed out after' /tmp/rr.log | head -120
+      grep -aA 12 -E '^\s*--- FAIL|^panic:|test timed out after' "$TMPDIR/rr.log" | head -120
       rc=1
     fi
   done
@@ -993,17 +1020,56 @@ run_e2e() {
   # One virtual display for every shard (see _e2e_run_shard's comment for why).
   # Reaped by exact pid on the way out; never pkill-by-pattern on this box.
   if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
-    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
-    _XVFB_PID=$!
-    export DISPLAY=:99
-    # Give the server a moment, then confirm it is actually up rather than
-    # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
-    sleep 2
-    if kill -0 "$_XVFB_PID" 2>/dev/null; then
-      log "e2e: virtual display :99 up (pid $_XVFB_PID)"
-    else
-      echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See /tmp/xvfb.log" >&2
-      unset DISPLAY _XVFB_PID
+    # 9>&- is load-bearing, not tidiness -- and it is needed on EVERY long-lived
+    # child of this gate, not just here. The whole-run mutex is `exec 9>lock;
+    # flock -n 9`, and fd 9 is INHERITED by every child. Xvfb is backgrounded
+    # and has outlived its parent before (orphaned 2026-09-17 at 10:09), which
+    # left it holding the lock after runci.sh exited — wedging every later run
+    # on that machine for the full 90-minute flock timeout. Two runs were lost
+    # to this in one afternoon, each reading as "is a run wedged?" with nothing
+    # actually running. Closing fd 9 in the child means an orphaned Xvfb can no
+    # longer hold the worker hostage. Any other long-lived background child
+    # added here needs the same treatment.
+    # An Xvfb ORPHANED by a killed run keeps display :99 and its /tmp/.X99-lock,
+    # and every later run then dies with "Server is already active for display
+    # 99" — one ungraceful shutdown wedges the preview-headed shard until the
+    # machine is rebuilt. Observed 2026-09-17/18: a stray Xvfb from a killed run
+    # failed every subsequent shard at browserType.launch in 2ms.
+    #
+    # So: ADOPT a healthy existing display rather than failing, and only clear
+    # a lock whose owner is genuinely gone. Never pkill-by-pattern on this box.
+    _xvfb_display_ok() { command -v xdpyinfo >/dev/null 2>&1 && xdpyinfo -display :99 >/dev/null 2>&1; }
+    _XVFB_PID=""
+    if [ -f /tmp/.X99-lock ]; then
+      _owner=$(tr -dc '0-9' < /tmp/.X99-lock 2>/dev/null)
+      if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+        # Live owner. Adopt it if it actually serves; do NOT record a pid we did
+        # not start, or the RETURN trap would kill another run's display.
+        export DISPLAY=:99
+        if _xvfb_display_ok || [ ! -x "$(command -v xdpyinfo 2>/dev/null)" ]; then
+          log "e2e: adopting existing virtual display :99 (owner pid $_owner, not started by this run — will not be reaped)"
+        else
+          echo "WARNING: display :99 is held by pid $_owner but does not answer; leaving it alone and continuing without a display" >&2
+          unset DISPLAY
+        fi
+      else
+        log "e2e: clearing a stale X99 lock (owner ${_owner:-unknown} is gone)"
+        rm -f /tmp/.X99-lock "/tmp/.X11-unix/X99" 2>/dev/null || true
+      fi
+    fi
+    if [ -z "${DISPLAY:-}" ]; then
+      Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 9>&- &
+      _XVFB_PID=$!
+      export DISPLAY=:99
+      # Give the server a moment, then confirm it is actually up rather than
+      # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
+      sleep 2
+      if kill -0 "$_XVFB_PID" 2>/dev/null; then
+        log "e2e: virtual display :99 up (pid $_XVFB_PID)"
+      else
+        echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See $TMPDIR/xvfb.log" >&2
+        unset DISPLAY _XVFB_PID
+      fi
     fi
   elif [ -z "${DISPLAY:-}" ]; then
     echo "WARNING: no Xvfb on this box — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect" >&2
@@ -1113,7 +1179,7 @@ run_e2e() {
       while [ "$running" -gt 0 ]; do _e2e_reap_one; done
       log "e2e: launch shard $group (port $port, key slot $slot; SOLO)"
       ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
-        > "$E2E_DIR/e2e-shard-$group.log" 2>&1
+        > "$E2E_DIR/e2e-shard-$group.log" 2>&1 9>&-
       src=$?
       NAMES+=("$group")
       if [ "$src" -eq 0 ]; then
@@ -1134,7 +1200,7 @@ run_e2e() {
     while [ "$(_e2e_in_flight "$kind")" -ge "$cap" ]; do _e2e_reap_one; done
     log "e2e: launch shard $group (port $port, key slot $slot; $(($(_e2e_in_flight "$kind") + 1))/$cap $kind shards in flight)"
     ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
-      > "$E2E_DIR/e2e-shard-$group.log" 2>&1 &
+      > "$E2E_DIR/e2e-shard-$group.log" 2>&1 9>&- &
     PID2NAME[$!]="$group"; NAMES+=("$group"); running=$((running + 1))
   done < <(scripts/e2e-shards.sh list 2>/dev/null)
 

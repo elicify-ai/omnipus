@@ -358,7 +358,7 @@ func (s *Store) rotateFull(newKey, newSalt []byte) error {
 // If the file does not exist, returns an empty storeFile with a fresh salt.
 func (s *Store) loadFileInternal() (*storeFile, error) {
 	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		// Create empty store with fresh salt on first use.
 		salt := make([]byte, saltLen)
 		if _, saltErr := io.ReadFull(rand.Reader, salt); saltErr != nil {
@@ -419,7 +419,7 @@ var writeFileAtomicFn = fileutil.WriteFileAtomic
 // generates a fresh one if the file does not yet exist.
 func (s *Store) loadOrCreateSalt() ([]byte, error) {
 	data, err := os.ReadFile(s.path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		salt := make([]byte, saltLen)
 		if _, saltErr := io.ReadFull(rand.Reader, salt); saltErr != nil {
 			return nil, fmt.Errorf("credentials: generate salt: %w", saltErr)

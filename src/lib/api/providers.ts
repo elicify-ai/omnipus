@@ -183,7 +183,7 @@ async function fetchProvidersCatalogOnce(mayRetryWithoutETag: boolean): Promise<
 // rejects it with 403 unless a single-use consent token (from reAuth) is replayed
 // in the X-Reauth-Token header. The token is OPTIONAL here because the same route
 // is used during onboarding, where no authenticated user exists yet and the gate
-// is skipped (see pkg/gateway/rest.go provider PUT handler).
+// is skipped (see pkg/gateway/rest_providers.go's providerPutAdmit).
 export function configureProvider(
   id: string,
   apiKey?: string,
@@ -194,7 +194,10 @@ export function configureProvider(
   // ADR-068 FR-037: an operator-named custom endpoint carries its own base URL
   // and wire protocol — both are contract fields on ProviderUpdateRequest, and
   // the server requires the pair to admit an id that is not in the catalog.
-  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol'>,
+  // `region` is issue #800's own field (Bedrock region contract): the
+  // per-provider-row selected region, sent whenever the caller has one —
+  // independent of whether this row is custom.
+  custom?: Pick<ProviderUpdateRequest, 'api_base' | 'protocol' | 'region'>,
 ): Promise<Provider> {
   // ProviderUpdateRequest (contract): api_key/model are strings, models is the
   // operator-supplied slug catalogue for endpoint-less providers. `endpoint` is
@@ -207,6 +210,7 @@ export function configureProvider(
   if (models !== undefined) body.models = models
   if (custom?.api_base !== undefined) body.api_base = custom.api_base
   if (custom?.protocol !== undefined) body.protocol = custom.protocol
+  if (custom?.region !== undefined) body.region = custom.region
   return request<Provider>(`/providers/${id}`, {
     method: 'PUT',
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
@@ -439,19 +443,21 @@ export function fetchIntegrationProviders(): Promise<IntegrationProvidersRespons
 }
 
 // configureIntegrationProvider sets a provider's API key and/or selects it as
-// active. It REQUIRES a re-auth consent token (from reAuth) — the server rejects
-// the PUT with 403 without a valid token. The token is replayed in the
-// X-Reauth-Token header.
+// active. requireReAuth (pkg/gateway/rest_integrations_auth.go) gates this PUT
+// unconditionally, but is itself a no-op in platform mode — so local mode
+// REQUIRES a valid re-auth consent token (from reAuth) or the server rejects
+// with 403, while platform mode's ConfirmDialog flow calls this with no token
+// at all. The token, when present, is replayed in the X-Reauth-Token header.
 export function configureIntegrationProvider(
   id: string,
   body: IntegrationProviderUpdateRequest,
-  reAuthToken: string,
+  reAuthToken?: string,
 ): Promise<IntegrationProvidersResponse> {
   return request<IntegrationProvidersResponse>(
     `/integrations/providers/${encodeURIComponent(id)}`,
     {
       method: 'PUT',
-      headers: { [REAUTH_HEADER]: reAuthToken },
+      headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
       body: JSON.stringify(body),
     },
     IntegrationProvidersResponseSchema as ZodType<IntegrationProvidersResponse>,

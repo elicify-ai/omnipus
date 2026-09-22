@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,10 +53,10 @@ func TestRetentionSweep_DeletesAgedFiles(t *testing.T) {
 	assert.NoError(t, err, "recent file (3 days old) must survive RetentionSweep(7)")
 
 	_, err = os.Stat(stale1)
-	assert.True(t, os.IsNotExist(err), "10-day-old file must be deleted")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "10-day-old file must be deleted")
 
 	_, err = os.Stat(stale2)
-	assert.True(t, os.IsNotExist(err), "30-day-old file must be deleted")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "30-day-old file must be deleted")
 }
 
 // TestRetentionSweep_ZeroRetentionIsNoOp verifies that retentionDays <= 0
@@ -112,7 +113,7 @@ func TestRetentionSweep_PartialDeleteFailureContinues(t *testing.T) {
 
 	// The deletable file must be gone.
 	_, statErr := os.Stat(deletable)
-	assert.True(t, os.IsNotExist(statErr), "deletable file must be removed")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "deletable file must be removed")
 
 	// removed may be 1 (only the file that succeeded).
 	assert.Equal(t, 1, removed, "only the successfully deleted file must be counted")
@@ -151,8 +152,7 @@ func TestRetentionSweep_RemovesEmptySessionDir(t *testing.T) {
 	// remaining file and there are no .jsonl transcripts left, so the dir
 	// is junk by definition.
 	_, statErr := os.Stat(sessionDir)
-	assert.True(t, os.IsNotExist(statErr),
-		"session directory must be removed when no .jsonl files remain (got: %v)", statErr)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "session directory must be removed when no .jsonl files remain (got: %v)", statErr)
 }
 
 // TestRetentionSweep_KeepsDirWithLiveTranscript verifies that a session
@@ -221,8 +221,7 @@ func TestRetention_SweepsIdleContext_SparesActive(t *testing.T) {
 
 	// (a) The idle context archive must be gone.
 	_, statErr := os.Stat(idleContextPath)
-	assert.True(t, os.IsNotExist(statErr),
-		"idle .context/<id>.jsonl (100d old) must be swept at the %d-day retention window", retentionDays)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "idle .context/<id>.jsonl (100d old) must be swept at the %d-day retention window", retentionDays)
 
 	// (b) The active context archive must survive.
 	_, statErr = os.Stat(activeContextPath)
@@ -278,12 +277,11 @@ func TestRetention_ContextMetaRemovedWithJsonl(t *testing.T) {
 
 	// Aged .jsonl must be gone.
 	_, err = os.Stat(agedJSONL)
-	assert.True(t, os.IsNotExist(err), "aged .context/<key>.jsonl must be swept")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "aged .context/<key>.jsonl must be swept")
 
 	// Sibling .meta.json for the aged .jsonl must also be gone.
 	_, err = os.Stat(agedMeta)
-	assert.True(t, os.IsNotExist(err),
-		"aged .context/<key>.meta.json must be removed alongside its .jsonl")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "aged .context/<key>.meta.json must be removed alongside its .jsonl")
 
 	// Active .jsonl must survive.
 	_, err = os.Stat(activeJSONL)
@@ -366,7 +364,7 @@ func TestRetentionSweep_GoalHookNilIsNoOp(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, removed)
 	_, statErr := os.Stat(stale)
-	assert.True(t, os.IsNotExist(statErr))
+	assert.True(t, errors.Is(statErr, os.ErrNotExist))
 }
 
 // TestRetentionSweep_GoalHookErrorDoesNotFailSweep proves a failing goal
@@ -385,7 +383,7 @@ func TestRetentionSweep_GoalHookErrorDoesNotFailSweep(t *testing.T) {
 	require.NoError(t, err, "a goal-hook error must not surface as RetentionSweep's own error")
 	assert.Equal(t, 1, removed, "the session-file sweep's own result must be unaffected by the goal hook's error")
 	_, statErr := os.Stat(stale)
-	assert.True(t, os.IsNotExist(statErr))
+	assert.True(t, errors.Is(statErr, os.ErrNotExist))
 }
 
 // TestRetentionSweep_GoalHookRunsAfterShardsReleased is C-26's central

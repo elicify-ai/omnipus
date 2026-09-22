@@ -4,6 +4,7 @@ description: >
   Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend
   agent capabilities. Each skill has an ID, version, and human-readable metadata.
 required:
+  - revision
   - id
   - name
   - version
@@ -11,6 +12,20 @@ required:
   - status
 additionalProperties: false
 properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  persistence_status:
+    $ref: './ConfigurationPersistenceStatus.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  changed_fields:
+    type: array
+    items:
+      type: string
+  error_stage:
+    type: string
+  message:
+    type: string
   id:
     type: string
     description: Unique skill identifier (typically the skill directory name or npm package name).

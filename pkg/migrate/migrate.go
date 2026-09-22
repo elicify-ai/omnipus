@@ -1,6 +1,7 @@
 package migrate
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -88,7 +89,7 @@ func (m *MigrateInstance) Run(opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	if _, err = os.Stat(sourceHome); os.IsNotExist(err) {
+	if _, err = os.Stat(sourceHome); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("source installation not found at %s", sourceHome)
 	}
 

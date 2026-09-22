@@ -62,41 +62,72 @@ type endpointDTO struct {
 }
 
 type providerDTO struct {
-	ID                string           `json:"id"`
-	Name              string           `json:"name"`
-	Company           string           `json:"company"`
-	API               string           `json:"api"`
-	Protocol          string           `json:"protocol"`
-	Protocols         []endpointDTO    `json:"protocols"`
-	Env               []string         `json:"env"`
-	Region            string           `json:"region"`
-	Plan              string           `json:"plan"`
-	Tier              string           `json:"tier"`
-	UnsupportedReason string           `json:"unsupported_reason"`
-	AuthMethods       []string         `json:"auth_methods"`
-	Aliases           []string         `json:"aliases"`
-	CLIKind           string           `json:"cli_kind"`
-	TokenSource       string           `json:"token_source"`
-	ResizeLimits      *resizeLimitsDTO `json:"resize_limits"`
-	Models            []modelDTO       `json:"models"`
+	ID                string              `json:"id"`
+	Name              string              `json:"name"`
+	Company           string              `json:"company"`
+	API               string              `json:"api"`
+	Protocol          string              `json:"protocol"`
+	Protocols         []endpointDTO       `json:"protocols"`
+	Env               []string            `json:"env"`
+	Region            string              `json:"region"`
+	Regions           []providerRegionDTO `json:"regions"`
+	Plan              string              `json:"plan"`
+	Tier              string              `json:"tier"`
+	UnsupportedReason string              `json:"unsupported_reason"`
+	AuthMethods       []string            `json:"auth_methods"`
+	Aliases           []string            `json:"aliases"`
+	CLIKind           string              `json:"cli_kind"`
+	TokenSource       string              `json:"token_source"`
+	ResizeLimits      *resizeLimitsDTO    `json:"resize_limits"`
+	Models            []modelDTO          `json:"models"`
 	// locality, if published, is ignored: it is derived on load (FR-039).
 }
 
+// providerRegionDTO is one entry of the issue #800 (Bedrock region
+// contract) `regions` array.
+type providerRegionDTO struct {
+	ID    string `json:"id"`
+	Group string `json:"group"`
+}
+
 type modelDTO struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	ReleaseDate     string   `json:"release_date"`
-	ContextWindow   int      `json:"context_window"`
-	MaxOutputTokens int      `json:"max_output_tokens"`
-	InputModalities []string `json:"input_modalities"`
-	ToolCall        bool     `json:"tool_call"`
-	Status          string   `json:"status"`
-	Disputed        bool     `json:"disputed"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	ReleaseDate       string   `json:"release_date"`
+	ContextWindow     int      `json:"context_window"`
+	MaxOutputTokens   int      `json:"max_output_tokens"`
+	InputModalities   []string `json:"input_modalities"`
+	ToolCall          bool     `json:"tool_call"`
+	Status            string   `json:"status"`
+	Disputed          bool     `json:"disputed"`
+	InferenceProfiles []string `json:"inference_profiles"`
 }
 
 // invalid builds a rejection naming path.
 func invalid(path, format string, args ...any) error {
 	return fmt.Errorf("%w: %s: %s", ErrInvalid, path, fmt.Sprintf(format, args...))
+}
+
+// unknownProtocolError is parseProvider's internal signal that a provider
+// named a protocol value outside this build's closed vocabulary
+// (parseProtocol) — either as its primary protocol or inside protocols[].
+// It is deliberately NOT wrapped in ErrInvalid and NOT treated as a
+// structural defect: ParseDocument's provider loop catches this specific
+// sentinel with errors.As, skips just the one offending provider (recording
+// it in Document.SkippedProviders), and keeps parsing the rest of the
+// document. This is the forward-compatibility fix — a catalog publisher
+// that starts shipping a protocol this build doesn't implement yet (e.g.
+// "bedrock") must not take down every other provider with it. Every OTHER
+// parseProvider failure still rejects the whole document via the ordinary
+// invalid() path — this sentinel exists precisely so unknown-protocol is
+// the ONLY per-provider failure that downgrades from reject to skip.
+type unknownProtocolError struct {
+	providerID string
+	protocol   string
+}
+
+func (e *unknownProtocolError) Error() string {
+	return fmt.Sprintf("provider %q: protocol %q is not recognized by this build", e.providerID, e.protocol)
 }
 
 // ParseDocument decodes and validates a 2.0.0 document (FR-001, FR-002,
@@ -147,6 +178,17 @@ func ParseDocument(data []byte) (*Document, error) {
 		path := "providers[" + strconv.Itoa(i) + "]"
 		p, err := parseProvider(path, &dto.Providers[i], defaults)
 		if err != nil {
+			var unknownProtocol *unknownProtocolError
+			if errors.As(err, &unknownProtocol) {
+				// Forward-compat skip, not a structural defect (see
+				// unknownProtocolError) — record and keep parsing the rest of
+				// the document.
+				doc.SkippedProviders = append(doc.SkippedProviders, SkippedProvider{
+					ID:       unknownProtocol.providerID,
+					Protocol: unknownProtocol.protocol,
+				})
+				continue
+			}
 			return nil, err
 		}
 		if _, dup := seenProviders[p.ID]; dup {
@@ -154,6 +196,9 @@ func ParseDocument(data []byte) (*Document, error) {
 		}
 		seenProviders[p.ID] = struct{}{}
 		doc.Providers = append(doc.Providers, p)
+	}
+	if len(doc.Providers) == 0 {
+		return nil, invalid("providers", "no providers remain after skipping %d with an unrecognized protocol", len(doc.SkippedProviders))
 	}
 	return doc, nil
 }
@@ -174,9 +219,87 @@ func parseResizeLimits(path string, dto *resizeLimitsDTO, inherit *ResizeLimits)
 	return ResizeLimits{LongEdgePx: dto.LongEdgePx, MaxBytes: dto.MaxBytes}, nil
 }
 
+// isKnownRegionGroup reports whether s is one of the closed cross-region
+// inference profile groups, or "" (on-demand only — legal on
+// ProviderRegion.Group, never as an inference_profiles entry).
+func isKnownRegionGroup(s string) bool {
+	switch s {
+	case "", RegionGroupUS, RegionGroupEU, RegionGroupAPAC, RegionGroupJP, RegionGroupAU, RegionGroupGlobal:
+		return true
+	}
+	return false
+}
+
+// parseProviderRegions validates the issue #800 `regions` array: every
+// entry needs a non-empty, unique id and a group drawn from the closed set
+// (including "" for on-demand-only). Absent/empty input returns a nil
+// slice — the field is optional (FR-002-style).
+func parseProviderRegions(path string, dtos []providerRegionDTO) ([]ProviderRegion, error) {
+	if len(dtos) == 0 {
+		return nil, nil
+	}
+	out := make([]ProviderRegion, 0, len(dtos))
+	seen := make(map[string]struct{}, len(dtos))
+	for i, r := range dtos {
+		rpath := path + "[" + strconv.Itoa(i) + "]"
+		if r.ID == "" {
+			return nil, invalid(rpath+".id", "must be non-empty")
+		}
+		if _, dup := seen[r.ID]; dup {
+			return nil, invalid(rpath+".id", "duplicate region id %q", r.ID)
+		}
+		seen[r.ID] = struct{}{}
+		if !isKnownRegionGroup(r.Group) {
+			return nil, invalid(rpath+".group", "%q is not one of \"\"|us|eu|apac|jp|au|global", r.Group)
+		}
+		out = append(out, ProviderRegion(r))
+	}
+	return out, nil
+}
+
+// parseInferenceProfiles validates the issue #800 `inference_profiles`
+// array: every entry must be a non-empty group from the closed set — unlike
+// ProviderRegion.Group, "" is never legal here (a model cannot carry a
+// cross-region profile in "no group"). Absent/empty input returns a nil
+// slice.
+func parseInferenceProfiles(path string, values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(values))
+	for i, v := range values {
+		if v == "" || !isKnownRegionGroup(v) {
+			return nil, invalid(path+"["+strconv.Itoa(i)+"]", "%q is not one of us|eu|apac|jp|au|global", v)
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// parseAuthMethods validates a provider row's `auth_methods` array: at
+// least one entry, each drawn from the closed api_key|sign_in set. Extracted
+// out of parseProvider (gocyclo budget: scripts/budgets/gocyclo.txt pins
+// parseProvider at 33; this loop's own branches counted separately here
+// instead of pushing parseProvider over its listed budget).
+func parseAuthMethods(path string, values []string) ([]AuthMethod, error) {
+	if len(values) == 0 {
+		return nil, invalid(path, "must contain at least one of api_key|sign_in")
+	}
+	out := make([]AuthMethod, 0, len(values))
+	for i, a := range values {
+		switch m := AuthMethod(a); m {
+		case AuthAPIKey, AuthSignIn:
+			out = append(out, m)
+		default:
+			return nil, invalid(path+"["+strconv.Itoa(i)+"]", "%q is not one of api_key|sign_in", a)
+		}
+	}
+	return out, nil
+}
+
 func parseProtocol(s string) (Protocol, bool) {
 	switch p := Protocol(s); p {
-	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolCLI:
+	case ProtocolOpenAICompatible, ProtocolAnthropic, ProtocolGoogle, ProtocolOllama, ProtocolCLI, ProtocolBedrock:
 		return p, true
 	}
 	return "", false
@@ -213,7 +336,9 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 	} else {
 		p, ok := parseProtocol(dto.Protocol)
 		if !ok {
-			return Provider{}, invalid(path+".protocol", "%q is not one of openai-compatible|anthropic|google|ollama|cli", dto.Protocol)
+			// Forward-compat (see unknownProtocolError): an unrecognized
+			// primary protocol skips this provider, not the whole document.
+			return Provider{}, &unknownProtocolError{providerID: dto.ID, protocol: dto.Protocol}
 		}
 		protocol = p
 	}
@@ -253,7 +378,11 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 			epath := path + ".protocols[" + strconv.Itoa(i) + "]"
 			ep, ok := parseProtocol(e.Protocol)
 			if !ok {
-				return Provider{}, invalid(epath+".protocol", "%q is not a known protocol", e.Protocol)
+				// Same forward-compat rationale as the primary protocol
+				// check above: an unrecognized secondary protocol entry
+				// skips this provider (not just the entry), rather than
+				// rejecting the whole document.
+				return Provider{}, &unknownProtocolError{providerID: dto.ID, protocol: e.Protocol}
 			}
 			if _, dup := seen[ep]; dup {
 				return Provider{}, invalid(epath, "duplicate protocol %q", e.Protocol)
@@ -275,20 +404,17 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		}
 	}
 
-	if len(dto.AuthMethods) == 0 {
-		return Provider{}, invalid(path+".auth_methods", "must contain at least one of api_key|sign_in")
-	}
-	auth := make([]AuthMethod, 0, len(dto.AuthMethods))
-	for i, a := range dto.AuthMethods {
-		switch m := AuthMethod(a); m {
-		case AuthAPIKey, AuthSignIn:
-			auth = append(auth, m)
-		default:
-			return Provider{}, invalid(path+".auth_methods["+strconv.Itoa(i)+"]", "%q is not one of api_key|sign_in", a)
-		}
+	auth, err := parseAuthMethods(path+".auth_methods", dto.AuthMethods)
+	if err != nil {
+		return Provider{}, err
 	}
 
 	limits, err := parseResizeLimits(path+".resize_limits", dto.ResizeLimits, &defaults)
+	if err != nil {
+		return Provider{}, err
+	}
+
+	regions, err := parseProviderRegions(path+".regions", dto.Regions)
 	if err != nil {
 		return Provider{}, err
 	}
@@ -315,6 +441,7 @@ func parseProvider(path string, dto *providerDTO, defaults ResizeLimits) (Provid
 		CLIKind:           dto.CLIKind,
 		TokenSource:       dto.TokenSource,
 		Locality:          locality,
+		Regions:           regions,
 		ResizeLimits:      limits,
 		Models:            make([]Model, 0, len(dto.Models)),
 	}
@@ -373,16 +500,21 @@ func parseModel(path string, dto *modelDTO) (Model, error) {
 	default:
 		return Model{}, invalid(path+".status", "%q is not one of active|retired", dto.Status)
 	}
+	profiles, err := parseInferenceProfiles(path+".inference_profiles", dto.InferenceProfiles)
+	if err != nil {
+		return Model{}, err
+	}
 	return Model{
-		ID:              dto.ID,
-		Name:            dto.Name,
-		ReleaseDate:     dto.ReleaseDate,
-		ContextWindow:   dto.ContextWindow,
-		MaxOutputTokens: dto.MaxOutputTokens,
-		InputModalities: mods,
-		ToolCall:        dto.ToolCall,
-		Status:          status,
-		Disputed:        dto.Disputed,
+		ID:                dto.ID,
+		Name:              dto.Name,
+		ReleaseDate:       dto.ReleaseDate,
+		ContextWindow:     dto.ContextWindow,
+		MaxOutputTokens:   dto.MaxOutputTokens,
+		InputModalities:   mods,
+		ToolCall:          dto.ToolCall,
+		Status:            status,
+		Disputed:          dto.Disputed,
+		InferenceProfiles: profiles,
 	}, nil
 }
 

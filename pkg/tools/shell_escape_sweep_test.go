@@ -6,6 +6,7 @@ package tools
 // the offending token).
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -145,15 +146,15 @@ func TestExecTool_ReportsSymlinkAssembledAtRuntime(t *testing.T) {
 	require.NoError(t, logger.Close())
 	files, err := filepath.Glob(filepath.Join(auditDir, "*.jsonl"))
 	require.NoError(t, err)
-	var all []byte // size depends on the audit logger's rotation, not on anything this test controls
+	var all bytes.Buffer
 	for _, f := range files {
 		b, rerr := os.ReadFile(f)
 		require.NoError(t, rerr)
-		all = append(all, b...)
+		_, _ = all.Write(b)
 	}
-	assert.Contains(t, string(all), `"warning":"escaping_symlinks"`)
-	assert.Contains(t, string(all), "etclink")
-	assert.NotContains(t, string(all), "removed after the command ran")
+	assert.Contains(t, all.String(), `"warning":"escaping_symlinks"`)
+	assert.Contains(t, all.String(), "etclink")
+	assert.NotContains(t, all.String(), "removed after the command ran")
 }
 
 // TestExecTool_BackgroundRunSweepsOnCompletion is the D-14 reproduction for
@@ -217,14 +218,14 @@ func TestExecTool_BackgroundRunSweepsOnCompletion(t *testing.T) {
 	require.NoError(t, logger.Close())
 	files, err := filepath.Glob(filepath.Join(auditDir, "*.jsonl"))
 	require.NoError(t, err)
-	var all []byte // size depends on the audit logger's rotation, not on anything this test controls
+	var all bytes.Buffer
 	for _, f := range files {
 		b, rerr := os.ReadFile(f)
 		require.NoError(t, rerr)
-		all = append(all, b...)
+		_, _ = all.Write(b)
 	}
-	assert.Contains(t, string(all), `"warning":"escaping_symlinks"`)
-	assert.Contains(t, string(all), "etclink")
+	assert.Contains(t, all.String(), `"warning":"escaping_symlinks"`)
+	assert.Contains(t, all.String(), "etclink")
 }
 
 // TestGuardCommand_RefusalNamesWhatWasRefused pins D-44 and D-66: a program

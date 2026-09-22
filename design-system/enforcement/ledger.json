@@ -2467,9 +2467,9 @@
     },
     {
       "ruleId": "ts-colors/extension-boundary",
-      "path": "src/components/browser/BrowserLiveView.tsx",
-      "syntax": "BrowserLiveView#dom-style.backgroundColor<-resolvedAgent?.color",
-      "reason": "Lead read (2026-09-20): lines 934/2780: agent colour from the agents query cache as background, token fallback",
+      "path": "src/components/browser/BrowserLiveToolbar.tsx",
+      "syntax": "BrowserLiveToolbar#dom-style.backgroundColor<-resolvedAgent?.color",
+      "reason": "Lead read (2026-09-20): agent colour from the agents query cache as background, token fallback.",
       "owner": "user-authored colours exception registry"
     },
     {

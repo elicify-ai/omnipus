@@ -79,6 +79,32 @@ describe('ProviderDetailPanel — plan and region groups (FR-027)', () => {
     expect(screen.queryByTestId('provider-detail-panel-regions')).not.toBeInTheDocument()
   })
 
+  // Orchestrator-review UX defect (issue #800): amazon-bedrock is a single
+  // catalog row, so `company.regions` (SIBLING-row split, see the module
+  // header's item 3) has exactly one entry — its own `region: "us-east-1"`.
+  // Rendering that as a one-button "Detected: Us-east-1 — change" group
+  // right next to the real AWS region <select> (CatalogProvider.regions,
+  // ProviderDetailPanel.awsRegion.test.tsx) reads as two competing region
+  // controls for the same decision. The single-option sibling group is
+  // hidden whenever it has nothing to choose between, or the row already
+  // offers its own AWS region picker.
+  it('hides the single-button sibling region group for Bedrock, keeping only the AWS region select', () => {
+    render(<ProviderDetailPanel company={companyRowFor('amazon-bedrock')} locale="en-US" />)
+    expect(screen.getByTestId('provider-detail-panel-aws-region')).toBeInTheDocument()
+    expect(screen.queryByTestId('provider-detail-panel-regions')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('provider-detail-panel-region-us-east-1')).not.toBeInTheDocument()
+  })
+
+  // The sibling group must still render for a company with a REAL choice —
+  // this fix must not hide it whenever an AWS-shaped `region` field is
+  // merely present; it hides it only when there is one option or the row
+  // carries its own AWS regions picker.
+  it('still renders the sibling region group for a company with more than one sibling region', () => {
+    render(<ProviderDetailPanel company={companyRowFor('zai')} locale="de-DE" />)
+    expect(screen.getByTestId('provider-detail-panel-regions')).toBeInTheDocument()
+    expect(screen.queryByTestId('provider-detail-panel-aws-region')).not.toBeInTheDocument()
+  })
+
   // Scenario Outline "Region inferred from locale" — the render half. The pure
   // inference map itself is `region-inference.test.ts` (TDD row 7).
   const localeRows: Array<{ locale: string | null; selected: string; copy: string }> = [

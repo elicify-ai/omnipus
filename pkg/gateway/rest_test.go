@@ -48,7 +48,7 @@ func seedTestAgents(cfg *config.Config) {
 			},
 		}, cfg.Agents.List...)
 	}
-	// Seed base core agents (mia, jim, ava, ray; Spec-3: max retired) — idempotent.
+	// Seed the ADR-090 §2.0 roster (ray/explorer/max retired) — idempotent.
 	coreagent.SeedConfig(cfg)
 }
 
@@ -104,8 +104,9 @@ func (m *restMockProvider) GetDefaultModel() string { return "test-model" }
 
 // newTestRestAPI creates a restAPI with a minimal AgentLoop for unit testing.
 // OMNIPUS_BEARER_TOKEN is unset so auth is disabled (development mode).
-// The config is seeded with omnipus-system and the 4 base core agents (mia, jim, ava, ray;
-// Spec-3: max retired) to mirror the production startup path in gateway.go.
+// The config is seeded with omnipus-system and the ADR-090 §2.0 roster (mia,
+// jim, ava, admin core; worker/planner/researcher subagents; judge/plansupervisor
+// system-hidden) to mirror the production startup path in gateway.go.
 func newTestRestAPI(t *testing.T) (*restAPI, func()) {
 	t.Helper()
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "") // disable auth in tests
@@ -360,7 +361,7 @@ func TestAgent_MemoryEnabled_DefaultsTrueAndRoundTripsOnPUT(t *testing.T) {
 	// 2. PUT memory_enabled:false persists and echoes back on the response.
 	body := `{"memory_enabled":false}`
 	w = httptest.NewRecorder()
-	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/mem-agent", strings.NewReader(body))
+	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/mem-agent", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
 

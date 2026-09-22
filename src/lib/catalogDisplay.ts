@@ -39,16 +39,57 @@ export function catalogLogoSlug(entry: CatalogProvider): string {
   return COMPANY_LOGO_SLUGS[entry.company.trim().toLowerCase()] ?? entry.id
 }
 
-/** Display host for the provider's primary endpoint ("api.z.ai/api/paas/v4"). */
-export function catalogEndpointHint(entry: CatalogProvider): string {
-  return entry.api.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '')
+/**
+ * Which region string to DISPLAY for a catalog row (issue #800 D2 /
+ * D2-addendum, orchestrator review round 2): the operator's own
+ * configured/selected AWS region when the row carries its own `regions`
+ * picker (CatalogProvider.regions — distinct from `region`, a company's
+ * plan x region VARIANT split) AND the value names one of the OFFERED
+ * regions, otherwise the catalog's static default (`entry.region`).
+ *
+ * Before this, `entry.region` (the catalog's DEFAULT region, e.g. Bedrock's
+ * "us-east-1") was the only value catalogLabel/catalogSubtitle/
+ * catalogEndpointHint ever read — so the onboarding summary card and every
+ * Settings → Providers surface kept reading "us-east-1" even after the
+ * operator picked eu-central-1.
+ */
+function displayRegion(entry: CatalogProvider, configuredRegion?: string): string | undefined {
+  if (configuredRegion && entry.regions?.some((r) => r.id === configuredRegion)) {
+    return configuredRegion
+  }
+  return entry.region
 }
 
-/** Full human-readable label: "<name> [(Region)]" — coding plans get a suffix. */
-export function catalogLabel(entry: CatalogProvider): string {
+/**
+ * Display host for the provider's primary endpoint ("api.z.ai/api/paas/v4").
+ *
+ * `configuredRegion` (issue #800 D2/D2-addendum) substitutes the operator's
+ * own AWS region into the host in place of the catalog's static default,
+ * for a row whose `regions` picker offers it — e.g.
+ * "bedrock-runtime.us-east-1.amazonaws.com" becomes
+ * "bedrock-runtime.eu-central-1.amazonaws.com". A string-level swap, not a
+ * hand-rolled URL template: it keeps working unmodified however AWS's own
+ * host pattern evolves, as long as the catalog's default region string
+ * appears in the host (it always does — the host IS built from it).
+ */
+export function catalogEndpointHint(entry: CatalogProvider, configuredRegion?: string): string {
+  const host = entry.api.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/+$/, '')
+  const region = displayRegion(entry, configuredRegion)
+  if (region && region !== entry.region && entry.region) {
+    return host.split(entry.region).join(region)
+  }
+  return host
+}
+
+/**
+ * Full human-readable label: "<name> [(Region)]" — coding plans get a
+ * suffix. `configuredRegion` — see displayRegion's doc comment.
+ */
+export function catalogLabel(entry: CatalogProvider, configuredRegion?: string): string {
   const plan = entry.plan && entry.plan !== 'standard-api' ? ` — ${planLabel(entry.plan)}` : ''
-  const region = entry.region ? ` (${regionLabel(entry.region)})` : ''
-  return `${entry.name}${plan}${region}`
+  const region = displayRegion(entry, configuredRegion)
+  const regionSuffix = region ? ` (${regionLabel(region)})` : ''
+  return `${entry.name}${plan}${regionSuffix}`
 }
 
 /**
@@ -59,15 +100,18 @@ export function catalogLabel(entry: CatalogProvider): string {
  * own copy rather than the cloud "Pay-as-you-go" line every other row shares
  * (UAT: the Ollama picker row previously read "Pay-as-you-go, per token",
  * which is simply false for a local endpoint).
+ *
+ * `configuredRegion` (issue #800 D2/D2-addendum) — see
+ * catalogEndpointHint's doc comment; forwarded through unchanged.
  */
-export function catalogSubtitle(entry: CatalogProvider): string {
+export function catalogSubtitle(entry: CatalogProvider, configuredRegion?: string): string {
   const billing =
     entry.locality === 'local'
       ? 'Local — no account needed'
       : entry.plan === 'coding-plan'
         ? 'Subscription (Coding Plan)'
         : 'Pay-as-you-go, per token'
-  return `${billing} · ${catalogEndpointHint(entry)}`
+  return `${billing} · ${catalogEndpointHint(entry, configuredRegion)}`
 }
 
 /** Variant row title inside a company group: "<Plan> · <Region>" (region omitted when absent). */

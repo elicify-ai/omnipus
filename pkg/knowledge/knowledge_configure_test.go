@@ -10,6 +10,7 @@
 package knowledge
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,7 +145,7 @@ func TestKnowledgeConfigure_CreateRecordType_UnknownPropertyType_Refused(t *test
 	// Nothing was written — a refused declaration must not land on disk.
 	col := a4Scoped(t, home, ws, "kb")
 	_, err := os.Stat(filepath.Join(col.Root, ".omnipus-vault", "records", "widget.yaml"))
-	require.True(t, os.IsNotExist(err))
+	require.True(t, errors.Is(err, os.ErrNotExist))
 }
 
 func TestKnowledgeConfigure_CreateRecordType_MissingSchemaVersion_Refused(t *testing.T) {
@@ -273,7 +274,7 @@ func TestKnowledgeConfigure_DeleteRecordType_RevertsCountAndAllowsRecreate(t *te
 	require.Contains(t, del.ForLLM, "CASCADE (meaning): 2 record(s) revert to ordinary notes")
 
 	_, err := os.Stat(filepath.Join(root, ".omnipus-vault", "records", "widget.yaml"))
-	require.True(t, os.IsNotExist(err))
+	require.True(t, errors.Is(err, os.ErrNotExist))
 
 	// Deleted, so it can be freely re-declared — proves the file is really
 	// gone, not merely reported gone.
@@ -334,7 +335,7 @@ func TestKnowledgeConfigure_WriteView_SuccessThenDelete(t *testing.T) {
 	})
 	require.False(t, del.IsError, del.ForLLM)
 	_, err = os.Stat(filepath.Join(root, ".omnipus-vault", "views", "open-widgets.yaml"))
-	require.True(t, os.IsNotExist(err))
+	require.True(t, errors.Is(err, os.ErrNotExist))
 }
 
 func TestKnowledgeConfigure_WriteView_UnknownProperty_Refused(t *testing.T) {
@@ -525,7 +526,7 @@ func TestKnowledgeConfigure_WriteView_NameEscapingTheViewsDir_Refused(t *testing
 		"/tmp/omnipus-pwned.yaml",
 	} {
 		_, serr := os.Stat(escaped)
-		require.True(t, os.IsNotExist(serr), "nothing may be written at %s", escaped)
+		require.True(t, errors.Is(serr, os.ErrNotExist), "nothing may be written at %s", escaped)
 	}
 
 	// The control case: an ordinary name still writes, so the guard refuses
@@ -566,7 +567,7 @@ func TestKnowledgeConfigure_CreateRecordType_NameEscapingTheRecordsDir_Refused(t
 		filepath.Join(filepath.Dir(root), "planted.yaml"),
 	} {
 		_, serr := os.Stat(escaped)
-		require.True(t, os.IsNotExist(serr), "nothing may be written at %s", escaped)
+		require.True(t, errors.Is(serr, os.ErrNotExist), "nothing may be written at %s", escaped)
 	}
 }
 
@@ -605,7 +606,7 @@ func TestKnowledgeConfigure_WriteView_CreateViewArguments_Refused(t *testing.T) 
 			require.True(t, res.IsError, "write_view must refuse %q, got: %s", arg, res.ForLLM)
 			require.Contains(t, res.ForLLM, arg, "the refusal must name the argument")
 			_, serr := os.Stat(filepath.Join(root, ".omnipus-vault", "views", "wv-"+arg+".yaml"))
-			require.True(t, os.IsNotExist(serr), "nothing may be written on a refused call")
+			require.True(t, errors.Is(serr, os.ErrNotExist), "nothing may be written on a refused call")
 		})
 	}
 }

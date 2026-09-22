@@ -1,0 +1,3 @@
+type: string
+pattern: '^[a-f0-9]{64}$'
+description: Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.

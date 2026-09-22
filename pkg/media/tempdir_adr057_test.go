@@ -1,6 +1,7 @@
 package media
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,7 +58,7 @@ func assertDirExistsNonEmpty(t *testing.T, dir string) {
 
 func assertDirGone(t *testing.T, dir string) {
 	t.Helper()
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected %s to be removed, stat returned err=%v", dir, err)
 	}
 }
@@ -164,7 +165,7 @@ func TestRemoveSessionUploadsTree_MissingDirectoryIsNotAnError(t *testing.T) {
 	}
 	// Positive lower bound for THIS test's shape: prove the path really is
 	// absent (not merely never checked) before asserting removal is a no-op.
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("precondition failed: %s unexpectedly exists (err=%v)", dir, err)
 	}
 

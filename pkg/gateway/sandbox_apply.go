@@ -33,10 +33,13 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -188,7 +191,7 @@ func isRunningInDocker(getEnv func(string) string) bool {
 	}
 	if _, err := os.Stat(dockerenvPath); err == nil {
 		return true
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		// EACCES, EPERM, or other non-ENOENT error: the file may exist but is
 		// unreadable (e.g. hardened AppArmor profile, read-only root with restricted
 		// stat).  Log so operators on those setups know why auto-detect fired or
@@ -817,13 +820,20 @@ type linuxApplier interface {
 // allow-lists (NET_BIND_TCP and NET_CONNECT_TCP) on top of
 // sandbox.DefaultConnectPorts ({53, 80, 443}).
 //
-// Two groups, and they are deliberately the SAME list for bind and connect:
+// Three groups, and they are deliberately the SAME list for bind and connect:
 //
 //   - cfg.Sandbox.DevServerPortRange — agents bind dev servers here via
 //     web_serve / background bash, and other children dial them back.
 //
 //   - The gateway's OWN listeners: cfg.Gateway.Port, and
 //     cfg.Tools.Browser.WebRTCMediaTCPPort when ICE-TCP is configured.
+//
+//   - The configured platform sign-in issuer's port (CONNECT-only in
+//     practice — the gateway is a client here, never a listener — but
+//     added to both lists like everything else this function returns,
+//     since bindPorts and this function share one call site). See
+//     platformAuthIssuerPort's doc comment for why the issuer's port alone
+//     covers discovery, authorize AND token.
 //
 // # Why the gateway's own port belongs here (regression guard)
 //
@@ -876,7 +886,50 @@ func sandboxExtraPorts(cfg *config.Config) []uint16 {
 	}
 	add(cfg.Gateway.Port)
 	add(cfg.Tools.Browser.WebRTCMediaTCPPort)
+	add(platformAuthIssuerPort(cfg))
 	return out
+}
+
+// platformAuthIssuerPort returns the one extra TCP port sandboxExtraPorts must
+// allow-list for the configured platform sign-in issuer (cfg.Security.PlatformAuth.Issuer),
+// or 0 when there is nothing to add.
+//
+// Why the issuer's port alone is enough: editions/platform's discovery flow
+// (discovery.go::discoverPlatformEndpoints) fetches RFC 8414 metadata from the
+// issuer's own origin, and sameOriginAsIssuer refuses any authorize or token
+// endpoint that is not on that EXACT scheme+host — and a URL's host includes
+// its port. So the issuer's origin is also the origin every subsequent
+// discovery/authorize/token request dials; one allow-listed port covers all
+// three. There is no separate JWKS/trust-anchor URL to add alongside it:
+// PlatformAuthConfig.Keys is a static, boot-time key list, never fetched (see
+// that field's doc comment in pkg/config/platform_auth.go) — a decision this
+// function does not need to know about beyond "there is nothing else to add".
+//
+// Returns 0 for: no issuer configured (the ordinary local-mode instance);
+// an issuer that is not an absolute URL (the platform provider already
+// refuses a malformed issuer loudly elsewhere — this is a sandbox allow-list,
+// not a second validator); or an issuer on the scheme's default port (http
+// :80, https :443 — both already in sandbox.DefaultConnectPorts, so adding
+// them again would be a harmless but pointless duplicate rule).
+func platformAuthIssuerPort(cfg *config.Config) int {
+	issuer := strings.TrimSpace(cfg.Security.PlatformAuth.Issuer)
+	if issuer == "" {
+		return 0
+	}
+	u, err := url.Parse(issuer)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return 0
+	}
+	portStr := u.Port()
+	if portStr == "" {
+		// No explicit port: the scheme's default is already allow-listed.
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0
+	}
+	return port
 }
 
 // connectPortsFromRules flattens the boot policy's outbound port rules back to

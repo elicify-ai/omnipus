@@ -293,9 +293,8 @@ func TestSeed_JudgeSkillAllowlistUnchanged(t *testing.T) {
 		"JUDGE-FR-059: the Judge's seeded allowlist must be an EXPLICIT empty list, never nil — "+
 			"nil skips seedSystemAgents' re-enforcement branch entirely, so a hand-edited grant "+
 			"would survive every subsequent boot")
-	assert.Equal(t, []string{}, j.Skills,
-		"JUDGE-FR-059: the Judge's seeded registry-skill allowlist is non-nil and EMPTY — "+
-			"the verifier loads no registry skill at all")
+	assert.Equal(t, []string{"verify"}, j.Skills,
+		"ADR-090 assigns the Judge exactly the verify skill")
 }
 
 // TestSeedSystemAgents_ReEnforcesJudgeSkillAllowlist is the second of
@@ -340,9 +339,8 @@ func TestSeedSystemAgents_ReEnforcesJudgeSkillAllowlist(t *testing.T) {
 				"re-enforcement must report modified=true after tampering with the Judge's allowlist")
 
 			j := findSeeded(t, cfg, string(coreagent.IDJudge))
-			assert.Equal(t, []string{}, j.Skills,
-				"JUDGE-FR-059: the Judge's empty allowlist is a role invariant — a tampered or "+
-					"cleared value must be repaired back to the seeded empty list on the next boot")
+			assert.Equal(t, []string{"verify"}, j.Skills,
+				"ADR-090's verify-only Judge assignment must be restored after tampering")
 		})
 	}
 }
@@ -538,7 +536,7 @@ func TestPlanContainmentParity_NonOwnersCannotStartAPlan(t *testing.T) {
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	for _, id := range []coreagent.CoreAgentID{
-		coreagent.IDWorker, coreagent.IDPlanner, coreagent.IDExplorer,
+		coreagent.IDWorker, coreagent.IDPlanner,
 		coreagent.IDResearcher, coreagent.IDJudge, coreagent.IDPlanSupervisor,
 	} {
 		a := findSeeded(t, cfg, string(id))
@@ -594,24 +592,15 @@ func TestPlanContainmentParity_WorkerExplicitDeny(t *testing.T) {
 		assert.Equalf(t, "deny", resolveFor(t, cfg, string(coreagent.IDWorker), name, nil),
 			"(Worker, %s) must RESOLVE deny", name)
 	}
-	// The Worker holds a non-deny execute_plan alongside a deny stop_plan. That
-	// is FR-006b exception 1, and the premise it rests on is IsChatTarget()
-	// == false (it can never be a Plan.OwnerAgentID, so "starts a plan it
-	// cannot stop" is unreachable) — NOT, as this assertion used to claim, the
-	// fact that its sparse map omitted execute_plan. Omission stopped meaning
-	// "ask" on 2026-07-28 when the ceiling was raised to "allow"; the entry is
-	// now explicit, and its RESOLVED value is unchanged at "ask".
-	//
-	// Assert the resolved value and the real premise, so this test fails if
-	// either the Worker's posture widens or it ever becomes a chat target.
+	// ADR-090 makes General Purpose explicitly unable to run the plan engine.
 	execPolicy, hasExec := worker.Tools.Builtin.Policies["execute_plan"]
 	require.True(t, hasExec,
 		"the Worker's sparse map must carry an EXPLICIT execute_plan entry — an absent key inherits "+
 			"the global ceiling, which is now 'allow'")
-	assert.Equal(t, config.ToolPolicyAsk, execPolicy,
-		"the Worker must be seeded ask for execute_plan (unchanged posture, now stated explicitly)")
-	assert.Equal(t, "ask", resolveFor(t, cfg, string(coreagent.IDWorker), "execute_plan", nil),
-		"(Worker, execute_plan) must RESOLVE ask — raising the ceiling must not have widened it to allow")
+	assert.Equal(t, config.ToolPolicyDeny, execPolicy,
+		"the Worker must be seeded deny for execute_plan")
+	assert.Equal(t, "deny", resolveFor(t, cfg, string(coreagent.IDWorker), "execute_plan", nil),
+		"(Worker, execute_plan) must resolve deny")
 	assert.False(t, worker.IsChatTarget(),
 		"the Worker must not be a chat target — that, not the shape of its policy map, is what makes "+
 			"'ask for execute_plan alongside deny for stop_plan' acceptable (FR-006b exception 1)")

@@ -624,24 +624,21 @@ func FixtureDevicePairingRequestFrame_ZeroValue() DevicePairingRequestFrame {
 
 // ── REST response type fixtures (OpenAPI) ────────────────────────────────────
 
-// LoginResponse
+// OnboardingCompleteResponse (contracts/components/schemas/OnboardingCompleteResponse.yaml).
+// It is its own schema now, not an alias of the deleted LoginResponse, and it
+// carries NO bearer token: completion runs behind an existing session
+// (ADR-0008 ruling 2), so there is nothing left to bootstrap.
 
-func FixtureLoginResponse_Populated() LoginResponse {
+func FixtureOnboardingCompleteResponse_Populated() OnboardingCompleteResponse {
 	warning := strPtr("API key stored in plaintext")
-	return LoginResponse{
-		Token:    "omnipus_" + repeatStr("a", 64),
+	return OnboardingCompleteResponse{
 		Username: "admin",
 		Warning:  warning,
 	}
 }
 
-func FixtureLoginResponse_ZeroValue() LoginResponse {
-	return LoginResponse{}
-}
-
-func FixtureLoginResponse_Edge() LoginResponse {
-	return LoginResponse{
-		Token:    "omnipus_" + repeatStr("f", 64),
+func FixtureOnboardingCompleteResponse_Edge() OnboardingCompleteResponse {
+	return OnboardingCompleteResponse{
 		Username: "unicode-user-🔑",
 	}
 }
@@ -742,6 +739,7 @@ func FixtureAgent_Populated() Agent {
 	model := "claude-sonnet-4-6"
 	warning := strPtr("Config reload failed after update")
 	return Agent{
+		Revision:          repeatStr("a", 64),
 		Id:                "jim",
 		Name:              "Jim",
 		Type:              AgentTypeCore,
@@ -763,6 +761,7 @@ func FixtureAgent_ZeroValue() Agent {
 
 func FixtureAgent_Edge() Agent {
 	return Agent{
+		Revision:          repeatStr("a", 64),
 		Id:                "custom-" + repeatStr("y", 36),
 		Name:              "Unicode Agent 🤖",
 		Type:              AgentTypeMain,
@@ -1247,7 +1246,7 @@ func FixtureAppState_Populated() AppState {
 	godModeAvail := false
 	godModeOptedIn := false
 	devModeBypass := false
-	return AppState{
+	s := AppState{
 		OnboardingComplete: true,
 		LastDoctorRun:      &lastRun,
 		LastDoctorScore:    &score,
@@ -1255,27 +1254,46 @@ func FixtureAppState_Populated() AppState {
 		GodModeOptedIn:     &godModeOptedIn,
 		DevModeBypass:      &devModeBypass,
 	}
+	// identity became required by AppState.yaml (ADR-0010 WP1); mode/edition
+	// are themselves enum-constrained (AppStateIdentity.yaml), so the zero
+	// value ("") never validates. local/core/signed out mirrors the example
+	// values in the schema.
+	s.Identity.Mode = AppStateIdentityModeLocal
+	s.Identity.Edition = AppStateIdentityEditionCore
+	s.Identity.SignedIn = false
+	return s
 }
 
-// FixtureAppState_ZeroValue — Go zero value.
-// Expected: PASS — onboarding_complete is the only required field,
-// and bool zero value (false) is a valid boolean (not an absent value).
-// This is one of the few types where ZeroValue passes.
+// FixtureAppState_ZeroValue — Go zero value for every OPTIONAL field.
+// identity is required as of ADR-0010 WP1 and its mode/edition subfields are
+// enum-constrained, so this can no longer be a true Go zero value end to end
+// (unlike the comment historically claimed) — identity is populated with the
+// same minimal valid value as Populated so the fixture still exercises "every
+// optional field absent" rather than failing on the one required object.
 func FixtureAppState_ZeroValue() AppState {
-	return AppState{}
+	s := AppState{}
+	s.Identity.Mode = AppStateIdentityModeLocal
+	s.Identity.Edition = AppStateIdentityEditionCore
+	return s
 }
 
-// FixtureAppState_Edge — onboarding not complete, god mode available and opted in.
+// FixtureAppState_Edge — onboarding not complete, god mode available and
+// opted in, identity in the platform/hosted/signed-in posture (differs from
+// Populated's local/core/signed-out identity for TestContract_AppState_Differentiation).
 func FixtureAppState_Edge() AppState {
 	godModeAvail := true
 	godModeOptedIn := true
 	devModeBypass := true
-	return AppState{
+	s := AppState{
 		OnboardingComplete: false,
 		GodModeAvailable:   &godModeAvail,
 		GodModeOptedIn:     &godModeOptedIn,
 		DevModeBypass:      &devModeBypass,
 	}
+	s.Identity.Mode = AppStateIdentityModePlatform
+	s.Identity.Edition = AppStateIdentityEditionHosted
+	s.Identity.SignedIn = true
+	return s
 }
 
 // ── ValidateTokenResponse ─────────────────────────────────────────────────────
@@ -1529,31 +1547,6 @@ func FixtureDevicesResponse_Edge() DevicesResponse {
 			PairedAt    time.Time                   `json:"paired_at"`
 			Status      DevicesResponsePairedStatus `json:"status"`
 		}{},
-	}
-}
-
-// ── BackupEntry (inlined in listBackups response, tested via raw JSON) ─────────
-// Note: oapi-codegen inlined BackupEntry as an anonymous object in the listBackups
-// response. Tests validate against the component schema BackupEntry.yaml directly.
-// Traces to: contracts/components/schemas/BackupEntry.yaml
-
-func FixtureBackupEntryJSON_Populated() map[string]any {
-	return map[string]any{
-		"filename":   "omnipus-backup-2026-05-16T10-00-00Z.tar.gz",
-		"size_bytes": int64(1048576),
-		"created_at": "2026-05-16T10:00:00Z",
-	}
-}
-
-func FixtureBackupEntryJSON_ZeroValue() map[string]any {
-	return map[string]any{}
-}
-
-func FixtureBackupEntryJSON_Edge() map[string]any {
-	return map[string]any{
-		"filename":   "omnipus-backup-" + repeatStr("x", 30) + ".tar.gz",
-		"size_bytes": int64(0), // minimum: 0 — empty archive is valid
-		"created_at": "2026-01-01T00:00:00Z",
 	}
 }
 
@@ -1898,16 +1891,15 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 	toolCfgAllow := AgentToolsResponseToolsConfiguredPolicyAllow
 	toolEffAllow := AgentToolsResponseToolsEffectivePolicyAllow
 	return AgentToolsResponse{
-		AgentType: &agentType,
+		Revision:      repeatStr("a", 64),
+		OverrideNames: []string{"bash"},
+		AgentType:     &agentType,
 		Config: struct {
 			Builtin *struct {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -1942,16 +1934,15 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 	toolCfgDeny := AgentToolsResponseToolsConfiguredPolicyDeny
 	toolEffAsk := AgentToolsResponseToolsEffectivePolicyAsk
 	return AgentToolsResponse{
-		AgentType: &agentType,
+		Revision:      repeatStr("a", 64),
+		OverrideNames: []string{"delete_agent"},
+		AgentType:     &agentType,
 		Config: struct {
 			Builtin *struct {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2006,29 +1997,6 @@ func FixtureChannelTestResponse_Edge() ChannelTestResponse {
 	return ChannelTestResponse{
 		Success: false,
 		Message: "missing required credential: telegram_bot_token",
-	}
-}
-
-// ── BackupCreateResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupCreateResponse.yaml
-
-func FixtureBackupCreateResponse_Populated() BackupCreateResponse {
-	return BackupCreateResponse{
-		Path:      "/home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz",
-		SizeBytes: 1048576,
-		CreatedAt: time.Date(2026, 5, 16, 10, 30, 0, 0, time.UTC),
-	}
-}
-
-func FixtureBackupCreateResponse_ZeroValue() BackupCreateResponse {
-	return BackupCreateResponse{}
-}
-
-func FixtureBackupCreateResponse_Edge() BackupCreateResponse {
-	return BackupCreateResponse{
-		Path:      "/home/user/.omnipus/backups/backup-" + repeatStr("x", 30) + ".tar.gz",
-		SizeBytes: 0, // minimum: 0 — empty archive valid
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -2390,6 +2358,7 @@ func FixturePlanListResponse_ZeroValue() PlanListResponse {
 
 func FixtureWorkspace_Populated() Workspace {
 	return Workspace{
+		Revision:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Id:          "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Name:        "website-api",
 		Description: strPtr("Main REST API service"),
@@ -2449,26 +2418,6 @@ func FixtureIntegrationProvider_ZeroValue() IntegrationProvider {
 	return IntegrationProvider{}
 }
 
-// ── ReAuthResponse ───────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ReAuthResponse.yaml
-// Note: all required fields are scalar with no value constraints, so the Go
-// zero value ({verified:false, token:"", expires_in:0}) is a VALID object —
-// there is no ZeroValue-fails case for this type.
-
-func FixtureReAuthResponse_Populated() ReAuthResponse {
-	return ReAuthResponse{
-		Verified:  true,
-		Token:     "reauth_2f1a9c0b8d7e6f5a",
-		ExpiresIn: 300,
-	}
-}
-
-// FixtureReAuthResponse_ZeroValue — Go zero values. Expected to PASS: all
-// required fields are present (false/""/0 are valid for their types).
-func FixtureReAuthResponse_ZeroValue() ReAuthResponse {
-	return ReAuthResponse{}
-}
-
 // ── PerformanceSettings ──────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/PerformanceSettings.yaml
 // Note: PerformanceSettings has no required fields and both properties are
@@ -2503,17 +2452,14 @@ func FixturePerformanceSettings_ZeroValue() PerformanceSettings {
 //     variant at all.
 
 func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
+	enabled := true
 	color := "#D4AF37"
 	icon := "Robot"
 	model := "claude-sonnet-4-6"
-	enabled := true
 	deny := AgentCreateRequestMainToolsCfgBuiltinPoliciesDeny
 	description := "Focused research assistant"
 	temperature := 0.7
 	maxTokens := 4096
-	maxCost := 5.0
-	maxCalls := 100
-	maxTools := 60
 	maxToolIterations := 60
 	voice := "alloy"
 
@@ -2538,17 +2484,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,
 		},
-		RateLimits: &struct {
-			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
-			MaxLlmCallsPerHour    *int     `json:"max_llm_calls_per_hour,omitempty"`
-			MaxToolCallsPerMinute *int     `json:"max_tool_calls_per_minute,omitempty"`
-			UseGlobalDefaults     *bool    `json:"use_global_defaults,omitempty"`
-		}{
-			UseGlobalDefaults:     &enabled,
-			MaxCostPerDay:         &maxCost,
-			MaxLlmCallsPerHour:    &maxCalls,
-			MaxToolCallsPerMinute: &maxTools,
-		},
 		ShellPolicy: &struct {
 			CustomDenyPatterns *[]string `json:"custom_deny_patterns,omitempty"`
 			EnableDenyPatterns *bool     `json:"enable_deny_patterns,omitempty"`
@@ -2561,10 +2496,7 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 				Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2575,15 +2507,9 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 				},
 			},
 			Mcp: &struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			}{
-				Servers: &[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				}{{Id: "my-mcp"}},
+				Servers: &[]AgentToolsMcpServerBinding{{Id: "my-mcp"}},
 			},
 		},
 	}
@@ -2625,10 +2551,7 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 				Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2754,13 +2677,12 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	temperature := 0.5
 	maxTokens := 2048
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
-	heartbeat := "Check queue every hour."
 	soul := "You are a helpful assistant."
 	voice := "alloy"
-	updatedAt := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
 
 	vDefault := true
 	return AgentUpdateRequest{
+		Revision:    repeatStr("a", 64),
 		Name:        &name,
 		Description: &description,
 		Model:       &model,
@@ -2768,7 +2690,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		Icon:        &icon,
 		Default:     &vDefault,
 		Soul:        &soul,
-		Heartbeat:   &heartbeat,
 		Voice:       &voice,
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
@@ -2782,10 +2703,7 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 				Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2796,17 +2714,13 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 				},
 			},
 		},
-		UpdatedAt: &updatedAt,
 	}
 }
 
-// FixtureAgentUpdateRequest_UpdatedAt returns a minimal patch whose only field
-// is a valid RFC3339 updated_at. JSON Schema validation must accept it.
-func FixtureAgentUpdateRequest_UpdatedAt() AgentUpdateRequest {
-	updatedAt := time.Date(2026, 6, 19, 12, 34, 56, 0, time.UTC)
-	return AgentUpdateRequest{
-		UpdatedAt: &updatedAt,
-	}
+// FixtureAgentUpdateRequest_Revision carries the required write precondition
+// and one changed field, as specified by ADR-090 FR-007.
+func FixtureAgentUpdateRequest_Revision() AgentUpdateRequest {
+	return AgentUpdateRequest{Revision: repeatStr("a", 64), Model: strPtr("fixture-model")}
 }
 
 // ── ChannelRouting ────────────────────────────────────────────────────────────

@@ -6872,16 +6872,106 @@
    "id": "amazon-bedrock",
    "name": "Amazon Bedrock",
    "company": "Amazon Bedrock",
-   "api": "",
-   "protocol": "",
+   "api": "https://bedrock-runtime.us-east-1.amazonaws.com",
+   "protocol": "bedrock",
    "env": [
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_REGION",
     "AWS_BEARER_TOKEN_BEDROCK"
    ],
-   "tier": "unsupported",
-   "unsupported_reason": "cloud-iam",
+   "region": "us-east-1",
+   "regions": [
+    {
+     "id": "us-east-1",
+     "group": "us"
+    },
+    {
+     "id": "us-east-2",
+     "group": "us"
+    },
+    {
+     "id": "us-west-2",
+     "group": "us"
+    },
+    {
+     "id": "ap-south-1",
+     "group": "apac"
+    },
+    {
+     "id": "ap-south-2",
+     "group": "apac"
+    },
+    {
+     "id": "ap-northeast-1",
+     "group": "jp"
+    },
+    {
+     "id": "ap-northeast-2",
+     "group": "apac"
+    },
+    {
+     "id": "ap-northeast-3",
+     "group": "jp"
+    },
+    {
+     "id": "ap-southeast-1",
+     "group": "apac"
+    },
+    {
+     "id": "ap-southeast-2",
+     "group": "au"
+    },
+    {
+     "id": "ca-central-1",
+     "group": ""
+    },
+    {
+     "id": "eu-central-1",
+     "group": "eu"
+    },
+    {
+     "id": "eu-central-2",
+     "group": "eu"
+    },
+    {
+     "id": "eu-north-1",
+     "group": "eu"
+    },
+    {
+     "id": "eu-south-1",
+     "group": "eu"
+    },
+    {
+     "id": "eu-south-2",
+     "group": "eu"
+    },
+    {
+     "id": "eu-west-1",
+     "group": "eu"
+    },
+    {
+     "id": "eu-west-2",
+     "group": "eu"
+    },
+    {
+     "id": "eu-west-3",
+     "group": "eu"
+    },
+    {
+     "id": "sa-east-1",
+     "group": ""
+    },
+    {
+     "id": "us-gov-east-1",
+     "group": ""
+    },
+    {
+     "id": "us-gov-west-1",
+     "group": ""
+    }
+   ],
+   "tier": "standard",
    "auth_methods": [
     "api_key"
    ],
@@ -6897,16 +6987,23 @@
     {
      "id": "amazon.nova-2-lite-v1:0",
      "name": "Nova 2 Lite",
-     "release_date": "2024-12-01",
+     "release_date": "2025-12-02",
      "tool_call": true,
-     "context_window": 128000,
-     "max_output_tokens": 4096,
+     "context_window": 1000000,
+     "max_output_tokens": 65535,
      "input_modalities": [
       "text",
       "image",
-      "video"
+      "video",
+      "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "global"
+     ]
     },
     {
      "id": "amazon.nova-lite-v1:0",
@@ -6914,13 +7011,19 @@
      "release_date": "2024-12-03",
      "tool_call": true,
      "context_window": 300000,
-     "max_output_tokens": 8192,
+     "max_output_tokens": 10000,
      "input_modalities": [
       "text",
       "image",
-      "video"
+      "video",
+      "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "apac"
+     ]
     },
     {
      "id": "amazon.nova-micro-v1:0",
@@ -6928,11 +7031,34 @@
      "release_date": "2024-12-03",
      "tool_call": true,
      "context_window": 128000,
-     "max_output_tokens": 8192,
+     "max_output_tokens": 10000,
      "input_modalities": [
       "text"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "apac"
+     ]
+    },
+    {
+     "id": "amazon.nova-premier-v1:0",
+     "name": "Nova Premier",
+     "release_date": "2025-04-30",
+     "tool_call": true,
+     "context_window": 1000000,
+     "max_output_tokens": 10000,
+     "input_modalities": [
+      "text",
+      "image",
+      "video",
+      "pdf"
+     ],
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "amazon.nova-pro-v1:0",
@@ -6940,13 +7066,19 @@
      "release_date": "2024-12-03",
      "tool_call": true,
      "context_window": 300000,
-     "max_output_tokens": 8192,
+     "max_output_tokens": 10000,
      "input_modalities": [
       "text",
       "image",
-      "video"
+      "video",
+      "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "apac"
+     ]
     },
     {
      "id": "anthropic.claude-fable-5",
@@ -6960,7 +7092,30 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "global"
+     ]
+    },
+    {
+     "id": "anthropic.claude-fable-5-1",
+     "name": "Claude Fable 5.1",
+     "release_date": "2026-09-01",
+     "tool_call": true,
+     "context_window": 1000000,
+     "max_output_tokens": 128000,
+     "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-haiku-4-5-20251001-v1:0",
@@ -6974,7 +7129,14 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "au",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-opus-4-1-20250805-v1:0",
@@ -6988,12 +7150,15 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "anthropic.claude-opus-4-5-20251101-v1:0",
      "name": "Claude Opus 4.5",
-     "release_date": "2025-11-24",
+     "release_date": "2025-11-01",
      "tool_call": true,
      "context_window": 200000,
      "max_output_tokens": 64000,
@@ -7002,7 +7167,12 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-opus-4-6-v1",
@@ -7016,7 +7186,13 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "au",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-opus-4-7",
@@ -7030,7 +7206,14 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "au",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-opus-4-8",
@@ -7044,7 +7227,14 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "au",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-opus-5",
@@ -7058,7 +7248,34 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "au",
+      "global"
+     ]
+    },
+    {
+     "id": "anthropic.claude-sonnet-4-20250514-v1:0",
+     "name": "Claude Sonnet 4",
+     "release_date": "2025-05-22",
+     "tool_call": true,
+     "context_window": 200000,
+     "max_output_tokens": 64000,
+     "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "apac",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -7072,7 +7289,14 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "au",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-sonnet-4-6",
@@ -7080,13 +7304,20 @@
      "release_date": "2026-02-17",
      "tool_call": true,
      "context_window": 1000000,
-     "max_output_tokens": 64000,
+     "max_output_tokens": 128000,
      "input_modalities": [
       "text",
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "au",
+      "global"
+     ]
     },
     {
      "id": "anthropic.claude-sonnet-5",
@@ -7100,102 +7331,26 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu",
+      "jp",
+      "au",
+      "global"
+     ]
     },
     {
-     "id": "au.anthropic.claude-haiku-4-5-20251001-v1:0",
-     "name": "Claude Haiku 4.5 (AU)",
-     "release_date": "2025-10-15",
+     "id": "ca.amazon.nova-lite-v1:0",
+     "name": "Nova Lite (CA)",
+     "release_date": "2024-12-03",
      "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
+     "context_window": 300000,
+     "max_output_tokens": 10000,
      "input_modalities": [
       "text",
       "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "au.anthropic.claude-opus-4-6-v1",
-     "name": "AU Anthropic Claude Opus 4.6",
-     "release_date": "2026-02-05",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "au.anthropic.claude-opus-4-8",
-     "name": "Claude Opus 4.8 (AU)",
-     "release_date": "2026-05-28",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "au.anthropic.claude-opus-5",
-     "name": "Claude Opus 5 (AU)",
-     "release_date": "2026-07-24",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "au.anthropic.claude-sonnet-4-5-20250929-v1:0",
-     "name": "Claude Sonnet 4.5 (AU)",
-     "release_date": "2025-09-29",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "au.anthropic.claude-sonnet-4-6",
-     "name": "AU Anthropic Claude Sonnet 4.6",
-     "release_date": "2026-02-17",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "au.anthropic.claude-sonnet-5",
-     "name": "Claude Sonnet 5 (AU)",
-     "release_date": "2026-06-30",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
+      "video",
       "pdf"
      ],
      "status": "active"
@@ -7204,18 +7359,21 @@
      "id": "deepseek.r1-v1:0",
      "name": "DeepSeek-R1",
      "release_date": "2025-01-20",
-     "tool_call": true,
+     "tool_call": false,
      "context_window": 128000,
      "max_output_tokens": 32768,
      "input_modalities": [
       "text"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "deepseek.v3-v1:0",
      "name": "DeepSeek-V3.1",
-     "release_date": "2025-09-18",
+     "release_date": "2025-08-21",
      "tool_call": true,
      "context_window": 163840,
      "max_output_tokens": 81920,
@@ -7226,8 +7384,8 @@
     },
     {
      "id": "deepseek.v3.2",
-     "name": "DeepSeek-V3.2",
-     "release_date": "2026-02-06",
+     "name": "DeepSeek V3.2",
+     "release_date": "2025-12-01",
      "tool_call": true,
      "context_window": 163840,
      "max_output_tokens": 81920,
@@ -7237,331 +7395,9 @@
      "status": "active"
     },
     {
-     "id": "eu.anthropic.claude-fable-5",
-     "name": "Claude Fable 5 (EU)",
-     "release_date": "2026-06-09",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-haiku-4-5-20251001-v1:0",
-     "name": "Claude Haiku 4.5 (EU)",
-     "release_date": "2025-10-15",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-opus-4-5-20251101-v1:0",
-     "name": "Claude Opus 4.5 (EU)",
-     "release_date": "2025-11-24",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-opus-4-6-v1",
-     "name": "Claude Opus 4.6 (EU)",
-     "release_date": "2026-02-05",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-opus-4-7",
-     "name": "Claude Opus 4.7 (EU)",
-     "release_date": "2026-04-16",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-opus-4-8",
-     "name": "Claude Opus 4.8 (EU)",
-     "release_date": "2026-05-28",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-opus-5",
-     "name": "Claude Opus 5 (EU)",
-     "release_date": "2026-07-24",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-sonnet-4-5-20250929-v1:0",
-     "name": "Claude Sonnet 4.5 (EU)",
-     "release_date": "2025-09-29",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-sonnet-4-6",
-     "name": "Claude Sonnet 4.6 (EU)",
-     "release_date": "2026-02-17",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "eu.anthropic.claude-sonnet-5",
-     "name": "Claude Sonnet 5 (EU)",
-     "release_date": "2026-06-30",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-fable-5",
-     "name": "Claude Fable 5 (Global)",
-     "release_date": "2026-06-09",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-     "name": "Claude Haiku 4.5 (Global)",
-     "release_date": "2025-10-15",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-opus-4-5-20251101-v1:0",
-     "name": "Claude Opus 4.5 (Global)",
-     "release_date": "2025-11-24",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-opus-4-6-v1",
-     "name": "Claude Opus 4.6 (Global)",
-     "release_date": "2026-02-05",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-opus-4-7",
-     "name": "Claude Opus 4.7 (Global)",
-     "release_date": "2026-04-16",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-opus-4-8",
-     "name": "Claude Opus 4.8 (Global)",
-     "release_date": "2026-05-28",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-opus-5",
-     "name": "Claude Opus 5 (Global)",
-     "release_date": "2026-07-24",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-     "name": "Claude Sonnet 4.5 (Global)",
-     "release_date": "2025-09-29",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-sonnet-4-6",
-     "name": "Claude Sonnet 4.6 (Global)",
-     "release_date": "2026-02-17",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.anthropic.claude-sonnet-5",
-     "name": "Claude Sonnet 5 (Global)",
-     "release_date": "2026-06-30",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.openai.gpt-5.6-luna",
-     "name": "GPT-5.6 Luna (Global)",
-     "release_date": "2026-07-09",
-     "tool_call": true,
-     "context_window": 1050000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.openai.gpt-5.6-sol",
-     "name": "GPT-5.6 Sol (Global)",
-     "release_date": "2026-07-09",
-     "tool_call": true,
-     "context_window": 1050000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "global.openai.gpt-5.6-terra",
-     "name": "GPT-5.6 Terra (Global)",
-     "release_date": "2026-07-09",
-     "tool_call": true,
-     "context_window": 1050000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
      "id": "google.gemma-3-12b-it",
-     "name": "Google Gemma 3 12B",
-     "release_date": "2024-12-01",
+     "name": "Gemma 3 12B IT",
+     "release_date": "2025-03-12",
      "tool_call": false,
      "context_window": 131072,
      "max_output_tokens": 8192,
@@ -7573,9 +7409,9 @@
     },
     {
      "id": "google.gemma-3-27b-it",
-     "name": "Google Gemma 3 27B Instruct",
-     "release_date": "2025-07-27",
-     "tool_call": true,
+     "name": "Gemma 3 27B IT",
+     "release_date": "2025-03-12",
+     "tool_call": false,
      "context_window": 202752,
      "max_output_tokens": 8192,
      "input_modalities": [
@@ -7587,9 +7423,9 @@
     {
      "id": "google.gemma-3-4b-it",
      "name": "Gemma 3 4B IT",
-     "release_date": "2024-12-01",
-     "tool_call": true,
-     "context_window": 128000,
+     "release_date": "2025-03-12",
+     "tool_call": false,
+     "context_window": 131072,
      "max_output_tokens": 4096,
      "input_modalities": [
       "text",
@@ -7598,25 +7434,54 @@
      "status": "active"
     },
     {
-     "id": "jp.anthropic.claude-haiku-4-5-20251001-v1:0",
-     "name": "Claude Haiku 4.5 (JP)",
-     "release_date": "2025-10-15",
+     "id": "google.gemma-4-26b-a4b",
+     "name": "Gemma 4 26B A4B IT",
+     "release_date": "2026-04-02",
      "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
+     "context_window": 262144,
+     "max_output_tokens": 32768,
      "input_modalities": [
       "text",
       "image",
-      "pdf"
+      "video"
      ],
      "status": "active"
     },
     {
-     "id": "jp.anthropic.claude-opus-4-7",
-     "name": "Claude Opus 4.7 (JP)",
-     "release_date": "2026-04-16",
+     "id": "google.gemma-4-31b",
+     "name": "Gemma 4 31B IT",
+     "release_date": "2026-04-02",
      "tool_call": true,
-     "context_window": 1000000,
+     "context_window": 262144,
+     "max_output_tokens": 32768,
+     "input_modalities": [
+      "text",
+      "image",
+      "video"
+     ],
+     "status": "active"
+    },
+    {
+     "id": "google.gemma-4-e2b",
+     "name": "Gemma 4 E2B IT",
+     "release_date": "2026-04-02",
+     "tool_call": true,
+     "context_window": 131072,
+     "max_output_tokens": 8192,
+     "input_modalities": [
+      "text",
+      "image",
+      "audio",
+      "video"
+     ],
+     "status": "active"
+    },
+    {
+     "id": "in.openai.gpt-5.6-luna",
+     "name": "GPT-5.6 Luna (India)",
+     "release_date": "2026-07-09",
+     "tool_call": true,
+     "context_window": 1050000,
      "max_output_tokens": 128000,
      "input_modalities": [
       "text",
@@ -7626,67 +7491,11 @@
      "status": "active"
     },
     {
-     "id": "jp.anthropic.claude-opus-4-8",
-     "name": "Claude Opus 4.8 (JP)",
-     "release_date": "2026-05-28",
+     "id": "in.openai.gpt-5.6-terra",
+     "name": "GPT-5.6 Terra (India)",
+     "release_date": "2026-07-09",
      "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "jp.anthropic.claude-opus-5",
-     "name": "Claude Opus 5 (JP)",
-     "release_date": "2026-07-24",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "jp.anthropic.claude-sonnet-4-5-20250929-v1:0",
-     "name": "Claude Sonnet 4.5 (JP)",
-     "release_date": "2025-09-29",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "jp.anthropic.claude-sonnet-4-6",
-     "name": "Claude Sonnet 4.6 (JP)",
-     "release_date": "2026-02-17",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "jp.anthropic.claude-sonnet-5",
-     "name": "Claude Sonnet 5 (JP)",
-     "release_date": "2026-06-30",
-     "tool_call": true,
-     "context_window": 1000000,
+     "context_window": 1050000,
      "max_output_tokens": 128000,
      "input_modalities": [
       "text",
@@ -7705,7 +7514,10 @@
      "input_modalities": [
       "text"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "meta.llama3-1-8b-instruct-v1:0",
@@ -7717,7 +7529,10 @@
      "input_modalities": [
       "text"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "meta.llama3-3-70b-instruct-v1:0",
@@ -7729,7 +7544,10 @@
      "input_modalities": [
       "text"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "meta.llama4-maverick-17b-instruct-v1:0",
@@ -7737,29 +7555,35 @@
      "release_date": "2025-04-05",
      "tool_call": true,
      "context_window": 1000000,
-     "max_output_tokens": 16384,
+     "max_output_tokens": 8192,
      "input_modalities": [
       "text",
       "image"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "meta.llama4-scout-17b-instruct-v1:0",
      "name": "Llama 4 Scout 17B Instruct",
      "release_date": "2025-04-05",
      "tool_call": true,
-     "context_window": 3500000,
-     "max_output_tokens": 16384,
+     "context_window": 10000000,
+     "max_output_tokens": 8192,
      "input_modalities": [
       "text",
       "image"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "minimax.minimax-m2",
-     "name": "MiniMax M2",
+     "name": "MiniMax-M2",
      "release_date": "2025-10-27",
      "tool_call": true,
      "context_window": 204608,
@@ -7771,7 +7595,7 @@
     },
     {
      "id": "minimax.minimax-m2.1",
-     "name": "MiniMax M2.1",
+     "name": "MiniMax-M2.1",
      "release_date": "2025-12-23",
      "tool_call": true,
      "context_window": 204800,
@@ -7783,8 +7607,8 @@
     },
     {
      "id": "minimax.minimax-m2.5",
-     "name": "MiniMax M2.5",
-     "release_date": "2026-03-18",
+     "name": "MiniMax-M2.5",
+     "release_date": "2026-02-12",
      "tool_call": true,
      "context_window": 196608,
      "max_output_tokens": 98304,
@@ -7796,7 +7620,7 @@
     {
      "id": "mistral.devstral-2-123b",
      "name": "Devstral 2 123B",
-     "release_date": "2026-02-17",
+     "release_date": "2025-12-09",
      "tool_call": true,
      "context_window": 256000,
      "max_output_tokens": 8192,
@@ -7808,7 +7632,7 @@
     {
      "id": "mistral.magistral-small-2509",
      "name": "Magistral Small 1.2",
-     "release_date": "2025-12-02",
+     "release_date": "2025-09-18",
      "tool_call": true,
      "context_window": 128000,
      "max_output_tokens": 40000,
@@ -7821,12 +7645,13 @@
     {
      "id": "mistral.ministral-3-14b-instruct",
      "name": "Ministral 14B 3.0",
-     "release_date": "2024-12-01",
+     "release_date": "2025-12-02",
      "tool_call": true,
      "context_window": 128000,
      "max_output_tokens": 4096,
      "input_modalities": [
-      "text"
+      "text",
+      "image"
      ],
      "status": "active"
     },
@@ -7846,12 +7671,13 @@
     {
      "id": "mistral.ministral-3-8b-instruct",
      "name": "Ministral 3 8B",
-     "release_date": "2024-12-01",
+     "release_date": "2025-12-02",
      "tool_call": true,
      "context_window": 128000,
      "max_output_tokens": 4096,
      "input_modalities": [
-      "text"
+      "text",
+      "image"
      ],
      "status": "active"
     },
@@ -7879,14 +7705,18 @@
       "text",
       "image"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "eu"
+     ]
     },
     {
      "id": "mistral.voxtral-mini-3b-2507",
      "name": "Voxtral Mini 3B 2507",
-     "release_date": "2024-12-01",
+     "release_date": "2025-07-15",
      "tool_call": true,
-     "context_window": 128000,
+     "context_window": 32768,
      "max_output_tokens": 4096,
      "input_modalities": [
       "text",
@@ -7897,9 +7727,9 @@
     {
      "id": "mistral.voxtral-small-24b-2507",
      "name": "Voxtral Small 24B 2507",
-     "release_date": "2025-07-01",
+     "release_date": "2025-07-15",
      "tool_call": true,
-     "context_window": 32000,
+     "context_window": 32768,
      "max_output_tokens": 8192,
      "input_modalities": [
       "text",
@@ -7910,7 +7740,7 @@
     {
      "id": "moonshot.kimi-k2-thinking",
      "name": "Kimi K2 Thinking",
-     "release_date": "2025-12-02",
+     "release_date": "2025-11-06",
      "tool_call": true,
      "context_window": 262143,
      "max_output_tokens": 16000,
@@ -7922,10 +7752,10 @@
     {
      "id": "moonshotai.kimi-k2.5",
      "name": "Kimi K2.5",
-     "release_date": "2026-02-06",
+     "release_date": "2026-01-27",
      "tool_call": true,
      "context_window": 262143,
-     "max_output_tokens": 16000,
+     "max_output_tokens": 16384,
      "input_modalities": [
       "text",
       "image"
@@ -7935,10 +7765,10 @@
     {
      "id": "nvidia.nemotron-nano-12b-v2",
      "name": "NVIDIA Nemotron Nano 12B v2 VL BF16",
-     "release_date": "2024-12-01",
+     "release_date": "2025-10-28",
      "tool_call": true,
      "context_window": 128000,
-     "max_output_tokens": 4096,
+     "max_output_tokens": 8192,
      "input_modalities": [
       "text",
       "image"
@@ -7948,10 +7778,10 @@
     {
      "id": "nvidia.nemotron-nano-3-30b",
      "name": "NVIDIA Nemotron Nano 3 30B",
-     "release_date": "2025-12-23",
+     "release_date": "2025-12-15",
      "tool_call": true,
-     "context_window": 128000,
-     "max_output_tokens": 4096,
+     "context_window": 262144,
+     "max_output_tokens": 8192,
      "input_modalities": [
       "text"
      ],
@@ -7960,10 +7790,10 @@
     {
      "id": "nvidia.nemotron-nano-9b-v2",
      "name": "NVIDIA Nemotron Nano 9B v2",
-     "release_date": "2024-12-01",
+     "release_date": "2025-08-18",
      "tool_call": true,
-     "context_window": 128000,
-     "max_output_tokens": 4096,
+     "context_window": 131072,
+     "max_output_tokens": 8192,
      "input_modalities": [
       "text"
      ],
@@ -8021,7 +7851,11 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "global"
+     ]
     },
     {
      "id": "openai.gpt-5.6-sol",
@@ -8035,7 +7869,11 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "global"
+     ]
     },
     {
      "id": "openai.gpt-5.6-terra",
@@ -8049,7 +7887,29 @@
       "image",
       "pdf"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "global"
+     ]
+    },
+    {
+     "id": "openai.gpt-6-astra",
+     "name": "GPT-6 Astra",
+     "release_date": "2026-09-04",
+     "tool_call": true,
+     "context_window": 1050000,
+     "max_output_tokens": 128000,
+     "input_modalities": [
+      "text",
+      "image",
+      "pdf"
+     ],
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "global"
+     ]
     },
     {
      "id": "openai.gpt-oss-120b",
@@ -8125,8 +7985,8 @@
     },
     {
      "id": "qwen.qwen3-235b-a22b-2507-v1:0",
-     "name": "Qwen3 235B A22B 2507",
-     "release_date": "2025-09-18",
+     "name": "Qwen3 235B-A22B Instruct 2507",
+     "release_date": "2025-07-21",
      "tool_call": true,
      "context_window": 262144,
      "max_output_tokens": 131072,
@@ -8137,10 +7997,9 @@
     },
     {
      "id": "qwen.qwen3-32b-v1:0",
-     "name": "Qwen3 32B (dense)",
-     "release_date": "2025-09-18",
+     "name": "Qwen3 32B",
      "tool_call": true,
-     "context_window": 16384,
+     "context_window": 32768,
      "max_output_tokens": 16384,
      "input_modalities": [
       "text"
@@ -8149,8 +8008,8 @@
     },
     {
      "id": "qwen.qwen3-coder-30b-a3b-v1:0",
-     "name": "Qwen3 Coder 30B A3B Instruct",
-     "release_date": "2025-09-18",
+     "name": "Qwen3-Coder 30B-A3B Instruct",
+     "release_date": "2025-07-31",
      "tool_call": true,
      "context_window": 262144,
      "max_output_tokens": 131072,
@@ -8161,8 +8020,8 @@
     },
     {
      "id": "qwen.qwen3-coder-480b-a35b-v1:0",
-     "name": "Qwen3 Coder 480B A35B Instruct",
-     "release_date": "2025-09-18",
+     "name": "Qwen3-Coder 480B-A35B Instruct",
+     "release_date": "2025-07-23",
      "tool_call": true,
      "context_window": 131072,
      "max_output_tokens": 65536,
@@ -8174,9 +8033,9 @@
     {
      "id": "qwen.qwen3-coder-next",
      "name": "Qwen3 Coder Next",
-     "release_date": "2026-02-06",
+     "release_date": "2026-02-03",
      "tool_call": true,
-     "context_window": 131072,
+     "context_window": 262144,
      "max_output_tokens": 65536,
      "input_modalities": [
       "text"
@@ -8185,10 +8044,10 @@
     },
     {
      "id": "qwen.qwen3-next-80b-a3b",
-     "name": "Qwen/Qwen3-Next-80B-A3B-Instruct",
-     "release_date": "2025-09-18",
+     "name": "Qwen3-Next 80B-A3B Instruct",
+     "release_date": "2025-09-11",
      "tool_call": true,
-     "context_window": 262000,
+     "context_window": 262144,
      "max_output_tokens": 262000,
      "input_modalities": [
       "text"
@@ -8197,10 +8056,10 @@
     },
     {
      "id": "qwen.qwen3-vl-235b-a22b",
-     "name": "Qwen/Qwen3-VL-235B-A22B-Instruct",
-     "release_date": "2025-10-04",
+     "name": "Qwen3 VL 235B A22B Instruct",
+     "release_date": "2025-09-23",
      "tool_call": true,
-     "context_window": 262000,
+     "context_window": 262144,
      "max_output_tokens": 262000,
      "input_modalities": [
       "text",
@@ -8209,208 +8068,43 @@
      "status": "active"
     },
     {
-     "id": "us.anthropic.claude-fable-5",
-     "name": "Claude Fable 5 (US)",
-     "release_date": "2026-06-09",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-     "name": "Claude Haiku 4.5 (US)",
-     "release_date": "2025-10-15",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-opus-4-1-20250805-v1:0",
-     "name": "Claude Opus 4.1 (US)",
+     "id": "us-gov.openai.gpt-oss-120b-1:0",
+     "name": "gpt-oss-120b (GovCloud)",
      "release_date": "2025-08-05",
      "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 32000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-     "name": "Claude Opus 4.5 (US)",
-     "release_date": "2025-11-24",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-opus-4-6-v1",
-     "name": "Claude Opus 4.6 (US)",
-     "release_date": "2026-02-05",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-opus-4-7",
-     "name": "Claude Opus 4.7 (US)",
-     "release_date": "2026-04-16",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-opus-4-8",
-     "name": "Claude Opus 4.8 (US)",
-     "release_date": "2026-05-28",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-opus-5",
-     "name": "Claude Opus 5 (US)",
-     "release_date": "2026-07-24",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-     "name": "Claude Sonnet 4.5 (US)",
-     "release_date": "2025-09-29",
-     "tool_call": true,
-     "context_window": 200000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-sonnet-4-6",
-     "name": "Claude Sonnet 4.6 (US)",
-     "release_date": "2026-02-17",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 64000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.anthropic.claude-sonnet-5",
-     "name": "Claude Sonnet 5 (US)",
-     "release_date": "2026-06-30",
-     "tool_call": true,
-     "context_window": 1000000,
-     "max_output_tokens": 128000,
-     "input_modalities": [
-      "text",
-      "image",
-      "pdf"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.deepseek.r1-v1:0",
-     "name": "DeepSeek-R1 (US)",
-     "release_date": "2025-01-20",
-     "tool_call": true,
      "context_window": 128000,
-     "max_output_tokens": 32768,
+     "max_output_tokens": 16384,
      "input_modalities": [
       "text"
      ],
      "status": "active"
     },
     {
-     "id": "us.meta.llama4-maverick-17b-instruct-v1:0",
-     "name": "Llama 4 Maverick 17B Instruct (US)",
-     "release_date": "2025-04-05",
+     "id": "us-gov.openai.gpt-oss-20b-1:0",
+     "name": "gpt-oss-20b (GovCloud)",
+     "release_date": "2025-08-05",
      "tool_call": true,
-     "context_window": 1000000,
+     "context_window": 128000,
      "max_output_tokens": 16384,
      "input_modalities": [
-      "text",
-      "image"
-     ],
-     "status": "active"
-    },
-    {
-     "id": "us.meta.llama4-scout-17b-instruct-v1:0",
-     "name": "Llama 4 Scout 17B Instruct (US)",
-     "release_date": "2025-04-05",
-     "tool_call": true,
-     "context_window": 3500000,
-     "max_output_tokens": 16384,
-     "input_modalities": [
-      "text",
-      "image"
+      "text"
      ],
      "status": "active"
     },
     {
      "id": "writer.palmyra-x4-v1:0",
      "name": "Palmyra X4",
-     "release_date": "2025-04-28",
+     "release_date": "2024-10-09",
      "tool_call": true,
      "context_window": 122880,
      "max_output_tokens": 8192,
      "input_modalities": [
       "text"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "writer.palmyra-x5-v1:0",
@@ -8422,7 +8116,10 @@
      "input_modalities": [
       "text"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us"
+     ]
     },
     {
      "id": "xai.grok-4.3",
@@ -8448,7 +8145,11 @@
       "text",
       "image"
      ],
-     "status": "active"
+     "status": "active",
+     "inference_profiles": [
+      "us",
+      "global"
+     ]
     },
     {
      "id": "zai.glm-4.7",
@@ -8477,10 +8178,10 @@
     {
      "id": "zai.glm-5",
      "name": "GLM-5",
-     "release_date": "2026-03-18",
+     "release_date": "2026-02-12",
      "tool_call": true,
      "context_window": 202752,
-     "max_output_tokens": 101376,
+     "max_output_tokens": 131072,
      "input_modalities": [
       "text"
      ],

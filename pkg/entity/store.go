@@ -6,6 +6,7 @@ package entity
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -45,6 +46,23 @@ func New[T any](dir string, acc Accessors[T]) *Store[T] {
 // Dir returns the store's entity directory.
 func (s *Store[T]) Dir() string { return s.dir }
 
+// WithLock runs fn while holding the same in-process and sidecar locks used
+// by Create, Update, and Delete for id. Composite stores use this to extend
+// the entity critical section across an authoritative sidecar file without
+// acquiring the non-reentrant entity lock a second time.
+func (s *Store[T]) WithLock(id string, fn func(dataPath string) error) error {
+	if err := validateID(id); err != nil {
+		return err
+	}
+	if fn == nil {
+		return fmt.Errorf("entity: with lock %q: nil callback", id)
+	}
+	mu := fileLock.get(s.path(id))
+	mu.Lock()
+	defer mu.Unlock()
+	return fileutil.WithFlock(s.lockPath(id), func() error { return fn(s.path(id)) })
+}
+
 // path returns the absolute path for an entity's data file.
 func (s *Store[T]) path(id string) string {
 	return filepath.Join(s.dir, id+".json")
@@ -80,7 +98,7 @@ func (s *Store[T]) lockPath(id string) string {
 func (s *Store[T]) load(id string) (*T, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("entity: read %q: %w", id, err)
@@ -154,7 +172,7 @@ func (s *Store[T]) Create(t *T) error {
 	return fileutil.WithFlock(s.lockPath(id), func() error {
 		if _, statErr := os.Stat(s.path(id)); statErr == nil {
 			return fmt.Errorf("entity: create %q: %w", id, ErrAlreadyExists)
-		} else if !os.IsNotExist(statErr) {
+		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return fmt.Errorf("entity: create %q: stat: %w", id, statErr)
 		}
 
@@ -232,7 +250,7 @@ func (s *Store[T]) scanIDs() ([]string, error) {
 func (s *Store[T]) List() (result []T, skipped []string, err error) {
 	ids, err := s.scanIDs()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, nil
 		}
 		return nil, nil, fmt.Errorf("entity: list dir %q: %w", s.dir, err)
@@ -357,7 +375,7 @@ func (s *Store[T]) Delete(id string) error {
 
 	return fileutil.WithFlock(s.lockPath(id), func() error {
 		if err := os.Remove(s.path(id)); err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("entity: delete %q: %w", id, err)

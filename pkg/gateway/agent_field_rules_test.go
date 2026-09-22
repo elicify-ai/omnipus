@@ -47,14 +47,16 @@ func TestSubagent3pForbiddenFieldsDrift(t *testing.T) {
 
 		// Every AgentUpdateRequest field is a pointer (partial-update PATCH
 		// semantics: "field absent" vs "field explicitly set" must be
-		// distinguishable). This holds structurally for the generated type
-		// today — guard rather than silently skip if that ever changes, since
-		// a non-pointer field would make this test's "unset" sentinel
-		// technique invalid.
-		if field.Type.Kind() != reflect.Pointer {
+		// distinguishable) — with one ADR-090 §5.2 exception: `revision` is a
+		// REQUIRED string, not an optional pointer ("absent" is a 400, not
+		// "unset"), so it cannot take a pointer sentinel; its verdict subtest
+		// below runs against the zero value instead. Any OTHER non-pointer
+		// field remains a structural break of this test's sentinel technique.
+		if field.Type.Kind() != reflect.Pointer && name != "revision" {
 			t.Fatalf(
 				"AgentUpdateRequest.%s (json:%q) is not a pointer type — "+
-					"the drift test's zero-value/sentinel technique assumes every field is optional",
+					"the drift test's zero-value/sentinel technique assumes every field is optional "+
+					"(the only sanctioned exception is the required revision precondition)",
 				field.Name, name,
 			)
 		}
@@ -62,8 +64,10 @@ func TestSubagent3pForbiddenFieldsDrift(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			req := gen.AgentUpdateRequest{}
 			reqVal := reflect.ValueOf(&req).Elem()
-			sentinel := reflect.New(field.Type.Elem()) // non-nil pointer to a zero value of the pointee type
-			reqVal.FieldByIndex(field.Index).Set(sentinel)
+			if field.Type.Kind() == reflect.Pointer {
+				sentinel := reflect.New(field.Type.Elem()) // non-nil pointer to a zero value of the pointee type
+				reqVal.FieldByIndex(field.Index).Set(sentinel)
+			}
 
 			_, isForbidden := firstForbiddenSubagent3pField(&req)
 			assert.Equal(t, forbidden[name], isForbidden,

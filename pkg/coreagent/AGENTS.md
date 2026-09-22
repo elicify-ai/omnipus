@@ -1,13 +1,24 @@
 # pkg/coreagent — agent roster and seeding
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestSeedConfig_FreshInstallSeedsCoreGrants$' -p 1 ./pkg/coreagent/`) — the
+fresh-install seeding contract for the roster and its compiled-in skill
+grants. CI is the authority for full-suite results.
+
 ## Agent types — wire names vs persisted constants
 
 Wire taxonomy (`contracts/components/schemas/Agent.yaml`): `Main` (chat
 colleague), `Subagent` (delegation-only worker on the Omnipus engine),
 `subagent_3p` (delegation-only worker on an external CLI: claude-code, codex,
-opencode). The build-in roster (Mia / Jim / Ava / Ray) returns `type: core`
-with `locked: true`, seeded via `SeedConfig`; the legacy `system` value
-survives on the wire for old configs, and `SeedConfig` seeds none.
+opencode). The built-in chat roster (Mia / Jim / Ava / Admin) returns `type: core`
+with `locked: true`. Planner, Researcher and General Purpose are native workers.
+Judge and Plan Supervisor are hidden engine agents with persisted `system` type.
+ADR-090 defines field-level editing: ordinary built-in identity and base prompts
+are fixed, while tool policies, connector assignments and skills are editable.
+Hidden agents have editable instructions and supported model tuning, with fixed
+capabilities. Ray, Explorer and Max are not seeded.
 
 `core.go::ResolveType` is the ONLY place wire names translate to the persisted
 constants (`custom` / `worker`). Those constants have ~110 internal

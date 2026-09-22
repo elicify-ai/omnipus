@@ -46,6 +46,10 @@ import {
   waitForConnected,
 } from './fixtures/selectors';
 import { restoreAdminSession } from './fixtures/admin-api';
+import {
+  installWebrtcDebug,
+  logWebrtcDebug,
+} from './fixtures/webrtc-debug';
 
 /**
  * Record an observation. Attached to the Playwright report AND printed to
@@ -506,6 +510,12 @@ async function waitForViewportInput(page: Page): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('UAT Group C — the live browser panel', () => {
+  // Squad J instrumentation — patch RTCPeerConnection so the first oracle
+  // failure in any UAT case can dump pc/track/stats state. Idempotent.
+  test.beforeEach(async ({ page }) => {
+    await installWebrtcDebug(page);
+  });
+
   test('UAT-C0 — with no browser open yet, the panel says so rather than sitting blank', async ({
     page,
   }, testInfo) => {
@@ -595,6 +605,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     const loaded = await sampleFrame(video);
     await saveFrame(testInfo, 'frame-loaded.png', loaded);
     const lum = meanLuminance(loaded);
+    // Squad J — at the first oracle failure (luminance=0.0 / blank capture),
+    // dump the four debug values the brief asks for so the cause of
+    // "no decoded frames" is recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-13:black-capture');
     expect(
       lum,
       `the captured frame is essentially black (mean luminance ${lum.toFixed(1)}) — every ` +
@@ -652,9 +666,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     expect(
       scrollFps,
       `the decoder produced ${scrollFps.toFixed(2)} fps while the page was scrolling continuously. ` +
-        'Below ~15 fps the panel is recognisably a sequence of stills rather than video — the P0 ' +
+        'The input-pressure policy deliberately limits capture to 15 fps; below that boundary the panel is ' +
+        'recognisably a sequence of stills rather than video — the P0 ' +
         'silent failure this case exists to catch (ADR-061).',
-    ).toBeGreaterThan(15);
+    ).toBeGreaterThanOrEqual(15);
   });
 
   test('UAT-14 — a click lands where you clicked, and the page responds', async ({ page }, testInfo) => {
@@ -677,6 +692,7 @@ test.describe('UAT Group C — the live browser panel', () => {
     await navigateLiveBrowser(page, `${HEROKU}/`);
     await expect(addressBar(page)).toHaveValue(/herokuapp\.com\/?$/, { timeout: 45_000 });
     await page.waitForTimeout(2_000);
+    await waitForViewportInput(page);
 
     const media = await video.evaluate((el) => {
       const v = el as HTMLVideoElement;
@@ -690,6 +706,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     // page. Take it deliberately, on empty space well below the link list, and
     // confirm the panel agrees before measuring anything.
     await clickRemotePoint(page, { x: media.width / 2, y: media.height * 0.92 });
+    // Squad J — at the first oracle failure ("did not put the panel into
+    // You're driving"), dump the four debug values the brief asks for so
+    // the cause is recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-14:not-driving');
     await expect(
       statusChip(page),
       'clicking into the frame did not put the panel into "You\'re driving" — the case cannot ' +
@@ -719,10 +739,20 @@ test.describe('UAT Group C — the live browser panel', () => {
       // reached the page at all. Reporting them as one finding would be useless.
       const afterMiss = await sampleFrame(video);
       const reacted = changedCells(beforeClick, afterMiss, 6);
+      // The panel publishes WHY input is suppressed (data-input-blocked-by on
+      // the dedicated-input root). A click that never reached the page is
+      // otherwise indistinguishable from a broken transport, and reading the
+      // gateway log to tell them apart has cost several rounds.
+      const gate = await page
+        .locator('[data-input-mode="dedicated"]')
+        .first()
+        .getAttribute('data-input-blocked-by')
+        .catch(() => null);
       await saveFrame(testInfo, 'frame-after-missed-click.png', afterMiss);
       throw new Error(
         `the click at remote (${target.x},${target.y}) in a ${media.width}x${media.height} capture ` +
-          `did not open /dropdown — the address bar still reads ` +
+          `did not open /dropdown — the panel's input gate reported ` +
+          `${gate ? `BLOCKED by ${gate}` : 'no blocking reason (gate open)'}, and the address bar still reads ` +
           `${JSON.stringify(await addressBar(page).inputValue())}. The picture ` +
           `${reacted > 0 ? `DID change (${reacted}/64 cells), so the click reached the page and hit ` +
             'the wrong thing — this is UAT-14\'s named silent failure, the picture sitting behind ' +
@@ -809,6 +839,7 @@ test.describe('UAT Group C — the live browser panel', () => {
     // already done so without clicking anything in the picture.
     await navigateLiveBrowser(page, `${HEROKU}/login`);
     await expect(addressBar(page)).toHaveValue(/\/login$/, { timeout: 45_000 });
+    await waitForViewportInput(page);
     const afterOmniboxLabel = (await chip.innerText()).trim();
 
     // Hand it back with the advertised escape (Esc — named on screen, which is
@@ -852,6 +883,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     const frameBox = await browserLiveFrame(page).boundingBox();
     if (!frameBox) throw new Error('the live frame has no bounding box');
     await page.mouse.click(frameBox.x + frameBox.width / 2, frameBox.y + frameBox.height * 0.92);
+    // Squad J — at the first oracle failure ("clicking the picture must
+    // take the wheel"), dump the four debug values the brief asks for so
+    // the cause is recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-15-human:not-driving');
     await expect(chip, 'clicking the picture must take the wheel').toHaveText(/You're driving/, {
       timeout: 20_000,
     });
@@ -963,6 +998,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     );
     if (media.width === 0 || media.height === 0 || media.frames === 0) {
       const panelText = (await browserLivePanel(page).innerText().catch(() => '')).trim();
+      // Squad J — at the first oracle failure (no decoded frames), dump
+      // the four debug values the brief asks for so the cause is
+      // recoverable from the report alone.
+      await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-15-agent:blocked');
       throw new Error(
         'BLOCKED: the live panel never decoded a single frame, so nothing this case measures ' +
           'could ever change — this is a live-view/capture failure, not a handover failure. ' +
@@ -1035,6 +1074,11 @@ test.describe('UAT Group C — the live browser panel', () => {
         JSON.stringify(transcript),
     ).toBe(false);
 
+    // Squad J — at the first oracle failure (agent could not browser_type —
+// the deployed-gateway "browser tools blocked by policy" failure mode),
+// dump the four debug values the brief asks for so the cause is
+// recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-15-agent:policy-block');
     expect(
       agentTyped,
       'after the operator released the wheel the agent was asked to fill a field and the page ' +

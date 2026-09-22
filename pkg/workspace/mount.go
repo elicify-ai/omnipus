@@ -176,7 +176,7 @@ func checkMountNameAvailable(existing []Mount, workDir, name string) error {
 	p := filepath.Join(workDir, name)
 	if _, err := os.Lstat(p); err == nil {
 		return fmt.Errorf("%w: %q already exists in work/", ErrMountNameCollision, name)
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("workspace: check work/ collision for %q: %w", name, err)
 	}
 	return nil
@@ -761,7 +761,7 @@ func DeleteMount(home, id, name string) error {
 		if rmErr := os.Remove(linkPath); rmErr != nil {
 			return fmt.Errorf("workspace: delete mount: remove symlink %s: %w", linkPath, rmErr)
 		}
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("workspace: delete mount: stat symlink %s: %w", linkPath, statErr)
 	}
 

@@ -382,7 +382,11 @@ export function ProviderRow({
   const connected = provider.status === 'connected'
   const signInCapable = isSignInCapable(provider, entry)
   const catalogMode = providerCatalogMode(provider)
-  const subtitle = entry ? catalogSubtitle(entry) : undefined
+  // Issue #800 D2-addendum: reflect the row's CONFIGURED AWS region
+  // (Provider.region, echoed back from a saved ProviderUpdateRequest.region),
+  // not the catalog's static default — a Bedrock row saved as eu-central-1
+  // must not keep reading "...bedrock-runtime.us-east-1.amazonaws.com".
+  const subtitle = entry ? catalogSubtitle(entry, provider.region) : undefined
   const limitRows = buildModelLimitRows(entry, entitlement)
   const badge = statusBadge(provider.status, provider.id, {
     signInCapable,

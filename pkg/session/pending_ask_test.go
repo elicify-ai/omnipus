@@ -17,6 +17,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,7 +60,7 @@ func TestPendingAskDoesNotMoveToGoal(t *testing.T) {
 		_, hasKey := goalOnDisk["pending_ask"]
 		assert.False(t, hasKey, "goal.json must never carry a pending_ask key after the relocation")
 	} else {
-		require.True(t, os.IsNotExist(statErr), "unexpected goal.json read error: %v", statErr)
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "unexpected goal.json read error: %v", statErr)
 	}
 
 	// GetMeta (warm cache) reflects the value under the unchanged field
@@ -95,7 +96,7 @@ func TestPendingAskWrite_FieldGroupIsolation(t *testing.T) {
 	pendingAskPath := filepath.Join(store.BaseDir(), sid, "pending_ask.json")
 
 	_, statErr := os.Stat(pendingAskPath)
-	require.True(t, os.IsNotExist(statErr), "pending_ask.json must not exist before any pending-ask write")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "pending_ask.json must not exist before any pending-ask write")
 
 	askSet := `{"questions":[]}`
 	require.NoError(t, store.SetMeta(sid, MetaPatch{PendingAskJSON: &askSet}))
@@ -103,9 +104,9 @@ func TestPendingAskWrite_FieldGroupIsolation(t *testing.T) {
 	_, statErr = os.Stat(pendingAskPath)
 	require.NoError(t, statErr, "pending_ask.json must be created lazily on first write")
 	_, statErr = os.Stat(goalPath)
-	assert.True(t, os.IsNotExist(statErr), "a PendingAskJSON-only SetMeta must not create goal.json")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a PendingAskJSON-only SetMeta must not create goal.json")
 	_, statErr = os.Stat(loopPath)
-	assert.True(t, os.IsNotExist(statErr), "a PendingAskJSON-only SetMeta must not create loop.json")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a PendingAskJSON-only SetMeta must not create loop.json")
 
 	// Now a goal-only write — must not disturb the pending-ask value already
 	// on disk, and must not rewrite pending_ask.json's content.

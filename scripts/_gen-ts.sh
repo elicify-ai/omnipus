@@ -183,6 +183,138 @@ for (const alias of names) {
 fs.writeFileSync(path, src);
 NODE_SCRIPT
 
+# Post-process: append `.strict()` (unknown-key rejection, mirroring the YAML
+# `additionalProperties: false`) and, where listed, a cross-field `.refine()`
+# to NESTED property-position objects. Same openapi-zod-client v1.18.3 gap as
+# the top-level STRICT_SCHEMAS rewrite above — the tool emits nothing for
+# `additionalProperties: false` — but the nested case cannot ride that awk:
+# it anchors on the `export const Name` declaration head, which a
+# property-position object never has. First such case: the ADR-052 FR-034
+# `behavior` payload inside AcceptanceCriterion / AcceptanceCriterionInput
+# (the two former inverted canaries in src/lib/__adr052__wireContracts.test.ts
+# are ordinary assertions from this rewrite on). Pairs are
+# "<Schema>:<property>". The refine covers cross-field rules the YAML
+# documents in prose (JSON Schema cannot express max_count >= min_count):
+# the predicate must stay semantics-locked to the Go validator the YAML
+# cites — pkg/task/criterion.go::validateCriterionBehavior defaults an
+# absent min_count to 1 BEFORE the comparison, and Zod applies .default()
+# before .refine() runs, so the refine compares against the defaulted
+# min_count.
+NESTED_STRICT_PROPS=${NESTED_STRICT_PROPS:-"AcceptanceCriterion:behavior AcceptanceCriterionInput:behavior"}
+NESTED_REFINE_PROPS=${NESTED_REFINE_PROPS:-"AcceptanceCriterion:behavior AcceptanceCriterionInput:behavior"}
+node - "$STRICT_RAW" "$NESTED_STRICT_PROPS" "$NESTED_REFINE_PROPS" <<'NODE_SCRIPT'
+const fs = require("fs");
+const [path, strictProps, refineProps] = process.argv.slice(2);
+let src = fs.readFileSync(path, "utf8");
+const strictPairs = strictProps.split(/\s+/).filter(Boolean);
+const refinePairs = refineProps.split(/\s+/).filter(Boolean);
+const allPairs = [...new Set([...strictPairs, ...refinePairs])];
+
+// Cross-field refine chains, keyed "<Schema>:<property>". Emission order is
+// .strict() then .refine(), inserted before whatever the generator already
+// chained after the object (e.g. .optional()). Predicate text is
+// generator-owned data (same seam idiom as POLICY_COMMENTS below) — the
+// YAML description remains the contract of record.
+const BEHAVIOR_MAX_MIN = {
+  param: "behavior",
+  predicate: [
+    "behavior.max_count === undefined ||",
+    "behavior.max_count >= behavior.min_count",
+  ],
+  message:
+    "max_count must be >= min_count when present (AcceptanceCriterion.yaml behavior; ADR-052 DS-7 row 6)",
+  path: "max_count",
+};
+const REFINE_CHAINS = {
+  "AcceptanceCriterion:behavior": BEHAVIOR_MAX_MIN,
+  "AcceptanceCriterionInput:behavior": BEHAVIOR_MAX_MIN,
+};
+
+for (const pair of allPairs) {
+  const [schema, prop] = pair.split(":");
+  if (!schema || !prop) {
+    console.error(`nested strict/refine: malformed pair '${pair}' (want <Schema>:<property>)`);
+    process.exit(1);
+  }
+  // Declaration span: `export const <Schema>` to the statement's first `;`
+  // — the generator emits no interior `;` (same assumption the union
+  // satisfies fix-up below makes).
+  const head = new RegExp(`export const ${schema}(?::| =)`).exec(src);
+  if (!head) {
+    console.error(`nested strict/refine: declaration for '${schema}' not found — schema renamed?`);
+    process.exit(1);
+  }
+  const spanEnd = src.indexOf(";", head.index);
+  if (spanEnd === -1) {
+    console.error(`nested strict/refine: unterminated declaration for '${schema}'`);
+    process.exit(1);
+  }
+  const span = src.slice(head.index, spanEnd);
+  // Property anchor: `<prop>: z` (newline- or space-separated) then `.object({`.
+  const anchor = new RegExp(`\\b${prop}:\\s*z\\s*\\.object\\(\\{`).exec(span);
+  if (!anchor) {
+    console.error(`nested strict/refine: property '${prop}' of '${schema}' not found or not an inline object — property renamed/extracted?`);
+    process.exit(1);
+  }
+  const openParen = head.index + anchor.index + anchor[0].indexOf("(");
+  // Find the `)` matching `.object(`'s `(`, skipping double-quoted string
+  // bodies (enum/default literals) so parens inside strings cannot skew the
+  // depth. Inside a string body a backslash escapes the NEXT character —
+  // skip it too, so `\"` cannot end the string early and let a literal
+  // like "x(\"))" shift the insertion point INSIDE the string (exit 0,
+  // silently dropping strict/refine — the 2026-09-18 contract-review
+  // scanner canary demonstrated exactly this).
+  let depth = 0, closeParen = -1, inStr = false;
+  for (let i = openParen; i < spanEnd; i++) {
+    const c = src[i];
+    if (inStr) {
+      // Escaped character (\" or \\) — never terminates the string body.
+      if (c === "\\") { i++; continue; }
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "(") depth++;
+    else if (c === ")") { depth--; if (depth === 0) { closeParen = i; break; } }
+  }
+  if (closeParen === -1) {
+    console.error(`nested strict/refine: unterminated .object( for '${schema}.${prop}'`);
+    process.exit(1);
+  }
+  // Indent = leading whitespace of the line `.object(` sits on — the
+  // generator emits every chain continuation (`.object({`, the closing
+  // `})`, `.optional()`) at that indent, so the appended `.strict()` /
+  // `.refine(...)` lines line up with them.
+  const objectCallIdx = head.index + anchor.index + anchor[0].indexOf(".object(");
+  const objectLineStart = src.lastIndexOf("\n", objectCallIdx) + 1;
+  const indent = src.slice(objectLineStart, objectCallIdx);
+  const parts = [];
+  if (strictPairs.includes(pair)) parts.push(`${indent}.strict()`);
+  if (refinePairs.includes(pair)) {
+    const chain = REFINE_CHAINS[pair];
+    if (!chain) {
+      console.error(`nested strict/refine: no REFINE_CHAINS entry for '${pair}' — add the predicate or drop the pair from NESTED_REFINE_PROPS`);
+      process.exit(1);
+    }
+    parts.push(
+      `${indent}.refine(\n` +
+        `${indent}  (${chain.param}) =>\n` +
+        chain.predicate.map((l) => `${indent}    ${l}`).join("\n") +
+        `,\n` +
+        `${indent}  {\n` +
+        `${indent}    message: ${JSON.stringify(chain.message)},\n` +
+        `${indent}    path: [${JSON.stringify(chain.path)}],\n` +
+        `${indent}  },\n` +
+        `${indent})`
+    );
+  }
+  if (parts.length === 0) continue;
+  src = src.slice(0, closeParen + 1) + "\n" + parts.join("\n") + src.slice(closeParen + 1);
+}
+fs.writeFileSync(path, src);
+console.log(`nested strict/refine applied: ${allPairs.join(", ")}`);
+NODE_SCRIPT
+
 # ── Discriminated-union fix-up (AgentCreateRequest oneOf, 2026-07-03;
 # extended 2026-07-22 for the ADR-053 SessionMessage / DelegateActionRequest
 # / MessageParentRequest inline oneOf+discriminator unions — same ADR-034

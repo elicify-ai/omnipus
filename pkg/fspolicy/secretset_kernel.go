@@ -5,6 +5,7 @@
 package fspolicy
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -359,7 +360,7 @@ func siblingsOutsideOwnBranch(root, workDir string) ([]string, error) {
 			// A chain component that does not exist yet (a workspace whose
 			// work/ dir is created lazily) is not an error: there are no
 			// siblings to deny inside a directory that is not there.
-			if os.IsNotExist(readErr) {
+			if errors.Is(readErr, os.ErrNotExist) {
 				return out, nil
 			}
 			return nil, fmt.Errorf("list %q: %w", current, readErr)

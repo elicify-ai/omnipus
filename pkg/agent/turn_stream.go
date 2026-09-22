@@ -111,8 +111,9 @@ func (ts *turnState) stampStreamerTurnID(streamer bus.Streamer) {
 // root-cause writeup.
 //
 // Uses a type-assertion to an inline interface so bus.Streamer needs no new
-// method — non-webchat streamers (telegram, wecom, sse) are untouched; only
-// wsStreamer implements SetParentSpawnCallID.
+// method. wsStreamer uses the value for nested webchat/replay projection; the
+// channel Manager's external wrapper uses it to contain delegated narration.
+// Streamers without the optional setter remain untouched.
 func (ts *turnState) stampStreamerParentSpawnCallID(streamer bus.Streamer) {
 	if pid, ok := streamer.(interface {
 		SetParentSpawnCallID(parentSpawnCallID string)

@@ -8,14 +8,11 @@ import {
   updateWorkspaceDelegation,
   workspacesQueryKeys,
   isWorker,
-  ApiError,
-  isApiError,
   getCsrfCookie,
   CSRF_HEADER_NAME,
   type Workspace,
   type WorkspaceDelegation,
   type WorkspaceUpdateRequest,
-  type WorkspaceDelegationUpdateRequest,
 } from '@/lib/api'
 import { useAutoSave } from '@/hooks/useAutoSave'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
@@ -47,11 +44,8 @@ import {
 // node to connect; click an edge → modes + depth). [+ Add agent] adds a node
 // (team membership); the node trash removes it (and its edges). Click a node →
 // the existing AgentProfile slide-over edits the GLOBAL agent definition.
-// Every save writes core_team (updateWorkspace) BEFORE edges
-// (updateWorkspaceDelegation) — the delegation PUT validates edge endpoints
-// against the STORED core_team, so a newly-added member must land there first
-// or drawing an edge to it 400s. Backed by the Sprint-3 per-workspace
-// delegation contract.
+// Membership and delegation edits save through one revision-guarded workspace
+// update. A graph-only edit uses the narrower delegation endpoint.
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface WorkspaceTeamTabProps {
@@ -102,6 +96,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
   const [editState, setEditState] = useState<TeamEditState | null>(null)
   const baselineRef = useRef<string>('')
   const hydratedRef = useRef(false)
+  const revisionRef = useRef(workspace.revision)
 
   // D3 residual (2nd site) fix: reactive counterpart to `hydratedRef`,
   // mirroring AgentProfile's `formHydrated` / WorkspaceSettingsTab's
@@ -157,6 +152,7 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     const nextKey = stateKey(next)
     if (!hydratedRef.current) {
       hydratedRef.current = true
+      revisionRef.current = delegation.revision
       baselineRef.current = nextKey
       setEditState(next)
       // D3 fix: flip the reactive readiness flag in the SAME commit the
@@ -172,11 +168,14 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     setEditState((prev) => {
       if (!prev) {
         baselineRef.current = nextKey
+        revisionRef.current = delegation.revision
         return next
       }
       const adopt = stateKey(prev) === baselineRef.current
+      if (!adopt) return prev
       baselineRef.current = nextKey
-      return adopt ? next : prev
+      revisionRef.current = delegation.revision
+      return next
     })
   }, [delegation, workspace.core_team, stateKey])
 
@@ -218,7 +217,33 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
       // propagates to useAutoSave's catch, which surfaces the error via
       // AutoSaveIndicator instead of silently dropping the edit.
       const members = body.members
-      const updatedWorkspace = await updateWorkspace(workspaceId, { core_team: members })
+      const membershipChanged = JSON.stringify([...members].sort()) !== JSON.stringify([...(workspace.core_team ?? [])].sort())
+      const revision = revisionRef.current
+
+      // ADR-090 FR-006: membership and delegation form one candidate state.
+      // When membership changes they must be validated and persisted through
+      // the single workspace mutation. A graph-only edit keeps using the
+      // dedicated route, but carries the same reviewed revision.
+      if (!membershipChanged) {
+        const resp = await updateWorkspaceDelegation(workspaceId, {
+          revision,
+          edges: body.edges,
+        })
+        revisionRef.current = resp.revision
+        queryClient.setQueryData<WorkspaceDelegation>(
+          workspacesQueryKeys.delegation(workspaceId),
+          resp,
+        )
+        baselineRef.current = stateKey(buildTeamEditState(resp, members))
+        return
+      }
+
+      const updatedWorkspace = await updateWorkspace(workspaceId, {
+        revision,
+        core_team: members,
+        delegation: body.edges,
+      })
+      revisionRef.current = updatedWorkspace.revision
 
       // Land the fresh core_team on every cache a consumer might read it from.
       // NOTE: `invalidateQueries({ queryKey: workspacesQueryKeys.list() })` (no
@@ -236,36 +261,22 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
         )
       }
 
-      // F4: core_team is durably saved as of this point. If the edges PUT
-      // below throws, a bare rethrow would surface via AutoSaveIndicator as
-      // an undifferentiated "save failed" message — indistinguishable from
-      // "nothing was saved at all" (e.g. if updateWorkspace itself had
-      // thrown, above). Wrap the error so the message tells the operator
-      // team membership DID land and only the delegation graph didn't. We
-      // still rethrow (never swallow) so useAutoSave's catch marks the save
-      // 'error' and keeps the edit pending/retryable.
-      try {
-        const resp = await updateWorkspaceDelegation(workspaceId, body.edges)
-        // Adopt the server's computed team + edges as the new baseline so the
-        // next refetch reconciles cleanly (no spurious dirty state).
-        queryClient.setQueryData<WorkspaceDelegation>(
-          workspacesQueryKeys.delegation(workspaceId),
-          resp,
-        )
-        baselineRef.current = stateKey(buildTeamEditState(resp, updatedWorkspace.core_team ?? []))
-      } catch (err) {
-        const detail = isApiError(err)
-          ? err.userMessage
-          : err instanceof Error
-            ? err.message
-            : String(err)
-        const message = `Team membership saved, but delegation edges failed: ${detail}`
-        throw isApiError(err)
-          ? new ApiError(err.status, message, { code: err.code, body: err.body, cause: err })
-          : new Error(message, { cause: err })
+      const nextDelegation: WorkspaceDelegation = {
+        revision: updatedWorkspace.revision,
+        persistence_status: updatedWorkspace.persistence_status,
+        activation_status: updatedWorkspace.activation_status,
+        changed_fields: updatedWorkspace.changed_fields,
+        error_stage: updatedWorkspace.error_stage,
+        message: updatedWorkspace.message,
+        workspace_id: workspaceId,
+        edges: updatedWorkspace.delegation ?? body.edges,
+        team: members,
+        default_depth: delegation?.default_depth ?? DEFAULT_DEPTH_FALLBACK,
       }
+      queryClient.setQueryData(workspacesQueryKeys.delegation(workspaceId), nextDelegation)
+      baselineRef.current = stateKey(buildTeamEditState(nextDelegation, members))
     },
-    [workspaceId, queryClient, stateKey],
+    [workspaceId, workspace.core_team, delegation?.default_depth, queryClient, stateKey],
   )
 
   // ── F3 — emergency-flush ordering ────────────────────────────────────────
@@ -328,15 +339,13 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
           console.error(`[WorkspaceTeamTab] beacon flush (${label}) failed:`, err)
         })
 
-    const coreTeamUrl = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`
-    const edgesUrl = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}/delegation`
-    const coreTeamBody: WorkspaceUpdateRequest = { core_team: editState.members }
-    const edgesBody: WorkspaceDelegationUpdateRequest = { edges: buildSaveEdges(editState) }
-
-    // Ordered: edges only fires once the core_team fetch has settled.
-    void putKeepalive(coreTeamUrl, coreTeamBody, 'core_team').then(() =>
-      putKeepalive(edgesUrl, edgesBody, 'edges'),
-    )
+    const workspaceUrl = `/api/v1/workspaces/${encodeURIComponent(workspaceId)}`
+    const body: WorkspaceUpdateRequest = {
+      revision: revisionRef.current,
+      core_team: editState.members,
+      delegation: buildSaveEdges(editState),
+    }
+    void putKeepalive(workspaceUrl, body, 'team and delegation')
   }, [workspaceId, editState])
 
   const {

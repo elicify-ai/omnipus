@@ -88,6 +88,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
     memory_enabled: true,
     ...overrides,
+    revision: overrides.revision ?? '0'.repeat(64),
   }
 }
 
@@ -103,6 +104,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     updated_at: '2025-01-01T00:00:00Z',
     core_team: [],
     ...overrides,
+    revision: overrides.revision ?? '0'.repeat(64),
   }
 }
 
@@ -173,6 +175,41 @@ describe('AgentListScreen — base/worker partition', () => {
     renderScreen()
     expect(await screen.findByText(/invoked by other agents, not chat targets/i)).toBeInTheDocument()
   })
+
+  it('refreshes agent runtime status while the roster remains open', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveRefresh!: (agents: Agent[]) => void
+      vi.mocked(fetchAgents)
+        .mockResolvedValueOnce([makeAgent({ id: 'worker-1', type: 'Subagent', status: 'idle' })])
+        .mockImplementationOnce(() => new Promise<Agent[]>((resolve) => {
+          resolveRefresh = resolve
+        }))
+
+      renderScreen()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(fetchAgents).toHaveBeenCalledTimes(1)
+      expect(screen.queryByText('Running')).not.toBeInTheDocument()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000)
+      })
+      expect(fetchAgents).toHaveBeenCalledTimes(2)
+      await act(async () => {
+        resolveRefresh([makeAgent({ id: 'worker-1', type: 'Subagent', status: 'active' })])
+        await Promise.resolve()
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(screen.getByText('Running')).toBeInTheDocument()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
 })
 
 // Agents-screen IA fix: two independent UAT testers stopped at the (empty)

@@ -2,17 +2,19 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-package gateway
-
-// FR-011 — HandleCompleteOnboarding session-cookie issuance (Wave 2,
-// preview-on-main-listener).
+// rest_onboarding_cookie_test.go — FR-011, session-cookie issuance on
+// HandleCompleteOnboarding. LOCAL-MODE ONLY (ADR-0010 WP5): restored from
+// upstream (merge base 184d724773789513a4a7fd404596115ea4ec55cf) for
+// config.EditionAuthMode() == config.AuthModeLocal, where this route
+// bootstraps the caller's first session — there is none to arrive with, the
+// way there is in platform mode (ADR-0008).
 //
 // BDD (S13): Given a fresh install, When POST /api/v1/onboarding/complete
 // succeeds, Then an omnipus-session cookie bound to the admin username is
 // set (after user-persist) And a subsequent /api/v1/* with it authenticates
 // And When IssueSessionCookie errors Then onboarding returns 500 and is not
 // marked complete.
-// Traces to: docs/internal/specs/preview-on-main-listener-spec.md FR-011.
+package gateway
 
 import (
 	"context"
@@ -33,14 +35,19 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 )
 
-// TestOnboardingIssuesSessionCookie_RoundTrip proves that a successful
-// onboarding both (a) sets the omnipus-session cookie bound to the admin
-// username, with the disk-persisted SessionTokenHash bcrypt-validating
+// loadDiskUsers (gateway.users straight off tmpDir/config.json) is defined
+// once for the package in rest_auth_cookie_test.go — reused here rather
+// than redeclared.
+
+// TestOnboardingIssuesSessionCookie_RoundTrip proves that a successful LOCAL
+// MODE onboarding both (a) sets the omnipus-session cookie bound to the
+// admin username, with the disk-persisted SessionTokenHash bcrypt-validating
 // against the cookie value, and (b) that cookie subsequently authenticates a
-// real /api/v1/* request through the actual checkBearerAuth cookie-fallback
-// path added in Wave 2 (FR-009) — proving the two halves of the feature
-// (onboarding issuance + gateway acceptance) interoperate end to end.
+// real /api/v1/* request through checkBearerAuth's cookie-fallback path —
+// proving the two halves of the feature (onboarding issuance + gateway
+// acceptance) interoperate end to end.
 func TestOnboardingIssuesSessionCookie_RoundTrip(t *testing.T) {
+	withEdition(t, config.EditionCore)
 	tmpDir := t.TempDir()
 	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[]}`)
 	require.NoError(t, os.WriteFile(tmpDir+"/config.json", minimalCfg, 0o600))
@@ -122,6 +129,7 @@ func TestOnboardingIssuesSessionCookie_RoundTrip(t *testing.T) {
 //   - does NOT mark onboarding complete (commitOnboarding/state.json is never
 //     reached — the reservation is released, so a retry is possible).
 func TestOnboardingCookieFailureReturns500(t *testing.T) {
+	withEdition(t, config.EditionCore)
 	orig := issueSessionCookieFn
 	t.Cleanup(func() { issueSessionCookieFn = orig })
 	issueSessionCookieFn = func(

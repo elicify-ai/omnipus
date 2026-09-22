@@ -44,6 +44,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -267,8 +268,7 @@ type JudgeCriteriaResult struct {
 	// only an operator can clear (JudgeMisconfiguredReasonPrefix — unknown
 	// provider, no model, unknown context window, rejected credentials), (c)
 	// its verdict was cut off at the output-token limit
-	// (JudgeOutputTruncatedReasonPrefix), (d) god mode is active
-	// (VerifierGodModeRefusalReasonPrefix), or (e) a concurrent adjudication
+	// (JudgeOutputTruncatedReasonPrefix), or (d) a concurrent adjudication
 	// holds the unit. See verifier_adjudication.go's "Judge-unavailable
 	// classification" section (UAT E-7).
 	Unavailable bool
@@ -1045,9 +1045,48 @@ func judgeBackoffDuration(attemptIdx int) time.Duration {
 
 func (al *AgentLoop) judgeBackoffWait(ctx context.Context, attemptIdx int, reason string) error {
 	d := judgeBackoffDuration(attemptIdx)
+	if err := al.errIfJudgeRetryCannotFit(ctx, d); err != nil {
+		return err
+	}
 	logger.WarnCF("agent", "judge: unavailable, backing off before retry",
 		map[string]any{"reason": reason, "backoff_ms": d.Milliseconds()})
 	return judgeSleepFn(ctx, d)
+}
+
+// errIfJudgeRetryCannotFit refuses a D7 retry when the caller's remaining
+// deadline cannot host the backoff PLUS one full judgeTurnTimeout.
+//
+// WHY. JudgeCriteria retries forever until ctx dies (D7). A plan/goal round
+// wraps that call in planJudgeRoundTimeout (10 min). One verifier turn is
+// itself bounded at judgeTurnTimeout (default 420 s). After a turn that used
+// the full 420 s, ~180 s of round remain — not enough for another 420 s
+// turn. The leftover used to start a doomed short turn (the 120 s window
+// UAT E-14 proved cuts a live Judge stream off), then return Unavailable at
+// the round deadline, so the plan engine's own retry never saw a full-budget
+// turn. Returning here lets the caller abandon the round while the plan
+// engine can still start a fresh one.
+//
+// A ctx with no deadline is unbounded: retry as before.
+func (al *AgentLoop) errIfJudgeRetryCannotFit(ctx context.Context, backoff time.Duration) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil
+	}
+	need := al.judgeTurnTimeout() + backoff
+	remaining := time.Until(deadline)
+	if remaining >= need {
+		return nil
+	}
+	logger.WarnCF("agent",
+		"judge: remaining round time cannot fit another full turn plus backoff; not retrying",
+		map[string]any{
+			"remaining_ms": remaining.Milliseconds(),
+			"need_ms":      need.Milliseconds(),
+		})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return errors.New("judge retry would exceed the remaining round deadline")
 }
 
 // judgeRubricFromConfig reads a verifier agent's rubric — now its SOUL

@@ -149,6 +149,47 @@ func TestServeWeb_RealStaticSite_IndexHTML(t *testing.T) {
 		"index.html must be served with text/html Content-Type")
 }
 
+// TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet verifies that the CSP on
+// a static preview document permits the browser to apply a stylesheet served
+// from the same preview origin. Fetching style.css successfully is not enough:
+// browsers discard it when style-src omits 'self'.
+func TestServeWeb_RealStaticSite_CSPAllowsOwnStylesheet(t *testing.T) {
+	api, ss := newServeWebTestAPI(t)
+
+	workDir := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, "index.html"),
+		[]byte(`<!doctype html><link rel="stylesheet" href="style.css"><main>Styled preview</main><script src="app.js"></script>`),
+		0o644,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workDir, "style.css"),
+		[]byte(`@font-face { font-family: Preview; src: url("preview.woff2"); } main { color: rebeccapurple; }`),
+		0o644,
+	))
+
+	token, _, err := ss.Register("site-agent-csp", workDir, time.Hour)
+	require.NoError(t, err)
+
+	rec := getFromAPI(api, "/preview/site-agent-csp/"+token+"/")
+	require.Equal(t, http.StatusOK, rec.Code)
+	csp := rec.Header().Get("Content-Security-Policy")
+	require.NotEmpty(t, csp, "static preview response must carry a CSP header")
+	assert.Equal(t, []string{"'none'"}, cspDirectiveSources(t, csp, "default-src"))
+	assert.Equal(t, []string{"'self'", "'unsafe-inline'"}, cspDirectiveSources(t, csp, "style-src"),
+		"same-origin linked stylesheets must be allowed without admitting third-party styles")
+	assert.Equal(t, []string{"'self'", "'unsafe-inline'"}, cspDirectiveSources(t, csp, "script-src"),
+		"same-origin static bundles must be allowed without admitting third-party scripts")
+	assert.Equal(t, []string{"'none'"}, cspDirectiveSources(t, csp, "worker-src"),
+		"script-src must not become the fallback permission for workers")
+	assert.Equal(t, []string{"'self'"}, cspDirectiveSources(t, csp, "font-src"),
+		"same-origin fonts must be allowed without admitting data or third-party sources")
+	assert.Equal(t, []string{"'self'", "data:", "blob:"}, cspDirectiveSources(t, csp, "img-src"),
+		"the existing local and embedded image policy must remain unchanged")
+	assert.Equal(t, []string{"'self'"}, cspDirectiveSources(t, csp, "connect-src"),
+		"same-origin data requests must remain allowed without admitting external connections")
+}
+
 // TestServeWeb_RealStaticSite_AppJS verifies that app.js is served with the
 // correct application/javascript Content-Type.
 //

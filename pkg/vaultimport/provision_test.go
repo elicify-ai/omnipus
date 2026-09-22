@@ -7,6 +7,7 @@
 package vaultimport
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -445,7 +446,7 @@ views:
 			t.Fatalf("a type whose base names no usable property must not be provisioned: %+v", p)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(records.SchemaDir(root), "bare-thing.yaml")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(records.SchemaDir(root), "bare-thing.yaml")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("no schema file should have been written for `bare-thing` (stat err = %v)", err)
 	}
 	// The schema set must still load — the point of the guard.
@@ -486,7 +487,7 @@ views:
 		}
 	}
 	outside := filepath.Join(filepath.Dir(root), "pwned.yaml")
-	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+	if _, err := os.Stat(outside); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a file was written outside the vault at %s", outside)
 	}
 }

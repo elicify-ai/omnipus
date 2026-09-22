@@ -223,7 +223,7 @@ func TestSave_WithColonInKey(t *testing.T) {
 
 	// The file on disk should use hex-encoded name.
 	expectedFile := filepath.Join(tmpDir, hex.EncodeToString([]byte(key))+".json")
-	if _, err := os.Stat(expectedFile); os.IsNotExist(err) {
+	if _, err := os.Stat(expectedFile); errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected session file %s to exist", expectedFile)
 	}
 
@@ -257,7 +257,7 @@ func TestSave_RejectsPathTraversal(t *testing.T) {
 		t.Fatalf("Save(\"foo/bar\") after sanitize should succeed: %v", err)
 	}
 	expectedHex := hex.EncodeToString([]byte("foo/bar"))
-	if _, err := os.Stat(filepath.Join(tmpDir, expectedHex+".json")); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(tmpDir, expectedHex+".json")); errors.Is(err, os.ErrNotExist) {
 		t.Errorf("expected %s.json in storage (hex-encoded from foo/bar)", expectedHex)
 	}
 }
@@ -293,7 +293,7 @@ func TestWriteMetaLocked_PendingAskDiffDispatch(t *testing.T) {
 
 	goalPath := filepath.Join(store.BaseDir(), sid, "goal.json")
 	_, statErr = os.Stat(goalPath)
-	assert.True(t, os.IsNotExist(statErr), "writeMetaLocked must NOT create goal.json for a PendingAskJSON-only diff")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "writeMetaLocked must NOT create goal.json for a PendingAskJSON-only diff")
 
 	onDisk, err := u5ReadPendingAskFile(filepath.Join(store.BaseDir(), sid))
 	require.NoError(t, err)
@@ -697,8 +697,7 @@ func TestAppendTranscriptStrict_UnknownSession_ErrorsAndCreatesNothing(t *testin
 
 	sessionDir := filepath.Join(store.BaseDir(), unknownID)
 	_, statErr := os.Stat(sessionDir)
-	require.Truef(t, os.IsNotExist(statErr),
-		"AppendTranscriptStrict MUST create no directory for an unknown session — os.Stat(%q) returned err=%v", sessionDir, statErr)
+	require.Truef(t, errors.Is(statErr, os.ErrNotExist), "AppendTranscriptStrict MUST create no directory for an unknown session — os.Stat(%q) returned err=%v", sessionDir, statErr)
 }
 
 // TestAppendTranscript_StrictAfterFR002_MatchesAppendTranscriptStrict is the
@@ -731,13 +730,12 @@ func TestAppendTranscript_StrictAfterFR002_MatchesAppendTranscriptStrict(t *test
 
 	sessionDir := filepath.Join(store.BaseDir(), unknownID)
 	_, statErr := os.Stat(sessionDir)
-	require.Truef(t, os.IsNotExist(statErr),
-		"AppendTranscript must create NO directory for an unknown session (os.Stat(%q) err=%v) — "+
-			"FR-002 deleted the orphan-create branch this test used to pin as a defect", sessionDir, statErr)
+	require.Truef(t, errors.Is(statErr, os.ErrNotExist), "AppendTranscript must create NO directory for an unknown session (os.Stat(%q) err=%v) — "+
+		"FR-002 deleted the orphan-create branch this test used to pin as a defect", sessionDir, statErr)
 
 	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
 	_, statErr2 := os.Stat(transcriptPath)
-	require.True(t, os.IsNotExist(statErr2), "no transcript.jsonl may be written for an unknown session")
+	require.True(t, errors.Is(statErr2, os.ErrNotExist), "no transcript.jsonl may be written for an unknown session")
 
 	// FR-002's own text: AppendTranscriptStrict is "a name, not a second
 	// behavior" — both entry points must now agree on this exact input.
@@ -800,7 +798,7 @@ func TestAppendTranscriptStrict_StatsThrottled(t *testing.T) {
 	// GREEN 1: stats.json must NOT exist yet — the delta is in-memory only.
 	statsPath := filepath.Join(store.BaseDir(), sessionID, "stats.json")
 	_, statErr := os.Stat(statsPath)
-	assert.True(t, os.IsNotExist(statErr), "stats.json must not exist immediately after AppendTranscriptStrict — the FR-061 throttle must apply here too")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "stats.json must not exist immediately after AppendTranscriptStrict — the FR-061 throttle must apply here too")
 
 	// GREEN 2: the cache is already current (GetMeta never touches disk on a
 	// cache hit) — a caller reading back through the store sees the update
@@ -878,7 +876,7 @@ func TestAppendTranscriptStrict_SessionIDResolutionDataset(t *testing.T) {
 			if r.id != "" && r.id != "../escape" {
 				sessionDir := filepath.Join(store.BaseDir(), r.id)
 				_, statErr := os.Stat(sessionDir)
-				assert.Truef(t, os.IsNotExist(statErr), "id %q must create no directory", r.id)
+				assert.Truef(t, errors.Is(statErr, os.ErrNotExist), "id %q must create no directory", r.id)
 			}
 		})
 	}
@@ -902,7 +900,7 @@ func TestAppendTranscriptStrict_SessionIDResolutionDataset(t *testing.T) {
 
 		transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
 		_, statErr := os.Stat(transcriptPath)
-		assert.True(t, os.IsNotExist(statErr), "no transcript.jsonl may be written into the corrupt directory")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "no transcript.jsonl may be written into the corrupt directory")
 	})
 
 	t.Run("row7_deleted_between_resolve_and_append", func(t *testing.T) {
@@ -915,7 +913,7 @@ func TestAppendTranscriptStrict_SessionIDResolutionDataset(t *testing.T) {
 		require.Error(t, err, "a deleted session id must not be silently re-created by a subsequent strict append")
 
 		_, statErr := os.Stat(filepath.Join(store.BaseDir(), meta.ID))
-		assert.True(t, os.IsNotExist(statErr), "AppendTranscriptStrict must not resurrect a deleted session's directory")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "AppendTranscriptStrict must not resurrect a deleted session's directory")
 	})
 }
 

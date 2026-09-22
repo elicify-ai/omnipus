@@ -3,6 +3,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -833,8 +834,7 @@ func TestDeleteSession_Success(t *testing.T) {
 	// Then — no error and directory is gone.
 	require.NoError(t, err, "DeleteSession must succeed for an existing session")
 	_, statErr = os.Stat(sessionDir)
-	assert.True(t, os.IsNotExist(statErr),
-		"session directory must be removed after DeleteSession; stat error: %v", statErr)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "session directory must be removed after DeleteSession; stat error: %v", statErr)
 }
 
 // TestDeleteSession_DifferentSessions verifies that deleting one session does not
@@ -863,7 +863,7 @@ func TestDeleteSession_DifferentSessions(t *testing.T) {
 
 	// Session 1's dir must be gone.
 	_, statErr := os.Stat(filepath.Join(store.baseDir, id1))
-	assert.True(t, os.IsNotExist(statErr), "deleted session directory must not exist")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "deleted session directory must not exist")
 
 	// Session 2's dir must still be present.
 	_, statErr = os.Stat(dir2)
@@ -1002,12 +1002,11 @@ func TestDeleteSession_CascadeDeletesUploads_SharedStore(t *testing.T) {
 
 	// The session directory must be gone.
 	_, statErr := os.Stat(filepath.Join(sessionsDir, sessionID))
-	assert.True(t, os.IsNotExist(statErr), "session dir must be removed after DeleteSession")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "session dir must be removed after DeleteSession")
 
 	// The uploads directory must also be gone (cascade-delete, N-B fix).
 	_, uploadsStatErr := os.Stat(uploadsDir)
-	assert.True(t, os.IsNotExist(uploadsStatErr),
-		"uploads dir at <home>/uploads/<sessionID> must be removed by cascade-delete (N-B fix)")
+	assert.True(t, errors.Is(uploadsStatErr, os.ErrNotExist), "uploads dir at <home>/uploads/<sessionID> must be removed by cascade-delete (N-B fix)")
 }
 
 // TestDeleteSession_CascadeDeletesUploads_PerAgentStore verifies that DeleteSession
@@ -1048,13 +1047,11 @@ func TestDeleteSession_CascadeDeletesUploads_PerAgentStore(t *testing.T) {
 
 	// The correct uploads directory must be removed (N-B fix).
 	_, correctStatErr := os.Stat(correctUploadsDir)
-	assert.True(t, os.IsNotExist(correctStatErr),
-		"uploads at <home>/uploads/<sessionID> must be removed by cascade-delete")
+	assert.True(t, errors.Is(correctStatErr, os.ErrNotExist), "uploads at <home>/uploads/<sessionID> must be removed by cascade-delete")
 
 	// The wrong path must never have been created or touched.
 	_, wrongStatErr := os.Stat(wrongUploadsDir)
-	assert.True(t, os.IsNotExist(wrongStatErr),
-		"<home>/agents/<id>/uploads/<sessionID> must not be touched — wrong path for uploads")
+	assert.True(t, errors.Is(wrongStatErr, os.ErrNotExist), "<home>/agents/<id>/uploads/<sessionID> must not be touched — wrong path for uploads")
 }
 
 // TestClearAll_RemovesSessionsContextAndUploads verifies the core destructive
@@ -1115,14 +1112,14 @@ func TestClearAll_RemovesSessionsContextAndUploads(t *testing.T) {
 
 	for _, m := range allMetas {
 		_, statErr = os.Stat(filepath.Join(store.BaseDir(), m.ID))
-		assert.True(t, os.IsNotExist(statErr), "session dir for %s must be removed", m.ID)
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "session dir for %s must be removed", m.ID)
 	}
 
 	_, statErr = os.Stat(contextFile)
-	assert.True(t, os.IsNotExist(statErr), "meta1's .context/<id>.jsonl must be removed")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "meta1's .context/<id>.jsonl must be removed")
 
 	_, statErr = os.Stat(uploadsDir)
-	assert.True(t, os.IsNotExist(statErr), "meta2's uploads/<id>/ dir must be removed")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "meta2's uploads/<id>/ dir must be removed")
 }
 
 // TestClearAll_PreservesContextDirItself verifies the exact skip condition in
@@ -1170,7 +1167,7 @@ func TestClearAll_PreservesContextDirItself(t *testing.T) {
 	// The matching context file for the removed session must be gone.
 	matchingFile := filepath.Join(contextDir, meta1.ID+".jsonl")
 	_, statErr = os.Stat(matchingFile)
-	assert.True(t, os.IsNotExist(statErr), "matching context file for removed session must be gone")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "matching context file for removed session must be gone")
 
 	// The unrelated stray file must be untouched.
 	strayData, readErr := os.ReadFile(strayFile)
@@ -1305,7 +1302,7 @@ func TestClearAll_ContinuesPastRemovalFailure(t *testing.T) {
 	// The two good directories must be gone.
 	for _, m := range []*UnifiedMeta{metaGood1, metaGood2} {
 		_, statErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
-		assert.True(t, os.IsNotExist(statErr), "removable session dir for %s must be gone", m.ID)
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "removable session dir for %s must be gone", m.ID)
 	}
 }
 
@@ -1375,6 +1372,6 @@ func TestClearAll_ContinuesPastRemovalFailure_InjectedError(t *testing.T) {
 	// os.RemoveAll passthrough in the stub).
 	for _, m := range []*UnifiedMeta{metaGood1, metaGood2} {
 		_, statErr := os.Stat(filepath.Join(store.BaseDir(), m.ID))
-		assert.True(t, os.IsNotExist(statErr), "unaffected session dir for %s must be gone", m.ID)
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "unaffected session dir for %s must be gone", m.ID)
 	}
 }

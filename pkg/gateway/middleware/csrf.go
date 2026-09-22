@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/gateway/pathredact"
 )
 
@@ -63,28 +64,10 @@ const CSRFHeaderName = "X-Csrf-Token"
 // csrfTokenBytes is the entropy of a fresh token (256 bits).
 const csrfTokenBytes = 32
 
-// defaultExemptPaths are the bootstrap / operational routes bypassed by the
-// gate when the caller has NOT supplied any WithExemptPath / WithExemptPaths /
-// WithDefaultExempts option. Calling CSRFMiddleware() with no options yields
-// this default set.
+// defaultOperationalExemptPaths are the operational routes exempt in EVERY
+// mode, appended to whichever bootstrap/cookie-issuer set defaultExemptPaths
+// returns below.
 //
-// Invariant: every path in this set that is a POST/PUT/PATCH/DELETE MUST
-// call IssueCSRFCookie on successful response. The exemption exists because
-// those endpoints ARE the cookie-issuing path — requiring a pre-existing
-// cookie on them would be a circular dependency (chicken-and-egg: no cookie
-// exists until the handler runs). If you add a path here, wire IssueCSRFCookie
-// into the success branch of the handler. If you remove IssueCSRFCookie from
-// one of these handlers, remove the entry here too so the gate still applies.
-//
-// Bootstrap / cookie-issuer endpoints (DO reach the REST mux and thus DO pass
-// through this middleware):
-//   - /api/v1/onboarding/complete — called on fresh install before any auth
-//     exists. Issues the cookie so the SPA's first post-onboarding request
-//     can pass the gate.
-//   - /api/v1/auth/login — the SPA reaches this with no cookie on first load
-//     of an existing install (refresh, new tab). Issues the cookie on 200.
-//
-// Operational endpoints (/health, /ready, /reload):
 //   - These are defense-in-depth for the case where a future refactor mounts
 //     these on the REST mux. Currently they are served on the separate
 //     health-server mux (pkg/health/server.go) and this gate never runs for
@@ -93,13 +76,101 @@ const csrfTokenBytes = 32
 //     trigger still function without a rebuild of the middleware chain.
 //
 // Plan reference: temporal-puzzling-melody.md §1, PR-H.
-var defaultExemptPaths = []string{
-	"/api/v1/onboarding/complete",
-	"/api/v1/onboarding/probe-provider",
-	"/api/v1/auth/login",
+var defaultOperationalExemptPaths = []string{
 	"/health",
 	"/ready",
 	"/reload",
+}
+
+// defaultExemptPaths returns the bootstrap / operational routes bypassed by
+// the gate when the caller has NOT supplied any WithExemptPath /
+// WithExemptPaths / WithDefaultExempts option. Calling CSRFMiddleware() with
+// no options yields this default set — which is why it is production's own
+// posture (pkg/gateway/gateway_boot.go calls CSRFMiddleware with no exempt
+// options at all).
+//
+// The bootstrap/cookie-issuer half is composed from config.EditionAuthMode()
+// (ADR-0010 WP2 auth-mode seam): the two modes are mutually exclusive on any
+// one binary, so exactly one of these lists is ever live. This package cannot
+// import pkg/gateway's auth_mode.go (that would cycle — gateway imports
+// middleware, not the reverse), so the two mode-specific lists below are kept
+// in lockstep with pkg/gateway/auth_mode.go's authMode.csrfExemptPaths by
+// pkg/gateway/auth_mode_test.go, not by a shared Go value.
+//
+// Invariant: every path in either mode's list that is a POST/PUT/PATCH/DELETE
+// MUST call IssueCSRFCookie on successful response. The exemption exists
+// because those endpoints ARE the cookie-issuing path — requiring a
+// pre-existing cookie on them would be a circular dependency (chicken-and-egg:
+// no cookie exists until the handler runs). If you add a path here, wire
+// IssueCSRFCookie into the success branch of the handler. If you remove
+// IssueCSRFCookie from one of these handlers, remove the entry here too so
+// the gate still applies.
+//
+// Local mode (core edition) — upstream's own bootstrap set, restored exactly
+// as the engine merge base had it:
+//   - /api/v1/auth/login — the SPA reaches this with no cookie on first load
+//     of an existing install (refresh, new tab). Issues the cookie on 200.
+//   - /api/v1/onboarding/complete, /api/v1/onboarding/probe-provider — local
+//     mode runs onboarding BEFORE any session exists (the FR-050 pre-auth
+//     window), so both are withOptionalAuth and both issue the cookie on
+//     their own first success. See auth_mode.go's localAuthMode for the
+//     route-wrapper half of this same property.
+//
+// Platform mode (desktop, hosted) — the omnipus.ai sign-in's own bootstrap
+// set:
+//   - /api/v1/auth/platform/start — the SPA reaches this with no cookie on
+//     first load of an existing install (refresh, new tab), because it is the
+//     first thing a SIGNED-OUT user's screen calls. Issues the cookie on 200.
+//
+// NOT exempt in platform mode, and deliberately so: /api/v1/onboarding/complete
+// and /api/v1/onboarding/probe-provider. BOTH were listed here while onboarding
+// ran before sign-in, and BOTH rationales are now false in the same way.
+//
+// /api/v1/onboarding/complete was exempt because it "issues the cookie so the
+// SPA's first post-onboarding request can pass the gate". It issues no cookie
+// any more — the session and the __Host-csrf cookie are minted at platform
+// sign-in, which happens BEFORE the wizard (ADR-0008 rulings 1 and 2), and the
+// route is withAuth. This file's own rule above says it: if you remove the
+// cookie issuance from one of these handlers, remove the entry here too.
+// Leaving it left an attacker page able to make the victim's browser complete
+// their onboarding with an attacker-chosen provider and API key, writing that
+// key into the victim's encrypted credential store.
+//
+// /api/v1/onboarding/probe-provider was listed here on the stated rationale
+// that it is "called on fresh install, no cookie exists". In platform mode
+// that rationale is simply false — the probe is a withAuth route reached only
+// from inside the wizard, so the caller already holds the session (and the
+// CSRF cookie) that /api/v1/auth/platform/start issued. Leaving the exemption
+// in place left a real hole: while onboarding was incomplete, an attacker page
+// could make the victim's browser POST a probe with the session cookie and no
+// CSRF token, driving an outbound request from the gateway to an
+// attacker-chosen api_base.
+func defaultExemptPaths() []string {
+	var modeSpecific []string
+	switch config.EditionAuthMode() {
+	case config.AuthModeLocal:
+		modeSpecific = []string{
+			"/api/v1/onboarding/complete",
+			"/api/v1/onboarding/probe-provider",
+			"/api/v1/auth/login",
+		}
+	default:
+		// Platform mode, or an unrecognized/empty edition: NO auth route is
+		// exempt by default. The registered sign-in provider declares which of
+		// its routes must be reachable without a CSRF cookie (the start route
+		// that issues it), and the gateway passes those in at boot with
+		// WithExemptPaths — one source, not a literal kept in lockstep here.
+		// An unknown edition registers no auth or onboarding routes at all
+		// (auth_mode.go's activeAuthMode), so this path is inert for it either
+		// way, but it must never default to local mode's WIDER set, which
+		// would exempt onboarding routes a misbuilt binary has no business
+		// exposing.
+		modeSpecific = nil
+	}
+	paths := make([]string, 0, len(modeSpecific)+len(defaultOperationalExemptPaths))
+	paths = append(paths, modeSpecific...)
+	paths = append(paths, defaultOperationalExemptPaths...)
+	return paths
 }
 
 // defaultExemptPrefixes are path PREFIXES exempt from the CSRF check for ALL
@@ -273,7 +344,7 @@ func WithExemptPaths(paths ...string) Option {
 }
 
 // WithDefaultExempts explicitly installs the built-in bootstrap exempt set
-// (/api/v1/onboarding/complete, /api/v1/auth/login, /health, /ready, /reload).
+// (/api/v1/onboarding/complete, /api/v1/auth/platform/start, /health, /ready, /reload).
 // Use this when you want the defaults AND additional custom paths —
 // otherwise passing WithExemptPath alone would drop the defaults.
 //
@@ -284,7 +355,7 @@ func WithDefaultExempts() Option {
 		if c.exempt == nil {
 			c.exempt = make(map[string]struct{})
 		}
-		for _, p := range defaultExemptPaths {
+		for _, p := range defaultExemptPaths() {
 			c.exempt[p] = struct{}{}
 		}
 	}
@@ -354,7 +425,7 @@ func CSRFMiddleware(opts ...Option) func(http.Handler) http.Handler {
 		if cfg.exempt == nil {
 			cfg.exempt = make(map[string]struct{})
 		}
-		for _, p := range defaultExemptPaths {
+		for _, p := range defaultExemptPaths() {
 			cfg.exempt[p] = struct{}{}
 		}
 	}

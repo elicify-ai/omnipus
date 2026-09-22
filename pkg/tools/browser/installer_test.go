@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -282,15 +283,27 @@ func TestInstaller_EnsureChromium_LinuxDownloadsFullChromeByDefault(t *testing.T
 	}
 }
 
-// TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessShell
-// is the graceful-degradation regression: when the manifest carries no
-// "chrome" (full build) entry at all — e.g. a feed that only ships
-// chrome-headless-shell — EnsureChromiumBuild(fullChromeBuild()) must fall
-// back to chrome-headless-shell rather than failing the install outright.
-// This exercises EnsureChromiumBuild's own fallback directly (requesting
-// fullChromeBuild() explicitly) so the assertion holds independent of which
-// build the current platform's selectDownloadBuild() would have picked.
-func TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessShell(t *testing.T) {
+// TestInstaller_SelectDownloadBuild_MissingFromManifest_ReturnsLoudError
+// is the Squad K (founder ruling 2026-09-19) regression: when the
+// chrome-for-testing manifest carries no "chrome" (full build) entry at
+// all — e.g. a feed that only ships chrome-headless-shell — the previously
+// shipped behaviour silently swapped the requested full build for
+// chrome-headless-shell, the gateway booted, the WebRTC panel opened, the
+// encoder never made an SDP offer (headless-shell lacks chrome.tabCapture
+// — capability.go:35-48), the viewer leg got nothing, and the failure
+// surfaced as a downstream symptom 45s later. The defect a silent fallback
+// exists to hide is exactly the defect that must NOT be hidden: the
+// installer must return a loud error so the capability classifier reports
+// not-capable with the real reason, the SPA surfaces it via
+// translateWebRTCFallbackReason, and the operator sees the WARN at the
+// same moment the panel degrades.
+//
+// The chrome-headless-shell entry on the manifest is deliberately still
+// present in the fixture, so the test also proves the function does not
+// silently fall back to it — it returns the loud error even when a
+// usable-looking alternative build is available, because that alternative
+// build cannot satisfy the requested capability (live-view tabCapture).
+func TestInstaller_SelectDownloadBuild_MissingFromManifest_ReturnsLoudError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix-only path layout")
 	}
@@ -311,7 +324,11 @@ func TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessSh
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/manifest", func(w http.ResponseWriter, _ *http.Request) {
-		// Deliberately no cftFullChromeDownloadID key at all.
+		// Deliberately no cftFullChromeDownloadID key at all — a manifest
+		// that only ships chrome-headless-shell. The loud-error contract
+		// must hold even when a usable-looking lighter alternative IS
+		// available, because the lighter alternative cannot satisfy the
+		// requested capability.
 		_, _ = w.Write(manifestFor(t, "131.0.6778.999", platform, map[string]string{
 			cftDownloadID: srv.URL + "/zip",
 		}))
@@ -320,14 +337,17 @@ func TestInstaller_SelectDownloadBuild_MissingFromManifest_FallsBackToHeadlessSh
 
 	root := t.TempDir()
 	got, err := EnsureChromiumBuild(context.Background(), root, fullChromeBuild())
-	if err != nil {
-		t.Fatalf("expected fallback to chrome-headless-shell to succeed, got: %v", err)
+	if err == nil {
+		t.Fatalf("expected loud error when full build is missing from manifest, got success: %q", got)
 	}
-	if !strings.HasSuffix(got, headlessShellBinaryName()) {
-		t.Fatalf("expected the fallback chrome-headless-shell binary path, got %q", got)
+	if !strings.Contains(err.Error(), "manifest missing") || !strings.Contains(err.Error(), cftFullChromeDownloadID) {
+		t.Fatalf("expected error to name the missing build %q, got: %v", cftFullChromeDownloadID, err)
 	}
-	if _, statErr := os.Stat(got); statErr != nil {
-		t.Fatalf("expected the fallback binary to exist on disk: %v", statErr)
+	// And no install happened — the loud error must not have left a partial
+	// build on disk that a subsequent findInstalledBuild could mistakenly
+	// treat as "already installed".
+	if entries, readErr := os.ReadDir(root); readErr == nil && len(entries) > 0 {
+		t.Fatalf("expected empty install root after a loud error, found: %v", entries)
 	}
 }
 
@@ -446,7 +466,7 @@ func TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity(t *te
 	}
 	// No binary must have been extracted anywhere under badZipRoot.
 	expectBadBin := fullBuild.binaryFullPath(filepath.Join(badZipRoot, "131.0.6778.999"), platform)
-	if _, statErr := os.Stat(expectBadBin); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(expectBadBin); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected no binary at %s after a bad-hash rejection, stat err: %v", expectBadBin, statErr)
 	}
 	// No leftover .part-* temp files or the .zip itself either.
@@ -543,7 +563,7 @@ func TestInstaller_ExtractFailure_CleansUpPartialInstall(t *testing.T) {
 	// The build's own extraction subdirectory must actually be gone from
 	// disk, not merely orphaned and silently ignored.
 	buildDir := filepath.Join(root, "131.0.6778.777", build.subdir(platform))
-	if _, statErr := os.Stat(buildDir); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(buildDir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected the partial extraction subdirectory to be removed, stat err: %v", statErr)
 	}
 }
@@ -629,11 +649,12 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	}
 
 	// The manifest below deliberately carries no full-chrome
-	// (cftFullChromeDownloadID) entry, so EnsureChromium's build resolution
-	// ends up fetching chrome-headless-shell either way (directly on
-	// non-linux, or via the "missing from manifest" fallback on linux) —
-	// exercising the integrity check on whichever build is actually
-	// resolved, same as production.
+	// (cftFullChromeDownloadID) entry — Squad K (founder ruling
+	// 2026-09-19) changed EnsureChromium's build resolution to fail
+	// LOUD on that shape rather than silently swap to chrome-headless-shell.
+	// This test still wants to exercise the integrity check on the
+	// headless-shell build, so it asks for that build EXPLICITLY via
+	// EnsureChromiumBuild rather than going through EnsureChromium.
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
@@ -655,9 +676,9 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	withManifestURL(t, srv.URL+"/manifest")
 
 	root := t.TempDir()
-	_, err = EnsureChromium(context.Background(), root)
+	_, err = EnsureChromiumBuild(context.Background(), root, build)
 	if err == nil {
-		t.Fatal("expected EnsureChromium to reject a headerless download, got nil error")
+		t.Fatal("expected EnsureChromiumBuild to reject a headerless download, got nil error")
 	}
 	if !strings.Contains(err.Error(), "X-Goog-Hash") {
 		t.Fatalf("expected an X-Goog-Hash-related rejection error, got: %v", err)
@@ -667,7 +688,7 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	}
 	// No binary must have been extracted anywhere under root.
 	expectBin := build.binaryFullPath(filepath.Join(root, "131.0.6778.999"), platform)
-	if _, statErr := os.Stat(expectBin); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(expectBin); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected no binary at %s after a headerless-download rejection, stat err: %v", expectBin, statErr)
 	}
 }
@@ -689,9 +710,10 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	allowHeaderlessDownloadForTesting = true
 	t.Cleanup(func() { allowHeaderlessDownloadForTesting = prev })
 
-	// No full-chrome manifest entry below -> resolution ends up on
-	// chrome-headless-shell either way (directly on non-linux, or via
-	// fallback on linux).
+	// No full-chrome manifest entry below — Squad K (founder ruling
+	// 2026-09-19) changed EnsureChromium's resolution to fail LOUD on
+	// that shape, so this test now asks for the headless-shell build
+	// EXPLICITLY via EnsureChromiumBuild.
 	build := headlessShellBuild()
 	content := []byte("#!/bin/sh\nexit 0\n")
 	zipBytes := buildZipFixture(t, build, platform, content)
@@ -710,7 +732,7 @@ func TestInstaller_MissingGoogHashHeader_AcceptedWhenExplicitlyOptedIn(t *testin
 	withManifestURL(t, srv.URL+"/manifest")
 
 	root := t.TempDir()
-	got, err := EnsureChromium(context.Background(), root)
+	got, err := EnsureChromiumBuild(context.Background(), root, build)
 	if err != nil {
 		t.Fatalf("expected the headerless download to be accepted under the opt-in, got: %v", err)
 	}

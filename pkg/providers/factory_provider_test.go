@@ -13,6 +13,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	anthropicmessages "github.com/elicify-ai/omnipus/pkg/providers/anthropic_messages"
+	"github.com/elicify-ai/omnipus/pkg/providers/bedrock"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
@@ -135,7 +136,7 @@ func TestCreateProviderFromConfig_ProtocolDispatch(t *testing.T) {
 		},
 		{
 			name:    "DS-3.9 a tier-unsupported row names the catalog's reason",
-			cfg:     config.ModelConfig{Provider: "amazon-bedrock", Model: "anthropic.claude-opus-4"},
+			cfg:     config.ModelConfig{Provider: "cloud-iam-example", Model: "anthropic.claude-opus-4"},
 			wantErr: "cloud-iam",
 		},
 	}
@@ -448,6 +449,39 @@ func TestCreateProviderFromConfig_EmbeddedSnapshotIsTheDefaultSource(t *testing.
 	}
 	if !strings.HasPrefix(got.APIBase(), "https://api.openai.com") {
 		t.Errorf("base URL = %q, want OpenAI's own from the snapshot", got.APIBase())
+	}
+}
+
+// Issue #800 — Bedrock is a normal catalog provider in the default build.
+// Its API key follows the same encrypted-store reference path as every other
+// hosted provider; the factory must construct it without a build tag.
+func TestCreateProviderFromConfig_BedrockDefaultBuild(t *testing.T) {
+	SetCatalog(nil)
+
+	p, modelID, err := CreateProviderFromConfig(&config.ModelConfig{
+		Provider:  "amazon-bedrock",
+		Model:     "anthropic.claude-opus-4-6-v1",
+		APIKeyRef: keyRef(t, "FACTORY_BEDROCK_TEST_KEY"),
+	})
+	if err != nil {
+		t.Fatalf("Bedrock must construct in the default build: %v", err)
+	}
+	got, ok := p.(*bedrock.Provider)
+	if !ok {
+		t.Fatalf("provider = %T, want *bedrock.Provider", p)
+	}
+	if want := "https://bedrock-runtime.us-east-1.amazonaws.com"; got.Endpoint() != want {
+		t.Fatalf("endpoint = %q, want %q", got.Endpoint(), want)
+	}
+	// Region resolution (issue #800): with no row region and no AWS_REGION the
+	// catalog default us-east-1 applies, whose cross-region group is "us". The
+	// embedded amazon-bedrock entry, synced to the published catalog
+	// v2026.9.21.2, lists inference_profiles ["us","eu","au","global"] for this
+	// model, so the region contract sends the "us." profile id. This used to
+	// assert the id verbatim, which held only while the embedded entry was a
+	// trimmed stand-in with no profiles for this model.
+	if want := "us.anthropic.claude-opus-4-6-v1"; modelID != want {
+		t.Fatalf("modelID = %q, want %q (us-east-1 is group us; the catalog lists a us profile)", modelID, want)
 	}
 }
 

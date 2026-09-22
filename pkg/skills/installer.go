@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -38,6 +39,25 @@ type SkillInstaller struct {
 	client      *http.Client
 	githubToken string
 	proxy       string
+}
+
+func (si *SkillInstaller) SkillsRoot() string { return filepath.Join(si.workspace, "skills") }
+
+// UninstallReviewed removes only the package revision the caller reviewed.
+// Comparison and deletion share the same process-wide lock as authoring and
+// marketplace replacement, so a concurrent writer cannot slip between them.
+func (si *SkillInstaller) UninstallReviewed(name, expectedRevision string) error {
+	writer := NewSkillWriter(si.SkillsRoot())
+	return WithMutationLock(writer.Root(), func() error {
+		current, err := writer.SkillRevision(name)
+		if err != nil {
+			return err
+		}
+		if expectedRevision == "" || current != expectedRevision {
+			return fmt.Errorf("%w: reviewed %q, current %q", ErrRevisionConflict, expectedRevision, current)
+		}
+		return si.Uninstall(name)
+	})
 }
 
 // NewSkillInstaller creates a new skill installer.
@@ -368,7 +388,7 @@ func (si *SkillInstaller) Uninstall(skillName string) error {
 		return fmt.Errorf("refusing to uninstall %q: %w", skillName, err)
 	}
 
-	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
+	if _, err := os.Stat(skillDir); errors.Is(err, os.ErrNotExist) {
 		// NOTE: skillName here is always expected to be the skill's stable ID
 		// (the on-disk directory slug) — the SAME identifier SkillsLoader.ListSkills
 		// and list_skills report as "id" (SkillInfo.ID, pkg/skills/loader.go).

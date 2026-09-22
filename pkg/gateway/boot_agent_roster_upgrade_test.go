@@ -4,10 +4,9 @@
 
 package gateway
 
-// boot_agent_roster_upgrade_test.go — an install seeded by an older build,
-// whose stored Worker carries the old seeded goal_claim deny, reaches the
-// fresh-install default (allow) on its next boot, once, through the real boot
-// sequence and real files on disk. Founder decision 2026-09-15, issue #710.
+// boot_agent_roster_upgrade_test.go — boot-sequence goal_claim persistence
+// guarantees, exercised through the real boot seeder and real files on disk.
+// Founder decision 2026-09-15, issue #710 (greenfield: no upgrade migrations).
 
 import (
 	"encoding/json"
@@ -86,63 +85,66 @@ func diskMarkerList(t *testing.T, configPath, key string) []any {
 	return list
 }
 
-// assertSkillMarkersIntact checks the two marker lists stay separate on disk:
-// the skills migrations' markers are still recorded under seeded_skill_grants,
-// and the tool-policy marker never lands there.
+// assertSkillMarkersIntact checks that greenfield installs do not fabricate
+// old skill-migration history, while tool-policy bookkeeping stays in its own
+// marker list.
 func assertSkillMarkersIntact(t *testing.T, configPath string) {
 	t.Helper()
 	skills := diskMarkerList(t, configPath, "seeded_skill_grants")
-	assert.Contains(t, skills, coreagent.SkillsMigrationDefineDone,
-		"the skills migration marker must still be recorded under seeded_skill_grants")
-	assert.Contains(t, skills, coreagent.SkillsMigrationDefineGoalRename,
-		"the skills rename marker must still be recorded under seeded_skill_grants")
+	assert.Empty(t, skills,
+		"greenfield installs must not create legacy skill-migration markers")
 	assert.NotContains(t, skills, coreagent.ToolPolicyUpdateWorkerGoalClaimAllow,
 		"the tool-policy marker must never be written under seeded_skill_grants")
 }
 
-func TestBootRoster_UpgradedInstall_SeededWorkerGoalClaimDenyBecomesAllowOnce(t *testing.T) {
+// boot_agent_roster_upgrade_test.go — greenfield preservation guarantees for
+// goal_claim across boots (founder decision 2026-09-15, issue #710: fresh
+// installs are greenfield, no upgrade migrations). SeedConfig seeds
+// goal_claim=allow on fresh installs (covered by
+// goal_claim_default_allow_test.go); this file pins the OTHER half: an
+// operator-stored override is operator data and must survive every boot
+// untouched, with no one-shot update marker written behind the operator's
+// back. The fixture's name ("upgrade-worker-goal-claim-deny") is historical —
+// it models any install whose stored Worker carries an explicit goal_claim
+// deny.
+func TestBootRoster_StoredGoalClaimOverrides_PreservedAcrossBoots(t *testing.T) {
 	home := copyFixtureHome(t, "upgrade-worker-goal-claim-deny")
 	configPath := filepath.Join(home, "config.json")
 
-	// The fixture really is the old state: the Worker stores the seeded deny,
-	// an operator's own agent stores its own deny, and no marker is recorded.
+	// Precondition: the Worker and an operator's own agent both store an
+	// explicit goal_claim deny, and no marker lists exist.
 	require.Equal(t, config.ToolPolicyDeny, storedAgentGoalClaim(t, home, string(coreagent.IDWorker)))
 	require.Equal(t, config.ToolPolicyDeny, storedAgentGoalClaim(t, home, "ops-bot"))
 	require.Empty(t, diskMarkers(t, configPath))
 
-	// First boot on the new build.
+	// First boot.
 	cfg := loadBootConfig(t, configPath)
 	require.NoError(t, seedAndPersistAgentRoster(cfg, home, configPath))
 
-	assert.Equal(t, config.ToolPolicyAllow, storedAgentGoalClaim(t, home, string(coreagent.IDWorker)),
-		"the Worker's stored seeded deny must be allow on disk after the first boot")
+	assert.Equal(t, config.ToolPolicyDeny, storedAgentGoalClaim(t, home, string(coreagent.IDWorker)),
+		"the Worker's stored goal_claim deny is operator data — a boot must never flip it")
 	assert.Equal(t, config.ToolPolicyDeny, storedAgentGoalClaim(t, home, "ops-bot"),
 		"another agent's explicit deny is operator data and must be left alone")
-	assert.Equal(t, []any{coreagent.ToolPolicyUpdateWorkerGoalClaimAllow}, diskMarkers(t, configPath),
-		"the update marker must be persisted to config.json")
+	assert.Empty(t, diskMarkers(t, configPath),
+		"no goal_claim update marker may be written — the one-shot migration marker is retired; "+
+			"fresh installs simply seed allow")
 	assertSkillMarkersIntact(t, configPath)
 
 	worker, err := agentstore.New(home).Get(string(coreagent.IDWorker))
 	require.NoError(t, err)
 	assert.Equal(t, config.ToolPolicyDeny, worker.Tools.Builtin.Policies["set_goal"],
-		"the update must not touch the Worker's other stored entries")
+		"a boot must not touch the Worker's other stored entries")
 	assert.Equal(t, config.ToolPolicyAsk, worker.Tools.Builtin.Policies["run_task"],
-		"the update must not touch the Worker's other stored entries")
+		"a boot must not touch the Worker's other stored entries")
 
-	// The operator then denies goal_claim on the Worker on purpose.
-	_, err = agentstore.New(home).Update(string(coreagent.IDWorker), func(ag *config.AgentConfig) error {
-		ag.Tools.Builtin.Policies[tools.GoalClaimToolName] = config.ToolPolicyDeny
-		return nil
-	})
-	require.NoError(t, err)
-
-	// Second boot: the marker is on disk, so the operator's deny is kept.
+	// Second boot: the overrides must be just as stable.
 	cfg2 := loadBootConfig(t, configPath)
 	require.NoError(t, seedAndPersistAgentRoster(cfg2, home, configPath))
 
 	assert.Equal(t, config.ToolPolicyDeny, storedAgentGoalClaim(t, home, string(coreagent.IDWorker)),
-		"a deny the operator set after the update must survive later boots")
-	assert.Equal(t, []any{coreagent.ToolPolicyUpdateWorkerGoalClaimAllow}, diskMarkers(t, configPath),
-		"the marker must stay recorded exactly once")
+		"a stored deny must survive every later boot")
+	assert.Equal(t, config.ToolPolicyDeny, storedAgentGoalClaim(t, home, "ops-bot"))
+	assert.Empty(t, diskMarkers(t, configPath),
+		"the marker list must stay absent across boots")
 	assertSkillMarkersIntact(t, configPath)
 }

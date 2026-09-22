@@ -10,6 +10,7 @@ package task
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -214,7 +215,7 @@ func (es *EvidenceStore) List(taskID string) ([]EvidenceRecord, error) {
 	dir := es.taskEvidenceDir(taskID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("task: evidence: list dir: %w", err)

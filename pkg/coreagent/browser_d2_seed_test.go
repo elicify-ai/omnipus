@@ -51,13 +51,14 @@ var d2BrowserVerbs = []string{
 }
 
 // browsingAgents are the seeded agents that hold the browser surface.
-var browsingAgents = []coreagent.CoreAgentID{coreagent.IDJim, coreagent.IDRay, coreagent.IDExplorer, coreagent.IDResearcher}
+var browsingAgents = []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva}
 
-// zeroBrowserAgents hold no browser tool at all and are expected to resolve
-// deny for every one of the six by their own least-privilege default —
-// denyAllThenOverride starts every catalog name at deny and neither names a
-// browser tool.
-var zeroBrowserAgents = []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva}
+// zeroBrowserAgents have explicit ADR-090 browser exclusions, which must
+// remain effective even when the global ceiling permits a browser tool.
+var zeroBrowserAgents = []coreagent.CoreAgentID{
+	coreagent.IDAdmin, coreagent.IDPlanner,
+	coreagent.IDResearcher, coreagent.IDWorker,
+}
 
 // d2Resolve resolves one (agent, tool) pair through the REAL compositor,
 // starting from a real DefaultConfig() + SeedConfig() install: the agent's own
@@ -118,20 +119,19 @@ func TestCoreAgentSeed_UploadIsAskForEveryBrowsingAgent(t *testing.T) {
 	}
 }
 
-// TestCoreAgentSeed_ExplorerResearcherBrowserParity is FR-024. The research
-// tier gets the same browsing surface Jim and Ray get, minus browser_evaluate
-// — and the minus is asserted too, because a parity test that only checked the
-// grants would pass on a build that had quietly widened the carve-out.
-func TestCoreAgentSeed_ExplorerResearcherBrowserParity(t *testing.T) {
-	for _, agent := range []coreagent.CoreAgentID{coreagent.IDExplorer, coreagent.IDResearcher} {
+// TestCoreAgentSeed_ResearcherHasNoBrowserSurface verifies Researcher uses
+// search_web and fetch_url and has no browser surface by default. Every
+// browser verb checked here must resolve Deny.
+func TestCoreAgentSeed_ResearcherHasNoBrowserSurface(t *testing.T) {
+	for _, agent := range []coreagent.CoreAgentID{coreagent.IDResearcher} {
 		for _, tool := range d2BrowserVerbs {
-			if got := d2Resolve(t, agent, tool); got != "allow" {
-				t.Errorf("(%s, %s) resolves %q, want \"allow\" — FR-024 parity with Jim and Ray",
+			if got := d2Resolve(t, agent, tool); got != "deny" {
+				t.Errorf("(%s, %s) resolves %q, want deny — ADR-090 Researcher uses search/fetch, not browser",
 					agent, tool, got)
 			}
 		}
-		if got := d2Resolve(t, agent, "browser_upload_file"); got != "ask" {
-			t.Errorf("(%s, browser_upload_file) resolves %q, want \"ask\"", agent, got)
+		if got := d2Resolve(t, agent, "browser_upload_file"); got != "deny" {
+			t.Errorf("(%s, browser_upload_file) resolves %q, want deny", agent, got)
 		}
 		if got := d2Resolve(t, agent, "browser_evaluate"); got != "deny" {
 			t.Errorf("(%s, browser_evaluate) resolves %q, want \"deny\". The research tier's "+

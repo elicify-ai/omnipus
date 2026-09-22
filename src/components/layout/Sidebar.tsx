@@ -21,6 +21,7 @@ import {
   UserCircle,
   Files,
   FolderOpen,
+  Shield,
 } from '@phosphor-icons/react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useSidebarStore, SIDEBAR_PIN_BREAKPOINT } from '@/store/sidebar'
@@ -54,6 +55,7 @@ import { Wordmark } from '@/components/shared/Wordmark'
 // (Per-workspace work — chat, tasks, calendar, team — lives inside the
 // workspace tabs, not the sidebar.)
 const ASSET_ITEMS = [
+  { to: '/admin/chat', label: 'Admin chat', Icon: Shield },
   { to: '/agents', label: 'Agents', Icon: Robot },
   { to: '/skills', label: 'Skills & Tools', Icon: PuzzlePiece },
   { to: '/connectors', label: 'Connectors', Icon: PlugsConnected },

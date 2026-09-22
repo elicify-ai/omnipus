@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -77,6 +78,26 @@ func (al *AgentLoop) ResolveApprovalToolPolicy(agentID, toolName string) string 
 	// either side fails closed to "deny" inside tools.EffectiveToolPolicy.
 	polCfg, agentType := tools.BuildFallbackPolicyCfg(cfg, agentID)
 	return tools.EffectiveToolPolicy(polCfg, tools.ScopeGeneral, agentType, toolName)
+}
+
+// ResolveRegisteredToolPolicy resolves one tool through the same live policy
+// snapshot used to assemble and execute calls. It deliberately has no config
+// fallback: callers of management inventory must prove a current actor.
+func (al *AgentLoop) ResolveRegisteredToolPolicy(agentID, toolName string) (string, bool) {
+	if al.registry == nil {
+		return string(config.ToolPolicyDeny), false
+	}
+	inst, ok := al.registry.GetAgent(agentID)
+	if !ok || inst == nil {
+		return string(config.ToolPolicyDeny), false
+	}
+	scope := tools.ScopeGeneral
+	if inst.Tools != nil {
+		if tool, found := inst.Tools.Get(toolName); found {
+			scope = tool.Scope()
+		}
+	}
+	return tools.EffectiveToolPolicy(inst.LoadToolPolicy(), scope, inst.AgentType, toolName), true
 }
 
 // SetToolApprover injects the gateway's policy-level approval implementation into
@@ -183,6 +204,18 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 	// care about our tool.
 	livePolicy := al.resolveSingleToolPolicy(ts, toolName)
 
+	// Discovery infrastructure (ToolSearch) is intentionally non-deniable
+	// (user clarification 2026-09-18). Once the filter-time snapshot offered
+	// it, operator Deny/Ask cannot block execution. Live deny still means
+	// the agent is gone or the tool is unregistered. Goal-forcing withholds
+	// the door via the offered-set gate (toolNotOfferedRefusal), not here.
+	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
+		if livePolicy == "deny" {
+			return "deny"
+		}
+		return "allow"
+	}
+
 	// If policy flipped to deny mid-turn, the caller will audit "mid_turn_policy_change".
 	if livePolicy == "deny" && filterTimePolicy != "deny" {
 		return "deny"
@@ -204,16 +237,35 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 // the tool is not found in the agent's registered tools or has no policy
 // entry on either side.
 //
-// The unified `ToolSearch` infra tool used to get an unconditional
-// registration-gated force-allow here (bypassing FilterToolsByPolicy
-// entirely) because no seeded agent named it in its own tool-policy override
-// map — a CLAUDE.md hard-constraint-6 violation. ToolSearch is now seeded
-// "allow" as real, explicit data for every agent (pkg/coreagent/core.go), so
-// it resolves correctly through the same FilterToolsByPolicy call as every
-// other tool below; the force-allow shortcut has been removed.
+// Discovery infrastructure (ToolSearch) is intentionally non-deniable
+// once the agent still exists and the tool is registered (user
+// clarification 2026-09-18). Operator Deny/Ask cannot block it. A
+// missing registry, deleted agent, or unregistered name still denies.
+// Filter-time offered applicability lives in resolveToolPolicyAtExec
+// (absent from the snapshot → deny). Target-tool permissions still
+// resolve through FilterToolsByPolicy below, including mid-turn revoke.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return "deny"
+	}
+	current, exists := registry.GetAgent(ts.agent.ID)
+	if !exists {
+		return "deny"
+	}
+	if tools.ToolManifestTier(toolName) == tools.ManifestInfra {
+		if current.Tools == nil {
+			return "deny"
+		}
+		if _, ok := current.Tools.Get(toolName); !ok {
+			return "deny"
+		}
+		return "allow"
+	}
+	// A running turn retains its loaded definitions across fast publication.
+	// Resolve their authority against the current instance, never the old snapshot.
 	allTools := ts.agent.Tools.GetAll()
-	_, pmap := tools.FilterToolsByPolicy(allTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
+	_, pmap := tools.FilterToolsByPolicy(allTools, current.AgentType, current.LoadToolPolicy())
 	p, ok := pmap[toolName]
 	if !ok {
 		return "deny"

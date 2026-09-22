@@ -66,6 +66,38 @@ var RestartGatedKeys = []config.ConfigKey{
 	// requires a restart (ADR-044, US-6/FR-007).
 	config.GatewayPublicURL,
 	config.ToolsWebServeWarmup,
+	// The omnipus.ai trust anchor (ADR-0008 / ADR-0005 E3).
+	//
+	// CORRECTION (code-review finding 14): these four are NOT restart-gated
+	// in the sense every other entry in this list is. HandlePlatformAuthStart
+	// and HandlePlatformAuthCallback (rest_platform_auth.go) read
+	// cfg.Security.PlatformAuth off a.agentLoop.GetConfig() — the LIVE
+	// config pointer — on every request, not off a.appliedConfig (the
+	// boot-frozen snapshot this file diffs against). And the generic config
+	// file-watcher (gateway.go, executeReload) hot-reloads and SwapConfig's
+	// ANY config.json change, this subtree included; nothing special-cases
+	// security.platform_auth out of that path. So a hand-edit to the trust
+	// anchor takes effect on the watcher's next poll, with no process
+	// restart at all — the opposite of what "restart-gated" promises.
+	//
+	// These four stay in RestartGatedKeys anyway, for a narrower reason than
+	// the one originally written here: it is the only way this endpoint's
+	// diff — and the UI's "restart required" banner — notices an edit to the
+	// trust anchor at all, since appliedConfig is otherwise never compared
+	// against these fields. Read it as "flag this edit for operator
+	// attention", not as "this requires a restart to take effect" — it does
+	// not, and an operator who restarts believing that is the only way to
+	// apply their change is not wrong to restart, but is wrong about why.
+	//
+	// Whether the live/hot-reload read is itself the right posture for a
+	// boot decision this security-sensitive (ADR-0008's own framing) is a
+	// real question this comment does not resolve — it lives with whoever
+	// owns rest_platform_auth.go and the file-watcher reload path, both
+	// outside this file.
+	config.SecurityPlatformAuthIssuer,
+	config.SecurityPlatformAuthClientID,
+	config.SecurityPlatformAuthInstanceID,
+	config.SecurityPlatformAuthKeys,
 }
 
 // pendingRestartEntry is an alias for the generated type — same dotted key

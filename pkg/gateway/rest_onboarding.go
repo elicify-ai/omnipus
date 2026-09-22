@@ -28,6 +28,30 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
+// onboardingOwnerRequiredMsg is the 401 for an unauthenticated
+// POST /onboarding/complete.
+//
+// Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2, spec §0.4
+// FR-OB-060): the omnipus.ai account IS the login, so by the time this route
+// runs the caller already holds the session the platform issued. There is no
+// pre-auth window on this route any more, and nothing here mints authority —
+// which is why the refusal is a plain 401 rather than the 409 the pre-auth
+// window gate returns on the routes that still have one.
+const onboardingOwnerRequiredMsg = "authentication required"
+
+// onboardingAdminRefusedMsg is the 400 for a local-mode `admin` block
+// submitted in platform mode. The caller already holds the session the
+// platform issued (ADR-0008 rulings 1 and 2); accepting the block and
+// silently ignoring it would leave a client believing it created a password
+// that does not exist.
+const onboardingAdminRefusedMsg = "admin is not accepted on this edition"
+
+// The five symbols below are LOCAL-MODE ONLY (ADR-0010 WP5): restored
+// verbatim from upstream (merge base 184d7247) for the auth mode where this
+// route mints the instance's FIRST account, exactly as upstream's does. In
+// platform mode the account already exists — the omnipus.ai sign-in created
+// it — and none of this runs; see validateAdminForMode and
+// writeLocalAdminUser below for the mode dispatch.
 var usernameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$`)
 
 const usernameInvalidMsg = `username must start with an alphanumeric and contain only letters, digits, dots, dashes, and underscores (length 2-63)`
@@ -47,11 +71,7 @@ const usernameInvalidMsg = `username must start with an alphanumeric and contain
 // "cli", nothing in this codebase synthesizes a UserConfig{Username:"admin"}
 // or "system" identity, so there is no collision hazard to guard against —
 // and "admin" is in practice the single most common username a solo
-// operator picks for their own account (it's also what onboarding's own
-// test fixtures use throughout). An earlier version of this map reserved
-// both, which 400'd real onboarding for anyone naming their account
-// "admin" — a regression caught by CI (TestHandleCompleteOnboarding_*
-// failing with 400 instead of 200), not by review.
+// operator picks for their own account.
 var reservedUsernames = map[string]struct{}{
 	"cli": {},
 }
@@ -67,6 +87,12 @@ const reservedUsernameMsg = "this username is reserved and cannot be registered"
 // safeUpdateConfigJSON calls in HandleCompleteOnboarding. Production always
 // resolves to middleware.IssueSessionCookie.
 var issueSessionCookieFn = middleware.IssueSessionCookie
+
+// errOnboardingUsernameTaken is the sentinel the config mutation returns when
+// the requested admin username already exists in gateway.users. See
+// onboardingWindowGate for why this is defence in depth rather than the
+// primary control.
+var errOnboardingUsernameTaken = errors.New("onboarding: username already exists")
 
 // onboardingAuthMethodErrMsg is the 400 for a missing or unrecognized
 // provider.auth_method discriminator.
@@ -99,14 +125,29 @@ type onboardingProviderChoice struct {
 	APIKey   string
 	Model    string
 	Endpoint string
+	// Region is issue #800's own field (Bedrock region contract): the
+	// selected region for a provider whose catalog entry carries `regions`
+	// (catalog.Provider.Regions). Only the api_key variant carries it on
+	// the wire — Bedrock is api_key-only (ADR-053).
+	Region string
+	// Preferences is step 1's name/tone/detail (FR-OB-010..-018), carried in
+	// the same request because onboarding has no per-step persistence.
+	// Optional (WP5, ADR-0010): a body may omit it entirely, in which case
+	// HasPreferences is false and no USER.md write is attempted.
+	Preferences    gen.OnboardingPreferences
+	HasPreferences bool
 }
 
 // decodeOnboardingCompleteBody reads the POST /onboarding/complete body,
 // peeks provider.auth_method, and strictly decodes the provider member into
 // the NAMED generated variant the discriminator selects — never through the
 // union wrapper's As*() accessors (the ADR-034 pattern createAgent uses).
-// It returns the decoded wrapper (for `admin`) plus the variant normalized
-// into onboardingProviderChoice.
+// It returns only the normalized provider choice: the wrapper carries nothing
+// else the handler reads, because the `admin` block that was its other member
+// went with the local credential (ADR-0008 ruling 2). The wrapper is still
+// decoded — strictly — because that decode is what REJECTS a body still
+// sending `admin`, and an out-of-date client must fail loudly rather than have
+// the credentials it sent silently ignored while onboarding succeeds.
 //
 // Behaviour for api_key bodies is byte-for-byte the pre-ADR-068 one apart
 // from the now-required auth_method field: the same 1 MB limit, the same
@@ -171,10 +212,44 @@ func decodeOnboardingCompleteBody(
 		}
 	}
 
-	if err := json.Unmarshal(raw, &body); err != nil {
+	// Strict decode of the WRAPPER, not only of the provider member below: a
+	// top-level field OnboardingCompleteRequest does not carry is a 400
+	// unconditionally, independent of ValidateInbound. `admin` and
+	// `preferences` are both legitimate top-level fields now (WP5, ADR-0010:
+	// `admin` is required in local mode, refused in platform mode — see
+	// validateAdminForMode, which runs AFTER this decode; `preferences` is
+	// optional in both).
+	wrapperDec := json.NewDecoder(bytes.NewReader(raw))
+	wrapperDec.DisallowUnknownFields()
+	if err := wrapperDec.Decode(&body); err != nil {
+		if strings.Contains(err.Error(), "unknown field") {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"field not allowed on the onboarding completion body: %v — "+
+					"see the OnboardingCompleteRequest schema", err))
+			return body, choice, false
+		}
 		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
 		return body, choice, false
 	}
+
+	// preferences is OPTIONAL (WP5): a body may omit it entirely. When
+	// present, the tone/detail enums are enforced HERE, unconditionally —
+	// not only by the inbound schema above, which runs only when
+	// ValidateInbound is on and that setting defaults to FALSE.
+	// encoding/json decodes any string into the generated enum types, and
+	// these two values end up in USER.md, which is concatenated into every
+	// agent's prompt. An unchecked value is a prompt-injection channel, so
+	// an out-of-enum tone or detail is a 400 in every configuration, exactly
+	// like the strict decodes either side of it.
+	if body.Preferences != nil {
+		choice.HasPreferences = true
+		choice.Preferences = *body.Preferences
+		if msg, field, prefsOK := validateOnboardingPreferences(*body.Preferences); !prefsOK {
+			jsonErrField(w, http.StatusBadRequest, msg, field)
+			return body, choice, false
+		}
+	}
+
 	var providerRaw struct { // not-wire-format: decode-only local carrier for the raw provider member
 		Provider json.RawMessage `json:"provider"`
 	}
@@ -233,20 +308,23 @@ func decodeOnboardingCompleteBody(
 	if variant.Endpoint != nil {
 		choice.Endpoint = *variant.Endpoint
 	}
+	if variant.Region != nil {
+		choice.Region = *variant.Region
+	}
 	return body, choice, true
 }
 
-// onboardingClosedMsg is the ONE refusal body POST /onboarding/complete emits
-// for every closed-window reason — already complete, an authentication
-// authority already exists, or the onboarding state is unknown.
+// onboardingClosedMsg is the refusal body POST /onboarding/complete emits
+// when the route will not proceed.
 //
-// It is deliberately identical across all three. The divergent state this
-// endpoint's authority gate exists to defend against (users in config.json,
-// onboarding.completed=false in state.json) is otherwise invisible to an
-// anonymous caller: GET /api/v1/state would report onboarding_complete=false,
-// so a reason-specific message here would be the one oracle telling an
-// attacker "this instance is in the interesting state". The reason is
-// recorded where it belongs — the audit log and the server log.
+// The message is deliberately ONE string across every reason, in both modes
+// (anti-oracle: see probeWindowClosedMsg below for the same reasoning). In
+// platform mode the route runs behind a session (ADR-0008 ruling 2), so the
+// one conflict a signed-in caller can genuinely hit is an instance that is
+// already set up. In local mode (WP5, ADR-0010) the pre-auth window gate is
+// restored, upstream's shape: an anonymous caller can also hit this for
+// "onboarding state unknown" or "an authentication authority already
+// exists" — see onboardingWindowGate / preAuthOnboardingWindowGate.
 const onboardingClosedMsg = "onboarding already complete"
 
 // probeWindowClosedMsg is POST /onboarding/probe-provider's refusal body. It
@@ -258,15 +336,26 @@ const onboardingClosedMsg = "onboarding already complete"
 const probeWindowClosedMsg = "onboarding already complete — " +
 	"use PUT /api/v1/providers/{id} and GET /api/v1/providers to add providers"
 
-// errOnboardingUsernameTaken is the sentinel the config mutation returns when
-// the requested admin username already exists in gateway.users. See
-// onboardingWindowGate for why this is defence in depth rather than the
-// primary control.
-var errOnboardingUsernameTaken = errors.New("onboarding: username already exists")
+// Route labels for the audit record written by preAuthOnboardingWindowGate.
+// They are the wire paths, so a forensic reader never has to map a Go symbol
+// back to an endpoint.
+const (
+	onboardingCompleteRoute = "/api/v1/onboarding/complete"
+	onboardingProbeRoute    = "/api/v1/onboarding/probe-provider"
+)
 
-// onboardingWindowGate is the authority gate for POST /onboarding/complete.
-// It writes the refusal response and returns false when the request must not
-// proceed.
+// onboardingWindowGate and preAuthOnboardingWindowGate below are LOCAL-MODE
+// ONLY (ADR-0010 WP5): restored verbatim from upstream (merge base
+// 184d7247) for the mode where /onboarding/complete mints the instance's
+// FIRST authentication authority, exactly as upstream's route does. In
+// platform mode a session already exists before this route ever runs
+// (ADR-0008), so onboardingSetupWindowGate below is the one that applies —
+// see onboardingProbeGateForMode and resolveAuthorityOrOwner for the mode
+// dispatch.
+
+// onboardingWindowGate is the authority gate for POST /onboarding/complete
+// in local mode. It writes the refusal response and returns false when the
+// request must not proceed.
 //
 // THE DEFECT THIS CLOSES. Until this gate existed, the endpoint gated on the
 // onboarding flag ALONE — `onboardingMgr.ReserveComplete()` and nothing else.
@@ -301,9 +390,10 @@ var errOnboardingUsernameTaken = errors.New("onboarding: username already exists
 //     the manager has already renamed the corrupt file aside, so the next
 //     restart sees a missing file and onboarding proceeds normally.
 //  2. The onboarding manager must not report completion.
-//  3. The instance must have no authentication authority — no configured user
-//     and no OMNIPUS_BEARER_TOKEN. This is the signal a corrupt state.json
-//     cannot erase, because it lives in config.json and the environment.
+//  3. The instance must have no authentication authority — no configured
+//     user and no OMNIPUS_BEARER_TOKEN. This is the signal a corrupt
+//     state.json cannot erase, because it lives in config.json and the
+//     environment.
 //
 // Status code: 409, not 401. 401 invites the caller to retry with
 // credentials, and no credential makes minting a second admin through the
@@ -317,14 +407,6 @@ func (a *restAPI) onboardingWindowGate(w http.ResponseWriter, r *http.Request) b
 	return a.preAuthOnboardingWindowGate(w, r, onboardingCompleteRoute, onboardingClosedMsg)
 }
 
-// Route labels for the audit record written by preAuthOnboardingWindowGate.
-// They are the wire paths, so a forensic reader never has to map a Go symbol
-// back to an endpoint.
-const (
-	onboardingCompleteRoute = "/api/v1/onboarding/complete"
-	onboardingProbeRoute    = "/api/v1/onboarding/probe-provider"
-)
-
 // preAuthOnboardingWindowGate is the shared body of every ADR-068 FR-050
 // pre-auth window gate on an /onboarding/* route: the decision, the refusal
 // status, the server log and the SEC-15 audit record, parameterised only by
@@ -334,9 +416,7 @@ const (
 // apart, and — more importantly — so neither of them grows a second opinion
 // about what "the pre-auth window is open" means. The decision itself is
 // always preAuthOnboardingWindowOpen (rest_auth.go); this function never
-// re-derives it. See onboardingWindowGate's comment above for the full
-// rationale behind each of the three signals, the 409, and the shared refusal
-// body.
+// re-derives it.
 //
 // Callers MUST invoke this before reading the request body: an
 // unauthenticated body is attacker-controlled input and must not be parsed
@@ -363,10 +443,10 @@ func (a *restAPI) preAuthOnboardingWindowGate(
 	slog.Warn("onboarding: refused — the pre-auth onboarding window is closed",
 		"route", route, "reason", reason, "source_ip", sourceIP)
 	if a.auditor != nil {
-		// No request field is recorded: the gate runs before the body is read,
-		// on purpose (see HandleCompleteOnboarding phase 0). What matters
-		// forensically is that a request reached a closed window, on which
-		// route, when, and from where.
+		// No request field is recorded: the gate runs before the body is
+		// read, on purpose (see HandleCompleteOnboarding phase 0). What
+		// matters forensically is that a request reached a closed window, on
+		// which route, when, and from where.
 		if err := a.auditor.Log(&audit.Entry{
 			Event:    audit.EventOnboardingRefused,
 			Decision: audit.DecisionDeny,
@@ -405,22 +485,138 @@ func (a *restAPI) onboardingClosedReason(r *http.Request) string {
 	}
 }
 
-// restAPIHandleCompleteOnboarding carries the shared state of HandleCompleteOnboarding across its stages.
+// onboardingSetupWindowGate protects the one /onboarding/* route that still
+// runs a window check after ADR-0008 ruling 2: POST /onboarding/probe-provider,
+// reached ONLY from inside the wizard, by a caller the route's withAuth
+// wrapper has already authenticated. It is not reachable anonymously, and
+// nothing below assumes otherwise — see "Authentication itself" at the end of
+// this comment.
+//
+// THE DEFECT THIS CLOSES, because it made onboarding impossible to finish.
+// Before ADR-0008, this route carried the now-deleted preAuthOnboardingWindowGate
+// (the ADR-068 FR-050 pre-auth gate that used to guard every /onboarding/*
+// route), one of whose three signals was hasAuthenticationAuthority — "a
+// configured user exists". Under ADR-0008 the wizard is only ever reached by
+// a SIGNED-IN user, and signing in creates exactly such a user. So the
+// endpoint refused the only caller it now has: step 2 could never pass its
+// probe, Finish never enabled (FR-029 requires probedModel == selectedModel),
+// and the wizard dead-ended on a step whose only exit is a request that
+// always 409s.
+//
+// Why the authority signal was right for that deleted gate and wrong here.
+// That gate protected /onboarding/complete, a route that used to MINT
+// authority — the live-reproduced escalation in this file's history was an
+// anonymous POST appending a second admin. Under ADR-0008 /complete no longer
+// mints anything either (completion is authenticated and creates no local
+// account), so that concern is gone for both routes. This probe in particular
+// mints nothing and never did: it validates a key the caller typed, with the
+// caller's own credential, and writes nothing. Its risk is being an open
+// outbound-request oracle, which authentication answers directly.
+//
+// So this gate keeps the two signals that still mean something and drops the
+// authority signal that does not:
+//
+//  1. onboardingStateUnknown — an existing but unparseable state.json is
+//     "unknown", never "fresh install", and we refuse. Same fail-CLOSED
+//     reasoning as the deleted pre-auth gate: the manager keeps the
+//     fresh-install zero value on ANY load failure, so a disk error must not
+//     read as "wizard open".
+//  2. The onboarding manager must not report completion — after setup,
+//     provider changes go through the audited PUT /providers/{id} flow
+//     instead.
+//
+// Authentication itself is enforced by the route's withAuth wrapper, not
+// here — this gate never re-derives or re-checks who the caller is.
+func (a *restAPI) onboardingSetupWindowGate(
+	w http.ResponseWriter, r *http.Request, route, refusalMsg string,
+) bool {
+	sourceIP := a.clientIPWithLiveFallback(r)
+	if a.requestConfigSnapshot(r) == nil {
+		slog.Warn("onboarding: refused — no readable config to judge the request against",
+			"route", route, "source_ip", sourceIP)
+		jsonErr(w, http.StatusConflict, refusalMsg)
+		return false
+	}
+	switch {
+	case a.onboardingStateUnknown:
+		a.refuseOnboardingSetup(w, r, route, refusalMsg, "onboarding_state_unknown", sourceIP)
+		return false
+	case a.onboardingMgr != nil && a.onboardingMgr.IsComplete():
+		a.refuseOnboardingSetup(w, r, route, refusalMsg, "onboarding_already_complete", sourceIP)
+		return false
+	}
+	return true
+}
+
+// refuseOnboardingSetup writes the refusal and, crucially, AUDITS it.
+//
+// The response body deliberately says nothing about why (see
+// TestProbeProvider_RefusalBodyRevealsNothing — a reason-specific body would be
+// an oracle telling a caller which state this instance is in). That makes the
+// audit log the only place the reason exists, and without a source IP a refused
+// attempt is unattributable. SEC-15/SEC-17.
+func (a *restAPI) refuseOnboardingSetup(
+	w http.ResponseWriter, r *http.Request, route, refusalMsg, reason, sourceIP string,
+) {
+	slog.Warn("onboarding: refused — the setup window is closed",
+		"route", route, "reason", reason, "source_ip", sourceIP)
+	if a.auditor != nil {
+		// No request field is recorded: the gate runs before the body is read,
+		// on purpose. What matters forensically is that a request reached a
+		// closed window, on which route, when, and from where.
+		if err := a.auditor.Log(&audit.Entry{
+			Event:    audit.EventOnboardingRefused,
+			Decision: audit.DecisionDeny,
+			Details: map[string]any{
+				"reason":    reason,
+				"source_ip": sourceIP,
+				"route":     route,
+			},
+			PolicyRule: route + " requires an open setup window " +
+				"(readable config, readable onboarding state, and onboarding not complete); " +
+				"the caller's identity is enforced separately by withAuth",
+		}); err != nil {
+			slog.Warn("audit write failed", "event", audit.EventOnboardingRefused, "error", err)
+		}
+	}
+	jsonErr(w, http.StatusConflict, refusalMsg)
+}
+
+// onboardingProbeGateForMode is POST /onboarding/probe-provider's mode
+// dispatch (WP5, ADR-0010): in local mode nothing has signed in yet — the
+// probe runs before the admin account this route's sibling mints exists at
+// all — so upstream's pre-auth window gate applies, unchanged from before
+// ADR-0008. In platform mode the caller is already signed in and the probe
+// only needs to know the wizard is still open, which is
+// onboardingSetupWindowGate's job, also unchanged.
+func (a *restAPI) onboardingProbeGateForMode(w http.ResponseWriter, r *http.Request) bool {
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		return a.preAuthOnboardingWindowGate(w, r, onboardingProbeRoute, probeWindowClosedMsg)
+	}
+	return a.onboardingSetupWindowGate(w, r, onboardingProbeRoute, probeWindowClosedMsg)
+}
+
+// restAPIHandleCompleteOnboarding carries the shared state of
+// HandleCompleteOnboarding across its stages.
 type restAPIHandleCompleteOnboarding struct {
 	a                *restAPI
 	w                http.ResponseWriter
 	r                *http.Request
+	owner            *config.UserConfig
+	body             gen.OnboardingCompleteRequest
 	commitOnboarding func() error
 	committed        bool
-	body             gen.OnboardingCompleteRequest
 	provider         onboardingProviderChoice
 	credRefName      string
 	keyWarning       string
 	providerModel    string
 	newProviderEntry map[string]any
-	passwordHash     []byte
-	token            string
-	tokenEntry       []any
+	// passwordHash/token/tokenEntry are LOCAL-MODE ONLY (ADR-0010 WP5):
+	// pre-computed by prepareLocalAdminCredentials for the admin account this
+	// route mints in local mode. Unused, and left zero, in platform mode.
+	passwordHash []byte
+	token        string
+	tokenEntry   []any
 }
 
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
@@ -439,11 +635,15 @@ type restAPIHandleCompleteOnboarding struct {
 //
 // This ordering guarantees state.json is NEVER written before config.json,
 // preventing the "bricked instance" scenario where state says complete but
-// config has no admin user (e.g., disk-full mid-write).
+// config has no admin user / no provider (e.g., disk-full mid-write).
 //
-// Phase 0 — authority gate: before either phase, the FR-050 pre-auth window
-// must be OPEN. See onboardingWindowGate below for why the onboarding flag
-// alone was never a sufficient gate on the one route that mints authority.
+// Phase 0 — authority or owner, dispatched by auth mode (WP5, ADR-0010): in
+// local mode nothing has signed in yet, so this is upstream's FR-050
+// pre-auth window gate — the one route that MINTS authority. In platform
+// mode onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2), so the
+// route is registered with withAuth and the only gate here is that a
+// session exists; no account is created and no credential is minted. See
+// resolveAuthorityOrOwner.
 func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Request) {
 	ro := &restAPIHandleCompleteOnboarding{a: a, w: w, r: r}
 
@@ -452,12 +652,10 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Phase 0: refuse outright if this instance already has an authentication
-	// authority (or its onboarding state is unknown). Deliberately BEFORE
-	// ReserveComplete and before the request body is read at all — an
-	// unauthenticated body is attacker-controlled input and must not be parsed
-	// ahead of the authorization decision.
-	if !ro.a.onboardingWindowGate(ro.w, ro.r) {
+	// Phase 0. Deliberately BEFORE ReserveComplete and before the request
+	// body is read at all — the body is caller-controlled input and must not
+	// be parsed ahead of the authorization decision.
+	if ro.resolveAuthorityOrOwner() {
 		return
 	}
 
@@ -489,6 +687,26 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	ro.finishOnboarding()
 }
 
+// resolveAuthorityOrOwner is HandleCompleteOnboarding's phase-0 mode
+// dispatch (WP5, ADR-0010). In local mode no session exists yet — this
+// route is about to mint the instance's first one — so it runs upstream's
+// pre-auth window gate and leaves ro.owner nil (the admin identity is not
+// known until decodeAndValidate reads ro.body.Admin). In platform mode the
+// caller already holds the session the platform issued; there is nothing to
+// gate beyond "does that session exist".
+func (ro *restAPIHandleCompleteOnboarding) resolveAuthorityOrOwner() bool {
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		return !ro.a.onboardingWindowGate(ro.w, ro.r)
+	}
+	owner, ok := ro.r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || owner == nil || owner.Username == "" {
+		jsonErr(ro.w, http.StatusUnauthorized, onboardingOwnerRequiredMsg)
+		return true
+	}
+	ro.owner = owner
+	return false
+}
+
 // reserveCompletion reserves the onboarding completion slot before any persistent changes.
 func (ro *restAPIHandleCompleteOnboarding) reserveCompletion() bool {
 	// Phase 1: Reserve the completion slot BEFORE touching config.json.
@@ -499,7 +717,7 @@ func (ro *restAPIHandleCompleteOnboarding) reserveCompletion() bool {
 	ro.commitOnboarding, reserveErr = ro.a.onboardingMgr.ReserveComplete()
 	if reserveErr != nil {
 		if errors.Is(reserveErr, onboarding.ErrAlreadyComplete) {
-			jsonErr(ro.w, http.StatusConflict, "onboarding already complete")
+			jsonErr(ro.w, http.StatusConflict, onboardingClosedMsg)
 			return true
 		}
 		slog.Error("onboarding: reserve failed unexpectedly", "error", reserveErr)
@@ -509,7 +727,7 @@ func (ro *restAPIHandleCompleteOnboarding) reserveCompletion() bool {
 	return false
 }
 
-// decodeAndValidate decodes the onboarding request and validates its provider and administrator fields.
+// decodeAndValidate decodes the onboarding request and validates its provider fields.
 func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	// ADR-068 (T068-06): `provider` is a discriminated union on `auth_method`
 	// (OnboardingProviderApiKey | OnboardingProviderSignIn). Mirror the ADR-034
@@ -522,6 +740,10 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	var ok bool
 	ro.body, ro.provider, ok = decodeOnboardingCompleteBody(ro.w, ro.r, validateEnabled)
 	if !ok {
+		return true
+	}
+
+	if ro.validateAdminForMode() {
 		return true
 	}
 
@@ -566,13 +788,31 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 		jsonErr(ro.w, http.StatusBadRequest, "provider.api_key is required")
 		return true
 	}
+	return false
+}
 
-	// Validate admin.
+// validateAdminForMode enforces WP5's split on the `admin` block: required
+// in local mode (upstream's account-creation shape, restored verbatim —
+// same username pattern, reserved-name list and 8-character password
+// floor), refused in platform mode (the caller already holds the session
+// the platform issued — ADR-0008 ruling 2 — so a submitted credential would
+// create a local password ADR-0008 deleted).
+func (ro *restAPIHandleCompleteOnboarding) validateAdminForMode() bool {
+	if config.EditionAuthMode() != config.AuthModeLocal {
+		if ro.body.Admin != nil {
+			jsonErr(ro.w, http.StatusBadRequest, onboardingAdminRefusedMsg)
+			return true
+		}
+		return false
+	}
+	if ro.body.Admin == nil {
+		jsonErr(ro.w, http.StatusBadRequest, "admin is required")
+		return true
+	}
 	if ro.body.Admin.Username == "" {
 		jsonErr(ro.w, http.StatusBadRequest, "admin.username is required")
 		return true
 	}
-	// Enforce username constraints regardless of ValidateInbound schema validation.
 	if !usernameRE.MatchString(ro.body.Admin.Username) {
 		jsonErr(ro.w, http.StatusBadRequest, usernameInvalidMsg)
 		return true
@@ -592,7 +832,7 @@ func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	return false
 }
 
-// prepareProviderAndCredentials stores provider credentials and prepares the provider, password, and token records.
+// prepareProviderAndCredentials stores provider credentials and prepares the provider record.
 func (ro *restAPIHandleCompleteOnboarding) prepareProviderAndCredentials() bool {
 	// ── Credential handling, per auth method ────────────────────────────────
 	// api_key: probe the key and store it. sign_in: nothing to probe and
@@ -665,9 +905,25 @@ func (ro *restAPIHandleCompleteOnboarding) prepareProviderAndCredentials() bool 
 	if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 		ro.newProviderEntry["api_base"] = ep
 	}
+	// Issue #800 (Bedrock region contract): a per-provider-row region
+	// selected during onboarding, persisted verbatim as the row's `region`.
+	if region := strings.TrimSpace(ro.provider.Region); region != "" {
+		ro.newProviderEntry["region"] = region
+	}
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		if ro.prepareLocalAdminCredentials() {
+			return true
+		}
+	}
+	return false
+}
 
-	// Pre-compute all expensive crypto operations outside the config lock to
-	// avoid holding configMu for ~300ms across three bcrypt operations.
+// prepareLocalAdminCredentials is LOCAL-MODE ONLY (ADR-0010 WP5): restored
+// from upstream (merge base 184d7247). It pre-computes the bcrypt password
+// hash and the bootstrap bearer token for the admin account this route
+// mints, OUTSIDE the config lock — three bcrypt operations must not hold
+// configMu for ~300ms.
+func (ro *restAPIHandleCompleteOnboarding) prepareLocalAdminCredentials() bool {
 	var err error
 	ro.passwordHash, err = bcrypt.GenerateFromPassword([]byte(ro.body.Admin.Password), bcrypt.DefaultCost)
 	if err != nil {
@@ -698,179 +954,14 @@ func (ro *restAPIHandleCompleteOnboarding) prepareProviderAndCredentials() bool 
 	return false
 }
 
-// persistConfig writes the provider, default model, and administrator account to config.json.
+// persistConfig writes the provider, the default model and (in local mode)
+// the admin account to config.json.
 func (ro *restAPIHandleCompleteOnboarding) persistConfig() bool {
 	// Phase 2: Write config.json only (no state.json write inside the callback).
 	// The commit() closure writes state.json after safeUpdateConfigJSON returns.
-	if err := ro.a.safeUpdateConfigJSON(func(m map[string]any) error {
-		// The TOCTOU window is now closed by ReserveComplete() above — no need
-		// to re-check IsComplete() here. The reserved flag blocks concurrent
-		// callers before they can reach this callback.
-
-		// --- Provider ---
-		providerList, ok := m["providers"].([]any)
-		if !ok {
-			if m["providers"] != nil {
-				return fmt.Errorf("providers field is not an array: %T", m["providers"])
-			}
-			providerList = []any{}
-		}
-
-		// Check if provider already exists; update or append.
-		// Dedup key is the (provider, model) pair. Running onboarding twice with
-		// the same model is idempotent; running with a different model from the
-		// same provider creates a new entry sharing the api_key_ref.
-		found := false
-		for i, entry := range providerList {
-			entryMap, isMap := entry.(map[string]any)
-			if !isMap {
-				continue
-			}
-			if entryMap["provider"] == ro.provider.ID && entryMap["model"] == ro.providerModel {
-				// Update existing entry.
-				switch {
-				case ro.credRefName != "":
-					entryMap["api_key_ref"] = ro.credRefName
-					delete(entryMap, "api_key")
-					delete(entryMap, "api_keys")
-				case ro.provider.AuthMethod == config.AuthMethodSignIn:
-					// No credential exists for a sign-in row, so leave none
-					// behind — including a stale one from an earlier api_key
-					// onboarding of the same pair.
-					delete(entryMap, "api_key")
-					delete(entryMap, "api_keys")
-					delete(entryMap, "api_key_ref")
-				default:
-					entryMap["api_key"] = ro.provider.APIKey
-				}
-				entryMap["model"] = ro.providerModel
-				entryMap["model_name"] = ro.providerModel
-				entryMap["provider"] = ro.provider.ID
-				entryMap["auth_method"] = ro.provider.AuthMethod
-				if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
-					entryMap["api_base"] = ep
-				}
-				providerList[i] = entryMap
-				found = true
-				break
-			}
-		}
-		if !found {
-			providerList = append(providerList, ro.newProviderEntry)
-		}
-		m["providers"] = providerList
-
-		// --- Set default model ---
-		// The pair the user picked becomes agents.defaults.default_model
-		// (ADR-068 D14.1 / FR-020): written ONCE here, as the exact
-		// (provider, model) the provider row above carries, so GetModelConfig
-		// resolves it exactly. No boot/reload path rewrites it.
-		agentsMap, ok := m["agents"].(map[string]any)
-		if !ok {
-			agentsMap = map[string]any{}
-		}
-		defaultsMap, ok := agentsMap["defaults"].(map[string]any)
-		if !ok {
-			defaultsMap = map[string]any{}
-		}
-		delete(defaultsMap, "model_name")
-		defaultsMap["default_model"] = map[string]any{
-			"provider": ro.provider.ID,
-			"model":    ro.providerModel,
-		}
-		agentsMap["defaults"] = defaultsMap
-		m["agents"] = agentsMap
-
-		// --- Admin user ---
-		// Build the user entry using pre-computed hashes.
-		newUser := map[string]any{
-			"username":      ro.body.Admin.Username,
-			"password_hash": string(ro.passwordHash),
-			"tokens":        ro.tokenEntry,
-		}
-
-		// Ensure gateway object exists in m.
-		if m["gateway"] == nil {
-			m["gateway"] = map[string]any{}
-		}
-		gatewayMap, ok := m["gateway"].(map[string]any)
-		if !ok {
-			return fmt.Errorf("gateway config is not a map")
-		}
-		users := make([]any, 0, 1)
-		if raw, exists := gatewayMap["users"]; exists {
-			var ok bool
-			users, ok = raw.([]any)
-			if !ok {
-				return fmt.Errorf("gateway.users is not an array")
-			}
-		}
-		// Duplicate username: REFUSE. This branch used to treat a name
-		// collision as "idempotent success" and overwrite the existing row's
-		// password_hash and tokens, on the theory that the only way to reach
-		// it was a partial commit by the same operator retrying. It was also
-		// a silent account takeover: an anonymous caller who reached this
-		// handler and named an EXISTING user replaced that user's password
-		// with one of their own choosing — the original password then 401'd
-		// and the attacker's worked, with nothing written anywhere to say
-		// why. (Confirmed in UAT.)
-		//
-		// The phase-0 authority gate already makes this unreachable over
-		// HTTP: existing users mean existing authority, which closes the
-		// window before the body is even read. This stays as defence in
-		// depth — creating an admin must never mutate a different account's
-		// credentials as a side effect, whatever gate ran upstream.
-		//
-		// The partial-commit case this branch was written for is not lost:
-		// the operator's account and the password they chose are already in
-		// config.json (config.json is written before the cookie is issued and
-		// before state.json is committed), so they sign in at /auth/login
-		// with the credentials they just typed. Only the one-shot bearer
-		// token from the 200 response is forfeited, and the session cookie
-		// login issues a working session anyway.
-		for _, u := range users {
-			um, ok := u.(map[string]any)
-			if !ok {
-				continue
-			}
-			if um["username"] == ro.body.Admin.Username {
-				return errOnboardingUsernameTaken
-			}
-		}
-		users = append(users, newUser)
-		gatewayMap["users"] = users
-		m["gateway"] = gatewayMap
-
-		// Config mutation only — state.json is written AFTER config.json
-		// succeeds (two-phase commit). Do NOT call CompleteOnboarding() here.
-		return nil
-	}); err != nil {
-		// config.json write failed — defer will release the reservation so a retry is possible.
+	if err := ro.a.safeUpdateConfigJSON(ro.mutateConfigForCompletion); err != nil {
 		if errors.Is(err, errOnboardingUsernameTaken) {
-			// A name collision is a client-visible conflict, not a server
-			// fault: report it as one rather than laundering it into a 500.
-			// It shares onboardingClosedMsg for the same anti-oracle reason
-			// the gate does — the response must not confirm which usernames
-			// already exist on this instance.
-			slog.Warn("onboarding: refused — requested admin username already exists",
-				"username", ro.body.Admin.Username, "source_ip", ro.a.clientIPWithLiveFallback(ro.r))
-			if ro.a.auditor != nil {
-				if auditErr := ro.a.auditor.Log(&audit.Entry{
-					Event:    audit.EventOnboardingRefused,
-					Decision: audit.DecisionDeny,
-					Details: map[string]any{
-						"reason":    "username_exists",
-						"username":  ro.body.Admin.Username,
-						"source_ip": ro.a.clientIPWithLiveFallback(ro.r),
-						"route":     "/api/v1/onboarding/complete",
-					},
-					PolicyRule: "onboarding.complete must never overwrite an existing account's credentials",
-				}); auditErr != nil {
-					slog.Warn("audit write failed", "event", audit.EventOnboardingRefused, "error", auditErr)
-				}
-			}
-			jsonErr(ro.w, http.StatusConflict, onboardingClosedMsg)
-			return true
+			return ro.refuseUsernameTaken()
 		}
 		slog.Error("onboarding: complete transaction failed", "error", err)
 		jsonErr(ro.w, http.StatusInternalServerError, "onboarding failed")
@@ -879,112 +970,354 @@ func (ro *restAPIHandleCompleteOnboarding) persistConfig() bool {
 	return false
 }
 
-// finishOnboarding audits the new administrator, issues cookies, commits onboarding state, reloads config, and responds.
+// refuseUsernameTaken is persistConfig's errOnboardingUsernameTaken branch,
+// restored from upstream (merge base 184d7247): a name collision is a
+// client-visible conflict, not a server fault, reported with onboardingClosedMsg
+// for the same anti-oracle reason the window gate uses it — the response must
+// not confirm which usernames already exist on this instance. LOCAL-MODE ONLY:
+// only mutateConfigForCompletion's local branch can ever return this sentinel.
+func (ro *restAPIHandleCompleteOnboarding) refuseUsernameTaken() bool {
+	slog.Warn("onboarding: refused — requested admin username already exists",
+		"username", ro.body.Admin.Username, "source_ip", ro.a.clientIPWithLiveFallback(ro.r))
+	if ro.a.auditor != nil {
+		if auditErr := ro.a.auditor.Log(&audit.Entry{
+			Event:    audit.EventOnboardingRefused,
+			Decision: audit.DecisionDeny,
+			Details: map[string]any{
+				"reason":    "username_exists",
+				"username":  ro.body.Admin.Username,
+				"source_ip": ro.a.clientIPWithLiveFallback(ro.r),
+				"route":     onboardingCompleteRoute,
+			},
+			PolicyRule: "onboarding.complete must never overwrite an existing account's credentials",
+		}); auditErr != nil {
+			slog.Warn("audit write failed", "event", audit.EventOnboardingRefused, "error", auditErr)
+		}
+	}
+	jsonErr(ro.w, http.StatusConflict, onboardingClosedMsg)
+	return true
+}
+
+// mutateConfigForCompletion is persistConfig's safeUpdateConfigJSON mutator:
+// the provider and default-model writes are generic to both modes; the
+// admin-user write is LOCAL-MODE ONLY (ADR-0010 WP5) — see writeLocalAdminUser.
+func (ro *restAPIHandleCompleteOnboarding) mutateConfigForCompletion(m map[string]any) error {
+	// The TOCTOU window is now closed by ReserveComplete() above — no need
+	// to re-check IsComplete() here. The reserved flag blocks concurrent
+	// callers before they can reach this callback.
+
+	// --- Provider ---
+	providerList, ok := m["providers"].([]any)
+	if !ok {
+		if m["providers"] != nil {
+			return fmt.Errorf("providers field is not an array: %T", m["providers"])
+		}
+		providerList = []any{}
+	}
+
+	// Check if provider already exists; update or append.
+	// Dedup key is the (provider, model) pair. Running onboarding twice with
+	// the same model is idempotent; running with a different model from the
+	// same provider creates a new entry sharing the api_key_ref.
+	found := false
+	for i, entry := range providerList {
+		entryMap, isMap := entry.(map[string]any)
+		if !isMap {
+			continue
+		}
+		if entryMap["provider"] == ro.provider.ID && entryMap["model"] == ro.providerModel {
+			// Update existing entry.
+			switch {
+			case ro.credRefName != "":
+				entryMap["api_key_ref"] = ro.credRefName
+				delete(entryMap, "api_key")
+				delete(entryMap, "api_keys")
+			case ro.provider.AuthMethod == config.AuthMethodSignIn:
+				// No credential exists for a sign-in row, so leave none
+				// behind — including a stale one from an earlier api_key
+				// onboarding of the same pair.
+				delete(entryMap, "api_key")
+				delete(entryMap, "api_keys")
+				delete(entryMap, "api_key_ref")
+			default:
+				entryMap["api_key"] = ro.provider.APIKey
+			}
+			entryMap["model"] = ro.providerModel
+			entryMap["model_name"] = ro.providerModel
+			entryMap["provider"] = ro.provider.ID
+			entryMap["auth_method"] = ro.provider.AuthMethod
+			if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
+				entryMap["api_base"] = ep
+			}
+			if region := strings.TrimSpace(ro.provider.Region); region != "" {
+				entryMap["region"] = region
+			}
+			providerList[i] = entryMap
+			found = true
+			break
+		}
+	}
+	if !found {
+		providerList = append(providerList, ro.newProviderEntry)
+	}
+	m["providers"] = providerList
+
+	// --- Set default model ---
+	// The pair the user picked becomes agents.defaults.default_model
+	// (ADR-068 D14.1 / FR-020): written ONCE here, as the exact
+	// (provider, model) the provider row above carries, so GetModelConfig
+	// resolves it exactly. No boot/reload path rewrites it.
+	agentsMap, ok := m["agents"].(map[string]any)
+	if !ok {
+		agentsMap = map[string]any{}
+	}
+	defaultsMap, ok := agentsMap["defaults"].(map[string]any)
+	if !ok {
+		defaultsMap = map[string]any{}
+	}
+	delete(defaultsMap, "model_name")
+	defaultsMap["default_model"] = map[string]any{
+		"provider": ro.provider.ID,
+		"model":    ro.providerModel,
+	}
+	agentsMap["defaults"] = defaultsMap
+	m["agents"] = agentsMap
+
+	// --- Admin user (local mode only) ---
+	//
+	// In platform mode NO user is written here. The caller signed in before
+	// reaching this route, so gateway.users already holds their account
+	// (username = the account email, password_hash empty) and this handler
+	// must leave it exactly as it found it (ADR-0008 ruling 2) — there is no
+	// local password on that edition, so there is nothing here to mint and
+	// nothing to collide with.
+	//
+	// In local mode this route mints the instance's FIRST account, exactly
+	// as upstream's does — see writeLocalAdminUser.
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		if err := ro.writeLocalAdminUser(m); err != nil {
+			return err
+		}
+	}
+
+	// Config mutation only — state.json is written AFTER config.json
+	// succeeds (two-phase commit). Do NOT call CompleteOnboarding() here.
+	return nil
+}
+
+// writeLocalAdminUser appends the new admin row to gateway.users, refusing a
+// name collision (errOnboardingUsernameTaken) rather than overwriting an
+// existing account's credentials — restored from upstream (merge base
+// 184d7247). LOCAL-MODE ONLY (ADR-0010 WP5): mutateConfigForCompletion is
+// the only caller, and only in local mode.
+//
+// Duplicate username: REFUSE. This branch used to treat a name collision as
+// "idempotent success" and overwrite the existing row's password_hash and
+// tokens, on the theory that the only way to reach it was a partial commit
+// by the same operator retrying. It was also a silent account takeover: an
+// anonymous caller who reached this handler and named an EXISTING user
+// replaced that user's password with one of their own choosing. The phase-0
+// authority gate already makes this unreachable over HTTP: existing users
+// mean existing authority, which closes the window before the body is even
+// read. This stays as defence in depth — creating an admin must never
+// mutate a different account's credentials as a side effect, whatever gate
+// ran upstream.
+func (ro *restAPIHandleCompleteOnboarding) writeLocalAdminUser(m map[string]any) error {
+	newUser := map[string]any{
+		"username":      ro.body.Admin.Username,
+		"password_hash": string(ro.passwordHash),
+		"tokens":        ro.tokenEntry,
+	}
+	if m["gateway"] == nil {
+		m["gateway"] = map[string]any{}
+	}
+	gatewayMap, ok := m["gateway"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("gateway config is not a map")
+	}
+	users := make([]any, 0, 1)
+	if raw, exists := gatewayMap["users"]; exists {
+		var ok bool
+		users, ok = raw.([]any)
+		if !ok {
+			return fmt.Errorf("gateway.users is not an array")
+		}
+	}
+	for _, u := range users {
+		um, ok := u.(map[string]any)
+		if !ok {
+			continue
+		}
+		if um["username"] == ro.body.Admin.Username {
+			return errOnboardingUsernameTaken
+		}
+	}
+	users = append(users, newUser)
+	gatewayMap["users"] = users
+	m["gateway"] = gatewayMap
+	return nil
+}
+
+// finishOnboarding writes the profile preferences, audits the completion,
+// commits onboarding state, reloads config, and responds.
 func (ro *restAPIHandleCompleteOnboarding) finishOnboarding() {
-	// SEC-15: the admin account now exists on disk. This is the single moment
-	// this product creates an authentication authority out of nothing, and
-	// until now it left no audit record at all — UAT found neither the
-	// creation nor the password change of the takeover variant anywhere in
-	// the log. Emitted here, immediately after the config.json commit and
-	// before any of the remaining best-effort steps (cookies, state.json,
-	// reload), so the record exists even if one of those subsequently fails.
-	// The password and the issued token are never logged; the username, the
-	// source IP and the provider the account was created alongside are.
+	// FR-OB-013a: write step 1's preferences into the global USER.md now —
+	// after the config write, before the response, in BOTH modes (generic
+	// feature, WP5). preferences is optional; nothing is written when the
+	// body omitted it. A write failure is surfaced as a non-blocking warning
+	// (FR-OB-016) and does NOT fail onboarding: the preferences are a
+	// courtesy, the flow is not.
+	var profileWarning string
+	if ro.provider.HasPreferences {
+		profileWarning = writeOnboardingUserProfile(ro.provider.Preferences)
+	}
+
+	actor := ro.completionActor()
+
+	// SEC-15: the instance is now set up, on disk, for a named account.
+	// Emitted here, immediately after the config.json commit and before the
+	// remaining best-effort steps (cookies, state.json, reload), so the
+	// record exists even if one of those subsequently fails. The provider
+	// API key is never logged; the account, the source IP and the provider
+	// it was set up with are.
 	if ro.a.auditor != nil {
 		if auditErr := ro.a.auditor.Log(&audit.Entry{
 			Event:    audit.EventOnboardingAdminCreated,
 			Decision: audit.DecisionAllow,
-			User:     ro.body.Admin.Username,
+			User:     actor,
 			Details: map[string]any{
-				"username":    ro.body.Admin.Username,
+				"username":    actor,
 				"source_ip":   ro.a.clientIPWithLiveFallback(ro.r),
 				"provider":    ro.provider.ID,
 				"auth_method": ro.provider.AuthMethod,
-				"route":       "/api/v1/onboarding/complete",
+				"route":       onboardingCompleteRoute,
 			},
-			PolicyRule: "onboarding.complete admitted: pre-auth onboarding window was open " +
-				"(no pre-existing authentication authority)",
+			PolicyRule: ro.completionPolicyRule(),
 		}); auditErr != nil {
 			slog.Warn("audit write failed", "event", audit.EventOnboardingAdminCreated, "error", auditErr)
 		}
 	}
 
-	// FR-011: issue the omnipus-session cookie bound to the new admin's
-	// username, now that gateway.users has been persisted above (
-	// IssueSessionCookie's configMutator locates the user by username and
-	// requires it to already exist — see session_cookie.go). Deliberately
-	// BEFORE commitOnboarding()/committed=true below: if this fails, we
-	// return 500 without ever marking onboarding complete in state.json, and
-	// the still-false `committed` lets the deferred ReleaseReservation() run
-	// so the client can retry (the mutate closure above is idempotent on a
-	// matching username — see the duplicate-username branch). This is the
-	// r4 MAJ-003 fix — never return 200 without the cookie.
-	if _, err := issueSessionCookieFn(ro.w, ro.r, ro.body.Admin.Username, ro.a.safeUpdateConfigJSON); err != nil {
-		slog.Error("onboarding: issue session cookie failed", "error", err)
-		jsonErr(ro.w, http.StatusInternalServerError, "session init failed")
-		return
-	}
-
-	// Issue the __Host-csrf cookie here too — BEFORE committed=true — so a
-	// cookie-issuance failure fails closed consistently with the session cookie
-	// above (never mark onboarding complete; the still-false `committed` lets the
-	// deferred ReleaseReservation run so the client can retry cleanly). This used
-	// to run AFTER commitOnboarding, so an RNG failure returned 500 for an
-	// onboarding that had actually already committed. The onboarding client has
-	// had no cookie up to this point (/api/v1/onboarding/complete is CSRF-exempt
-	// for exactly that reason — see pkg/gateway/middleware/csrf.go), so it needs
-	// this to make subsequent state-changing requests without a 403. Issue #97.
-	if err := middleware.IssueCSRFCookie(ro.w, ro.r); err != nil {
-		slog.Error("onboarding: issue CSRF cookie failed", "error", err)
-		jsonErr(ro.w, http.StatusInternalServerError, "session init failed")
-		return
+	// Local mode issues the session and CSRF cookies here — this IS the
+	// route that bootstraps the caller's first session (upstream's
+	// behaviour, restored). Platform mode issues nothing: the caller arrived
+	// with the session the platform issued at sign-in (omnipus-session +
+	// __Host-csrf), so there is nothing to bootstrap (ADR-0008 ruling 2).
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		if ro.issueLocalSessionCookies() {
+			return
+		}
 	}
 
 	// config.json written successfully. Now commit state.json (phase 2).
 	// If this fails, the instance is in a recoverable state: next boot
-	// will re-enter onboarding, detect the admin user exists, and succeed.
+	// will re-enter onboarding and the same caller can retry (in local mode,
+	// detect the admin user exists and succeed).
 	if err := ro.commitOnboarding(); err != nil {
 		slog.Error(
 			"onboarding: state.json commit failed (config.json already written — retry will recover)",
 			"error", err,
 		)
 		// Do NOT return an error to the caller — config is committed.
-		// The admin user exists and the token is valid.
+		// The provider and the default model (and, in local mode, the
+		// admin account and its token) are live.
 	}
 	// Phase-2 complete: config.json is committed. Mark committed so the defer does NOT release the reservation.
 	// Note: state.json may have failed above (logged as non-fatal) — the process-level reservation correctly
 	// stays held since config.json represents the canonical commit.
 	ro.committed = true
 
-	// Trigger a reload so the in-memory config picks up the new user.
-	// Reload failure is non-fatal — token is on disk and active after next config poll.
+	// Trigger a reload so the in-memory config picks up the new provider.
+	// Reload failure is non-fatal — the provider is on disk and active after
+	// the next config poll.
 	if confirmed, err := ro.a.triggerReloadAndWaitOutcome(); err != nil {
-		slog.Warn("onboarding: hot-reload after complete failed; token active after next restart", "error", err)
+		slog.Warn("onboarding: hot-reload after complete failed; provider active after next restart", "error", err)
 	} else if !confirmed {
 		slog.Warn(
 			"onboarding: hot-reload after complete did not confirm within the poll window; "+
-				"new admin user may not be active until next restart",
-			"username", ro.body.Admin.Username,
+				"the new provider may not be active until next restart",
+			"username", actor,
 		)
 	}
 
-	slog.Info("onboarding: completed", "username", ro.body.Admin.Username)
+	slog.Info("onboarding: completed", "username", actor)
 	resp := gen.OnboardingCompleteResponse{
-		Token:    ro.token,
-		Username: ro.body.Admin.Username,
+		Username: actor,
 	}
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		resp.Token = &ro.token
+	}
+	// The provider-side warnings stay mutually exclusive (each names a
+	// specific, one-time setup outcome); profileWarning is an independent
+	// concern (USER.md, not the provider) and rides alongside whichever of
+	// those fires, so a person who hits both actually hears about both.
+	var warnings []string
 	switch {
 	case ro.provider.AuthMethod == config.AuthMethodAPIKey && ro.credRefName == "":
-		warningMsg := "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage"
-		resp.Warning = &warningMsg
+		warnings = append(warnings, "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage")
 	case ro.keyWarning != "":
 		// A non-blocking key-validation outcome (no_credit / unreachable /
 		// restricted). Surfaced on the existing warning field so the SPA's
 		// first-run screen can tell the operator now, rather than letting them
 		// discover it on their first message.
-		resp.Warning = &ro.keyWarning
+		warnings = append(warnings, ro.keyWarning)
+	}
+	if profileWarning != "" {
+		warnings = append(warnings, profileWarning)
+	}
+	if len(warnings) > 0 {
+		joined := strings.Join(warnings, " ")
+		resp.Warning = &joined
 	}
 	jsonOK(ro.w, resp)
+}
+
+// completionActor is the account this completion is attributed to: the
+// admin username just minted in local mode, the already-signed-in owner in
+// platform mode.
+func (ro *restAPIHandleCompleteOnboarding) completionActor() string {
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		return ro.body.Admin.Username
+	}
+	return ro.owner.Username
+}
+
+// completionPolicyRule is the audit record's PolicyRule (SEC-17), stated
+// per mode so a forensic reader sees which authority decision admitted the
+// request.
+func (ro *restAPIHandleCompleteOnboarding) completionPolicyRule() string {
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		return onboardingCompleteRoute + " admitted: pre-auth onboarding window was open " +
+			"(no pre-existing authentication authority)"
+	}
+	return onboardingCompleteRoute + " admitted: the caller held a valid session " +
+		"(onboarding runs after sign-in; no credential is minted here)"
+}
+
+// issueLocalSessionCookies is LOCAL-MODE ONLY (ADR-0010 WP5): restored from
+// upstream (merge base 184d7247). It issues the omnipus-session cookie bound
+// to the new admin's username, now that gateway.users has been persisted
+// (IssueSessionCookie's configMutator locates the user by username and
+// requires it to already exist), then the __Host-csrf cookie the onboarding
+// client needs for subsequent state-changing requests (the route is
+// CSRF-exempt for exactly that reason — see
+// pkg/gateway/middleware/csrf.go). Both run BEFORE committed=true: a
+// cookie-issuance failure fails closed — never mark onboarding complete;
+// the still-false `committed` lets the deferred ReleaseReservation run so
+// the client can retry (the mutate closure above is idempotent on a
+// matching username). Returns true if it already wrote an error response.
+func (ro *restAPIHandleCompleteOnboarding) issueLocalSessionCookies() bool {
+	if _, err := issueSessionCookieFn(ro.w, ro.r, ro.body.Admin.Username, ro.a.safeUpdateConfigJSON); err != nil {
+		slog.Error("onboarding: issue session cookie failed", "error", err)
+		jsonErr(ro.w, http.StatusInternalServerError, "session init failed")
+		return true
+	}
+	if err := middleware.IssueCSRFCookie(ro.w, ro.r); err != nil {
+		slog.Error("onboarding: issue CSRF cookie failed", "error", err)
+		jsonErr(ro.w, http.StatusInternalServerError, "session init failed")
+		return true
+	}
+	return false
 }
 
 // validateAndStoreOnboardingKey is the api_key half of onboarding completion:
@@ -1245,6 +1578,13 @@ type restAPIHandleOnboardingProbeProvider struct {
 	catalogRow   catalog.Provider
 	isCatalogRow bool
 	baseURL      string
+	// bedrockModelOriginal is issue #800 D1 (orchestrator review round 2):
+	// non-nil only for a Bedrock row with its own regions[] picker, mapping
+	// a probeModels entry AFTER bedrock.ResolveModelID's group-prefix
+	// rewrite back to the operator's own model id — see
+	// bedrockProbeRegionResolution's doc comment for why probed_model must
+	// never echo the rewritten id.
+	bedrockModelOriginal map[string]string
 }
 
 // HandleOnboardingProbeProvider handles POST /api/v1/onboarding/probe-provider.
@@ -1340,7 +1680,10 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// is a state conflict, not a failed authentication challenge. One refusal
 	// message for every closed-window reason keeps the divergent state from
 	// becoming an oracle; the reason goes to the audit log.
-	if !ro.a.preAuthOnboardingWindowGate(ro.w, ro.r, onboardingProbeRoute, probeWindowClosedMsg) {
+	//
+	// WHICH gate runs is a mode dispatch (WP5, ADR-0010): see
+	// onboardingProbeGateForMode.
+	if !ro.a.onboardingProbeGateForMode(ro.w, ro.r) {
 		return
 	}
 
@@ -1472,9 +1815,30 @@ func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 		return true
 	}
 
-	ro.baseURL = reqAPIBase
-	if ro.baseURL == "" {
-		ro.baseURL = providers.APIBaseFor(ro.body.Id)
+	// Issue #800 D1 (orchestrator review round 2): a Bedrock row's endpoint
+	// is REGION-derived, never the catalog's flat us-east-1 default — the
+	// SAME resolution a real turn's factory construction applies
+	// (factory_provider.go's ProtocolBedrock case), reused here for the
+	// probe via bedrockProbeRegionResolution. reqAPIBase still wins outright
+	// when supplied (a private/VPC endpoint override), matching
+	// ProviderUpdateRequest.api_base's own contract.
+	if bedrockRegionsRow(ro.catalogRow, ro.isCatalogRow) {
+		reqRegion := ""
+		if ro.body.Region != nil {
+			reqRegion = strings.TrimSpace(*ro.body.Region)
+		}
+		resolvedBase, _, _, rerr := bedrockProbeRegionResolution(
+			ro.catalogRow, reqRegion, reqAPIBase, ro.a.bedrockRuntimeBaseOverride, nil)
+		if rerr != nil {
+			jsonErrField(ro.w, http.StatusBadRequest, rerr.Error(), "region")
+			return true
+		}
+		ro.baseURL = resolvedBase
+	} else {
+		ro.baseURL = reqAPIBase
+		if ro.baseURL == "" {
+			ro.baseURL = providers.APIBaseFor(ro.body.Id)
+		}
 	}
 	if ro.baseURL == "" {
 		// Admission passed, so this is a catalog row whose document carries no
@@ -1563,6 +1927,27 @@ func (ro *restAPIHandleOnboardingProbeProvider) executeProbe() {
 	if ro.pickedModel != "" {
 		probeModels = []string{ro.pickedModel}
 	}
+	// Issue #800 D1: rewrite each candidate with its cross-region inference
+	// profile group prefix (bedrock.ResolveModelID) BEFORE probing — a
+	// model that needs the prefix in the selected region 403s as a genuine
+	// model-access restriction on the bare id, which is not what "the key
+	// works" should have answered. bedrockModelOriginal lets probed_model
+	// echo the operator's own pick afterward (see the field's doc comment).
+	if bedrockRegionsRow(ro.catalogRow, ro.isCatalogRow) && len(probeModels) > 0 {
+		reqRegion := ""
+		if ro.body.Region != nil {
+			reqRegion = strings.TrimSpace(*ro.body.Region)
+		}
+		_, resolvedModels, originalByResolved, rerr := bedrockProbeRegionResolution(
+			ro.catalogRow, reqRegion, "", ro.a.bedrockRuntimeBaseOverride, probeModels)
+		if rerr == nil {
+			probeModels = resolvedModels
+			ro.bedrockModelOriginal = originalByResolved
+		}
+		// A region error here was already caught (and answered) in
+		// resolveEndpoint, which runs first — this second call can only
+		// fail identically, so no second error response is needed.
+	}
 	result := providers.ValidateKey(ro.r.Context(), providers.ValidateInput{
 		ProviderID:   ro.body.Id,
 		ProviderName: providers.DisplayName(ro.body.Id),
@@ -1571,6 +1956,9 @@ func (ro *restAPIHandleOnboardingProbeProvider) executeProbe() {
 		Catalog:      models,
 		ProbeModels:  probeModels,
 	}, ro.a.ssrfChk())
+	if orig, ok := ro.bedrockModelOriginal[result.ProbedModel]; ok {
+		result.ProbedModel = orig
+	}
 	slog.Debug("rest: probe-provider: key validation result",
 		"provider", ro.body.Id, "outcome", result.Outcome,
 		"probed_model", result.ProbedModel, "detail", result.RawDetail)
@@ -1662,10 +2050,12 @@ const signInProbePrompt = "hi"
 //   - `cli_kind` (codex | copilot) — a `protocol: cli` row whose vendor binary
 //     holds the login. The probe is one subprocess completion with the chosen
 //     model.
-//   - `token_source: codex-auth-json` — a row that reuses the Codex CLI's saved
-//     access token against its OWN base URL (openai-chatgpt). The probe is one
-//     ordinary completion carrying that token, classified by the same
-//     providers.ValidateKey the api_key path uses.
+//   - a first-party OAuth owner — a device-code row whose access token lives in
+//     Omnipus' encrypted credential store. The probe is one ordinary completion
+//     carrying that token, classified by the same providers.ValidateKey the
+//     api_key path uses.
+//   - `token_source: codex-auth-json` — a legacy/read-only row that reuses the
+//     Codex CLI's saved access token against its own base URL.
 //
 // Returns (result, refusal). A non-empty refusal is a 400 on field `auth` and
 // the result is meaningless; an empty refusal means a completion ran and its
@@ -1692,6 +2082,46 @@ func (a *restAPI) probeSignIn(
 	switch {
 	case row.CLIKind != "":
 		return a.probeSignInCLI(ctx, row, displayName, model)
+
+	case providers.OAuthEntryOwner(providerID):
+		store, err := a.resolveSignInCredStore()
+		if err != nil {
+			slog.Warn("rest: probe-provider: encrypted sign-in store unavailable",
+				"provider", providerID, "error", err)
+			return providers.ValidationResult{}, probeSignInUnavailableMsg
+		}
+		oauthCfg, err := signInRefreshOAuthConfig(providerID)
+		if err != nil {
+			slog.Warn("rest: probe-provider: sign-in refresh configuration unavailable",
+				"provider", providerID, "error", err)
+			return providers.ValidationResult{}, probeSignInUnavailableMsg
+		}
+		tokenSource := newStoreOAuthTokenSource(providerID, store, oauthCfg)
+		token, _, err := tokenSource()
+		if err != nil {
+			if errors.Is(err, providers.ErrProviderNeedsSignIn) {
+				return providers.ValidationResult{}, probeNotSignedInMsg
+			}
+			slog.Warn("rest: probe-provider: encrypted sign-in token unavailable",
+				"provider", providerID, "error", err)
+			return providers.ValidationResult{}, probeSignInUnavailableMsg
+		}
+		a.reRegisterOAuthSensitiveValues(store)
+		var probeModels []string
+		if model != "" {
+			probeModels = []string{model}
+		}
+		result := providers.ValidateKey(ctx, providers.ValidateInput{
+			ProviderID:   providerID,
+			ProviderName: displayName,
+			BaseURL:      baseURL,
+			APIKey:       token,
+			ProbeModels:  probeModels,
+		}, a.ssrfChk())
+		slog.Debug("rest: probe-provider: encrypted sign-in token probe result",
+			"provider", providerID, "outcome", result.Outcome,
+			"probed_model", result.ProbedModel, "detail", result.RawDetail)
+		return result, ""
 
 	case row.TokenSource == catalog.TokenSourceCodexAuthJSON:
 		// FR-007: the file is read, never written, refreshed or proxied.

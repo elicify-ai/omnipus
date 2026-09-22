@@ -41,6 +41,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -168,7 +169,7 @@ func embedChainHMAC(records []IntentRecord, rec *IntentRecord, key []byte) error
 func (l *IntentLog) VerifyChain(ctx context.Context, planID string) (*audit.ChainResult, error) {
 	path := l.path(planID)
 	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return &audit.ChainResult{Valid: true, BrokenAt: -1}, nil
 		}
 		return nil, fmt.Errorf("intent_log: stat %q: %w", path, err)

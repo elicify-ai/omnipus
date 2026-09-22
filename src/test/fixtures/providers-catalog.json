@@ -804,17 +804,20 @@
       ]
     },
     {
-      "id": "bedrock",
+      "id": "amazon-bedrock",
       "name": "Amazon Bedrock",
       "company": "Amazon",
       "api": "https://bedrock-runtime.us-east-1.amazonaws.com",
-      "protocol": "openai-compatible",
-      "tier": "unsupported",
-      "unsupported_reason": "cloud-iam",
+      "protocol": "bedrock",
+      "region": "us-east-1",
+      "tier": "standard",
       "auth_methods": [
         "api_key"
       ],
-      "aliases": [],
+      "aliases": [
+        "bedrock",
+        "aws"
+      ],
       "locality": "cloud",
       "models": [
         {
@@ -828,7 +831,29 @@
             "image"
           ],
           "tool_call": true,
-          "status": "active"
+          "status": "active",
+          "inference_profiles": [
+            "us",
+            "eu"
+          ]
+        }
+      ],
+      "regions": [
+        {
+          "id": "us-east-1",
+          "group": "us"
+        },
+        {
+          "id": "eu-central-1",
+          "group": "eu"
+        },
+        {
+          "id": "ap-northeast-1",
+          "group": "jp"
+        },
+        {
+          "id": "us-gov-west-1",
+          "group": ""
         }
       ]
     },

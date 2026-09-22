@@ -557,7 +557,7 @@ func TestRemoveSkill_ProjectSlugDeletesProjectFile(t *testing.T) {
 		t.Fatalf("RemoveSkill: %v", err)
 	}
 
-	if _, statErr := os.Stat(skillDir); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(skillDir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("project skill's own directory still exists after removal (err=%v)", statErr)
 	}
 	// The removal is confined to the one skill's own subdirectory — the

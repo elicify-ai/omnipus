@@ -9,32 +9,36 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-// TestSeededPolicy_AddMCPServerDeniedByDefault is the regression for the third
-// privilege escalation: an MCP server definition names a program the gateway
-// launches, and that process is not confined by the sandbox. config.json is in
-// the ADR-062 secret set precisely so an agent cannot write an MCP server entry
-// with write_file — add_mcp_server wrote the same setting through the API, and
-// was seeded "allow".
-//
-// This asserts the SEEDED DATA, which is where the control lives. There is no
-// code branch refusing the tool (see the companion test below) — CLAUDE.md hard
-// constraint 6 requires the posture of a fresh install to come from the seed an
-// operator can edit, never from a hardcoded refusal.
-func TestSeededPolicy_AddMCPServerDeniedByDefault(t *testing.T) {
+// ADR-090 section 5 gives Admin connector setup while every other seeded role
+// remains denied. The global ceiling permits that explicit role assignment;
+// the compositor must still enforce an operator's global Deny for Admin.
+func TestSeededPolicy_AddMCPServerAdminOnly(t *testing.T) {
 	cfg := config.DefaultConfig()
+	cfg.Agents.List = nil
+	coreagent.SeedConfig(cfg)
 	policies := cfg.Sandbox.ToolPolicies
-
-	got, ok := policies["add_mcp_server"]
-	if !ok {
-		t.Fatal("add_mcp_server has no explicit seeded tool policy — constraint 6 requires " +
-			"every static builtin tool to resolve from an explicit literal entry")
+	if got := policies["add_mcp_server"]; got != "allow" {
+		t.Fatalf("ADR-090 Admin setup requires global allow ceiling, got %q", got)
 	}
-	if got != "deny" {
-		t.Errorf("seeded global policy for add_mcp_server = %q, want \"deny\" — an agent granted "+
-			"this tool can launch an unconfined program and escape the sandbox", got)
+	for _, agent := range cfg.Agents.List {
+		policy, agentType := tools.BuildFallbackPolicyCfg(cfg, agent.ID)
+		want := "deny"
+		if agent.ID == "admin" {
+			want = "allow"
+		}
+		if got := tools.EffectiveToolPolicy(policy, tools.ScopeCore, agentType, "add_mcp_server"); got != want {
+			t.Errorf("%s add_mcp_server = %q, want %q", agent.ID, got, want)
+		}
+	}
+	cfg.Sandbox.ToolPolicies["add_mcp_server"] = "deny"
+	policy, agentType := tools.BuildFallbackPolicyCfg(cfg, "admin")
+	if got := tools.EffectiveToolPolicy(policy, tools.ScopeCore, agentType, "add_mcp_server"); got != "deny" {
+		t.Errorf("operator global denial must block Admin, got %q", got)
 	}
 
 	// remove_mcp_server stays "ask", deliberately: it narrows capability rather
@@ -53,7 +57,7 @@ func TestSeededPolicy_AddMCPServerDeniedByDefault(t *testing.T) {
 
 // TestMCPAddTool_HasNoHardcodedRefusal is the other half of the constraint-6
 // contract, and the reason the test above is not sufficient on its own: the
-// deny must live in the seed, not in the code. An operator who deliberately
+// restriction must live in the seed, not in the code. An operator who deliberately
 // grants add_mcp_server on their own install must still get a working tool.
 //
 // Without this test, the suite above would also pass against a build that

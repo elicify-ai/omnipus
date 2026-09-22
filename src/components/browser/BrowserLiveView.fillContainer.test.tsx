@@ -151,6 +151,35 @@ beforeEach(() => {
   callbacksRef.current = null
 })
 
+describe('BrowserLiveView — control hand-back survives input failure', () => {
+  it('releases control on Escape even after the dedicated input connection fails', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectFrameAndDrive()
+    const frame = screen.getByTestId('browser-live-frame')
+    act(() => inputStateCallback.current?.('failed', 'Input connection failed. Retry input.'))
+    mockSendControl.mockClear()
+
+    act(() => fireEvent.keyDown(frame, { key: 'Escape' }))
+
+    expect(mockSendControl).toHaveBeenCalledExactlyOnceWith('release')
+    expect(screen.getByLabelText('Address bar')).toHaveFocus()
+  })
+
+  it('keeps IME cancellation local after the dedicated input connection fails', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectFrameAndDrive()
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.compositionStart(sink)
+    act(() => inputStateCallback.current?.('failed', 'Input connection failed. Retry input.'))
+    mockSendControl.mockClear()
+
+    fireEvent.keyDown(sink, { key: 'Escape', code: 'Escape', keyCode: 27, isComposing: true })
+
+    expect(mockSendControl).not.toHaveBeenCalled()
+  })
+})
+
 describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
   // NOTE: this covers the component DEFAULT, not the docked panel. As of
   // 2026-07-31 BrowserLivePanel passes `fillContainer` explicitly — an
@@ -705,6 +734,36 @@ describe('BrowserLiveView — resize preserves active input', () => {
         expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'failed')
         expect(screen.getByRole('alert')).toHaveTextContent('Browser resize did not finish')
       }
+    } finally { vi.useRealTimers() }
+  })
+
+  // Regression (ui-browser shard UAT-13/14/15, 2026-09-18): the viewport ACK
+  // pins the generation the gateway had committed at admission, but a later
+  // transition — here a navigate whose document transition outruns the resized
+  // picture — advances the capture past it. The handoff must complete on that
+  // NEWER picture (it postdates the resize); demanding the exact acked
+  // generation wedged every gesture behind "Browser resize did not finish."
+  it('completes the viewport handoff when the presented picture is newer than the acked generation', async () => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1280
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      mockSendViewport.mockClear()
+      width = 1200
+      fireEvent(window, new Event('resize'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).toHaveBeenCalled()
+      const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+      act(() => {
+        callbacksRef.current?.onInputControlAck?.({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 0, ok: true, capture_id: 'capture-test', capture_generation: 2 })
+        callbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: 3, rtp_timestamp: 300, css_width: 1280, css_height: 720 })
+        emitBrowserFrame(video, { rtpTimestamp: 300, expectedDisplayTime: performance.now() })
+      })
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'ready')
     } finally { vi.useRealTimers() }
   })
   it.each(['composition', 'paste', 'composition-after-key', 'blur', 'drag'])('commits a deferred resize after %s ends without another resize event', async (mode) => {

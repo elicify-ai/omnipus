@@ -9,6 +9,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -79,7 +80,7 @@ func DefaultConfig() *TUIConfig {
 // Load reads the TUI config from path. Returns a default config if the file does not exist.
 func Load(path string) (*TUIConfig, error) {
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return DefaultConfig(), nil
 	}
 	if err != nil {

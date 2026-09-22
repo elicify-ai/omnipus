@@ -7,6 +7,7 @@ package gateway
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -277,10 +278,10 @@ func TestHandleRetentionSweep_OnDemand(t *testing.T) {
 	assert.NoError(t, err, "recent file (3 days) must survive")
 
 	_, err = os.Stat(stale1)
-	assert.True(t, os.IsNotExist(err), "10-day-old file must be deleted")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "10-day-old file must be deleted")
 
 	_, err = os.Stat(stale2)
-	assert.True(t, os.IsNotExist(err), "30-day-old file must be deleted")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "30-day-old file must be deleted")
 }
 
 // TestHandleRetentionSweep_MutexConflictReturns409 acquires retentionSweepMu in

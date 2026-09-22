@@ -41,6 +41,7 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -249,7 +250,7 @@ func u5ReadStatsFile(sessionDir string) (u5StatsFile, error) {
 	var f u5StatsFile
 	data, err := readFileFn(filepath.Join(sessionDir, "stats.json"))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return f, nil
 		}
 		return f, fmt.Errorf("read %q: %w", filepath.Join(sessionDir, "stats.json"), err)
@@ -266,7 +267,7 @@ func u5ReadLoopFile(sessionDir string) (u5LoopFile, error) {
 	var f u5LoopFile
 	data, err := readFileFn(filepath.Join(sessionDir, "loop.json"))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return f, nil
 		}
 		return f, fmt.Errorf("read %q: %w", filepath.Join(sessionDir, "loop.json"), err)

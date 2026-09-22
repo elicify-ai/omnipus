@@ -28,6 +28,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -253,5 +254,85 @@ func TestPlanEngine_JudgeUnavailable_StreakResetsOnRealVerdict(t *testing.T) {
 	if streak != 0 {
 		t.Fatalf("judgeUnavailableStreak = %d after a real verdict, want 0 — the counter must "+
 			"measure the CURRENT unbroken run of unavailability, not a lifetime total", streak)
+	}
+}
+
+// TestPlanEngine_JudgeUnavailable_AbandonedRoundIsRetriedOnNextTick pins the
+// live llm-conformance-replan failure: one timed-out judge turn logged
+// "plan judge round abandoned (judge unavailable)" and the plan never reached
+// awaiting_supervision. Abandoning MUST revert to dispatching, leave no
+// pause (a leftover pause makes processPlan skip the plan forever), write a
+// handover the operator can see, and start a new judge round on the next tick.
+func TestPlanEngine_JudgeUnavailable_AbandonedRoundIsRetriedOnNextTick(t *testing.T) {
+	h := newAllTerminalPlanWithBrokenJudge(t, "turn timed out: context deadline exceeded")
+
+	got := tick(t, h)
+	if got.PlanPhase != plan.PhaseDispatching {
+		t.Fatalf("after first abandon: plan_phase = %q, want %q", got.PlanPhase, plan.PhaseDispatching)
+	}
+	if got.PausedReason != "" {
+		t.Fatalf("after first abandon: PausedReason = %q, want empty — a leftover pause strands the plan because processPlan returns before it can retry",
+			got.PausedReason)
+	}
+	if !strings.Contains(got.HandoverText, "will retry") {
+		t.Fatalf("HandoverText = %q, want it to say the engine will retry so an abandoned round is not silent",
+			got.HandoverText)
+	}
+	if got.JudgeRounds != 0 {
+		t.Fatalf("judge_rounds = %d, want 0", got.JudgeRounds)
+	}
+	if h.judge.callCount() != 1 {
+		t.Fatalf("judge called %d times after the first tick, want 1", h.judge.callCount())
+	}
+
+	got = tick(t, h)
+	if h.judge.callCount() != 2 {
+		t.Fatalf("judge called %d times after the second tick, want 2 — an abandoned round must be retried, not stranded",
+			h.judge.callCount())
+	}
+	if got.PlanPhase != plan.PhaseDispatching {
+		t.Fatalf("after second abandon (still below the bound): plan_phase = %q, want %q",
+			got.PlanPhase, plan.PhaseDispatching)
+	}
+}
+
+// TestPlanEngine_JudgeUnavailable_AbandonClearsInRoundPause is the strand
+// guard: D7 stamps PausedReason while waiting. If that marker survived
+// abandon, processPlan would skip the plan forever (FR-065). Drive the
+// abandon helper directly so the pause is present at the moment of revert
+// (processPlan itself refuses to start a round on a paused plan).
+func TestPlanEngine_JudgeUnavailable_AbandonClearsInRoundPause(t *testing.T) {
+	h := newAllTerminalPlanWithBrokenJudge(t, "turn timed out: context deadline exceeded")
+	h.pe.noteJudgeUnavailable("p1", "its model did not answer in time", 60*time.Second)
+	paused, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.IsJudgeUnavailablePausedReason(paused.PausedReason) {
+		t.Fatalf("precondition: PausedReason = %q, want a judge-unavailable pause", paused.PausedReason)
+	}
+
+	h.pe.planDecisionMu.Lock()
+	h.pe.revertAbandonedJudgeRoundLocked(paused, "turn timed out: context deadline exceeded")
+	h.pe.planDecisionMu.Unlock()
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PausedReason != "" {
+		t.Fatalf("after abandon: PausedReason = %q, want empty", got.PausedReason)
+	}
+	if got.PlanPhase != plan.PhaseDispatching {
+		t.Fatalf("after abandon: plan_phase = %q, want %q", got.PlanPhase, plan.PhaseDispatching)
+	}
+	if !strings.Contains(got.HandoverText, "will retry") {
+		t.Fatalf("HandoverText = %q, want it to say the engine will retry", got.HandoverText)
+	}
+
+	tick(t, h)
+	if h.judge.callCount() != 1 {
+		t.Fatalf("judge called %d times after the post-abandon tick, want 1 — clearing the pause must let processPlan retry",
+			h.judge.callCount())
 	}
 }

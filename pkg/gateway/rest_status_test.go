@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -165,6 +166,93 @@ func TestHandleStateGET(t *testing.T) {
 	_, hasField := resp["onboarding_complete"]
 	assert.True(t, hasField, "response must contain 'onboarding_complete' field")
 	assert.Equal(t, false, resp["onboarding_complete"], "fresh install must have onboarding_complete=false")
+}
+
+// TestHandleStateGET_IdentityModeByEdition pins ADR-0010 / login-and-
+// onboarding-spec.md §2.2: `identity.mode` mirrors config.EditionAuthMode(),
+// which is DERIVED from the stamped config.Edition, never read from a
+// request or a config key. core -> local; hosted -> platform. Uses the
+// withEdition-style save/restore pattern (withEditionForBootTest, defined in
+// boot_order_test.go) rather than mutating config.Edition permanently.
+func TestHandleStateGET_IdentityModeByEdition(t *testing.T) {
+	cases := []struct {
+		edition      string
+		wantMode     string
+		wantEditionF string
+	}{
+		{config.EditionCore, "local", config.EditionCore},
+		{config.EditionHosted, "platform", config.EditionHosted},
+		{config.EditionDesktop, "platform", config.EditionDesktop},
+	}
+	for _, tc := range cases {
+		t.Run(tc.edition, func(t *testing.T) {
+			withEditionForBootTest(t, tc.edition)
+			api := newTestRestAPIWithHome(t)
+
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+			api.HandleState(w, r)
+
+			require.Equal(t, http.StatusOK, w.Code)
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			identity, ok := resp["identity"].(map[string]any)
+			require.True(t, ok, "response must contain an 'identity' object")
+			assert.Equal(t, tc.wantMode, identity["mode"], "edition %q must map to mode %q", tc.edition, tc.wantMode)
+			assert.Equal(t, tc.wantEditionF, identity["edition"], "identity.edition must mirror config.Edition")
+		})
+	}
+}
+
+// TestHandleStateGET_IdentitySignedInVsNot pins the second half of §2.2:
+// `identity.signed_in` and `identity.account`/`identity.blocked_reason`
+// reflect THIS request's own context, not a global. GET /api/v1/state is
+// registered withOptionalAuth, so a non-nil *config.UserConfig under
+// UserContextKey is exactly what "signed in" means here.
+func TestHandleStateGET_IdentitySignedInVsNot(t *testing.T) {
+	withEditionForBootTest(t, config.EditionCore)
+
+	t.Run("signed out", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+		api.HandleState(w, r)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		identity, ok := resp["identity"].(map[string]any)
+		require.True(t, ok, "identity must be a map")
+		assert.Equal(t, false, identity["signed_in"])
+		assert.Equal(t, "signed_out", identity["blocked_reason"])
+		_, hasAccount := identity["account"]
+		assert.False(t, hasAccount, "identity.account must be absent when signed_in is false")
+	})
+
+	t.Run("signed in", func(t *testing.T) {
+		api := newTestRestAPIWithHome(t)
+
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/state", nil)
+		user := &config.UserConfig{Username: "daniel@elicify.ai"}
+		r = r.WithContext(context.WithValue(r.Context(), UserContextKey{}, user))
+		api.HandleState(w, r)
+
+		require.Equal(t, http.StatusOK, w.Code)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		identity, ok := resp["identity"].(map[string]any)
+		require.True(t, ok, "identity must be a map")
+		assert.Equal(t, true, identity["signed_in"])
+		_, hasBlockedReason := identity["blocked_reason"]
+		assert.False(t, hasBlockedReason, "identity.blocked_reason must be absent when signed_in is true")
+		account, ok := identity["account"].(map[string]any)
+		require.True(t, ok, "identity.account must be present when signed_in is true")
+		assert.Equal(t, "daniel@elicify.ai", account["label"])
+		assert.Equal(t, "d•••@elicify.ai", account["email_masked"])
+		assert.Nil(t, account["org"])
+	})
 }
 
 // TestHandleStatePATCH verifies PATCH /api/v1/state returns 200.

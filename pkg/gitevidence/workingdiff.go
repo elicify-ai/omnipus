@@ -6,6 +6,7 @@
 package gitevidence
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -141,7 +142,7 @@ func (r *Repo) DiffWorkingTree(fromHash string, writeSet []string) (*DiffEvidenc
 		}
 		info, infoErr := d.Info()
 		if infoErr != nil {
-			if os.IsNotExist(infoErr) {
+			if errors.Is(infoErr, os.ErrNotExist) {
 				return nil // removed between the WalkDir readdir and this Info call
 			}
 			return fmt.Errorf("gitevidence: stat %s: %w", relSlash, infoErr)
@@ -153,7 +154,7 @@ func (r *Repo) DiffWorkingTree(fromHash string, writeSet []string) (*DiffEvidenc
 		}
 		data, readErr := os.ReadFile(p)
 		if readErr != nil {
-			if os.IsNotExist(readErr) {
+			if errors.Is(readErr, os.ErrNotExist) {
 				return nil // same benign race as above
 			}
 			return fmt.Errorf("gitevidence: read working-tree file %s: %w", relSlash, readErr)

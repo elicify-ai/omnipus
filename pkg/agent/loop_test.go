@@ -533,7 +533,7 @@ func TestNewAgentLoop_StateInitialized(t *testing.T) {
 
 	// Verify state directory was created
 	stateDir := filepath.Join(tmpDir, "state")
-	if _, err := os.Stat(stateDir); os.IsNotExist(err) {
+	if _, err := os.Stat(stateDir); errors.Is(err, os.ErrNotExist) {
 		t.Error("Expected state directory to exist")
 	}
 }

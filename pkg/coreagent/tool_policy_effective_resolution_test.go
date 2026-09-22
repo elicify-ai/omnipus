@@ -70,7 +70,8 @@ func TestEffectiveResolution_InspectSession_JudgeAllow_OthersDeny(t *testing.T) 
 		"(Judge, inspect_session) must resolve allow through the real compositor merge")
 
 	for _, id := range []coreagent.CoreAgentID{
-		coreagent.IDMia, coreagent.IDRay, coreagent.IDAva, coreagent.IDWorker,
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 	} {
 		assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), "inspect_session", nil),
 			"(%s, inspect_session) must resolve deny through the real compositor merge", id)
@@ -100,7 +101,7 @@ func TestEffectiveResolution_PlanExecution_DefaultCeiling_JimAllowOthersAsk(t *t
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 
-	for _, tool := range planExecutionTools {
+	for _, tool := range []string{"create_plan", "execute_plan"} {
 		assert.Equalf(t, "allow", resolveFor(t, cfg, string(coreagent.IDJim), tool, nil),
 			"(Jim, %s) must RESOLVE allow on a fresh install — he is the only seeded agent "+
 				"granted unprompted plan-execution (ADR-052 FR-005/R2-06). Resolving ask here means "+
@@ -108,12 +109,11 @@ func TestEffectiveResolution_PlanExecution_DefaultCeiling_JimAllowOthersAsk(t *t
 				"silently overruling his seeded allow again", tool)
 
 		for _, id := range []coreagent.CoreAgentID{
-			coreagent.IDMia, coreagent.IDRay, coreagent.IDAva, coreagent.IDWorker,
+			coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin,
+			coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker,
 		} {
-			assert.Equalf(t, "ask", resolveFor(t, cfg, string(id), tool, nil),
-				"(%s, %s) must still resolve ask — raising the ceiling grants the tool to nobody "+
-					"by itself; every seeded agent except Jim carries an explicit per-agent ask "+
-					"that still wins under strictest-wins", id, tool)
+			assert.Equalf(t, "deny", resolveFor(t, cfg, string(id), tool, nil),
+				"(%s, %s) must resolve deny under ADR-090's shipped role boundaries", id, tool)
 		}
 	}
 
@@ -180,7 +180,7 @@ func TestEffectiveResolution_SeededAgentAllow_IsNeverOverruledByCeiling(t *testi
 
 	// Guard against the assertion loop silently covering nothing (an empty
 	// seed, a renamed field) and reporting a vacuous pass.
-	require.Greater(t, checked, 100,
+	require.Greater(t, checked, 20,
 		"expected the seeded roster to contain many per-agent allow entries; "+
 			"got %d — the seed shape probably changed and this test is no longer covering it", checked)
 }

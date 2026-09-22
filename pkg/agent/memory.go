@@ -18,6 +18,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -913,7 +914,7 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 
 	return fileutil.WithFlock(lockPath, func() error {
 		existing, err := os.ReadFile(retroPath)
-		if err != nil && !os.IsNotExist(err) {
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("memory: read existing retro: %w", err)
 		}
 
@@ -938,7 +939,7 @@ func (ms *MemoryStore) ReadLastSession() (string, error) {
 	path := filepath.Join(ms.privateRoom.Root, memrooms.LastSessionFile)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
 		return "", fmt.Errorf("memory: read last-session.md: %w", err)
@@ -1146,7 +1147,7 @@ func (ms *MemoryStore) ReadRetros(daysBack int) ([]Retro, error) {
 		dayDir := filepath.Join(retrosBase, dateStr)
 		entries, err := os.ReadDir(dayDir)
 		if err != nil {
-			if !os.IsNotExist(err) {
+			if !errors.Is(err, os.ErrNotExist) {
 				logger.WarnCF("agent.memory", "ReadRetros: cannot read day dir",
 					map[string]any{"dir": dayDir, "error": err.Error()})
 			}
@@ -1188,7 +1189,7 @@ func (ms *MemoryStore) SweepRetros(retentionDays int) (int, error) {
 
 	entries, err := os.ReadDir(retrosBase)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("memory: sweep retros: read retros dir: %w", err)

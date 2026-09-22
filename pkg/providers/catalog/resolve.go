@@ -82,6 +82,36 @@ func (h Handle) Status() Status {
 // Disputed reports the A-22 marker; false on a miss.
 func (h Handle) Disputed() bool { return h.m != nil && h.m.Disputed }
 
+// InferenceProfiles returns a copy of the model's cross-region inference
+// profile groups (issue #800 / Bedrock region contract); nil on a miss —
+// callers never auto-prefix a model id the catalog does not recognize.
+func (h Handle) InferenceProfiles() []string {
+	if h.m == nil {
+		return nil
+	}
+	return append([]string(nil), h.m.InferenceProfiles...)
+}
+
+// Regions returns a copy of the provider's own region picker (issue #800 /
+// Bedrock region contract); nil when the provider id is unknown or carries
+// no regions.
+func (h Handle) Regions() []ProviderRegion {
+	if h.p == nil {
+		return nil
+	}
+	return append([]ProviderRegion(nil), h.p.Regions...)
+}
+
+// DefaultRegion returns the provider's own default region (the existing
+// optional `region` field); "" when the provider id is unknown or carries
+// none.
+func (h Handle) DefaultRegion() string {
+	if h.p == nil {
+		return ""
+	}
+	return h.p.Region
+}
+
 // Budget is the resize budget the media pipeline must honour: the
 // provider's own limits on a hit, the catalog default on a miss, the
 // package default when no document is loaded.

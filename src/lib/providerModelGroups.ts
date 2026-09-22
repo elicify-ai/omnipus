@@ -41,7 +41,9 @@ export function providerDisplayName(
   provider: Provider,
   entry?: CatalogProvider,
 ): string {
-  if (entry) return catalogLabel(entry)
+  // Issue #800 D2-addendum: the Default model line must reflect the row's
+  // CONFIGURED AWS region, not the catalog's static default.
+  if (entry) return catalogLabel(entry, provider.region)
   return provider.display_name ?? provider.name ?? provider.id
 }
 

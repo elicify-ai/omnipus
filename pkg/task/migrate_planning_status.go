@@ -16,6 +16,7 @@ package task
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -45,14 +46,14 @@ func MigratePlanningStatusToNext(home string) error {
 	sentinelPath := filepath.Join(home, planningStatusMigrationSentinelFile)
 	if _, err := os.Stat(sentinelPath); err == nil {
 		return nil
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("task: planning-status migration: stat sentinel: %w", err)
 	}
 
 	tasksDir := filepath.Join(home, "tasks")
 	entries, err := os.ReadDir(tasksDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return writeMigrationSentinel(sentinelPath)
 		}
 		return fmt.Errorf("task: planning-status migration: read tasks dir: %w", err)

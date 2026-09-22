@@ -6,6 +6,13 @@ CLAUDE.md of the three — `pkg/goal` and `pkg/plan` carry no module-local rules
 beyond their in-code headers, so this file points at them rather than padding
 two near-empty twins.
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestNormalizeCriteria_DoesNotMutateCallerSlice$' -p 1 ./pkg/task/`) — the
+post-race regression pinned by `criterion_no_mutation_test.go` below. CI is
+the authority for full-suite results.
+
 ## The canonical striped lock lives here
 
 `lock.go::StripedLock` (with the process-wide `TaskFileLock`) is the canonical

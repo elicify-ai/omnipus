@@ -19,12 +19,20 @@ var (
 	GoVersion string  // Go version used for building
 )
 
-// FormatVersion returns the version string with optional git commit
+// FormatVersion returns the version string with optional git commit and the
+// stamped edition (pkg/config/edition.go, ADR-0010) — e.g.
+// "1.2.3 (git: abc) edition: hosted". Edition defaults to "core" in source,
+// so this always prints something even for an unstamped build; that default,
+// plus the build-time assertions in the engine and root Makefiles and in
+// hosted/Dockerfile, is what makes a forgotten `-X …Edition=hosted` flag
+// visible instead of silent (docs/plans/engine-divergence-workplan-review-2.md
+// finding N2).
 func FormatVersion() string {
 	v := Version
 	if GitCommit != "" {
 		v += fmt.Sprintf(" (git: %s)", GitCommit)
 	}
+	v += fmt.Sprintf(" edition: %s", Edition)
 	return v
 }
 

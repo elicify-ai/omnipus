@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Omnipus REST API
   version: 0.1.0
-  description: 'REST API surface for the Omnipus agentic gateway. All endpoints are under /api/v1. Authentication uses Bearer tokens issued by /auth/login or /onboarding/complete. State-changing requests must include the X-CSRF-Token header echoing the __Host-csrf cookie value (double-submit cookie, issue #97). See src/lib/api.ts for the CSRF_EXEMPT_PATHS list (endpoints that issue the cookie and cannot require it to be present yet).
+  description: 'REST API surface for the Omnipus agentic gateway. All endpoints are under /api/v1. Authentication uses the HttpOnly omnipus-session cookie, issued by /auth/login in local mode (core edition) or by the omnipus.ai sign-in flow (/auth/platform/start then the /auth/callback page) in platform mode (desktop, hosted) — or by /onboarding/complete. Which mode a build serves is derived from its stamped edition at registration time (ADR-0010 WP2); the two are mutually exclusive on any one binary. State-changing requests must include the X-CSRF-Token header echoing the __Host-csrf cookie value (double-submit cookie, issue #97). See src/lib/api.ts for the CSRF_EXEMPT_PATHS list (endpoints that issue the cookie and cannot require it to be present yet).
 
     '
   contact:
@@ -16,7 +16,7 @@ servers:
   description: Local development gateway (default port 5000)
 tags:
 - name: auth
-  description: "Authentication \u2014 login, logout, token validation, password management."
+  description: "Authentication \u2014 omnipus.ai sign-in, session state, logout, token validation."
 - name: onboarding
   description: "First-run onboarding wizard \u2014 provider probe and atomic setup."
 - name: sessions
@@ -92,16 +92,40 @@ components:
     BearerAuth:
       type: http
       scheme: bearer
-      description: 'Programmatic/CLI bearer token. The browser SPA does NOT use this: since ADR-044 it authenticates via the HttpOnly `omnipus-session` cookie (set by /auth/login and /onboarding/complete, sent automatically with credentials:include) and stores no JS-readable token. Bearer remains accepted server-side as an additive path for CLI/programmatic clients.
+      description: 'Programmatic/CLI bearer token. The browser SPA does NOT use this: since ADR-044 it authenticates via the HttpOnly `omnipus-session` cookie (set by /auth/login in local mode, by the omnipus.ai sign-in callback in platform mode, and by /onboarding/complete, sent automatically with credentials:include) and stores no JS-readable token. Bearer remains accepted server-side as an additive path for CLI/programmatic clients.
 
         '
   schemas:
+    ConfigurationRevision:
+      $ref: ./components/schemas/ConfigurationRevision.yaml
+    ConfigurationPersistenceStatus:
+      $ref: ./components/schemas/ConfigurationPersistenceStatus.yaml
+    ConfigurationActivationStatus:
+      $ref: ./components/schemas/ConfigurationActivationStatus.yaml
+    ConfigurationMutationState:
+      $ref: ./components/schemas/ConfigurationMutationState.yaml
+    ConfigurationMutationFailureState:
+      $ref: ./components/schemas/ConfigurationMutationFailureState.yaml
+    AgentFieldDescriptor:
+      $ref: ./components/schemas/AgentFieldDescriptor.yaml
+    AgentMCPBinding:
+      $ref: ./components/schemas/AgentMCPBinding.yaml
+    ToolPolicyChanges:
+      $ref: ./components/schemas/ToolPolicyChanges.yaml
     ErrorResponse:
       $ref: ./components/schemas/ErrorResponse.yaml
     LoginRequest:
       $ref: ./components/schemas/LoginRequest.yaml
     LoginResponse:
       $ref: ./components/schemas/LoginResponse.yaml
+    PlatformAuthStartRequest:
+      $ref: ./components/schemas/PlatformAuthStartRequest.yaml
+    PlatformAuthStartResponse:
+      $ref: ./components/schemas/PlatformAuthStartResponse.yaml
+    PlatformAuthClaimRequest:
+      $ref: ./components/schemas/PlatformAuthClaimRequest.yaml
+    AuthSessionResponse:
+      $ref: ./components/schemas/AuthSessionResponse.yaml
     BrowserInspectRequest:
       $ref: ./components/schemas/BrowserInspectRequest.yaml
     BrowserInspectResponse:
@@ -119,13 +143,18 @@ components:
       type: object
       title: OnboardingCompleteRequest
       description: >
-        Body for POST /onboarding/complete. Atomically sets up the first LLM
-        provider and creates the initial admin account. CSRF-exempt (no cookie
-        exists at this point). `provider` is discriminated by `auth_method`:
-        `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+        Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by
+        auth mode: in local mode (open-source edition) the route runs BEFORE
+        any session exists and mints the instance's first account — `admin`
+        is REQUIRED, upstream's behaviour restored. In platform mode
+        (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1
+        and 2: the omnipus.ai account is the login) — `admin` is REFUSED
+        (400) because no local credential is ever minted on that edition.
+        `provider` is discriminated by `auth_method`: `api_key` requires
+        `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is
+        optional in both modes.
       required:
         - provider
-        - admin
       additionalProperties: false
       properties:
         provider:
@@ -140,10 +169,13 @@ components:
               sign_in: '#/components/schemas/OnboardingProviderSignIn'
         admin:
           type: object
-          description: Initial admin account credentials.
+          description: >
+            Initial admin account credentials. Required in local mode;
+            refused (400) in platform mode.
           required:
             - username
             - password
+          additionalProperties: false
           properties:
             username:
               type: string
@@ -157,6 +189,10 @@ components:
               minLength: 8
               description: Admin password. Minimum 8 characters.
               example: "s3cr3tpassword"
+        preferences:
+          $ref: '#/components/schemas/OnboardingPreferences'
+    OnboardingPreferences:
+      $ref: ./components/schemas/OnboardingPreferences.yaml
     OnboardingProviderApiKey:
       $ref: ./components/schemas/OnboardingProviderApiKey.yaml
     OnboardingProviderSignIn:
@@ -194,7 +230,7 @@ components:
     SignInPollResponse:
       $ref: ./components/schemas/SignInPollResponse.yaml
     OnboardingCompleteResponse:
-      $ref: ./components/schemas/LoginResponse.yaml
+      $ref: ./components/schemas/OnboardingCompleteResponse.yaml
     ProbeProviderRequest:
       $ref: ./components/schemas/ProbeProviderRequest.yaml
     ProbeProviderResponse:
@@ -1332,6 +1368,8 @@ components:
       $ref: ./components/schemas/AgentShellPolicy.yaml
     AgentToolsCfg:
       $ref: ./components/schemas/AgentToolsCfg.yaml
+    AgentToolsMcpServerBinding:
+      $ref: ./components/schemas/AgentToolsMcpServerBinding.yaml
     AgentToolsUpdateRequest:
       $ref: ./components/schemas/AgentToolsUpdateRequest.yaml
     # AgentCreateRequest is a discriminated union hosted INLINE here (not in a
@@ -1474,6 +1512,8 @@ components:
       $ref: ./components/schemas/CatalogModel.yaml
     CatalogProtocol:
       $ref: ./components/schemas/CatalogProtocol.yaml
+    CatalogProviderRegion:
+      $ref: ./components/schemas/CatalogProviderRegion.yaml
     CatalogResizeLimits:
       $ref: ./components/schemas/CatalogResizeLimits.yaml
     ContextWindowSource:
@@ -1589,6 +1629,10 @@ components:
       $ref: ./components/schemas/McpServerToolsResponse.yaml
     AppState:
       $ref: ./components/schemas/AppState.yaml
+    AppStateIdentity:
+      $ref: ./components/schemas/AppStateIdentity.yaml
+    AppStateIdentityAccount:
+      $ref: ./components/schemas/AppStateIdentityAccount.yaml
     ValidateTokenResponse:
       $ref: ./components/schemas/ValidateTokenResponse.yaml
     DoctorIssue:
@@ -2131,11 +2175,96 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
 paths:
+  /auth/platform/start:
+    post:
+      operationId: startPlatformAuth
+      summary: Begin an omnipus.ai sign-in
+      description: "Mints a PKCE verifier (S256) and a single-use, 10-minute state, then returns the platform's authorization URL for the SPA to open in the SYSTEM browser (RFC 8252 \u00a78.12 \u2014 never an embedded web view). The verifier never leaves the gateway. The redirect_uri is this gateway's own loopback address, http://127.0.0.1:<port>/auth/callback, which needs no OS URL-scheme registration an unsigned desktop build cannot reliably claim (ADR-0008, 'The return trip is loopback'). CSRF-exempt and unauthenticated \u2014 it is the route a signed-out user reaches first \u2014 and it seeds the __Host-csrf cookie on success. Answers 503 when security.platform_auth.issuer is unset: there is no local password to fall back to.\n"
+      tags:
+      - auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformAuthStartRequest'
+      responses:
+        '200':
+          description: Sign-in started. Open authorize_url in the system browser.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformAuthStartResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+        '503':
+          description: Platform sign-in is not configured on this instance.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/platform/claim:
+    post:
+      operationId: claimPlatformAuth
+      summary: Collect the session the browser half of a sign-in just opened
+      description: "Exists because the browser's cookie jar is not the application's. On desktop the sign-in page opens in the user's REAL browser (RFC 8252 §8.12), so the Set-Cookie written by /auth/callback lands there and the Electron renderer never sees it — without this route the app would poll /auth/session forever behind a browser tab that says \"You're signed in\". A successful callback records the session it minted for 60 seconds, once, under a key derived from the state; presenting that state here issues the SAME omnipus-session and CSRF cookies on THIS response, making the caller the signed-in client. Delete-on-lookup, so a second claim cannot succeed. Unauthenticated by necessity (the caller is claiming the session it does not have), rate-limited on its own bucket, and NOT CSRF-exempt — /auth/platform/start seeded the CSRF cookie already. An unknown state, an expired entry and an already-collected one are one indistinguishable 404: a caller must not learn which.\n"
+      tags:
+      - auth
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformAuthClaimRequest'
+      responses:
+        '200':
+          description: The session was handed over; this response carries the cookies.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponse'
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '404':
+          description: "Nothing is waiting to be collected — unknown, expired or already claimed, deliberately not distinguished."
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+  /auth/session:
+    get:
+      operationId: getAuthSession
+      summary: Report whether this request carries a valid session
+      description: "Resolves the omnipus-session cookie and returns the account it belongs to, or 401 when there is none. Deliberately the thinnest possible answer: it performs no side effects, so both the sign-in screen (waiting for the browser half to finish) and the desktop shell (waiting to raise its window) can poll it about once a second without consequence. Rate-limited: 120 requests per IP per minute.\n"
+      tags:
+      - auth
+      security: []
+      responses:
+        '200':
+          description: The cookie resolves to a signed-in account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponse'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
   /auth/login:
     post:
       operationId: login
-      summary: Authenticate with username and password
-      description: "Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes \u2192 429.\n"
+      summary: Authenticate with username and password (local mode)
+      description: "Local-mode sign-in (core edition; ADR-0010 WP2 auth-mode seam). Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429. Not registered at all in platform mode (desktop, hosted) — see /auth/platform/start.\n"
       tags:
       - auth
       security: []
@@ -2234,10 +2363,8 @@ paths:
   /auth/change-password:
     post:
       operationId: changePassword
-      summary: Change the authenticated user's own password
-      description: 'Self-service password change. Requires the current password for verification. Requires authentication.
-
-        '
+      summary: Change the authenticated user's own password (local mode)
+      description: "Local-mode self-service password change (core edition; ADR-0010 WP2 auth-mode seam). Requires the current password for verification. Requires authentication. Not registered at all in platform mode.\n"
       tags:
       - auth
       security:
@@ -2266,10 +2393,8 @@ paths:
   /auth/reauth:
     post:
       operationId: reAuth
-      summary: Re-verify the user's password to consent to a sensitive setting change
-      description: 'Single-user consent primitive (FR-12.2). Re-verifies the authenticated user''s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
-
-        '
+      summary: Re-verify the user's password to consent to a sensitive setting change (local mode)
+      description: "Local-mode consent primitive (core edition; FR-12.2; ADR-0010 WP2 auth-mode seam). Re-verifies the authenticated user's one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited. Not registered at all in platform mode, where the signed-in session itself is the guard.\n"
       tags:
       - auth
       security:
@@ -2321,7 +2446,7 @@ paths:
     put:
       operationId: updateIntegrationProvider
       summary: Configure a search or voice-input integration provider
-      description: 'Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+      description: 'Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 
         '
       tags:
@@ -2423,12 +2548,11 @@ paths:
     post:
       operationId: completeOnboarding
       summary: Finalize first-run onboarding
-      description: 'Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response''s `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance''s state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account''s password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+      description: 'AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response''s `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
 
         '
       tags:
       - onboarding
-      security: []
       requestBody:
         required: true
         content:
@@ -2437,13 +2561,15 @@ paths:
               $ref: '#/components/schemas/OnboardingCompleteRequest'
       responses:
         '200':
-          description: Onboarding completed successfully. Bearer token ready.
+          description: Onboarding completed successfully for the authenticated account.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/OnboardingCompleteResponse'
         '400':
           $ref: '#/components/responses/400BadRequest'
+        '401':
+          $ref: '#/components/responses/401Unauthorized'
         '409':
           $ref: '#/components/responses/409Conflict'
         '429':
@@ -2895,9 +3021,10 @@ paths:
     put:
       operationId: updateAgent
       summary: Update agent configuration
-      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
-
-        '
+      description: >
+        Applies changed editable fields with a required revision. Protected or invalid
+        fields and stale revisions reject without writes. Successful saves report
+        live activation separately; partial storage failures report actual state.
       tags:
       - agents
       security:
@@ -2931,8 +3058,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Revision or inherited global policy changed; no writes occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
     delete:
       operationId: deleteAgent
       summary: Delete a custom agent
@@ -2940,8 +3073,8 @@ paths:
         Removes a custom (non-core, non-system) agent from config.json and
         reloads the live config. Built-in core/system agents (locked) and the
         `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`).
-        Deleting an agent also clears its session history and on-disk
-        workspace artifacts via the cascade pipeline. Audited (severity INFO,
+        Deleting an agent removes its entity and applicable SOUL bytes but
+        preserves unrelated files in the agent home. Audited (severity INFO,
         event `agent.delete`).
       tags:
       - agents
@@ -2955,9 +3088,18 @@ paths:
           type: string
         description: Agent ID.
         example: 550e8400-e29b-41d4-a716-446655440000
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
       responses:
-        '204':
-          description: Agent deleted.
+        '200':
+          description: Agent deleted. Reports persisted and activated state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -2966,8 +3108,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Revision or inherited global policy changed; no writes occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
   /agents/{id}/sessions:
     get:
       operationId: listAgentSessions
@@ -3039,9 +3187,10 @@ paths:
     put:
       operationId: updateAgentTools
       summary: Replace per-agent tool policy configuration
-      description: 'Replaces the agent''s tools_cfg in config.json. Locked (core/system) agents cannot have their tool policy overwritten via this endpoint (403). Triggers a config reload on success.
-
-        '
+      description: >
+        Replaces capability settings with explicit sparse override intent and a
+        required revision. Ordinary built-ins are editable; hidden capabilities
+        remain fixed. Reports persistence and live activation separately.
       tags:
       - agents
       security:
@@ -3075,8 +3224,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Revision or inherited global policy changed; no writes occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
   /agents/{id}/runner/test:
     post:
       operationId: testAgentRunner
@@ -4782,7 +4937,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     post:
       operationId: setGodMode
-      summary: Toggle the global god-mode switch (O14, password step-up)
+      summary: Toggle the global god-mode switch (O14, confirmation dialog)
       description: >
         Flips the global god-mode ("bypass-permissions") switch. When the build
         supports god mode AND this boot was already authorized (see
@@ -4796,9 +4951,9 @@ paths:
         effect after the gateway restarts. Disabling is always applied live.
         Audit logging, the prompt-injection guard, and rate limiting stay on.
         High blast radius — secured by RequireNotBypass
-        (dev_mode_bypass returns 503) AND a single-use password re-auth consent
-        token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403
-        otherwise). Returns 403 when enabling and god mode is not SUPPORTED in
+        (dev_mode_bypass returns 503); the SPA additionally confirms the flip
+        with the operator before sending (ADR-0008 ruling 6).
+        Returns 403 when enabling and god mode is not SUPPORTED in
         this build (compiled with nogodmode). Every toggle is audit-logged
         with the acting user.
       tags:
@@ -5082,9 +5237,9 @@ paths:
       summary: Rotate the credential vault key via a new passphrase
       description: >
         Re-encrypts the entire credential vault under a new Argon2id key derived
-        from new_passphrase (and a fresh salt). Sensitive change — requires a
-        re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 /
-        ADR-022). No restart is required; the in-memory key is updated in place.
+        from new_passphrase (and a fresh salt). Sensitive change — the SPA
+        confirms it with the operator before sending (ADR-0008 ruling 6). No
+        restart is required; the in-memory key is updated in place.
       tags:
       - Settings
       requestBody:
@@ -5110,12 +5265,6 @@ paths:
                     example: rotated
         '400':
           description: Invalid request (e.g. empty passphrase).
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '403':
-          description: Re-auth required or invalid consent token.
           content:
             application/json:
               schema:
@@ -6087,6 +6236,12 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '500':
+          description: Publication failed after storage changed; reports the actual persisted state. Revision is omitted when no live package remains.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
         '502':
           $ref: '#/components/responses/502BadGateway'
   /skills/marketplace:
@@ -6166,6 +6321,12 @@ paths:
         description: Skill slug (matches the `id` field on Skill).
         schema:
           type: string
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
+        description: Revision returned by GET /skills for the reviewed installed skill.
       responses:
         '204':
           description: Skill removed.
@@ -7808,6 +7969,14 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Workspace membership or graph revision changed; no writes occurred.
+        '500':
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
     delete:
       operationId: deleteWorkspace
       summary: Delete a workspace and cascade-delete its tasks and session links
@@ -7836,17 +8005,32 @@ paths:
         required: true
         schema:
           type: string
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
       responses:
-        '204':
-          description: Deleted
+        '200':
+          description: Workspace record deleted. Reports persisted and activated state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Workspace membership or graph revision changed, or the default workspace cannot be deleted; no authoritative delete occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed after the workspace record was removed; reports actual partial state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
 
   /workspaces/{id}/media:
     get:
@@ -9835,6 +10019,14 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
+        '409':
+          description: Workspace membership or graph revision changed; no writes occurred.
+        '500':
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
   /workspaces/{id}/mounts:
     post:
       operationId: createWorkspaceMount
@@ -9996,17 +10188,19 @@ paths:
               $ref: '#/components/schemas/WorkspaceInstructionsRequest'
       responses:
         '200':
-          description: Updated AGENT.md content (echoed back).
+          description: Instructions saved. Reports persisted and activated state; GET instructions for content readback.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WorkspaceInstructionsResponse'
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Instructions revision changed; no writes occurred.
         '405':
           description: Method not allowed.
           content:
@@ -10014,7 +10208,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
 
   /workspaces/{id}/plans:
     get:

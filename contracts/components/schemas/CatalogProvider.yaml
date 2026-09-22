@@ -55,6 +55,7 @@ properties:
       - google
       - ollama
       - cli
+      - bedrock
     description: >
       Primary wire protocol the factory dispatches on (ADR-067 D11). Absent
       only when tier is "unsupported" (F-19).
@@ -77,6 +78,26 @@ properties:
     type: string
     description: Deployment region when the provider has a regional split (e.g. "intl", "china", "us").
     example: "intl"
+  regions:
+    type: array
+    items:
+      $ref: './CatalogProviderRegion.yaml'
+    description: >
+      Issue #800 (Bedrock region contract): the regions offered in this
+      provider's own region picker, each with its cross-region inference
+      profile group. Distinct from `region` above (a company's plan x region
+      VARIANT split, a different provider id per region) — this field lists
+      the regions ONE provider row itself can be pointed at, e.g. Bedrock's
+      AWS regions. Absent or empty on a provider with no such picker.
+    example:
+      - id: "us-east-1"
+        group: "us"
+      - id: "eu-central-1"
+        group: "eu"
+      - id: "ap-northeast-1"
+        group: "jp"
+      - id: "us-gov-west-1"
+        group: ""
   plan:
     type: string
     description: Billing plan label when the provider has plan variants (e.g. "coding-plan").

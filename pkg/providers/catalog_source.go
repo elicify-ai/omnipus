@@ -88,6 +88,25 @@ func IsCatalogProvider(providerID string) bool {
 	return ok
 }
 
+// BedrockGroupForRegion looks up the cross-region inference profile group
+// for a region in a provider's own region picker (issue #800 / Bedrock
+// region contract, catalog.Provider.Regions). An unrecognized region (e.g.
+// an AWS_REGION value the picker does not list) or a provider with no
+// regions[] returns "" — on-demand only, never invented.
+//
+// Exported (orchestrator review round 2, D1) so pkg/gateway's onboarding
+// probe and PUT-triggered save-time key check can resolve the same group a
+// real turn's factory construction (factory_provider.go) would, without a
+// second copy of this lookup.
+func BedrockGroupForRegion(regions []catalog.ProviderRegion, region string) string {
+	for _, r := range regions {
+		if r.ID == region {
+			return r.Group
+		}
+	}
+	return ""
+}
+
 // APIBaseFor returns the catalog's primary base URL for a provider id, or ""
 // when the id is unknown or the row carries no URL (an unsupported row).
 // Callers that hold an explicit `api_base` MUST prefer it — the catalog URL

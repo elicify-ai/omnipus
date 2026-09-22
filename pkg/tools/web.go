@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -966,7 +964,11 @@ func makeSearchClient(ssrf *security.SSRFChecker, proxy string, timeout time.Dur
 		// the OS/network level.
 		return ssrf.SafeClient(), nil
 	}
-	return utils.CreateHTTPClient(proxy, timeout)
+	client, err := utils.CreateHTTPClient(proxy, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("makeSearchClient: %w", err)
+	}
+	return client, nil
 }
 
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
@@ -1334,204 +1336,22 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult("internal error: SSRF checker not initialized")
 	}
 
-	urlStr, ok := args["url"].(string)
-	if !ok {
-		return ErrorResult("url is required")
+	urlStr, maxChars, errResult := webFetchParseArgs(args, t.maxChars, t.ssrf)
+	if errResult != nil {
+		return errResult
 	}
 
-	parsedURL, err := url.Parse(urlStr)
-	if err != nil {
-		return ErrorResult(fmt.Sprintf("invalid URL: %v", err))
+	status, contentType, body, errResult := t.fetchURL(ctx, urlStr)
+	if errResult != nil {
+		return errResult
 	}
 
-	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return ErrorResult("only http/https URLs are allowed")
+	text, extractor, nonUTF8Charset, errResult := t.decodeFetchedBody(body, contentType)
+	if errResult != nil {
+		return errResult
 	}
 
-	if parsedURL.Host == "" {
-		return ErrorResult("missing domain in URL")
-	}
-
-	// Lightweight pre-flight: block obvious localhost/literal-IP without DNS resolution.
-	// The real SSRF guard is webFetchDialContext at connect time (SEC-24), which
-	// re-resolves and re-checks every candidate address to close the TOCTOU
-	// window a pre-flight-only check would leave open.
-	hostname := parsedURL.Hostname()
-	if isObviousPrivateHost(hostname, t.ssrf) {
-		return ErrorResult("fetching private or local network hosts is not allowed")
-	}
-
-	maxChars := t.maxChars
-	if mc, ok := args["maxChars"].(float64); ok {
-		if int(mc) >= 100 {
-			maxChars = int(mc)
-		}
-	}
-
-	doFetch := func(ua string) (*http.Response, []byte, error) {
-		req, reqErr := http.NewRequestWithContext(ctx, "GET", urlStr, nil)
-		if reqErr != nil {
-			return nil, nil, fmt.Errorf("failed to create request: %w", reqErr)
-		}
-		req.Header.Set("User-Agent", ua)
-		resp, doErr := t.client.Do(req)
-		if doErr != nil {
-			return nil, nil, fmt.Errorf("request failed: %w", doErr)
-		}
-		resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
-
-		b, readErr := io.ReadAll(resp.Body)
-		return resp, b, readErr
-	}
-
-	resp, body, err := doFetch(userAgent)
-	if resp != nil && resp.Body != nil {
-		defer resp.Body.Close()
-	}
-
-	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			return ErrorResult(
-				fmt.Sprintf(
-					"failed to read response: size exceeded %d bytes limit",
-					t.fetchLimitBytes,
-				),
-			)
-		}
-		return ErrorResult(err.Error())
-	}
-
-	// Cloudflare (and similar WAFs) signal bot challenges with 403 + cf-mitigated: challenge.
-	// Retry once with an honest User-Agent that identifies omnipus, which some
-	// operators explicitly allow-list for AI assistants.
-	if resp.StatusCode == http.StatusForbidden && resp.Header.Get("Cf-Mitigated") == "challenge" {
-		logger.DebugCF("tool", "Cloudflare challenge detected, retrying with honest User-Agent",
-			map[string]any{"url": urlStr})
-		resp.Body.Close()
-		honestUA := fmt.Sprintf(userAgentHonest, config.Version)
-		resp2, body2, err2 := doFetch(honestUA)
-		if resp2 != nil && resp2.Body != nil {
-			defer resp2.Body.Close()
-		}
-
-		if err2 == nil {
-			resp, body = resp2, body2
-		} else {
-			var maxBytesErr *http.MaxBytesError
-			if errors.As(err2, &maxBytesErr) {
-				return ErrorResult(
-					fmt.Sprintf("failed to read response: size exceeded %d bytes limit", t.fetchLimitBytes),
-				)
-			}
-			return ErrorResult(err2.Error())
-		}
-	}
-
-	bodyStr := string(body)
-	contentType := resp.Header.Get("Content-Type")
-
-	mediaType, params, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		// The most common error here is "mime: no media type" if the header is empty.
-		logger.WarnCF("tool", "Failed to parse Content-Type", map[string]any{
-			"raw_header": contentType,
-			"error":      err.Error(),
-		})
-
-		// security fallback
-		mediaType = "application/octet-stream"
-	}
-
-	var nonUTF8Charset bool
-	charset, hasCharset := params["charset"]
-	if hasCharset {
-		// If the charset is not utf-8, we might have to convert the bodyStr
-		// before passing it to the HTML/Markdown parser
-		if strings.ToLower(charset) != "utf-8" {
-			logger.WarnCF(
-				"tool",
-				"Note: the content is not in UTF-8",
-				map[string]any{"charset": charset},
-			)
-			nonUTF8Charset = true
-		}
-	}
-
-	var text, extractor string
-
-	switch {
-	case mediaType == "application/json":
-		var jsonData any
-		if err := json.Unmarshal(body, &jsonData); err != nil {
-			text = bodyStr
-			extractor = "raw"
-			break
-		}
-
-		formatted, err := json.MarshalIndent(jsonData, "", "  ")
-		if err != nil {
-			text = bodyStr
-			extractor = "raw"
-			break
-		}
-
-		text = string(formatted)
-		extractor = "json"
-
-	case mediaType == "text/html" || looksLikeHTML(bodyStr):
-		switch strings.ToLower(t.format) {
-		case "markdown":
-			var err error
-			text, err = utils.HtmlToMarkdown(bodyStr)
-			if err != nil {
-				return ErrorResult(fmt.Sprintf("failed to HTML to markdown: %v", err))
-			}
-			extractor = "markdown"
-
-		default:
-			text = t.extractText(bodyStr)
-			extractor = "text"
-		}
-
-	default:
-		text = bodyStr
-		extractor = "raw"
-	}
-
-	truncated := len(text) > maxChars
-	if truncated {
-		text = text[:maxChars] + "\n[Content truncated due to size limit]"
-	}
-
-	if nonUTF8Charset {
-		text += "\n\n[Warning: Content charset is not UTF-8; text may contain encoding artifacts]"
-	}
-
-	result := map[string]any{
-		"url":       urlStr,
-		"status":    resp.StatusCode,
-		"extractor": extractor,
-		"truncated": truncated,
-		"length":    len(text),
-		"text":      text,
-	}
-
-	resultJSON, marshalErr := json.MarshalIndent(result, "", "  ")
-	if marshalErr != nil {
-		return ErrorResult(fmt.Sprintf("failed to format fetch result: %v", marshalErr))
-	}
-
-	return &ToolResult{
-		ForLLM: string(resultJSON),
-		ForUser: fmt.Sprintf(
-			"Fetched %d bytes from %s (extractor: %s, truncated: %v)",
-			len(text),
-			urlStr,
-			extractor,
-			truncated,
-		),
-	}
+	return webFetchBuildResult(urlStr, status, text, extractor, maxChars, nonUTF8Charset)
 }
 
 func looksLikeHTML(body string) bool {

@@ -105,9 +105,9 @@ func TestEventBus_DropsWhenSubscriberIsFull(t *testing.T) {
 
 // TestEventBus_MustNotDropEventKind_DeliversWithinRetryWindow proves the
 // 2026-07-31 burst-drop fix: a SubTurnSpawn/SubTurnEnd event that hits a
-// momentarily-full subscriber buffer is NOT dropped immediately (unlike every
-// other kind) as long as the subscriber drains in time to make room within
-// mustNotDropEventKindTimeout.
+// momentarily-full subscriber buffer is NOT dropped immediately (unlike
+// ordinary best-effort events) as long as the subscriber drains in time to
+// make room within mustNotDropEventKindTimeout.
 func TestEventBus_MustNotDropEventKind_DeliversWithinRetryWindow(t *testing.T) {
 	eb := NewEventBus()
 	sub := eb.Subscribe(1)
@@ -143,6 +143,64 @@ func TestEventBus_MustNotDropEventKind_DeliversWithinRetryWindow(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("expected the spawn event to be sitting in the subscriber buffer after Emit returned")
+	}
+}
+
+// TestEventBus_DelegatedTaskLimit_DeliversWithinRetryWindow proves the
+// operator's single identified limit notice gets the same bounded delivery
+// protection as sub-turn span boundaries, without making ordinary error
+// frames non-lossy.
+func TestEventBus_DelegatedTaskLimit_DeliversWithinRetryWindow(t *testing.T) {
+	eb := NewEventBus()
+	sub := eb.Subscribe(1)
+	defer eb.Unsubscribe(sub.ID)
+
+	eb.Emit(Event{Kind: EventKindLLMRequest}) // fills the 1-slot buffer
+
+	drained := make(chan struct{})
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		<-sub.C
+		close(drained)
+	}()
+
+	identified := Event{
+		Kind: EventKindError,
+		Payload: ErrorPayload{
+			Code: string(CodeDelegatedTaskLimit),
+		},
+	}
+	eb.Emit(identified)
+	<-drained
+
+	if got := eb.Dropped(EventKindError); got != 0 {
+		t.Fatalf("expected delegated-task limit notice to use the bounded retry, got %d drops", got)
+	}
+	select {
+	case evt := <-sub.C:
+		payload, ok := evt.Payload.(ErrorPayload)
+		if !ok || payload.Code != string(CodeDelegatedTaskLimit) {
+			t.Fatalf("expected identified delegated-task limit event, got %#v", evt.Payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected delegated-task limit notice after subscriber drained")
+	}
+}
+
+func TestEventBus_OrdinaryError_RemainsBestEffort(t *testing.T) {
+	eb := NewEventBus()
+	sub := eb.Subscribe(1)
+	defer eb.Unsubscribe(sub.ID)
+
+	eb.Emit(Event{Kind: EventKindLLMRequest}) // fills the 1-slot buffer
+	start := time.Now()
+	eb.Emit(Event{Kind: EventKindError, Payload: ErrorPayload{Code: string(CodeTurnTimedOut)}})
+
+	if elapsed := time.Since(start); elapsed >= mustNotDropEventKindTimeout {
+		t.Fatalf("ordinary error unexpectedly used bounded retry; took %s", elapsed)
+	}
+	if got := eb.Dropped(EventKindError); got != 1 {
+		t.Fatalf("expected ordinary full-buffer error to be dropped immediately, got %d drops", got)
 	}
 }
 
@@ -192,6 +250,13 @@ func TestEventBus_MustNotDropEventKind_ClosedBusStillCounts(t *testing.T) {
 
 	if got := eb.Dropped(EventKindSubTurnEnd); got != 1 {
 		t.Fatalf("expected a must-not-drop event emitted on a closed bus to still be counted, got %d", got)
+	}
+	eb.Emit(Event{
+		Kind:    EventKindError,
+		Payload: ErrorPayload{Code: string(CodeDelegatedTaskLimit)},
+	})
+	if got := eb.Dropped(EventKindError); got != 1 {
+		t.Fatalf("expected a delegated-task limit notice emitted on a closed bus to still be counted, got %d", got)
 	}
 	// A non-must-not-drop kind on a closed bus stays silent-drop (unchanged,
 	// high-frequency kinds are lossy by design even when live).

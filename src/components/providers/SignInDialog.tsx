@@ -192,7 +192,6 @@ export function SignInDialog({
       setImportError('')
       setCodexLoginPresent(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, providerId])
 
   // FR-047 availability probe, openai-chatgpt only. Kept out of `begin()` so a
@@ -283,7 +282,6 @@ export function SignInDialog({
       cancelled = true
       if (timeoutId) clearTimeout(timeoutId)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, providerId, deviceAuthId, startIntervalSeconds])
 
   const handleCheckCliSignIn = async () => {

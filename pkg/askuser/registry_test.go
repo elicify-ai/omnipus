@@ -9,14 +9,18 @@
 package askuser
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // --- fakes ---
@@ -29,13 +33,14 @@ type recordedResume struct {
 type fakeResume struct {
 	mu    sync.Mutex
 	calls []recordedResume
+	err   error
 }
 
 func (f *fakeResume) DispatchResume(set *PendingSet, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, recordedResume{Set: set, Text: text})
-	return nil
+	return f.err
 }
 
 func (f *fakeResume) count() int {
@@ -142,6 +147,209 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 func strp(s string) *string { return &s }
+
+func captureAskUserSlog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return buf
+}
+
+func findAskUserRegistryLog(t *testing.T, buf *bytes.Buffer, message, cardID string) map[string]any {
+	t.Helper()
+	recordCount := 0
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		recordCount++
+		if record["msg"] == message && record["card_id"] == cardID {
+			return record
+		}
+	}
+	t.Fatalf("missing registry log message %q for card_id=%s (captured_record_count=%d)",
+		message, cardID, recordCount)
+	return nil
+}
+
+func TestLifecycleLogging_SubmitDeliveredCountsOnly(t *testing.T) {
+	logBuf := captureAskUserSlog(t)
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	resume := &fakeResume{}
+	reg := NewRegistry(store, resume, Options{})
+	t.Cleanup(reg.Quiesce)
+
+	const secretSelected = "CONFIDENTIAL-SELECTED-DO-NOT-LOG"
+	set := testSet(sid,
+		Question{
+			Header: "Scope", Question: "Which scope?",
+			Options: []Option{{Label: secretSelected}, {Label: "Public option"}},
+		},
+		Question{
+			Header: "Notes", Question: "Any notes?",
+			Options: []Option{{Label: "None"}, {Label: "Add note"}},
+		},
+	)
+	set.CardID = "ask_logging_counts"
+	require.NoError(t, reg.CreatePending(set))
+
+	secretAnswer := "CONFIDENTIAL-ANSWER-DO-NOT-LOG"
+	require.NoError(t, reg.Submit(set.CardID, sid, "", []SubmittedAnswer{
+		{Header: "Scope", Selected: []string{secretSelected}, AutoDefault: true},
+		{Header: "Notes", FreeText: &secretAnswer},
+	}))
+
+	created := findAskUserRegistryLog(t, logBuf, "askuser: card created", set.CardID)
+	assert.Equal(t, "INFO", created["level"])
+	assert.Equal(t, float64(2), created["question_count"])
+
+	submitted := findAskUserRegistryLog(t, logBuf, "askuser: answer submitted", set.CardID)
+	assert.Equal(t, "INFO", submitted["level"])
+	assert.Equal(t, float64(2), submitted["answer_count"])
+	assert.Equal(t, float64(1), submitted["selected_option_count"])
+	assert.Equal(t, float64(1), submitted["free_text_count"])
+	assert.Equal(t, float64(1), submitted["auto_default_count"])
+
+	if strings.Contains(logBuf.String(), secretAnswer) || strings.Contains(logBuf.String(), secretSelected) {
+		t.Fatal("AskUserQuestion lifecycle logs exposed answer content")
+	}
+}
+
+func TestDispatchResume_LogsStrandedWithoutDispatcher(t *testing.T) {
+	logBuf := captureAskUserSlog(t)
+
+	stranded := testSet("session_stranded")
+	stranded.CardID = "ask_stranded"
+	stranded.Status = StatusAnswered
+	stranded.Answers = []Answer{{Header: "Scope", FreeText: strp("STRANDED-ANSWER-DO-NOT-LOG")}}
+	strandedReg := NewRegistry(nil, nil, Options{})
+	require.Error(t, strandedReg.dispatchResume(stranded, false))
+	strandedLog := findAskUserRegistryLog(t, logBuf, "askuser: resume dispatch completed", stranded.CardID)
+	assert.Equal(t, "WARN", strandedLog["level"])
+	assert.Equal(t, "stranded", strandedLog["outcome"])
+	assert.Equal(t, "no_dispatcher", strandedLog["reason"])
+
+	if strings.Contains(logBuf.String(), "DO-NOT-LOG") {
+		t.Fatal("resume outcome logs exposed answer content")
+	}
+}
+
+func TestDefaultSafeAutoSubmit_LogsFiring(t *testing.T) {
+	logBuf := captureAskUserSlog(t)
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	resume := &fakeResume{}
+	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 10 * time.Millisecond})
+	t.Cleanup(reg.Quiesce)
+
+	const secretRecommended = "AUTO-DEFAULT-ANSWER-DO-NOT-LOG"
+	set := testSet(sid, Question{
+		Header: "Scope", Question: "Which scope?", Recommended: secretRecommended, DefaultSafe: true,
+		Options: []Option{{Label: secretRecommended}, {Label: "Full stack"}},
+	})
+	set.CardID = "ask_auto_submit_log"
+	require.NoError(t, reg.CreatePending(set))
+	waitFor(t, "server auto-submit", func() bool { return resume.count() == 1 })
+	reg.Quiesce()
+
+	record := findAskUserRegistryLog(t, logBuf, "askuser: default-safe auto-submit fired", set.CardID)
+	assert.Equal(t, "INFO", record["level"])
+	assert.Equal(t, float64(1), record["question_count"])
+	assert.Equal(t, float64(1), record["answer_count"])
+	if strings.Contains(logBuf.String(), secretRecommended) {
+		t.Fatal("default-safe auto-submit log exposed answer content")
+	}
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	for i := range entries {
+		if entries[i].Role == "user" {
+			t.Fatalf("server auto-submit must not impersonate a user transcript record: %+v", entries[i])
+		}
+	}
+}
+
+func TestSubmit_PersistsHumanFreeTextAsCorrelatedUserTranscript(t *testing.T) {
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	resume := &fakeResume{}
+	reg := NewRegistry(store, resume, Options{})
+	t.Cleanup(reg.Quiesce)
+
+	set := testSet(sid)
+	set.CardID = "ask_human_free_text"
+	require.NoError(t, reg.CreatePending(set))
+	freeText := "Use the private staging environment."
+	require.NoError(t, reg.Submit(set.CardID, sid, "", []SubmittedAnswer{
+		{Header: "Scope", FreeText: &freeText},
+	}))
+
+	entries, err := store.ReadTranscript(sid)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "a human card submission must add one transcript record")
+	require.Equal(t, "user", entries[0].Role)
+	require.Equal(t, "mia", entries[0].AgentID)
+	persisted, recognized, err := ParseResumeMessage(entries[0].Content)
+	require.NoError(t, err)
+	require.True(t, recognized, "the transcript record must use the canonical resume-message shape")
+	require.Equal(t, set.CardID, persisted.CardID)
+	require.Equal(t, StatusAnswered, persisted.Status)
+	require.Len(t, persisted.Answers, 1)
+	require.NotNil(t, persisted.Answers[0].FreeText)
+	require.Equal(t, freeText, *persisted.Answers[0].FreeText,
+		"free text typed into the card is user-authored conversation content")
+}
+
+func TestSubmit_TranscriptPersistenceUnavailableDoesNotResume(t *testing.T) {
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	metaOnly := &countingMeta{inner: store}
+	resume := &fakeResume{}
+	reg := NewRegistry(metaOnly, resume, Options{})
+	t.Cleanup(reg.Quiesce)
+
+	set := testSet(sid)
+	require.NoError(t, reg.CreatePending(set))
+	err := reg.Submit(set.CardID, sid, "", []SubmittedAnswer{
+		{Header: "Scope", Selected: []string{"Backend"}},
+	})
+
+	require.ErrorIs(t, err, ErrResumeDispatch)
+	require.Zero(t, resume.count(),
+		"the agent must not act on a human answer that could not be written to the transcript")
+}
+
+func TestDefaultSafeAutoSubmit_ResumeFailureLogRedactsDispatcherError(t *testing.T) {
+	logBuf := captureAskUserSlog(t)
+	store := newTestStore(t)
+	sid := newOwnerSession(t, store)
+	const secretRecommended = "DISPATCHER-ECHOED-ANSWER-DO-NOT-LOG"
+	resume := &fakeResume{err: errors.New("dispatcher echoed " + secretRecommended)}
+	reg := NewRegistry(store, resume, Options{DefaultSafeDelay: 10 * time.Millisecond})
+	t.Cleanup(reg.Quiesce)
+
+	set := testSet(sid, Question{
+		Header: "Scope", Question: "Which scope?", Recommended: secretRecommended, DefaultSafe: true,
+		Options: []Option{{Label: secretRecommended}, {Label: "Full stack"}},
+	})
+	set.CardID = "ask_auto_submit_failure_log"
+	require.NoError(t, reg.CreatePending(set))
+	waitFor(t, "failed server auto-submit resume", func() bool { return resume.count() == 1 })
+	reg.Quiesce()
+
+	record := findAskUserRegistryLog(t, logBuf, "askuser: server auto-submit resume dispatch failed", set.CardID)
+	assert.Equal(t, "WARN", record["level"])
+	assert.Equal(t, "resume_dispatch_failed", record["reason"])
+	if strings.Contains(logBuf.String(), secretRecommended) {
+		t.Fatal("auto-submit resume-failure log exposed answer content through dispatcher error")
+	}
+}
 
 // --- Test 3/5 backend halves: create, persistence, one-per-session, cap,
 // delegated-child rejection ---

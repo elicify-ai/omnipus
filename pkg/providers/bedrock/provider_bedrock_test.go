@@ -1,657 +1,322 @@
-//go:build bedrock
-
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
-//
-// Copyright (c) 2026 Omnipus contributors
 
 package bedrock
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
+func TestNewProvider_APIKeyOnlyAndRegionalEndpoint(t *testing.T) {
+	_, err := NewProvider("")
+	require.ErrorContains(t, err, "api key is required")
+
+	p, err := NewProvider("test-key", WithRegion("ap-southeast-3"))
+	require.NoError(t, err)
+	assert.Equal(t, "ap-southeast-3", p.Region())
+	assert.Equal(t, "https://bedrock-runtime.ap-southeast-3.amazonaws.com", p.Endpoint())
+}
+
 func TestConvertMessages_SystemPrompts(t *testing.T) {
-	messages := []Message{
-		{Role: "system", Content: "You are a helpful assistant."},
+	messages, system := convertMessages([]Message{
+		{Role: "system", Content: "You are helpful."},
 		{Role: "user", Content: "Hello"},
-	}
-
-	bedrockMsgs, systemPrompts := convertMessages(messages)
-
-	assert.Len(t, systemPrompts, 1)
-	assert.Len(t, bedrockMsgs, 1)
-
-	// Check system prompt
-	textBlock, ok := systemPrompts[0].(*types.SystemContentBlockMemberText)
-	require.True(t, ok)
-	assert.Equal(t, "You are a helpful assistant.", textBlock.Value)
-
-	// Check user message
-	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[0].Role)
+	})
+	require.Len(t, system, 1)
+	assert.Equal(t, "You are helpful.", system[0].Text)
+	require.Len(t, messages, 1)
+	assert.Equal(t, "user", messages[0].Role)
 }
 
 func TestConvertMessages_UserMessage(t *testing.T) {
-	messages := []Message{
-		{Role: "user", Content: "What is 2+2?"},
-	}
-
-	bedrockMsgs, systemPrompts := convertMessages(messages)
-
-	assert.Empty(t, systemPrompts)
-	assert.Len(t, bedrockMsgs, 1)
-	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[0].Role)
-
-	textBlock, ok := bedrockMsgs[0].Content[0].(*types.ContentBlockMemberText)
-	require.True(t, ok)
-	assert.Equal(t, "What is 2+2?", textBlock.Value)
+	messages, system := convertMessages([]Message{{Role: "user", Content: "What is 2+2?"}})
+	assert.Empty(t, system)
+	require.Len(t, messages, 1)
+	require.Len(t, messages[0].Content, 1)
+	assert.Equal(t, "What is 2+2?", *messages[0].Content[0].Text)
 }
 
 func TestConvertMessages_AssistantMessage(t *testing.T) {
-	messages := []Message{
-		{Role: "assistant", Content: "The answer is 4."},
-	}
-
-	bedrockMsgs, _ := convertMessages(messages)
-
-	assert.Len(t, bedrockMsgs, 1)
-	assert.Equal(t, types.ConversationRoleAssistant, bedrockMsgs[0].Role)
-
-	textBlock, ok := bedrockMsgs[0].Content[0].(*types.ContentBlockMemberText)
-	require.True(t, ok)
-	assert.Equal(t, "The answer is 4.", textBlock.Value)
+	messages, _ := convertMessages([]Message{{Role: "assistant", Content: "Four."}})
+	require.Len(t, messages, 1)
+	assert.Equal(t, "assistant", messages[0].Role)
+	assert.Equal(t, "Four.", *messages[0].Content[0].Text)
 }
 
 func TestConvertMessages_ToolResult(t *testing.T) {
-	messages := []Message{
-		{Role: "tool", Content: "Result from tool", ToolCallID: "call_123"},
-	}
-
-	bedrockMsgs, _ := convertMessages(messages)
-
-	assert.Len(t, bedrockMsgs, 1)
-	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[0].Role)
-
-	toolResult, ok := bedrockMsgs[0].Content[0].(*types.ContentBlockMemberToolResult)
-	require.True(t, ok)
-	assert.Equal(t, "call_123", aws.ToString(toolResult.Value.ToolUseId))
+	messages, _ := convertMessages([]Message{{Role: "tool", Content: "result", ToolCallID: "call_123"}})
+	result := messages[0].Content[0].ToolResult
+	require.NotNil(t, result)
+	assert.Equal(t, "call_123", result.ToolUseID)
+	assert.Equal(t, "result", *result.Content[0].Text)
 }
 
 func TestConvertMessages_MultipleToolResultsMerged(t *testing.T) {
-	// When an assistant makes multiple tool calls, all tool results must be
-	// merged into a single user message for Bedrock
-	messages := []Message{
-		{Role: "user", Content: "What's the weather in NYC and LA?"},
-		{
-			Role:    "assistant",
-			Content: "Let me check both cities.",
-			ToolCalls: []protocoltypes.ToolCall{
-				{ID: "call_nyc", Name: "get_weather", Arguments: map[string]any{"city": "NYC"}},
-				{ID: "call_la", Name: "get_weather", Arguments: map[string]any{"city": "LA"}},
-			},
-		},
-		{Role: "tool", Content: "NYC: 72°F, sunny", ToolCallID: "call_nyc"},
-		{Role: "tool", Content: "LA: 85°F, clear", ToolCallID: "call_la"},
-	}
-
-	bedrockMsgs, _ := convertMessages(messages)
-
-	// Should be: user message, assistant message, merged tool results (single user message)
-	assert.Len(t, bedrockMsgs, 3)
-
-	// First message: user
-	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[0].Role)
-
-	// Second message: assistant with tool calls
-	assert.Equal(t, types.ConversationRoleAssistant, bedrockMsgs[1].Role)
-
-	// Third message: merged tool results in single user message
-	assert.Equal(t, types.ConversationRoleUser, bedrockMsgs[2].Role)
-	assert.Len(t, bedrockMsgs[2].Content, 2) // Both tool results in one message
-
-	// Verify both tool results are present
-	result1, ok := bedrockMsgs[2].Content[0].(*types.ContentBlockMemberToolResult)
-	require.True(t, ok)
-	assert.Equal(t, "call_nyc", aws.ToString(result1.Value.ToolUseId))
-
-	result2, ok := bedrockMsgs[2].Content[1].(*types.ContentBlockMemberToolResult)
-	require.True(t, ok)
-	assert.Equal(t, "call_la", aws.ToString(result2.Value.ToolUseId))
+	messages, _ := convertMessages([]Message{
+		{Role: "user", Content: "weather"},
+		{Role: "assistant", ToolCalls: []ToolCall{
+			{ID: "call_nyc", Name: "weather", Arguments: map[string]any{"city": "NYC"}},
+			{ID: "call_la", Name: "weather", Arguments: map[string]any{"city": "LA"}},
+		}},
+		{Role: "tool", Content: "sunny", ToolCallID: "call_nyc"},
+		{Role: "tool", Content: "clear", ToolCallID: "call_la"},
+	})
+	require.Len(t, messages, 3)
+	assert.Equal(t, "user", messages[2].Role)
+	require.Len(t, messages[2].Content, 2)
+	assert.Equal(t, "call_nyc", messages[2].Content[0].ToolResult.ToolUseID)
+	assert.Equal(t, "call_la", messages[2].Content[1].ToolResult.ToolUseID)
 }
 
 func TestConvertMessages_AssistantWithToolCalls(t *testing.T) {
-	messages := []Message{
-		{
-			Role:    "assistant",
-			Content: "Let me calculate that.",
-			ToolCalls: []protocoltypes.ToolCall{
-				{
-					ID:        "call_456",
-					Name:      "calculator",
-					Arguments: map[string]any{"expression": "2+2"},
-				},
-			},
-		},
-	}
-
-	bedrockMsgs, _ := convertMessages(messages)
-
-	assert.Len(t, bedrockMsgs, 1)
-	assert.Len(t, bedrockMsgs[0].Content, 2) // text + tool use
-
-	// Check text content
-	textBlock, ok := bedrockMsgs[0].Content[0].(*types.ContentBlockMemberText)
-	require.True(t, ok)
-	assert.Equal(t, "Let me calculate that.", textBlock.Value)
-
-	// Check tool use
-	toolUse, ok := bedrockMsgs[0].Content[1].(*types.ContentBlockMemberToolUse)
-	require.True(t, ok)
-	assert.Equal(t, "call_456", aws.ToString(toolUse.Value.ToolUseId))
-	assert.Equal(t, "calculator", aws.ToString(toolUse.Value.Name))
+	messages, _ := convertMessages([]Message{{
+		Role: "assistant", Content: "Calculating.",
+		ToolCalls: []ToolCall{{ID: "call_456", Name: "calculator", Arguments: map[string]any{"expression": "2+2"}}},
+	}})
+	require.Len(t, messages[0].Content, 2)
+	assert.Equal(t, "Calculating.", *messages[0].Content[0].Text)
+	assert.Equal(t, "calculator", messages[0].Content[1].ToolUse.Name)
+	assert.Equal(t, "call_456", messages[0].Content[1].ToolUse.ToolUseID)
 }
 
 func TestConvertTools_Basic(t *testing.T) {
-	tools := []ToolDefinition{
-		{
-			Function: protocoltypes.ToolFunctionDefinition{
-				Name:        "get_weather",
-				Description: "Get the current weather",
-				Parameters: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"location": map[string]any{"type": "string"},
-					},
-				},
-			},
-		},
-	}
-
-	toolConfig := convertTools(tools)
-
-	assert.NotNil(t, toolConfig)
-	assert.Len(t, toolConfig.Tools, 1)
-
-	toolSpec, ok := toolConfig.Tools[0].(*types.ToolMemberToolSpec)
-	require.True(t, ok)
-	assert.Equal(t, "get_weather", aws.ToString(toolSpec.Value.Name))
-	assert.Equal(t, "Get the current weather", aws.ToString(toolSpec.Value.Description))
+	toolConfig := convertTools([]ToolDefinition{{Function: ToolFunctionDefinition{
+		Name: "get_weather", Description: "Get weather",
+		Parameters: map[string]any{"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}}},
+	}}})
+	require.Len(t, toolConfig.Tools, 1)
+	assert.Equal(t, "get_weather", toolConfig.Tools[0].ToolSpec.Name)
+	assert.Equal(t, "Get weather", toolConfig.Tools[0].ToolSpec.Description)
+	assert.Equal(t, "object", toolConfig.Tools[0].ToolSpec.InputSchema.JSON["type"])
 }
 
 func TestConvertTools_SkipsEmptyName(t *testing.T) {
-	tools := []ToolDefinition{
-		{
-			Function: protocoltypes.ToolFunctionDefinition{
-				Name:        "",
-				Description: "Empty name tool",
-			},
-		},
-		{
-			Function: protocoltypes.ToolFunctionDefinition{
-				Name:        "   ",
-				Description: "Whitespace name tool",
-			},
-		},
-		{
-			Function: protocoltypes.ToolFunctionDefinition{
-				Name:        "valid_tool",
-				Description: "Valid tool",
-			},
-		},
-	}
-
-	toolConfig := convertTools(tools)
-
-	assert.Len(t, toolConfig.Tools, 1)
-	toolSpec := toolConfig.Tools[0].(*types.ToolMemberToolSpec)
-	assert.Equal(t, "valid_tool", aws.ToString(toolSpec.Value.Name))
+	toolConfig := convertTools([]ToolDefinition{
+		{Function: ToolFunctionDefinition{Name: ""}},
+		{Function: ToolFunctionDefinition{Name: "   "}},
+		{Function: ToolFunctionDefinition{Name: "valid"}},
+	})
+	require.Len(t, toolConfig.Tools, 1)
+	assert.Equal(t, "valid", toolConfig.Tools[0].ToolSpec.Name)
 }
 
 func TestConvertTools_NilParameters(t *testing.T) {
-	tools := []ToolDefinition{
-		{
-			Function: protocoltypes.ToolFunctionDefinition{
-				Name:        "simple_tool",
-				Description: "A tool with no parameters",
-				Parameters:  nil,
-			},
-		},
-	}
-
-	toolConfig := convertTools(tools)
-
-	assert.Len(t, toolConfig.Tools, 1)
-	// Should not panic and should create a valid tool
+	toolConfig := convertTools([]ToolDefinition{{Function: ToolFunctionDefinition{Name: "simple"}}})
+	require.Len(t, toolConfig.Tools, 1)
+	assert.Equal(t, "object", toolConfig.Tools[0].ToolSpec.InputSchema.JSON["type"])
 }
 
 func TestBuildUserContent_TextOnly(t *testing.T) {
-	msg := Message{Content: "Hello world"}
-
-	content := buildUserContent(msg)
-
-	assert.Len(t, content, 1)
-	textBlock, ok := content[0].(*types.ContentBlockMemberText)
-	require.True(t, ok)
-	assert.Equal(t, "Hello world", textBlock.Value)
+	content := buildUserContent(Message{Content: "Hello"})
+	require.Len(t, content, 1)
+	assert.Equal(t, "Hello", *content[0].Text)
 }
 
 func TestBuildUserContent_WithImage(t *testing.T) {
-	// Base64-encoded 1x1 PNG (the provider doesn't validate image correctness,
-	// it just verifies the format and base64 decoding works)
-	b64Data := "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
-
-	msg := Message{
-		Content: "Look at this image",
-		Media:   []string{"data:image/png;base64," + b64Data},
-	}
-
-	content := buildUserContent(msg)
-
-	assert.Len(t, content, 2)
-
-	// Check text
-	textBlock, ok := content[0].(*types.ContentBlockMemberText)
-	require.True(t, ok)
-	assert.Equal(t, "Look at this image", textBlock.Value)
-
-	// Check image
-	imageBlock, ok := content[1].(*types.ContentBlockMemberImage)
-	require.True(t, ok)
-	assert.Equal(t, types.ImageFormatPng, imageBlock.Value.Format)
+	const encoded = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+	content := buildUserContent(Message{Content: "Look", Media: []string{"data:image/png;base64," + encoded}})
+	require.Len(t, content, 2)
+	require.NotNil(t, content[1].Image)
+	assert.Equal(t, "png", content[1].Image.Format)
+	want, err := base64.StdEncoding.DecodeString(encoded)
+	require.NoError(t, err)
+	assert.Equal(t, want, content[1].Image.Source.Bytes)
 }
 
 func TestBuildUserContent_SkipsInvalidBase64(t *testing.T) {
-	msg := Message{
-		Content: "Invalid image",
-		Media:   []string{"data:image/png;base64,not-valid-base64!!!"},
-	}
-
-	content := buildUserContent(msg)
-
-	// Should only have text, image should be skipped
-	assert.Len(t, content, 1)
+	content := buildUserContent(Message{Content: "Invalid", Media: []string{"data:image/png;base64,not-valid!!!"}})
+	require.Len(t, content, 1)
+	assert.Nil(t, content[0].Image)
 }
 
 func TestBuildUserContent_SkipsNonBase64Data(t *testing.T) {
-	msg := Message{
-		Content: "Non-base64 image",
-		Media:   []string{"data:image/png,raw-data-here"},
-	}
-
-	content := buildUserContent(msg)
-
-	// Should only have text, non-base64 image should be skipped
-	assert.Len(t, content, 1)
+	content := buildUserContent(Message{Content: "Invalid", Media: []string{"data:image/png,raw"}})
+	require.Len(t, content, 1)
+	assert.Nil(t, content[0].Image)
 }
 
 func TestBuildAssistantContent_SkipsEmptyToolName(t *testing.T) {
-	msg := Message{
-		Content: "Response",
-		ToolCalls: []protocoltypes.ToolCall{
-			{ID: "1", Name: "", Arguments: map[string]any{}},
-			{ID: "2", Name: "   ", Arguments: map[string]any{}},
-			{ID: "3", Name: "valid", Arguments: map[string]any{}},
-		},
-	}
-
-	content := buildAssistantContent(msg)
-
-	// Should have text + 1 valid tool
-	assert.Len(t, content, 2)
+	content := buildAssistantContent(Message{Content: "response", ToolCalls: []ToolCall{
+		{ID: "1", Name: ""}, {ID: "2", Name: "   "}, {ID: "3", Name: "valid"},
+	}})
+	require.Len(t, content, 2)
+	assert.Equal(t, "valid", content[1].ToolUse.Name)
 }
 
 func TestBuildAssistantContent_NilArguments(t *testing.T) {
-	msg := Message{
-		ToolCalls: []protocoltypes.ToolCall{
-			{ID: "1", Name: "tool", Arguments: nil},
-		},
-	}
-
-	content := buildAssistantContent(msg)
-
-	assert.Len(t, content, 1)
-	toolUse, ok := content[0].(*types.ContentBlockMemberToolUse)
-	require.True(t, ok)
-	assert.NotNil(t, toolUse.Value.Input)
+	content := buildAssistantContent(Message{ToolCalls: []ToolCall{{ID: "1", Name: "tool"}}})
+	require.Len(t, content, 1)
+	assert.Empty(t, content[0].ToolUse.Input)
 }
 
 func TestBuildAssistantContent_FunctionFallback(t *testing.T) {
-	// When Name/Arguments are empty (json:"-"), should fallback to Function fields
-	msg := Message{
-		ToolCalls: []protocoltypes.ToolCall{
-			{
-				ID:   "1",
-				Name: "", // empty, should fallback to Function.Name
-				Function: &protocoltypes.FunctionCall{
-					Name:      "fallback_tool",
-					Arguments: `{"key":"value"}`,
-				},
-			},
-		},
-	}
-
-	content := buildAssistantContent(msg)
-
-	assert.Len(t, content, 1)
-	toolUse, ok := content[0].(*types.ContentBlockMemberToolUse)
-	require.True(t, ok)
-	assert.Equal(t, "fallback_tool", aws.ToString(toolUse.Value.Name))
+	content := buildAssistantContent(Message{ToolCalls: []ToolCall{{
+		ID: "1", Function: &FunctionCall{Name: "fallback", Arguments: `{"key":"value"}`},
+	}}})
+	require.Len(t, content, 1)
+	assert.Equal(t, "fallback", content[0].ToolUse.Name)
+	assert.Equal(t, "value", content[0].ToolUse.Input["key"])
 }
 
 func TestParseResponse_TextOnly(t *testing.T) {
-	output := &bedrockruntime.ConverseOutput{
-		Output: &types.ConverseOutputMemberMessage{
-			Value: types.Message{
-				Role: types.ConversationRoleAssistant,
-				Content: []types.ContentBlock{
-					&types.ContentBlockMemberText{Value: "Hello!"},
-				},
-			},
-		},
-		StopReason: types.StopReasonEndTurn,
-		Usage: &types.TokenUsage{
-			InputTokens:  aws.Int32(10),
-			OutputTokens: aws.Int32(5),
-		},
-	}
-
-	resp, err := parseResponse(output)
-
+	text := "Hello!"
+	response, err := parseResponse(&converseResponse{
+		Output:     converseOutput{Message: bedrockResponseMessage{Content: []responseContentBlock{{Text: &text}}}},
+		StopReason: "end_turn", Usage: &tokenUsage{InputTokens: 10, OutputTokens: 5},
+	})
 	require.NoError(t, err)
-	assert.Equal(t, "Hello!", resp.Content)
-	assert.Equal(t, "stop", resp.FinishReason)
-	assert.Empty(t, resp.ToolCalls)
-	assert.Equal(t, 10, resp.Usage.PromptTokens)
-	assert.Equal(t, 5, resp.Usage.CompletionTokens)
+	assert.Equal(t, "Hello!", response.Content)
+	assert.Equal(t, "stop", response.FinishReason)
+	assert.Equal(t, 15, response.Usage.TotalTokens)
 }
 
 func TestParseResponse_StopReasons(t *testing.T) {
-	tests := []struct {
-		stopReason     types.StopReason
-		expectedFinish string
-	}{
-		{types.StopReasonEndTurn, "stop"},
-		{types.StopReasonToolUse, "tool_calls"},
-		{types.StopReasonMaxTokens, "length"},
-		{types.StopReasonStopSequence, "stop"},
-		{types.StopReasonContentFiltered, "content_filter"},
+	tests := map[string]string{
+		"end_turn": "stop", "tool_use": "tool_calls", "max_tokens": "length",
+		"stop_sequence": "stop", "content_filtered": "content_filter", "guardrail_intervened": "content_filter",
 	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.stopReason), func(t *testing.T) {
-			output := &bedrockruntime.ConverseOutput{
-				Output: &types.ConverseOutputMemberMessage{
-					Value: types.Message{
-						Content: []types.ContentBlock{
-							&types.ContentBlockMemberText{Value: "test"},
-						},
-					},
-				},
-				StopReason: tt.stopReason,
-			}
-
-			resp, err := parseResponse(output)
-
+	for input, want := range tests {
+		t.Run(input, func(t *testing.T) {
+			response, err := parseResponse(&converseResponse{StopReason: input})
 			require.NoError(t, err)
-			assert.Equal(t, tt.expectedFinish, resp.FinishReason)
+			assert.Equal(t, want, response.FinishReason)
 		})
 	}
 }
 
-// testCredentials supplies constant SigV4 credentials for
-// converseViaTestServer. They must be NON-anonymous: the SDK's
-// ignoreAnonymousAuth step strips aws.AnonymousCredentials from the client
-// options, scheme selection then falls through to httpBearerAuth, whose
-// identity resolver wraps a nil bearer provider and panics. With these
-// credentials the SigV4 scheme is selected instead and signs with values
-// the test server never checks.
-type testCredentials struct{}
-
-func (testCredentials) Retrieve(context.Context) (aws.Credentials, error) {
-	return aws.Credentials{AccessKeyID: "TESTKEY", SecretAccessKey: "TESTSECRET"}, nil
-}
-
-// converseViaTestServer drives a real bedrockruntime.Client at an
-// httptest.Server that replies with the given Converse response body and
-// returns the SDK-deserialized output.
-//
-// The HTTP round-trip is not decoration: ToolUseBlock.Input is a
-// document.Interface, whose unexported isSmithyDocument marker no type
-// outside the SDK's internal/document package can implement, so the only
-// way to obtain the document production actually receives is to let the
-// SDK's own response deserializer build it. The public alternative,
-// document.NewLazyDocument, is the REQUEST-side constructor and is broken
-// for unmarshaling in this SDK version (aws/aws-sdk-go-v2#2751 transposes
-// the decode source and target), which is exactly why the previous
-// hand-built fixtures failed inside parseResponse.
-func converseViaTestServer(t *testing.T, responseBody string) *bedrockruntime.ConverseOutput {
+func parseCannedResponse(t *testing.T, raw string) *converseResponse {
 	t.Helper()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(responseBody))
-	}))
-	t.Cleanup(server.Close)
-
-	client := bedrockruntime.NewFromConfig(aws.Config{
-		Region:      "us-east-1",
-		Credentials: testCredentials{},
-	}, func(o *bedrockruntime.Options) {
-		o.BaseEndpoint = aws.String(server.URL)
-		// The canned body must not be retried against.
-		o.Retryer = aws.NopRetryer{}
-	})
-
-	output, err := client.Converse(context.Background(), &bedrockruntime.ConverseInput{
-		ModelId: aws.String("test-model"),
-	})
-	require.NoError(t, err, "SDK must deserialize the canned Converse response")
-	return output
+	var output converseResponse
+	require.NoError(t, json.Unmarshal([]byte(raw), &output))
+	return &output
 }
 
 func TestParseResponse_WithToolCalls(t *testing.T) {
-	// A realistic Converse reply carrying one tool_use block, deserialized by
-	// the SDK's real response path (see converseViaTestServer).
-	output := converseViaTestServer(t, `{
-		"output": {
-			"message": {
-				"role": "assistant",
-				"content": [
-					{"text": "Let me check the weather."},
-					{
-						"toolUse": {
-							"toolUseId": "call_weather_123",
-							"name": "get_weather",
-							"input": {"location": "San Francisco", "unit": "celsius"}
-						}
-					}
-				]
-			}
-		},
-		"stopReason": "tool_use",
-		"usage": {"inputTokens": 20, "outputTokens": 15}
-	}`)
-
-	resp, err := parseResponse(output)
-
+	output := parseCannedResponse(t, `{
+		"output":{"message":{"role":"assistant","content":[
+			{"text":"Checking."},
+			{"toolUse":{"toolUseId":"call_1","name":"weather","input":{"city":"Jakarta"}}}
+		]}},"stopReason":"tool_use","usage":{"inputTokens":20,"outputTokens":15,"totalTokens":35}}`)
+	response, err := parseResponse(output)
 	require.NoError(t, err)
-	assert.Equal(t, "Let me check the weather.", resp.Content)
-	assert.Equal(t, "tool_calls", resp.FinishReason)
-	assert.Len(t, resp.ToolCalls, 1)
-
-	tc := resp.ToolCalls[0]
-	assert.Equal(t, "call_weather_123", tc.ID)
-	assert.Equal(t, "get_weather", tc.Name)
-
-	// The decoded arguments themselves, not just a non-nil map.
-	assert.Equal(t, map[string]any{"location": "San Francisco", "unit": "celsius"}, tc.Arguments)
-
-	// Function mirrors the same arguments as a JSON string.
-	require.NotNil(t, tc.Function)
-	assert.Equal(t, "get_weather", tc.Function.Name)
-	var fnArgs map[string]any
-	require.NoError(t, json.Unmarshal([]byte(tc.Function.Arguments), &fnArgs))
-	assert.Equal(t, map[string]any{"location": "San Francisco", "unit": "celsius"}, fnArgs)
-
-	// Verify usage
-	assert.Equal(t, 20, resp.Usage.PromptTokens)
-	assert.Equal(t, 15, resp.Usage.CompletionTokens)
-	assert.Equal(t, 35, resp.Usage.TotalTokens)
+	assert.Equal(t, "Checking.", response.Content)
+	require.Len(t, response.ToolCalls, 1)
+	assert.Equal(t, map[string]any{"city": "Jakarta"}, response.ToolCalls[0].Arguments)
+	assert.JSONEq(t, `{"city":"Jakarta"}`, response.ToolCalls[0].Function.Arguments)
+	assert.Equal(t, 35, response.Usage.TotalTokens)
 }
 
 func TestParseResponse_MultipleToolCalls(t *testing.T) {
-	// A realistic Converse reply with two tool_use blocks and no text block,
-	// deserialized by the SDK's real response path.
-	output := converseViaTestServer(t, `{
-		"output": {
-			"message": {
-				"role": "assistant",
-				"content": [
-					{
-						"toolUse": {
-							"toolUseId": "call_1",
-							"name": "tool_a",
-							"input": {"arg": "value1"}
-						}
-					},
-					{
-						"toolUse": {
-							"toolUseId": "call_2",
-							"name": "tool_b",
-							"input": {"arg": "value2"}
-						}
-					}
-				]
-			}
-		},
-		"stopReason": "tool_use"
-	}`)
-
-	resp, err := parseResponse(output)
-
+	output := parseCannedResponse(t, `{
+		"output":{"message":{"content":[
+			{"toolUse":{"toolUseId":"call_1","name":"a","input":{"arg":"one"}}},
+			{"toolUse":{"toolUseId":"call_2","name":"b","input":{"arg":"two"}}}
+		]}},"stopReason":"tool_use"}`)
+	response, err := parseResponse(output)
 	require.NoError(t, err)
-	assert.Equal(t, "tool_calls", resp.FinishReason)
-	assert.Empty(t, resp.Content) // no text block in this reply
-	assert.Len(t, resp.ToolCalls, 2)
-
-	// Each tool call keeps its own id, name, and decoded arguments.
-	assert.Equal(t, "call_1", resp.ToolCalls[0].ID)
-	assert.Equal(t, "tool_a", resp.ToolCalls[0].Name)
-	assert.Equal(t, map[string]any{"arg": "value1"}, resp.ToolCalls[0].Arguments)
-	require.NotNil(t, resp.ToolCalls[0].Function)
-	assert.Equal(t, "tool_a", resp.ToolCalls[0].Function.Name)
-
-	assert.Equal(t, "call_2", resp.ToolCalls[1].ID)
-	assert.Equal(t, "tool_b", resp.ToolCalls[1].Name)
-	assert.Equal(t, map[string]any{"arg": "value2"}, resp.ToolCalls[1].Arguments)
-	require.NotNil(t, resp.ToolCalls[1].Function)
-	assert.Equal(t, "tool_b", resp.ToolCalls[1].Function.Name)
+	require.Len(t, response.ToolCalls, 2)
+	assert.Equal(t, "call_1", response.ToolCalls[0].ID)
+	assert.Equal(t, "call_2", response.ToolCalls[1].ID)
 }
 
 func TestParseResponse_ToolCallNumbersReachToolAsNumbers(t *testing.T) {
-	// A tool_use block whose input carries numbers in every position — top
-	// level, nested in an object, and inside an array — next to a string, a
-	// bool and a null that must survive untouched. "big" exceeds int64 and
-	// float64's exact integer range, so any decode that routes through a
-	// float would visibly mangle it. Deserialized by the SDK's real response
-	// path (see converseViaTestServer).
-	output := converseViaTestServer(t, `{
-		"output": {
-			"message": {
-				"role": "assistant",
-				"content": [
-					{
-						"toolUse": {
-							"toolUseId": "call_num_1",
-							"name": "resize",
-							"input": {
-								"count": 3,
-								"ratio": 1.5,
-								"big": 12345678901234567890,
-								"list": [1, 2],
-								"nested": {"depth": 42},
-								"label": "unchanged",
-								"active": true,
-								"missing": null
-							}
-						}
-					}
-				]
-			}
-		},
-		"stopReason": "tool_use"
-	}`)
-
-	resp, err := parseResponse(output)
-
+	output := parseCannedResponse(t, `{
+		"output":{"message":{"content":[{"toolUse":{"toolUseId":"call_num","name":"resize","input":{
+			"count":3,"ratio":1.5,"big":12345678901234567890,"list":[1,2],"nested":{"depth":42},
+			"label":"unchanged","active":true,"missing":null
+		}}}]}},"stopReason":"tool_use"}`)
+	response, err := parseResponse(output)
 	require.NoError(t, err)
-	require.Len(t, resp.ToolCalls, 1)
-	tc := resp.ToolCalls[0]
-
-	// Surface 1: the decoded Arguments map. reflect.DeepEqual compares
-	// types, so a smithy document.Number (a named string type) fails here
-	// even though its textual value matches.
-	assert.Equal(t, map[string]any{
-		"count":   json.Number("3"),
-		"ratio":   json.Number("1.5"),
-		"big":     json.Number("12345678901234567890"),
-		"list":    []any{json.Number("1"), json.Number("2")},
-		"nested":  map[string]any{"depth": json.Number("42")},
-		"label":   "unchanged",
-		"active":  true,
-		"missing": nil,
-	}, tc.Arguments)
-
-	// Surface 2: the serialized Function.Arguments string, compared exactly.
-	// encoding/json emits map keys in sorted order, so the full string is a
-	// deterministic oracle: "3" (stringified), 3.0 (float-coerced) and
-	// 1.2345678901234567e+19 (float-mangled big) are all distinct here.
-	require.NotNil(t, tc.Function)
-	assert.Equal(t,
-		`{"active":true,"big":12345678901234567890,"count":3,"label":"unchanged",`+
-			`"list":[1,2],"missing":null,"nested":{"depth":42},"ratio":1.5}`,
-		tc.Function.Arguments)
+	args := response.ToolCalls[0].Arguments
+	assert.Equal(t, json.Number("3"), args["count"])
+	assert.Equal(t, json.Number("12345678901234567890"), args["big"])
+	assert.JSONEq(t,
+		`{"active":true,"big":12345678901234567890,"count":3,"label":"unchanged","list":[1,2],"missing":null,"nested":{"depth":42},"ratio":1.5}`,
+		response.ToolCalls[0].Function.Arguments)
 }
 
 func TestParseResponse_ToolCallWithNilInput(t *testing.T) {
-	output := &bedrockruntime.ConverseOutput{
-		Output: &types.ConverseOutputMemberMessage{
-			Value: types.Message{
-				Role: types.ConversationRoleAssistant,
-				Content: []types.ContentBlock{
-					&types.ContentBlockMemberToolUse{
-						Value: types.ToolUseBlock{
-							ToolUseId: aws.String("call_nil"),
-							Name:      aws.String("no_args_tool"),
-							Input:     nil,
-						},
-					},
-				},
-			},
-		},
-		StopReason: types.StopReasonToolUse,
-	}
-
-	resp, err := parseResponse(output)
-
+	response, err := parseResponse(&converseResponse{
+		Output: converseOutput{Message: bedrockResponseMessage{Content: []responseContentBlock{{
+			ToolUse: &responseToolUseBlock{ToolUseID: "call_nil", Name: "no_args"},
+		}}}}, StopReason: "tool_use",
+	})
 	require.NoError(t, err)
-	assert.Len(t, resp.ToolCalls, 1)
-	assert.Equal(t, "call_nil", resp.ToolCalls[0].ID)
-	assert.Equal(t, "no_args_tool", resp.ToolCalls[0].Name)
-	// Arguments should be empty map, not nil
-	assert.NotNil(t, resp.ToolCalls[0].Arguments)
-	assert.Empty(t, resp.ToolCalls[0].Arguments)
+	require.Len(t, response.ToolCalls, 1)
+	assert.NotNil(t, response.ToolCalls[0].Arguments)
+	assert.Empty(t, response.ToolCalls[0].Arguments)
+}
+
+func TestChat_RequestResponseAndBearerAuthentication(t *testing.T) {
+	const imageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	var gotPath, gotAuthorization string
+	var gotRequest converseRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		gotAuthorization = r.Header.Get("Authorization")
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&gotRequest))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"output":{"message":{"role":"assistant","content":[
+				{"text":"Calling tool."},
+				{"toolUse":{"toolUseId":"call_7","name":"weather","input":{"city":"Jakarta"}}}
+			]}},"stopReason":"tool_use","usage":{"inputTokens":11,"outputTokens":7,"totalTokens":18}}`))
+	}))
+	t.Cleanup(server.Close)
+
+	p, err := NewProvider("fake-bedrock-key", WithBaseEndpoint(server.URL))
+	require.NoError(t, err)
+	response, err := p.Chat(context.Background(), []Message{
+		{Role: "system", Content: "Be concise."},
+		{Role: "user", Content: "Weather?", Media: []string{"data:image/png;base64," + imageData}},
+	}, []ToolDefinition{{Function: protocoltypes.ToolFunctionDefinition{
+		Name: "weather", Description: "Get weather", Parameters: map[string]any{"type": "object"},
+	}}}, "anthropic.claude-opus-4-6-v1", map[string]any{"max_tokens": 32, "temperature": 0.25})
+	require.NoError(t, err)
+
+	assert.Equal(t, "/model/anthropic.claude-opus-4-6-v1/converse", gotPath)
+	assert.Equal(t, "Bearer fake-bedrock-key", gotAuthorization)
+	require.Len(t, gotRequest.System, 1)
+	assert.Equal(t, "Be concise.", gotRequest.System[0].Text)
+	require.Len(t, gotRequest.Messages[0].Content, 2)
+	assert.Equal(t, "png", gotRequest.Messages[0].Content[1].Image.Format)
+	require.NotNil(t, gotRequest.InferenceConfig)
+	assert.Equal(t, int32(32), *gotRequest.InferenceConfig.MaxTokens)
+	require.NotNil(t, gotRequest.ToolConfig)
+	assert.Equal(t, "weather", gotRequest.ToolConfig.Tools[0].ToolSpec.Name)
+
+	assert.Equal(t, "Calling tool.", response.Content)
+	assert.Equal(t, "tool_calls", response.FinishReason)
+	assert.Equal(t, 18, response.Usage.TotalTokens)
+	require.Len(t, response.ToolCalls, 1)
+	assert.Equal(t, "Jakarta", response.ToolCalls[0].Arguments["city"])
+}
+
+func TestChat_ErrorMapping(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Amzn-Errortype", "ThrottlingException:http://internal")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"message":"rate limited"}`))
+	}))
+	t.Cleanup(server.Close)
+	p, err := NewProvider("fake-key", WithBaseEndpoint(server.URL))
+	require.NoError(t, err)
+	_, err = p.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}, nil, "model", nil)
+	require.Error(t, err)
+	var httpErr *HTTPError
+	require.True(t, errors.As(err, &httpErr))
+	assert.Equal(t, http.StatusTooManyRequests, httpErr.StatusCode)
+	assert.Equal(t, "ThrottlingException", httpErr.Code)
+	assert.Equal(t, "rate limited", httpErr.Message)
 }

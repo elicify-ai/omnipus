@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 const addToast = vi.fn()
@@ -40,7 +40,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchGodMode: vi.fn(),
     setGodMode: vi.fn(),
-    reAuth: vi.fn(),
+    fetchAppState: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
@@ -87,8 +87,17 @@ const STATE_S1_ARMED_PENDING = { enabled: false, available: false, supported: tr
 // nogodmode build — god mode does not exist in this binary at all.
 const STATE_COMPILED_OUT = { enabled: false, available: false, supported: false, persisted: false }
 
+// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
+// the ConfirmDialog flow these tests cover. GodModeControl.password.test.tsx
+// covers local mode.
+const PLATFORM_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as never
+
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
 describe('GodModeControl', () => {
@@ -108,35 +117,37 @@ describe('GodModeControl', () => {
     })
   })
 
-  it('flipping the toggle opens the step-up dialog and does NOT call setGodMode yet', async () => {
+  // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
+  // the confirm is not the destructive variant.
+  it('flipping the toggle opens the confirmation and does NOT call setGodMode yet', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     renderControl()
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
 
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Enable god mode?')
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeInTheDocument()
+    const acceptButton = within(dialog).getByRole('button', { name: 'Enable god mode' })
+    expect(acceptButton).toBeInTheDocument()
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    expect(acceptButton.className).not.toMatch(/color-error/)
     expect(api.setGodMode).not.toHaveBeenCalled()
   })
 
-  it('replays the minted consent token into setGodMode after password confirm', async () => {
+  it('confirming performs the save', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: true, restart_required: false })
 
     renderControl()
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable god mode' }))
 
     await waitFor(() => {
-      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
-      expect(api.setGodMode).toHaveBeenCalledWith(true, 'reauth_tok')
+      expect(api.setGodMode).toHaveBeenCalledWith(true)
     })
   })
 
@@ -170,7 +181,6 @@ describe('GodModeControl', () => {
 
   it('D1: clicking the main toggle from S1 (armed/pending) disarms — emits {enabled:false}, not a re-arm', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S1_ARMED_PENDING)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
 
     renderControl()
@@ -180,30 +190,25 @@ describe('GodModeControl', () => {
     // always false while `available` is false, this click would have staged
     // `true` again (a re-arm), even though the switch visually reads as ON.
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
 
     await waitFor(() => {
-      expect(api.setGodMode).toHaveBeenCalledWith(false, 'reauth_tok')
+      expect(api.setGodMode).toHaveBeenCalledWith(false)
     })
   })
 
-  it('S1: "Cancel authorization" disarms via the existing setGodMode(false, token) re-auth flow', async () => {
+  it('S1: "Cancel authorization" disarms via the existing setGodMode(false) confirmation flow', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S1_ARMED_PENDING)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
 
     renderControl()
     await waitFor(() => screen.getByTestId('god-mode-cancel-authorization'))
 
     fireEvent.click(screen.getByTestId('god-mode-cancel-authorization'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
 
     await waitFor(() => {
-      expect(api.setGodMode).toHaveBeenCalledWith(false, 'reauth_tok')
+      expect(api.setGodMode).toHaveBeenCalledWith(false)
     })
     // No new backend endpoint — this replays the exact same setGodMode call
     // the main toggle would, just from a more discoverable affordance.
@@ -239,36 +244,33 @@ describe('GodModeControl', () => {
     expect(screen.getByTestId('god-mode-toggle')).toBeEnabled()
   })
 
-  it('does not call setGodMode if the step-up dialog is cancelled', async () => {
+  it('cancelling performs nothing', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_OFF)
     renderControl()
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    await waitFor(() => screen.getByTestId('reauth-confirm'))
+    const dialog = await screen.findByRole('alertdialog')
 
-    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).toBeNull()
     })
     expect(api.setGodMode).not.toHaveBeenCalled()
   })
 
   it('opens GatewayRestartModal when enabling returns restart_required=true', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_S0_NEVER_ARMED)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: true, restart_required: true })
 
     renderControl()
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Enable god mode' }))
 
     await waitFor(() => {
-      expect(api.setGodMode).toHaveBeenCalledWith(true, 'reauth_tok')
+      expect(api.setGodMode).toHaveBeenCalledWith(true)
     })
     await waitFor(() => {
       expect(screen.getByText(/gateway restart required/i)).toBeInTheDocument()
@@ -277,19 +279,16 @@ describe('GodModeControl', () => {
 
   it('does NOT open GatewayRestartModal when disabling (restart_required=false)', async () => {
     vi.mocked(api.fetchGodMode).mockResolvedValue(STATE_ON)
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
     vi.mocked(api.setGodMode).mockResolvedValue({ enabled: false, restart_required: false })
 
     renderControl()
     await waitFor(() => expect(screen.getByTestId('god-mode-toggle')).toBeEnabled())
 
     fireEvent.click(screen.getByTestId('god-mode-toggle'))
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Disable god mode' }))
 
     await waitFor(() => {
-      expect(api.setGodMode).toHaveBeenCalledWith(false, 'reauth_tok')
+      expect(api.setGodMode).toHaveBeenCalledWith(false)
     })
     expect(screen.queryByText(/gateway restart required/i)).not.toBeInTheDocument()
   })

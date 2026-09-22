@@ -1914,6 +1914,9 @@ components:
         turn_timed_out:
           message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        delegated_task_limit:
+          message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
+          attribution: config
         context_unrecoverable:
           message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
           attribution: product
@@ -1946,6 +1949,7 @@ components:
             - model_unassigned
             - turn_canceled
             - turn_timed_out
+            - delegated_task_limit
             - context_unrecoverable
             - context_window_unknown
             - unknown
@@ -2072,6 +2076,9 @@ components:
         turn_timed_out:
           message: "The model provider didn’t finish this turn in time, so it was stopped. Retry — if it keeps happening, open Verbose chat for details."
           attribution: provider
+        delegated_task_limit:
+          message: "A delegated task reached its configured limit before finishing. Open its task or session, then adjust the named limit if more work is needed."
+          attribution: config
         context_unrecoverable:
           message: "We couldn’t fit this turn into the model’s context even after clearing older tool results — that’s a bug on our side, not yours. Start a new session, or open Verbose chat for technical details."
           attribution: product
@@ -2104,6 +2111,7 @@ components:
             - model_unassigned
             - turn_canceled
             - turn_timed_out
+            - delegated_task_limit
             - context_unrecoverable
             - context_window_unknown
             - unknown
@@ -5093,7 +5101,6 @@ components:
             - done
             - failed
             - cleared
-            - judge_refused_god_mode
             - judge_cas_loss
             - blocked
             - claim_overturned
@@ -5104,9 +5111,11 @@ components:
             active/paused_judge_unavailable/brake_fired/cleared set — no
             back-compat at the time; `cleared` re-added as a 9th value by
             the UAT S3 fix so a user-initiated `/goal clear` no longer
-            collapses into `failed`). Five values ADDED by the joint
-            ADR-084/ADR-085/ADR-086 delivery (C-39): `judge_refused_god_mode`
-            (JUDGE-FR-057a), `judge_cas_loss` (JUDGE-FR-083, reason string
+            collapses into `failed`). Four values ADDED by the joint
+            ADR-084/ADR-085/ADR-086 delivery (C-39); a fifth,
+            `judge_refused_god_mode` (JUDGE-FR-057a), was REMOVED on
+            2026-09-20 by issue #761 — nothing can emit it, do not re-add.
+            `judge_cas_loss` (JUDGE-FR-083, reason string
             stays `cas_loss`), `blocked` (JUDGE-FR-093, not terminal),
             `claim_overturned` (JUDGE-FR-102, not terminal), `expired`
             (ADR-086 GOAL-FR-028, terminal). See

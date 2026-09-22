@@ -3,10 +3,72 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
 )
+
+func (b *AgentMCPServerBinding) UnmarshalJSON(data []byte) error {
+	type wire struct {
+		ID    string          `json:"id"`
+		Tools json.RawMessage `json:"tools"`
+	}
+	var w wire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	b.ID, b.ToolsSpecified, b.Tools = w.ID, w.Tools != nil, nil
+	if w.Tools != nil {
+		if bytes.Equal(bytes.TrimSpace(w.Tools), []byte("null")) {
+			return fmt.Errorf("tools must be an array when supplied")
+		}
+		if err := json.Unmarshal(w.Tools, &b.Tools); err != nil {
+			return fmt.Errorf("tools: %w", err)
+		}
+		if b.Tools == nil {
+			b.Tools = []string{}
+		}
+	}
+	return ValidateAgentMCPServerBinding(*b)
+}
+
+func (b AgentMCPServerBinding) MarshalJSON() ([]byte, error) {
+	type wire struct {
+		ID    string    `json:"id"`
+		Tools *[]string `json:"tools,omitempty"`
+	}
+	w := wire{ID: b.ID}
+	if b.ToolsSpecified || len(b.Tools) > 0 {
+		tools := b.Tools
+		w.Tools = &tools
+	}
+	return json.Marshal(w)
+}
+
+func ValidateAgentMCPServerBinding(b AgentMCPServerBinding) error {
+	if strings.TrimSpace(b.ID) == "" {
+		return fmt.Errorf("mcp server id is required")
+	}
+	wildcard := false
+	seen := make(map[string]struct{}, len(b.Tools))
+	for _, name := range b.Tools {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("mcp tool name must not be blank")
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("duplicate mcp tool %q", name)
+		}
+		seen[name] = struct{}{}
+		if name == "*" {
+			wildcard = true
+		}
+	}
+	if wildcard && len(b.Tools) != 1 {
+		return fmt.Errorf("mcp wildcard cannot be combined with exact tool names")
+	}
+	return nil
+}
 
 func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
 	var s string

@@ -44,6 +44,7 @@ package vaultprops
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -228,8 +229,7 @@ func TestF9B_TypedOnly_WordMissMustNotBypassPropertiesIndexRefusal(t *testing.T)
 	propsPath, perr := knowledge.PropertiesIndexPath(home, root)
 	require.NoError(t, perr)
 	_, statErr := os.Stat(propsPath)
-	require.True(t, os.IsNotExist(statErr),
-		"test precondition failed: properties.db already exists at %s (dir=%s)", propsPath, dir)
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "test precondition failed: properties.db already exists at %s (dir=%s)", propsPath, dir)
 
 	// The regression check: a type=deal/status=prospect query — which
 	// NEEDS the properties index — plus a `words` argument that matches

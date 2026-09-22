@@ -259,7 +259,6 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
       return group.models.length > 0
     })
     // filterKey stands in for filterProviders (see above).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [catalogGroups, filterKey])
 
   // FR-019 also narrows the legacy string groups, by id only — a string group
@@ -269,7 +268,6 @@ export function ModelSelector({ models, value, onChange, placeholder, disabled, 
     const ids = filterProviders?.providerIds
     if (!ids || ids.length === 0) return providerGroups
     return providerGroups.filter((g) => g.providerId !== undefined && ids.includes(g.providerId))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerGroups, filterKey])
 
   // FR-030 ordering + chips, computed once per catalog change. Recommended is

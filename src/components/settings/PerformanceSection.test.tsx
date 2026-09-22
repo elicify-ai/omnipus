@@ -1,17 +1,17 @@
 /**
- * PerformanceSection.test.tsx — Spec-6 FR-12.2 / Spec-3 FR-6.6.
+ * PerformanceSection.test.tsx — Spec-3 FR-6.6, ADR-0008 ruling 6.
  *
- * Covers the max-parallel-agents control and that saving it is gated by the
- * re-auth consent dialog: changing the input triggers autosave after debounce,
- * which opens the ReAuthDialog (the PUT does NOT fire yet), and only a
- * successful re-auth replays the consent token into updatePerformanceSettings.
+ * Covers the max-parallel-agents control and that saving it is confirmed:
+ * changing the input triggers autosave after debounce, which opens the
+ * ConfirmDialog (the PUT does NOT fire yet), and only a confirm calls
+ * updatePerformanceSettings.
  *
- * UAT fix #2: explicit Save button removed — autosave opens ReAuthDialog
+ * UAT fix #2: explicit Save button removed — autosave opens the confirmation
  * automatically after the debounce (600 ms) when the input value is valid.
  *
- * Tool loading toggle: toggling tools_on_demand immediately opens the reauth
- * dialog and calls updatePerformanceSettings with both fields (max_parallel_agents
- * + tools_on_demand) after confirmation.
+ * Tool loading toggle: toggling tools_on_demand immediately opens the
+ * confirmation and calls updatePerformanceSettings with both fields
+ * (max_parallel_agents + tools_on_demand) after it.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -30,12 +30,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchPerformanceSettings: vi.fn(),
     updatePerformanceSettings: vi.fn(),
-    reAuth: vi.fn(),
+    fetchAppState: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
 
 import * as api from '@/lib/api'
+import type { AppState } from '@/lib/api'
 import { PerformanceSection } from './PerformanceSection'
 
 const SETTINGS = {
@@ -44,6 +45,14 @@ const SETTINGS = {
   max_parallel_agents_configured: true,
   tools_on_demand: true,
 }
+
+// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
+// ConfirmDialog, no consent token. The password-mode (local edition)
+// equivalent lives in PerformanceSection.password.test.tsx.
+const PLATFORM_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as AppState
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
@@ -60,6 +69,7 @@ function renderSection() {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(SETTINGS as never)
+  vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
   // Real timers by default — individual tests switch to fake timers after
   // initial render so that waitFor (which uses setInterval internally) can
   // resolve the data-loading Promise before fake timers are installed.
@@ -101,7 +111,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     fireEvent.change(screen.getByLabelText('Max parallel agents'), { target: { value: '8' } })
 
     // Before debounce fires — dialog must NOT be open yet.
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
 
     // Advance past the autosave debounce (600 ms).
@@ -110,15 +120,19 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     // Switch back so waitFor can poll.
     vi.useRealTimers()
 
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
+    // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
+    // the confirm is not the destructive variant.
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Change the performance settings?')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(screen.getByRole('button', { name: 'Change performance settings' })).toHaveTextContent('Change performance settings')
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Change performance settings' }).className).not.toMatch(/color-error/)
     // PUT must still NOT have been called — user hasn't confirmed yet.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
-  it('replays the consent token into updatePerformanceSettings after re-auth', async () => {
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+  it('confirming performs the save', async () => {
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue(SETTINGS as never)
 
     renderSection()
@@ -131,20 +145,17 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
-      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
         { max_parallel_agents: 8, tools_on_demand: true },
-        'reauth_tok',
+        undefined,
       )
     })
   })
 
-  it('does NOT open the re-auth dialog for a negative value (still rejected — no ceiling, but a floor of 0 remains)', async () => {
+  it('does NOT open the confirmation for a negative value (still rejected — no ceiling, but a floor of 0 remains)', async () => {
     renderSection()
     // Wait for data with real timers.
     await waitFor(() => screen.getByLabelText('Max parallel agents'))
@@ -156,7 +167,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     vi.useRealTimers()
 
     // Dialog must NOT open — a negative value is silently skipped by autosave.
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     // PUT must not have been called.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
@@ -165,8 +176,7 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     // The backend removed `maximum: 16` from PerformanceSettingsUpdate — an
     // explicit value now has no ceiling and is honored exactly as configured
     // (clampParallelExplicit only floors at 1). 40 must be accepted, open the
-    // reauth dialog, and be sent to updatePerformanceSettings verbatim.
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_40', expires_in: 300 } as never)
+    // confirmation, and be sent to updatePerformanceSettings verbatim.
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, max_parallel_agents: 40, effective_max_parallel_agents: 40 } as never)
 
     vi.useRealTimers()
@@ -178,14 +188,12 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
         { max_parallel_agents: 40, tools_on_demand: true },
-        'reauth_tok_40',
+        undefined,
       )
     })
     // No validation error toast for a value that is now within bounds.
@@ -198,7 +206,6 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     // Per PerformanceSettingsUpdate.yaml: "Set to 0 to restore the
     // auto-detected default." Typing 0 explicitly must behave identically to
     // leaving the field blank — both send max_parallel_agents: 0.
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_0', expires_in: 300 } as never)
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue(SETTINGS as never)
 
     vi.useRealTimers()
@@ -210,14 +217,12 @@ describe('PerformanceSection — autosave (UAT fix #2)', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
         { max_parallel_agents: 0, tools_on_demand: true },
-        'reauth_tok_0',
+        undefined,
       )
     })
   })
@@ -351,7 +356,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     expect(screen.getByText(/Every tool is always available/)).toBeInTheDocument()
   })
 
-  it('toggling the switch immediately opens the reauth dialog', async () => {
+  it('toggling the switch immediately opens the confirmation', async () => {
     vi.useRealTimers()
     renderSection()
     await waitFor(() => screen.getByLabelText('Tool loading'))
@@ -359,14 +364,13 @@ describe('PerformanceSection — Tool loading toggle', () => {
     fireEvent.click(screen.getByLabelText('Tool loading'))
 
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Change performance settings' })).toBeInTheDocument()
     })
-    // PUT must NOT have been called before reauth.
+    // PUT must NOT have been called before the confirmation.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
-  it('calls updatePerformanceSettings with tools_on_demand toggled after reauth', async () => {
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok2', expires_in: 300 } as never)
+  it('calls updatePerformanceSettings with tools_on_demand toggled after confirming', async () => {
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, tools_on_demand: false } as never)
 
     vi.useRealTimers()
@@ -376,16 +380,13 @@ describe('PerformanceSection — Tool loading toggle', () => {
     // Toggle OFF (from default ON).
     fireEvent.click(screen.getByLabelText('Tool loading'))
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
-      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
       // tools_on_demand flipped to false; max_parallel_agents still 4 (from SETTINGS).
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
         { max_parallel_agents: 4, tools_on_demand: false },
-        'reauth_tok2',
+        undefined,
       )
     })
   })
@@ -418,8 +419,8 @@ describe('PerformanceSection — Tool loading toggle', () => {
     // Give React time to process state updates.
     await new Promise((r) => setTimeout(r, 50))
 
-    // The reauth dialog must NOT have opened (no valid body → no setPending/setReauthOpen).
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    // The confirmation must NOT have opened (no valid body → no setPending/setConfirmOpen).
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
 
     // updatePerformanceSettings must NOT have been called.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
@@ -465,7 +466,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
 
     // No save was attempted.
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('shows an error toast and reverts the switch when toggled OFF-to-ON while max_parallel_agents is out of range', async () => {
@@ -503,7 +504,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     })
 
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('shows an error toast when the debounced max_parallel_agents input settles out of range (Bug 1)', async () => {
@@ -528,7 +529,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     })
 
     // Dialog never opens and no PUT fires for the invalid value.
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
@@ -542,7 +543,6 @@ describe('PerformanceSection — Tool loading toggle', () => {
     // the bug regressed. This test asserts the toast shows the bare
     // userMessage, which only getErrorMessage()'s ApiError-first priority
     // produces.
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok3', expires_in: 300 } as never)
     vi.mocked(api.updatePerformanceSettings).mockRejectedValue(
       new api.ApiError(422, 'Unprocessable value for max_parallel_agents'),
     )
@@ -556,9 +556,7 @@ describe('PerformanceSection — Tool loading toggle', () => {
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Change performance settings' }))
 
     await waitFor(() => {
       expect(addToast).toHaveBeenCalledWith({
@@ -574,8 +572,8 @@ describe('PerformanceSection — Tool loading toggle', () => {
     })
   })
 
-  it('reverts tools_on_demand to the server value when re-auth is cancelled after a valid toggle (Bug 2)', async () => {
-    // Regression test: cancelling the ReAuthDialog for a *valid* toggle left
+  it('cancelling performs nothing and reverts tools_on_demand to the server value (Bug 2)', async () => {
+    // Regression test: cancelling the confirmation for a *valid* toggle left
     // toolsOnDemand pointing at the optimistically-flipped value forever,
     // with `dirty` stuck true so the resync effect could never restore the
     // real server value. The fix clears `dirty` on cancel so the sync effect
@@ -591,18 +589,18 @@ describe('PerformanceSection — Tool loading toggle', () => {
     fireEvent.click(toggle)
 
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     })
     // Switch is optimistically OFF while the dialog is open.
     expect(screen.getByLabelText('Tool loading')).not.toBeChecked()
 
-    // Cancel re-auth instead of confirming.
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    // Cancel instead of confirming.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
 
     // Dialog closes and the switch reverts to the server's true value (ON) —
     // it must not keep showing the unsaved OFF state.
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     })
     await waitFor(() => {
       expect(screen.getByLabelText('Tool loading')).toBeChecked()

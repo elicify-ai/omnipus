@@ -1,9 +1,11 @@
 /**
- * IntegrationsSection.test.tsx — Spec-6 U5 (FR-12.1 / FR-12.2).
+ * IntegrationsSection.test.tsx — Spec-6 U5 (FR-12.1), ADR-0010 WP3.
  *
- * Covers the provider-picker UI and that a sensitive change is gated by the
- * re-auth consent dialog: a configure action opens the ReAuthDialog, and only a
- * successful re-auth replays the consent token into configureIntegrationProvider.
+ * Covers the provider-picker UI and that a sensitive change goes through the
+ * step-up gate: a configure action opens ConfirmDialog (platform/confirm
+ * mode, pinned here via a mocked AppState identity.mode), and only a confirm
+ * calls configureIntegrationProvider. The password-mode (local edition)
+ * equivalent lives in IntegrationsSection.password.test.tsx.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -22,13 +24,22 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchIntegrationProviders: vi.fn(),
     configureIntegrationProvider: vi.fn(),
-    reAuth: vi.fn(),
+    fetchAppState: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
 
 import * as api from '@/lib/api'
+import type { AppState } from '@/lib/api'
 import { IntegrationsSection } from './IntegrationsSection'
+
+// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
+// ConfirmDialog, no consent token. See useStepUp.test.tsx for the mode
+// selection itself.
+const PLATFORM_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as AppState
 
 const CATALOGUE = {
   search: [
@@ -56,6 +67,7 @@ function renderSection() {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchIntegrationProviders).mockResolvedValue(CATALOGUE as never)
+  vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
 describe('IntegrationsSection', () => {
@@ -122,7 +134,9 @@ describe('IntegrationsSection', () => {
     expect(screen.queryByTestId('active-searxng')).not.toBeInTheDocument()
   })
 
-  it('opens the re-auth dialog before configuring (does NOT call PUT directly)', async () => {
+  // FR-OB-041/042: exactly Cancel and one confirm, no input of any kind, and
+  // the confirm is not the destructive variant.
+  it('opens the confirmation before configuring (does NOT call PUT directly)', async () => {
     renderSection()
     await waitFor(() => screen.getByText('Brave Search'))
 
@@ -131,15 +145,17 @@ describe('IntegrationsSection', () => {
     fireEvent.change(screen.getByTestId('key-input-brave'), { target: { value: 'BSA-secret' } })
     fireEvent.click(screen.getByTestId('save-brave'))
 
-    // The re-auth dialog must appear; the PUT must NOT have fired yet.
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
+    // The confirmation must appear; the PUT must NOT have fired yet.
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Update this integration?')
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveTextContent('Cancel')
+    expect(screen.getByRole('button', { name: 'Update integration' })).toHaveTextContent('Update integration')
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    expect(screen.getByRole('button', { name: 'Update integration' }).className).not.toMatch(/color-error/)
     expect(api.configureIntegrationProvider).not.toHaveBeenCalled()
   })
 
-  it('replays the consent token into configureIntegrationProvider after re-auth', async () => {
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+  it('confirming performs the save', async () => {
     vi.mocked(api.configureIntegrationProvider).mockResolvedValue(CATALOGUE as never)
 
     renderSection()
@@ -149,18 +165,34 @@ describe('IntegrationsSection', () => {
     fireEvent.change(screen.getByTestId('key-input-brave'), { target: { value: 'BSA-secret' } })
     fireEvent.click(screen.getByTestId('save-brave'))
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Update integration' }))
 
     await waitFor(() => {
-      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
+      // Confirm mode (platform edition) calls with no consent token — the
+      // third argument is undefined, not omitted, since gate() always calls
+      // run(token) positionally.
       expect(api.configureIntegrationProvider).toHaveBeenCalledWith(
         'brave',
         { kind: 'search', api_key: 'BSA-secret', active: true },
-        'reauth_tok',
+        undefined,
       )
     })
+  })
+
+  it('cancelling performs nothing', async () => {
+    renderSection()
+    await waitFor(() => screen.getByText('Brave Search'))
+
+    fireEvent.click(screen.getByTestId('addkey-brave'))
+    fireEvent.change(screen.getByTestId('key-input-brave'), { target: { value: 'BSA-secret' } })
+    fireEvent.click(screen.getByTestId('save-brave'))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+    })
+    expect(api.configureIntegrationProvider).not.toHaveBeenCalled()
   })
 
   it('shows an error when the providers query fails', async () => {

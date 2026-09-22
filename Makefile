@@ -21,7 +21,6 @@
 # Discretionary tags (append to GO_BUILD_TAGS, none are on by default):
 #   lite       drops WhatsApp native AND WebRTC live-browser video
 #   nogodmode  compiles out the sandbox-off ("god mode") toggle; for hosted
-#   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
 .PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts docs-reference lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards sync-agents-md spa-embed release-snapshot release-build golangci-lint-version-check
@@ -41,7 +40,17 @@ GO_VERSION=$(shell $(GO) version | awk '{print $$3}')
 # pkg/config/version.go documents this path explicitly. The CLI reads Version
 # via config.GetVersion(). (pkg/gateway has its own unrelated Version var.)
 CONFIG_PKG=github.com/elicify-ai/omnipus/pkg/config
-LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -s -w
+# Edition (ADR-0010): which product this binary is — core (open-source),
+# desktop or hosted. Stamped the same way Version is, and defaulted to `core`
+# explicitly rather than left off: pkg/config/edition.go's Edition var
+# already defaults to "core" in source, so an unstamped `go build` and an
+# `EDITION=core` build behave identically — this default just makes the
+# open-source path say so instead of relying on the zero value. Desktop and
+# hosted builds override it (root Makefile's desktop-binary, hosted/Dockerfile).
+# See docs/plans/engine-divergence-workplan-review-2.md finding N2: a hosted
+# or desktop build without this flag must not silently pass as core.
+EDITION?=core
+LDFLAGS=-X $(CONFIG_PKG).Version=$(VERSION) -X $(CONFIG_PKG).GitCommit=$(GIT_COMMIT) -X $(CONFIG_PKG).BuildTime=$(BUILD_TIME) -X $(CONFIG_PKG).GoVersion=$(GO_VERSION) -X $(CONFIG_PKG).Edition=$(EDITION) -s -w
 
 # Go variables
 GO?=CGO_ENABLED=0 go
@@ -516,6 +525,18 @@ lint-budgets:
 	bash scripts/check-file-budget.sh
 	bash scripts/check-function-budget-selfcheck.sh
 	bash scripts/check-function-budget.sh
+
+## lint-gocyclo: WARN-only cyclomatic-complexity gate (founder ruling, decision #3 of the
+## 2026-09-16 conventions interview): a Go function at or above complexity 30 warns, never fails;
+## the only FAIL is a function listed in scripts/budgets/gocyclo.txt that grew (shrink-only
+## ratchet). Implemented in the custom budget script, NOT .golangci.yaml — cyclop stays off,
+## nestif not adopted. Runs the gate's own --self-test first so a guard that can no longer fail
+## is itself a failure. Thin delegate for muscle memory and direct invocation — scripts/guards.sh
+## (via `lint-guards` below) discovers check-gocyclo-budget.sh automatically and is what `lint`
+## actually depends on; this target requires no separate wiring into `lint`.
+lint-gocyclo:
+	bash scripts/check-gocyclo-budget.sh --self-test
+	bash scripts/check-gocyclo-budget.sh
 
 ## lint-guards: Run every discovered guard under scripts/ (scripts/guards.sh)
 ## The eight targets above remain as thin delegates to their own guard for muscle memory and

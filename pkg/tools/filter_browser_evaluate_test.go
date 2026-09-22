@@ -15,10 +15,10 @@
 // definitions, not refused at call time. An implementer looking for a refusal
 // string would find nothing and could conclude the control does not exist.
 //
-// The oracle is fixed, not conditional: Mia and Ava must NOT see
-// browser_evaluate, and Jim MUST see it at "allow". A test that only asserted
-// the absence would go green on a build where FilterToolsByPolicy drops
-// everything.
+// The oracle is fixed, not conditional: Ava must NOT see browser_evaluate,
+// while Mia and Jim MUST see it at "allow". ADR-090 gives Mia a live-browser
+// workflow and keeps Ava out of browser execution. A test that only asserted
+// absence would go green on a filter that drops everything.
 
 package tools
 
@@ -57,15 +57,9 @@ func seededAgentPolicyCfg(t *testing.T, cfg *config.Config, agentID string) *Too
 	return nil
 }
 
-// TestFilterToolsByPolicy_OmitsBrowserEvaluate_MiaAva is FR-042/AC2's
-// observable half.
-//
-// browser_evaluate is now LIVE on a fresh install (sandbox.browser_evaluate_enabled
-// is seeded true), so the runtime kill switch no longer stands between the two
-// zero-browser agents and arbitrary in-page JavaScript. Tool policy is the only
-// thing left, and this asserts it holds through the real filter rather than
-// through the seed literal.
-func TestFilterToolsByPolicy_OmitsBrowserEvaluate_MiaAva(t *testing.T) {
+// ADR-090 permits browser evaluation for Mia, Jim and Ava, while Admin
+// remains excluded even though the global browser switch is enabled.
+func TestFilterToolsByPolicy_EnforcesADR090BrowserEvaluateRoles(t *testing.T) {
 	cfg := config.DefaultConfig()
 	if !coreagent.SeedConfig(cfg) {
 		t.Fatal("coreagent.SeedConfig reported no change on a fresh DefaultConfig()")
@@ -81,36 +75,36 @@ func TestFilterToolsByPolicy_OmitsBrowserEvaluate_MiaAva(t *testing.T) {
 		makeScopedTool("browser_navigate", ScopeCore),
 	}
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDAdmin} {
 		polCfg := seededAgentPolicyCfg(t, cfg, string(id))
 		kept, policies := FilterToolsByPolicy(toolSet, "core", polCfg)
 		for _, tool := range kept {
 			if tool.Name() == "browser_evaluate" {
-				t.Errorf("%s can be sent browser_evaluate (resolved %q). She holds no browser tools at all; "+
+				t.Errorf("%s can be sent browser_evaluate (resolved %q). This role holds no browser tools; "+
 					"with sandbox.browser_evaluate_enabled seeded true, policy is the ONLY thing between "+
-					"her and arbitrary in-page JavaScript on the workspace browser that carries the "+
+					"this role and arbitrary in-page JavaScript on the workspace browser that carries the "+
 					"operator's live logins", id, policies["browser_evaluate"])
 			}
 		}
 	}
 
-	// Positive control. Without it this file passes against a build where
+	// Positive controls. Without them this file passes against a build where
 	// FilterToolsByPolicy returns nothing at all, which is a broken filter
 	// rather than a safe posture.
-	jimCfg := seededAgentPolicyCfg(t, cfg, string(coreagent.IDJim))
-	kept, policies := FilterToolsByPolicy(toolSet, "core", jimCfg)
-	var jimSees bool
-	for _, tool := range kept {
-		if tool.Name() == "browser_evaluate" {
-			jimSees = true
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva} {
+		polCfg := seededAgentPolicyCfg(t, cfg, string(id))
+		kept, policies := FilterToolsByPolicy(toolSet, "core", polCfg)
+		var seesEvaluate bool
+		for _, tool := range kept {
+			if tool.Name() == "browser_evaluate" {
+				seesEvaluate = true
+			}
 		}
-	}
-	if !jimSees {
-		t.Fatal("Jim cannot be sent browser_evaluate. He holds the only agent-level grant (ADR D1.9b " +
-			"ruling 2); if he has lost it the capability is unreachable on a stock install and the " +
-			"seeded sandbox.browser_evaluate_enabled=true is switching on nothing")
-	}
-	if got := policies["browser_evaluate"]; got != "allow" {
-		t.Errorf("(Jim, browser_evaluate) resolves %q through the real filter, want \"allow\"", got)
+		if !seesEvaluate {
+			t.Errorf("%s cannot be sent browser_evaluate despite ADR-090's live-browser role", id)
+		}
+		if got := policies["browser_evaluate"]; got != "allow" {
+			t.Errorf("(%s, browser_evaluate) resolves %q through the real filter, want allow", id, got)
+		}
 	}
 }

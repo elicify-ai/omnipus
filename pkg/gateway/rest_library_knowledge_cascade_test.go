@@ -9,6 +9,7 @@
 package gateway
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,7 +48,7 @@ func TestLibraryRename_NoteInVaultRewritesInboundLinks(t *testing.T) {
 	_, err := os.Stat(filepath.Join(vault, "People", "Tobias Brandt-Larsen.md"))
 	require.NoError(t, err, "the note must exist at its new name")
 	_, err = os.Stat(filepath.Join(vault, "People", "Tobias Brandt.md"))
-	require.True(t, os.IsNotExist(err), "the old name must be gone")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the old name must be gone")
 
 	project, err := os.ReadFile(filepath.Join(vault, "Projects", "Atlas.md"))
 	require.NoError(t, err)
@@ -81,7 +82,7 @@ func TestLibraryDelete_NoteInVaultGoesToTrash(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 
 	_, err := os.Stat(filepath.Join(vault, "People", "Tobias Brandt.md"))
-	require.True(t, os.IsNotExist(err), "the live note must be gone from the collection")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the live note must be gone from the collection")
 
 	trashDir := filepath.Join(vault, ".omnipus-vault", "trash")
 	entries, err := os.ReadDir(trashDir)
@@ -109,9 +110,9 @@ func TestLibraryDelete_FileOutsideVaultStaysPlain(t *testing.T) {
 	w := libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=loose.md")
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 	_, err := os.Stat(filepath.Join(dir, "loose.md"))
-	require.True(t, os.IsNotExist(err))
+	require.True(t, errors.Is(err, os.ErrNotExist))
 	_, err = os.Stat(filepath.Join(dir, ".omnipus-vault"))
-	require.True(t, os.IsNotExist(err), "no knowledge base, no trash directory conjured")
+	require.True(t, errors.Is(err, os.ErrNotExist), "no knowledge base, no trash directory conjured")
 }
 
 func TestLibraryRename_NoteInVaultOntoExistingIs409(t *testing.T) {
@@ -150,7 +151,7 @@ func TestLibraryRename_AttachmentInVaultRewritesEmbed(t *testing.T) {
 	_, err := os.Stat(filepath.Join(vault, "assets", "diagram-v2.png"))
 	require.NoError(t, err, "the attachment must exist at its new name")
 	_, err = os.Stat(filepath.Join(vault, "assets", "diagram.png"))
-	require.True(t, os.IsNotExist(err), "the old name must be gone")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the old name must be gone")
 
 	roadmap, err := os.ReadFile(filepath.Join(vault, "Projects", "Roadmap.md"))
 	require.NoError(t, err)
@@ -188,7 +189,7 @@ func TestLibraryDelete_AttachmentInVaultGoesToTrash(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 
 	_, err := os.Stat(filepath.Join(vault, "assets", "diagram.png"))
-	require.True(t, os.IsNotExist(err), "the live attachment must be gone")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the live attachment must be gone")
 	trashed, err := filepath.Glob(filepath.Join(vault, ".omnipus-vault", "trash", "*", "assets", "diagram.png"))
 	require.NoError(t, err)
 	require.Len(t, trashed, 1, "a Library delete of an attachment must be recoverable from the knowledge base's trash")
@@ -216,7 +217,7 @@ func TestLibraryCascade_AttachmentTrashIsRecoverable(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 
 	_, err = os.Stat(filepath.Join(vault, "assets", "diagram.png"))
-	require.True(t, os.IsNotExist(err), "the live attachment must be gone")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the live attachment must be gone")
 
 	tr := &knowledge.Trasher{Root: file.root, Lock: file.lock}
 	restored, err := tr.Restore(knowledge.RestoreRequest{Path: "assets/diagram.png"})
@@ -257,7 +258,7 @@ func TestLibraryRename_FolderInVaultRewritesLinksToEverythingInside(t *testing.T
 	_, err = os.Stat(filepath.Join(vault, "images", "Spec.md"))
 	require.NoError(t, err, "the note moved with its folder")
 	_, err = os.Stat(filepath.Join(vault, "assets"))
-	require.True(t, os.IsNotExist(err), "the old folder is gone")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the old folder is gone")
 
 	brief, err := os.ReadFile(filepath.Join(vault, "Projects", "Brief.md"))
 	require.NoError(t, err)
@@ -295,7 +296,7 @@ func TestLibraryDelete_FolderInVaultGoesToTrashAndRestoresIntact(t *testing.T) {
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 
 	_, err = os.Stat(filepath.Join(vault, "assets"))
-	require.True(t, os.IsNotExist(err), "the live folder is gone")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the live folder is gone")
 	trashed, err := filepath.Glob(filepath.Join(vault, ".omnipus-vault", "trash", "*", "assets"))
 	require.NoError(t, err)
 	require.Len(t, trashed, 1, "a Library delete of a folder must land in the knowledge base's trash, not be removed for good")
@@ -338,9 +339,9 @@ func TestLibraryFolderOutsideKnowledgeBase_KeepsPlainSemantics(t *testing.T) {
 	w = libDelete(t, api, "/api/v1/library/"+ws+"/entries?path=plain2")
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 	_, err = os.Stat(filepath.Join(work, "plain2"))
-	require.True(t, os.IsNotExist(err), "the folder is deleted")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the folder is deleted")
 	_, err = os.Stat(filepath.Join(work, ".omnipus-vault"))
-	require.True(t, os.IsNotExist(err), "no trash is invented for a folder outside a knowledge base")
+	require.True(t, errors.Is(err, os.ErrNotExist), "no trash is invented for a folder outside a knowledge base")
 }
 
 // Inside a knowledge base, two kinds of folder still keep plain semantics: a

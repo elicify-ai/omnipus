@@ -18,10 +18,9 @@ import (
 //
 // Resolution order:
 //  1. The compiled core prompt (coreagent.GetPrompt) — for seeded base agents
-//     and the seeded worker. As of the RC-6 fix (see coreagent.prompts'
-//     "worker" entry), the seeded worker's compiled prompt is no longer
-//     empty, so this step now resolves it to a real execution-discipline
-//     prompt like any other seeded agent.
+//     and the seeded worker. Since the RC-6 fix, the seeded worker's compiled
+//     prompt is non-empty, so this step resolves it to a real
+//     execution-discipline prompt like any other seeded agent.
 //  2. The agent's on-disk SOUL.md content — for custom (non-seeded) agents,
 //     including a custom Type=worker agent, whose soul is genuinely
 //     OPTIONAL: no on-disk SOUL.md resolves to "".

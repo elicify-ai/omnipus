@@ -156,7 +156,7 @@ func newCancelTestWSHandler(t *testing.T) (*WSHandler, *bus.MessageBus, string, 
 func readAuditEventNamesFromDir(t *testing.T, auditDir string) []string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(auditDir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

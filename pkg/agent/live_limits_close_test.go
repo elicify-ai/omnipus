@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -74,7 +75,7 @@ func TestLiveLimits_CloseAbortsInflightFetchAndNeverWrites(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 	_, statErr := os.Stat(cachePath)
-	require.True(t, os.IsNotExist(statErr), "cache must not be written after Close; stat: %v", statErr)
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "cache must not be written after Close; stat: %v", statErr)
 
 	// No fetch may START after Close either.
 	_, ok = ll.Lookup("openrouter", "https://openrouter.ai/api/v1", "z-ai/glm-5.3")

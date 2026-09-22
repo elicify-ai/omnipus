@@ -8,15 +8,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
-// TestSeedConfig_SeedsSkillAllowlistMatrix verifies FR-9.4: SeedConfig seeds the
-// per-agent skill allowlist matrix on a fresh install:
-//
-//	summarize       → Mia, Ray
-//	plan            → Jim
-//	skill-authoring → Ava
-//	daily-briefing  → Mia
-//	define-goal     → all of the above (ADR-074 D4; renamed from define-done
-//	                  by ADR-080 D-SKILL)
+// TestSeedConfig_SeedsSkillAllowlistMatrix verifies the complete fresh-install
+// ADR-090 role-to-skill assignments in the expected matrix below.
 func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = nil // fresh install — no agents yet
@@ -24,10 +17,15 @@ func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 
 	want := map[string][]string{
-		"mia": {"daily-briefing", "define-goal", "summarize"},
-		"ray": {"define-goal", "summarize"},
-		"jim": {"define-goal", "plan"},
-		"ava": {"define-goal", "skill-authoring"},
+		"mia":            {"interview", "handoff", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"jim":            {"interview", "orchestrate", "plan", "define-goal"},
+		"ava":            {"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"},
+		"admin":          {"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"},
+		"planner":        {"plan", "define-goal"},
+		"researcher":     {"deep-research"},
+		"worker":         {"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"},
+		"judge":          {"verify"},
+		"plansupervisor": {"plan", "define-goal"},
 	}
 
 	byID := map[string][]string{}
@@ -87,8 +85,8 @@ func TestSeedConfig_SkillAllowlist_RespectsOperatorEdits(t *testing.T) {
 	// the ADR-074 D4 migration (marker was absent on this "boot") and
 	// immediately rewritten from define-done to define-goal by the ADR-080
 	// D-SKILL rename migration in the same pass.
-	want := []string{"custom-skill", "define-goal"}
-	if len(mia.Skills) != len(want) || mia.Skills[0] != want[0] || mia.Skills[1] != want[1] {
-		t.Errorf("operator skill allowlist not preserved+appended: got %v; want %v", mia.Skills, want)
+	want := []string{"custom-skill"}
+	if len(mia.Skills) != len(want) || mia.Skills[0] != want[0] {
+		t.Errorf("operator skill allowlist not preserved: got %v; want %v", mia.Skills, want)
 	}
 }

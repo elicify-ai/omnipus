@@ -1321,7 +1321,7 @@ func identityFor(sc *records.Schema, n int64) string {
 func nextSequenceValue(seqPath string) (int64, error) {
 	data, err := os.ReadFile(seqPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 1, nil
 		}
 		return 0, fmt.Errorf("read identity sequence %q: %w", seqPath, err)

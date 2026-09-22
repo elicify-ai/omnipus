@@ -39,11 +39,12 @@
 //   - macOS/non-Linux POSIX: no /proc; the name check falls back to /proc/<pid>/comm
 //     (truncated, 15 chars) or is unavailable — conservatively assumes ours when the
 //     name cannot be read, so Stop will proceed rather than orphan a running gateway.
-//   - Windows: depends on wmic availability. When wmic is missing (Win11 24H2+) or
-//     fails unexpectedly, Stop refuses to act (fail-safe) and returns an error.
+//   - Windows: reads the executable through the process API. When access is denied,
+//     Stop refuses to act (fail-safe) and returns an error.
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -75,7 +76,7 @@ func PIDPath(home string) string {
 func readPID(home string) (int, error) {
 	path := PIDPath(home)
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
 	if err != nil {
@@ -123,7 +124,7 @@ func removePID(home string) {
 // removePIDPath deletes the file at path. Errors are logged at Debug level
 // and not propagated (removal is best-effort cleanup).
 func removePIDPath(path string) {
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Debug("daemon: remove PID file", "path", path, "error", err)
 	}
 }

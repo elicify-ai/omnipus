@@ -83,8 +83,10 @@ describe('GoalPillTray — 13-state rendering (ADR-088 D5/D9: `queued` retired; 
   // 13 of the 14 wire states (contracts/components/schemas/GoalStatusFrame.yaml)
   // render a dedicated pill, including `cleared` — the UAT S3 post-ADR-053
   // addition — and the five states added by the joint ADR-084/ADR-085/
-  // ADR-086 delivery (C-39): `judge_refused_god_mode`, `judge_cas_loss`,
-  // `blocked`, `claim_overturned`, `expired`. The 14th, `queued`, is
+  // ADR-086 delivery (C-39): `judge_cas_loss`, `blocked`,
+  // `claim_overturned`, `expired`. (A fifth, `judge_refused_god_mode`, was
+  // removed from the contract on 2026-09-20 by issue #761 — nothing can emit
+  // it.) The 13th, `queued`, is
   // retired (ADR-088 D5/D9) — see the dedicated describe block below for
   // its now-renders-nothing coverage.
   const states: Array<[GoalStatusFrame['state'], string]> = [
@@ -96,7 +98,6 @@ describe('GoalPillTray — 13-state rendering (ADR-088 D5/D9: `queued` retired; 
     ['done', 'goal-pill-done'],
     ['failed', 'goal-pill-failed'],
     ['cleared', 'goal-pill-cleared'],
-    ['judge_refused_god_mode', 'goal-pill-judge-refused-god-mode'],
     ['judge_cas_loss', 'goal-pill-judge-cas-loss'],
     ['blocked', 'goal-pill-blocked'],
     ['claim_overturned', 'goal-pill-claim-overturned'],

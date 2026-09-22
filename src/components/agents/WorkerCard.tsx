@@ -1,6 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
-import { Lightning, CheckCircle, WarningCircle, XCircle } from '@phosphor-icons/react'
+import { CheckCircle, Circle, Lightning, WarningCircle, XCircle } from '@phosphor-icons/react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { IconRenderer } from '@/components/shared/IconRenderer'
@@ -81,6 +81,13 @@ export function WorkerCard({ agent }: WorkerCardProps) {
               <span className="font-headline font-bold text-[length:var(--type-body-compact-size)] text-[var(--color-secondary)] truncate">
                 {agent.name}
               </span>
+              {/* Live turn status, separate from the workspace heartbeat feature. */}
+              {agent.status === 'active' && (
+                <span className="inline-flex items-center gap-[var(--space-1)] text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-success)]">
+                  <Circle size={7} weight="fill" aria-hidden="true" />
+                  Running
+                </span>
+              )}
               {/* NB: no heartbeat indicator and no default-★ — workers never have them. */}
             </div>
             <p className="text-[length:var(--type-body-compact-size)] text-[var(--color-muted)] line-clamp-2 mb-[var(--space-2)]">

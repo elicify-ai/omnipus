@@ -143,6 +143,7 @@ func (c *Catalog) Apply(data []byte) error {
 	if err != nil {
 		return err
 	}
+	c.logSkippedProviders(doc)
 	return c.applyDoc(doc, ServedEmbedded)
 }
 
@@ -216,10 +217,12 @@ func (p *Provider) clone() Provider {
 	out.Env = append([]string(nil), p.Env...)
 	out.AuthMethods = append([]AuthMethod(nil), p.AuthMethods...)
 	out.Aliases = append([]string(nil), p.Aliases...)
+	out.Regions = append([]ProviderRegion(nil), p.Regions...)
 	out.Models = make([]Model, len(p.Models))
 	for i := range p.Models {
 		out.Models[i] = p.Models[i]
 		out.Models[i].InputModalities = append([]Modality(nil), p.Models[i].InputModalities...)
+		out.Models[i].InferenceProfiles = append([]string(nil), p.Models[i].InferenceProfiles...)
 	}
 	return out
 }

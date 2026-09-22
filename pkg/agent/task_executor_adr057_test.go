@@ -28,6 +28,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -61,7 +62,7 @@ func u26FreshTaskSession(t *testing.T, store *session.UnifiedStore, agentID stri
 // re-verified at this unit's own call sites.
 func u26AssertNoSessionDir(t *testing.T, store *session.UnifiedStore, sessionID string) {
 	t.Helper()
-	if _, err := os.Stat(filepath.Join(store.BaseDir(), sessionID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(store.BaseDir(), sessionID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected no directory for %q, stat returned err=%v", sessionID, err)
 	}
 }

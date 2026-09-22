@@ -14,6 +14,7 @@ package fspolicy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -335,7 +336,7 @@ func realpath(path string) (string, error) {
 
 	if resolved, evalErr := filepath.EvalSymlinks(cleaned); evalErr == nil {
 		return filepath.Clean(resolved), nil
-	} else if !os.IsNotExist(evalErr) {
+	} else if !errors.Is(evalErr, os.ErrNotExist) {
 		return "", fmt.Errorf("resolve symlinks for %q: %w", cleaned, evalErr)
 	}
 
@@ -346,7 +347,7 @@ func realpath(path string) (string, error) {
 		if evalErr == nil {
 			return filepath.Clean(filepath.Join(resolved, remainder)), nil
 		}
-		if !os.IsNotExist(evalErr) {
+		if !errors.Is(evalErr, os.ErrNotExist) {
 			return "", fmt.Errorf("resolve ancestor %q: %w", dir, evalErr)
 		}
 		parent := filepath.Dir(dir)

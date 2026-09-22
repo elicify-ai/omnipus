@@ -117,7 +117,7 @@ func (s *toolResultStore) readByRef(sessionID, ref string) ([]byte, error) {
 
 	data, err := os.ReadFile(target)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrToolResultNotFound
 		}
 		return nil, fmt.Errorf("tool_result_store: read %s: %w", ref, err)
@@ -141,7 +141,7 @@ func (s *toolResultStore) retentionSweep(retentionDays int) (int, error) {
 	}
 
 	base := filepath.Join(s.homePath, "tool_results")
-	if _, err := os.Stat(base); os.IsNotExist(err) {
+	if _, err := os.Stat(base); errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)

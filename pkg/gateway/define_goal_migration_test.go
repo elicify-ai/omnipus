@@ -15,6 +15,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,7 +42,7 @@ func requireDirExists(t *testing.T, dir string) {
 
 func requireDirAbsent(t *testing.T, dir string) {
 	t.Helper()
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected %s to be absent, stat error: %v", dir, err)
 	}
 }

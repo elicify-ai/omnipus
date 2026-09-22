@@ -41,7 +41,13 @@ function renderNote(content: string, opts: { resolveEmbedUrl?: (target: string) 
 
 beforeEach(() => {
   vi.mocked(fetchAppState).mockReset()
-  const state: AppState = { onboarding_complete: true, video_embed_hosts: ['www.youtube-nocookie.com'] }
+  // ADR-0010 / login-and-onboarding-spec.md §2.2 — `identity` is a required
+  // AppState field; this suite is about video-embed hosts, not identity.
+  const state: AppState = {
+    onboarding_complete: true,
+    video_embed_hosts: ['www.youtube-nocookie.com'],
+    identity: { mode: 'local', edition: 'core', signed_in: false, blocked_reason: 'signed_out' },
+  }
   vi.mocked(fetchAppState).mockResolvedValue(state)
 })
 

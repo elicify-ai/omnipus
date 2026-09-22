@@ -66,11 +66,20 @@ test.describe('Bug-1: No skip button in onboarding welcome step', () => {
     // `/` / AppShell / `/login` is no longer reachable, so the assertions
     // below run deterministically against the REAL welcome/first step, which
     // never renders AppShell and never contains "Skip to content".
+    //
+    // `identity` is REQUIRED on AppState (ADR-0010 WP1); this test wants the
+    // REAL local-mode wizard (NameStep, "What should I call you?" — the
+    // engine's own admin-account first step, WP5), so the stub says
+    // `mode: 'local'` explicitly rather than relying on a missing-field
+    // parse failure to fall into local mode by accident.
     await page.route('**/api/v1/state', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ onboarding_complete: false }),
+        body: JSON.stringify({
+          onboarding_complete: false,
+          identity: { mode: 'local', edition: 'core', signed_in: false },
+        }),
       })
     })
 
@@ -123,16 +132,22 @@ test.describe('Bug-1: No skip button in onboarding welcome step', () => {
     // waiting for a "Get Started" button that exists nowhere in the app.
     //
     // Fix: mock `GET /api/v1/state` to report `onboarding_complete: false`
-    // (`onboarding_complete` is AppState's only required field —
-    // src/lib/api/generated/schemas.ts:1930-1937) so `beforeLoad` does not
-    // redirect, letting the test observe the REAL first step and its REAL
-    // forward control, scoped by heading so it cannot match ChatScreen's
-    // differently-worded empty-state heading ("Welcome to Omnipus").
+    // so `beforeLoad` does not redirect, letting the test observe the REAL
+    // first step and its REAL forward control, scoped by heading so it
+    // cannot match ChatScreen's differently-worded empty-state heading
+    // ("Welcome to Omnipus"). `identity` is REQUIRED on AppState (ADR-0010
+    // WP1, not "the only required field" as this comment used to say); this
+    // test wants the REAL local-mode wizard (NameStep), so the stub states
+    // `mode: 'local'` explicitly rather than relying on a missing-field
+    // parse failure to fall into local mode by accident.
     await page.route('**/api/v1/state', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ onboarding_complete: false }),
+        body: JSON.stringify({
+          onboarding_complete: false,
+          identity: { mode: 'local', edition: 'core', signed_in: false },
+        }),
       })
     })
 

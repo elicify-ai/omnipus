@@ -191,9 +191,14 @@ const ROUTING_AGENT_REQUIRED = {
   // instead of routing-agent-select. false = healthy (has a usable model).
   needs_model: false,
 }
+// `revision` is REQUIRED on the Agent and Workspace schemas under ADR-090
+// (ConfigurationRevision, ^[a-f0-9]{64}$) — a stub missing it makes the SPA's
+// zod validation silently drop the whole GET payload, so the pickers render
+// empty.
+const ROUTING_STUB_REVISION = 'a'.repeat(64)
 const ROUTING_STUB_AGENTS = [
-  { id: 'mia', name: 'Mia', type: 'core', locked: true, ...ROUTING_AGENT_REQUIRED },
-  { id: 'ray', name: 'Ray', type: 'core', locked: true, ...ROUTING_AGENT_REQUIRED },
+  { id: 'mia', name: 'Mia', type: 'core', locked: true, revision: ROUTING_STUB_REVISION, ...ROUTING_AGENT_REQUIRED },
+  { id: 'ray', name: 'Ray', type: 'core', locked: true, revision: ROUTING_STUB_REVISION, ...ROUTING_AGENT_REQUIRED },
 ]
 const ROUTING_WS_REQUIRED = {
   pinned: false,
@@ -207,6 +212,7 @@ const ROUTING_STUB_WORKSPACE = {
   status: 'active',
   core_team: ['mia', 'ray'],
   task_count: 0,
+  revision: ROUTING_STUB_REVISION,
   ...ROUTING_WS_REQUIRED,
 }
 const ROUTING_STUB_CHANNEL = {

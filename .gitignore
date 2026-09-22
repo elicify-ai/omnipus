@@ -122,3 +122,6 @@ pkg/**/system/cost.json
 # these on every run; 820 of them (65 MB) were tracked and deleted 2026-09-16.
 # They are run evidence, not source - keep them local, do not commit them again.
 docs/internal/uat/screenshots/
+
+# TanStack Router CLI tool cache (route codegen scratch state; regenerated).
+.tanstack/

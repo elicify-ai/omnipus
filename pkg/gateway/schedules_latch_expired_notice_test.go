@@ -73,7 +73,7 @@ func TestScheduledRunner_WatchDeadline_OnLatchExpired_LogsHonestWarn(t *testing.
 	logFile := filepath.Join(tmpDir, "watchdeadline-latch-expired.log")
 
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {

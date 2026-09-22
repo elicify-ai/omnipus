@@ -53,6 +53,8 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/documentruntime"
+	"github.com/elicify-ai/omnipus/pkg/environmentsetup"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -193,6 +195,19 @@ type ExecTool struct {
 	// in every production build; it exists so a test can make the sweep panic
 	// and prove the completion goroutine survives it.
 	backgroundSweepFn func(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult
+
+	documentRuntime *documentruntime.Layout
+}
+
+// SetDocumentRuntime makes the versioned document toolchain reachable from
+// this bash tool. ADR-090 environment-setup: every native agent gets the
+// same read+execute view of the shared prefix; writable state (the cache)
+// is resolved per turn INSIDE the turn's authorized root, and there is no
+// Admin write grant — installation goes through environment_setup, not a
+// bash finalizer (ES-FR-03/04).
+func (t *ExecTool) SetDocumentRuntime(layout documentruntime.Layout) {
+	layoutCopy := layout
+	t.documentRuntime = &layoutCopy
 }
 
 // GodModeForTest exposes the resolved god-mode flag for white-box testing.
@@ -241,7 +256,7 @@ var (
 		regexp.MustCompile(`\brmdir\s+/s\b`),
 		// Match disk wiping commands (must be followed by space/args)
 		regexp.MustCompile(
-			`\b(format|mkfs|diskpart)\b\s`,
+			`(?:^|[;&|]\s*|sudo\s+)(format|mkfs|diskpart)\s`,
 		),
 		regexp.MustCompile(`\bdd\s+if=`),
 		// Block writes to block devices (all common naming schemes).
@@ -268,7 +283,11 @@ var (
 		// reinstate a blanket rule here without reading that file's threat
 		// notes first.
 		regexp.MustCompile(`\$\{[^}]+\}`),
-		regexp.MustCompile("`[^`]+`"),
+		// Legacy backtick substitutions are judged structurally by
+		// substitutionGuard, alongside $(...). That guard still refuses command
+		// position, dangerous inner commands, and hostile outer commands, while
+		// deliberately no longer treating every prose fragment wrapped in
+		// backticks as executable shell syntax (issue #767).
 		regexp.MustCompile(`\|\s*sh\b`),
 		regexp.MustCompile(`\|\s*bash\b`),
 		regexp.MustCompile(`;\s*rm\s+-[rf]`),
@@ -355,18 +374,37 @@ var (
 	// "check the agents dir"), and the own-tree exception that makes reaching
 	// them sometimes correct (fspolicy.DeniedPathsFor) is inherently
 	// contextual — a static text guard has no turn to evaluate that against.
-	// The five ALWAYS names are never legitimate in ANY turn, which is what
-	// makes a context-free literal match safe for them and not for the rest.
+	// Every ALWAYS entry remains covered, but issue #767 proved that the words
+	// "system" and "config.json" are legitimate in prose. Those two are
+	// therefore path-shaped below; all other names retain literal coverage.
 	secretGuardPatterns = buildSecretGuardPatterns()
 )
 
 // buildSecretGuardPatterns compiles one case-insensitive-by-construction
-// (applyDenyPatterns lowercases the command before matching) word-boundary
-// regex per fspolicy.SecretEntriesAlways entry.
+// (applyDenyPatterns lowercases the command before matching) regex per
+// fspolicy.SecretEntriesAlways entry. Most names remain context-free because
+// merely exposing them is unsafe. The two ordinary-language exceptions are
+// narrowed to explicit path components below.
 func buildSecretGuardPatterns() []*regexp.Regexp {
 	out := make([]*regexp.Regexp, 0, len(fspolicy.SecretEntriesAlways))
 	for _, name := range fspolicy.SecretEntriesAlways {
-		out = append(out, regexp.MustCompile(`\b`+regexp.QuoteMeta(strings.ToLower(name))+`\b`))
+		var pattern string
+		switch name {
+		case "config.json":
+			// Catch config.json only as an explicit path component. A bare
+			// filename in prose is deliberately allowed; the protected file lives
+			// under $OMNIPUS_HOME, so a real reference from an agent workspace
+			// carries a path separator and also reaches the path/platform guards.
+			pattern = `[/\\]config\.json\b`
+		case "system":
+			// Catch the protected system directory when it is traversed as a
+			// path. The ordinary word "system" and a bare filename are
+			// deliberately allowed; paths such as system/audit.jsonl are not.
+			pattern = `\bsystem[/\\]`
+		default:
+			pattern = `\b` + regexp.QuoteMeta(strings.ToLower(name)) + `\b`
+		}
+		out = append(out, regexp.MustCompile(pattern))
 	}
 	return out
 }
@@ -454,7 +492,8 @@ func (t *ExecTool) Description() string {
 		"need all of it. Commands are screened by a safety guard (deny patterns, a binary allowlist, and a " +
 		"path-use check) before they run — writing outside your workspace requires a mount first (see " +
 		"list_mounts / request_mount); a \"blocked by safety guard\" or \"blocked by exec allowlist\" error means " +
-		"the guard refused the command, not that it failed to run."
+		"the guard refused the command, not that it failed to run. Document runtime provisioning goes " +
+		"through the environment_setup tool, not a bash command."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -618,7 +657,11 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	// FR-B4: hardcoded deny-pattern baseline (unconditional) + the opt-in
 	// operator-extensible layer + the legacy command-text absolute-path scan.
-	if guardErr := t.guardCommand(ctx, command, cwd); guardErr != "" {
+	// The document probe is an immutable first-party command whose manifest
+	// lives outside the agent work directory by design. Its filesystem access
+	// is still confined by the per-turn kernel policy augmented below.
+	isDocumentProbe := t.documentRuntime != nil && command == strings.Join(documentruntime.ProbeArgv(*t.documentRuntime), " ")
+	if guardErr := t.guardCommand(ctx, command, cwd); guardErr != "" && !isDocumentProbe {
 		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 		return ErrorResult(guardErr)
 	}
@@ -653,6 +696,31 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	}
 	lim.WorkspaceDir = cwd
 
+	// ADR-090 environment-setup: resolve the per-turn runtime layers ONCE per
+	// run call — the generic prefixes (storage's RuntimeEnvPaths over the
+	// turn's authorized root) and the optional managed document runtime
+	// (readiness + per-turn cache) — then derive the kernel policy and the
+	// child environment from the SAME resolved layers, preserving each spawn
+	// path's baseline (god: scrubbed environ; background sandbox:
+	// sandboxLimitsEnv, whose proxy/npm injections must survive because that
+	// path bypasses sandbox.Run's merge; foreground sandbox: nil = inherit,
+	// preserved when nothing composes). Everything follows the turn's
+	// authorized root, never a construction-time identity (ES-FR-04).
+	docLayer := t.documentEnvTurn(baseDir)
+	rtLayer, rtErr := runtimeEnvTurn(baseDir)
+	// Truthful readiness reporting: a broken optional layer never blocks the
+	// command, but it is never silent either (coordinator ruling). The doc
+	// notice covers the managed document runtime; the runtime notice covers
+	// unresolved or corrupt generic runtime state — where silent fall-through
+	// to the host PATH could run a different program of the same name.
+	turnNotice := docLayer.notice
+	if n := runtimeEnvNotice(rtLayer, rtErr); n != "" {
+		if turnNotice != "" {
+			turnNotice += "\n\n"
+		}
+		turnNotice += n
+	}
+
 	// ADR-063 FR-3.5: carry THIS TURN's filesystem policy to the kernel, so the
 	// child bash spawns is confined the same way the app-layer path resolver
 	// confines this same turn's read_file/write_file.
@@ -666,7 +734,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	// God mode is excluded deliberately: it is an explicit operator opt-out of
 	// confinement, and runForeground routes it to runUnconstrained anyway.
 	if !t.godMode {
-		kernelPolicy, kpErr := t.turnKernelPolicy(ctx)
+		kernelPolicy, kpErr := t.turnKernelPolicy(ctx, cwd, rtLayer, docLayer)
 		if kpErr != nil {
 			t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 			return ErrorResult(fmt.Sprintf("sandbox policy error: %v", kpErr))
@@ -674,13 +742,47 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		lim.KernelPolicy = kernelPolicy
 	}
 
+	var execEnv []string
+	switch {
+	case runInBackground && !t.godMode:
+		execEnv = composeExecutionEnv(sandboxLimitsEnv(lim), docLayer, rtLayer)
+	case runInBackground && t.godMode:
+		execEnv = composeExecutionEnv(scrubbedEnv(os.Environ()), docLayer, rtLayer)
+	case !t.godMode:
+		// sandbox.Run re-appends the proxy/npm injections after whatever env
+		// is passed, so nil stays nil when nothing has to be composed.
+		execEnv = composeExecutionEnv(nil, docLayer, rtLayer)
+	default:
+		execEnv = composeExecutionEnv(scrubbedEnv(os.Environ()), docLayer, rtLayer)
+	}
+
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
-		return t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, ownerSessionID, cb)
+		startedResult := t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, execEnv, ownerSessionID, cb)
+		// The background START result carries the same truthful notice as the
+		// foreground path: a broken optional runtime never blocks the command,
+		// but it is never silent either.
+		return appendRuntimeNotice(startedResult, turnNotice)
 	}
 	started := time.Now()
-	result := t.runForeground(ctx, command, lim, timeoutSeconds)
-	return t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
+	result := t.runForeground(ctx, command, lim, timeoutSeconds, execEnv)
+	result = t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
+	return appendRuntimeNotice(result, turnNotice)
+}
+
+// appendRuntimeNotice attaches the per-turn readiness notice to a run result.
+// The command still ran; the notice reports the broken wired runtime honestly
+// so the agent can repair it via environment_setup instead of misreading a
+// missing managed toolchain as "bash is broken".
+func appendRuntimeNotice(result *ToolResult, notice string) *ToolResult {
+	if result == nil || notice == "" {
+		return result
+	}
+	result.ForLLM = result.ContentForLLM() + "\n\n" + notice
+	if result.ForUser != "" {
+		result.ForUser += "\n\n" + notice
+	}
+	return result
 }
 
 // sweepAfterRun runs the post-command escaping-symlink sweep (D-14, see
@@ -794,7 +896,10 @@ func escapeSweepMountsUnresolvedNote() string {
 // turnKernelPolicy derives the per-turn kernel policy for this bash call from
 // the SAME authored fspolicy.FSPolicy that every path-taking tool resolves
 // (ResolveTurnFSPolicy), so the kernel and the app layer are answering "what
-// may this turn touch" from one input rather than two.
+// may this turn touch" from one input rather than two. rt is the generic
+// runtime layer executeRun resolved ONCE this turn (zero on resolution
+// failure) — the same snapshot that composed the child env, so env and
+// kernel grants cannot drift (runtime-final-review R2).
 //
 // Returns (nil, nil) when no kernel policy is in force — sandbox off, or a
 // platform that degraded to application-level enforcement. The spawn then uses
@@ -804,7 +909,7 @@ func escapeSweepMountsUnresolvedNote() string {
 // could not be derived. Falling back on failure would hand the child the boot
 // profile, which is the WIDER of the two — a derivation bug would then quietly
 // restore the very cross-agent reach this exists to remove.
-func (t *ExecTool) turnKernelPolicy(ctx context.Context) (*sandbox.SandboxPolicy, error) {
+func (t *ExecTool) turnKernelPolicy(ctx context.Context, cwd string, rt environmentsetup.RuntimeEnv, doc documentEnvLayer) (*sandbox.SandboxPolicy, error) {
 	if !sandbox.TurnPolicyBaseInstalled() {
 		return nil, nil
 	}
@@ -817,7 +922,15 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context) (*sandbox.SandboxPolicy
 	if err != nil {
 		return nil, fmt.Errorf("resolve turn filesystem policy: %w", err)
 	}
-	return sandbox.KernelPolicyForTurn(authored)
+	policy, err := sandbox.KernelPolicyForTurn(authored)
+	if err != nil || policy == nil {
+		return policy, err
+	}
+	augmented, err := t.augmentKernelPolicy(*policy, cwd, rt, doc)
+	if err != nil {
+		return nil, fmt.Errorf("apply runtime sandbox access: %w", err)
+	}
+	return &augmented, nil
 }
 
 // --- cwd resolution (FR-B2/FR-B13) -----------------------------------------
@@ -967,14 +1080,15 @@ func (t *ExecTool) runForeground(
 	command string,
 	lim sandbox.Limits,
 	timeoutSeconds int32,
+	execEnv []string,
 ) *ToolResult {
 	argv := buildShellArgv(command)
 
 	if t.godMode {
-		return t.runUnconstrained(ctx, argv, lim.WorkspaceDir, timeoutSeconds)
+		return t.runUnconstrained(ctx, argv, lim.WorkspaceDir, timeoutSeconds, execEnv)
 	}
 
-	res, err := sandbox.Run(ctx, argv, nil, lim)
+	res, err := sandbox.Run(ctx, argv, execEnv, lim)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("sandbox.Run failed: %v", err))
 	}
@@ -1063,6 +1177,7 @@ func (t *ExecTool) runUnconstrained(
 	argv []string,
 	cwdPath string,
 	timeoutSeconds int32,
+	execEnv []string,
 ) *ToolResult {
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -1071,7 +1186,7 @@ func (t *ExecTool) runUnconstrained(
 	if cwdPath != "" {
 		cmd.Dir = cwdPath
 	}
-	cmd.Env = scrubbedEnv(os.Environ())
+	cmd.Env = execEnv
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf

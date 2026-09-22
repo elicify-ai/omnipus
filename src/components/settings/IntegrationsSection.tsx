@@ -23,26 +23,17 @@ import {
   type IntegrationProviderUpdateRequest,
 } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
-import { ReAuthDialog } from './ReAuthDialog'
-
-// A pending edit captured before the re-auth prompt; replayed once the consent
-// token is minted.
-type PendingChange = {
-  id: string
-  body: IntegrationProviderUpdateRequest
-}
+import { isReAuthCancelled } from './useReAuthGate'
+import { useStepUp } from './useStepUp'
 
 export function IntegrationsSection() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
+  const stepUp = useStepUp()
 
   const [expanded, setExpanded] = useState<string | null>(null)
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
   const [showKey, setShowKey] = useState<Record<string, boolean>>({})
-
-  // The change waiting on a re-auth token, and whether the dialog is open.
-  const [pending, setPending] = useState<PendingChange | null>(null)
-  const [reauthOpen, setReauthOpen] = useState(false)
 
   const {
     data,
@@ -53,14 +44,13 @@ export function IntegrationsSection() {
     queryFn: fetchIntegrationProviders,
   })
 
-  const { mutate: applyChange, isPending: isSaving } = useMutation({
-    mutationFn: ({ id, body, token }: { id: string; body: IntegrationProviderUpdateRequest; token: string }) =>
+  const { mutateAsync: applyChange, isPending: isSaving } = useMutation({
+    mutationFn: ({ id, body, token }: { id: string; body: IntegrationProviderUpdateRequest; token?: string }) =>
       configureIntegrationProvider(id, body, token),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['integrations'] })
       addToast({ message: 'Integration updated', variant: 'success' })
       setExpanded(null)
-      setPending(null)
       setApiKeys({})
     },
     onError: (err: Error) => {
@@ -68,20 +58,28 @@ export function IntegrationsSection() {
         message: getErrorMessage(err, 'Integration update failed'),
         variant: 'error',
       })
-      setPending(null)
     },
   })
 
-  // requestChange stages the edit then opens the re-auth dialog. The actual PUT
-  // fires from onReAuthConfirmed once the consent token is minted.
+  // requestChange runs the edit through the step-up gate (ADR-0010 WP3):
+  // ReAuthDialog + a replayed consent token in local mode, ConfirmDialog with
+  // no token in platform mode. Either way the PUT only fires once the
+  // operator stands behind it.
   const requestChange = (id: string, body: IntegrationProviderUpdateRequest) => {
-    setPending({ id, body })
-    setReauthOpen(true)
-  }
-
-  const onReAuthConfirmed = (token: string) => {
-    if (!pending) return
-    applyChange({ id: pending.id, body: pending.body, token })
+    void stepUp
+      .gate(
+        (token) => applyChange({ id, body, token }),
+        {
+          title: 'Update this integration?',
+          body: 'The key is stored encrypted, and the provider you picked becomes the one Omnipus uses for this kind of work from now on.',
+          confirmLabel: 'Update integration',
+        },
+      )
+      .catch((err) => {
+        // A dismissed dialog is a no-op, not a failure. A real save failure
+        // already surfaced its toast via the mutation's onError above.
+        if (isReAuthCancelled(err)) return
+      })
   }
 
   const renderProvider = (p: IntegrationProvider) => {
@@ -253,16 +251,7 @@ export function IntegrationsSection() {
         </>
       ) : null}
 
-      <ReAuthDialog
-        open={reauthOpen}
-        onOpenChange={(o) => {
-          setReauthOpen(o)
-          if (!o) setPending(null)
-        }}
-        title="Confirm to update integration"
-        description="Re-type your password to change this integration provider."
-        onConfirmed={onReAuthConfirmed}
-      />
+      {stepUp.dialogs}
     </div>
   )
 }

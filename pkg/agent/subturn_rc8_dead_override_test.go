@@ -168,7 +168,9 @@ func TestSpawnSubTurn_NativeDispatch_SystemPromptComesFromTargetContextBuilder(t
 	if calls == 0 {
 		t.Fatal("mock provider Chat was never called — native dispatch did not run")
 	}
-	const wantMarker = "delegation-only executor"
+	// ADR-090 rewrote the worker persona (prompts_adr090.go): "…the default
+	// delegation-only task runner". The pre-ADR-090 wording said "executor".
+	const wantMarker = "delegation-only task runner"
 	if !strings.Contains(sawSystem, wantMarker) {
 		t.Errorf(
 			"system message = %q\n\nwant it to contain the worker's real compiled persona marker %q — "+

@@ -947,7 +947,7 @@ func marshalControlFrame(t *testing.T, action string) []byte {
 func readBrowserAuditRecords(t *testing.T, auditDir string) []audit.Record {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(auditDir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

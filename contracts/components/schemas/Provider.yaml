@@ -56,6 +56,7 @@ properties:
       - google
       - ollama
       - cli
+      - bedrock
     description: >
       Wire protocol this configured row uses (ADR-067 D11/FR-013). Absent →
       the catalog provider's primary protocol. Always present on custom rows.
@@ -71,6 +72,14 @@ properties:
     type: string
     description: Catalog grouping key (CatalogProvider.company) for the configured row's provider; absent for custom and unknown rows.
     example: "Z.ai"
+  region:
+    type: string
+    description: >
+      Issue #800 (Bedrock region contract): the selected region for a row
+      whose catalog entry carries `regions` (CatalogProvider.regions), echoed
+      back from ProviderUpdateRequest.region. Absent when the row has no
+      region setting.
+    example: "eu-central-1"
   locality:
     type: string
     enum:

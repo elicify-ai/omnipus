@@ -81,7 +81,6 @@ export function LibrarySignaturePad({
     setHasInk(false)
     setPageNumber(Math.min(Math.max(defaultPageNumber, 1), clampedPageCount))
     clearCanvas()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, defaultPageNumber, pageCount])
 
   function configureCanvas(canvas: HTMLCanvasElement) {

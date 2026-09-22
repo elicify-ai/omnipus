@@ -273,11 +273,7 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 func systemAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDJudge:
-		// JUDGE-FR-059: non-nil, EMPTY — see the doc comment above for why
-		// this closes nothing on its own (context.go::skillAllowed already
-		// denies a nil allowlist too) and why it does not touch the
-		// project-shelf hole FR-059a closes separately.
-		return []string{}
+		return []string{"verify"}
 	case IDPlanSupervisor:
 		// EXACTLY these two — an explicit ADR-074 D4 amendment to
 		// plan-supervisor-spec FR-007/N3 ("exactly one" → "exactly these
@@ -298,7 +294,7 @@ func systemAgentSkills(id CoreAgentID) []string {
 		// where the define-goal grant reaches existing installs
 		// automatically — no migration marker involved (ADR-074 D4; the
 		// ADR-080 D-SKILL rename rides the same exact-equality
-		// re-enforcement, not the applyDefineGoalRenameMigration below).
+		// re-enforcement, not a one-shot migration).
 		return []string{"plan", "define-goal"}
 	default:
 		return nil
@@ -339,7 +335,7 @@ func systemAgentSkills(id CoreAgentID) []string {
 //
 // D1 removes the old prohibition entirely: the Judge is now an ACTIVE
 // reviewer that is expected to use its read-only tools — read_file,
-// list_directory, inspect_session, ToolSearch, Skill — to open the
+// list_directory, inspect_session, ToolSearch, Skill, grep — to open the
 // artifact a criterion names, list a directory, or read a session record
 // (including a delegated descendant session, D1a) BEFORE it returns a
 // verdict for evidence that was not simply handed to it (D2). D2d supplies
@@ -365,7 +361,7 @@ func systemAgentSkills(id CoreAgentID) []string {
 // genuinely persuaded of, name what was missing or unverifiable, and
 // justify the call the way a human reviewer would — never to let a weak
 // quote alone decide the verdict for it.
-const JudgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine, and an ACTIVE reviewer: you have read-only tools (read_file, list_directory, inspect_session, ToolSearch, Skill) and you are expected to use them to find the evidence a criterion needs.
+const JudgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine, and an ACTIVE reviewer: you have read-only tools (read_file, list_directory, inspect_session, ToolSearch, Skill, grep; tool:read_file, tool:list_directory, tool:inspect_session, tool:ToolSearch, tool:Skill, tool:grep) and you are expected to use them to find the evidence a criterion needs. Labels of the form tool:<name> mark a catalog tool; the prefix is not part of the name, so call the bare catalog name.
 
 You adjudicate PROSE criteria only. Machine-checkable criteria (real command runs) and behavior criteria (tool-call-log counts) are decided deterministically by code before you are ever invoked — you are not asked to verdict them, and none will appear in the criteria list below.
 
@@ -390,7 +386,7 @@ Return ONLY valid JSON, in this field order:
 
 // PlanSupervisorDefaultRubric is the PlanSupervisor System Agent's default
 // system prompt / adjudication rubric (ADR-055; plan-supervisor-spec FR-005,
-// full text = spec §27 Appendix A, transcribed verbatim). It is the
+// based on spec §27 Appendix A, with ADR-090's four-tool capability updates). It is the
 // PlanSupervisor's soul, not a separate "rubric" field: AgentConfig.Rubric was
 // deleted by ADR-052 FR-038, so a System Agent's standards live in its SOUL.md
 // like any other agent's soul — operator-EDITABLE while the agent itself stays
@@ -412,6 +408,10 @@ Return ONLY valid JSON, in this field order:
 // corrector is a different actor from the plan's author, and the STALL wake,
 // which the skill does not cover. Marked in the spec as a first draft open to
 // tuning (RISK-12).
+//
+// ADR-090 supersedes the appendix's one-tool restriction: this role can
+// discover tools, load its assigned skills and search permitted file evidence.
+// plan_correct remains its only mutation tool.
 //
 // HOW IT REACHES DISK. Exactly like JudgeDefaultRubric, and for the same two
 // reasons spelled out in that constant's doc comment: SeedConfig/
@@ -459,7 +459,7 @@ Both wakes also carry the identifiers you need to act, and they are the ONLY pla
 
 Use those ids verbatim. Do not infer an id from a plan or member title, and do not invent one — a call with the wrong id is rejected and the wake is spent.
 
-The wake gives you the diagnosis (the Judge's per-criterion reasons, or the stall reason) and the member list. It does not give you each member's full result text, and you have no tool that can fetch it. Decide from the diagnosis: it is what tells you which criterion actually failed and why. A member's own claim that it succeeded is a claim, not a verdict.
+The wake gives you the diagnosis (the Judge's per-criterion reasons, or the stall reason) and the member list. It does not give you each member's full result text. Decide from the diagnosis: it is what tells you which criterion actually failed and why. A member's own claim that it succeeded is a claim, not a verdict.
 
 THE ONE RULE THAT IS NOT NEGOTIABLE
 
@@ -492,7 +492,7 @@ BOUNDARIES
 - If you are unsure between two verbs, prefer the one that adds work over the one that discounts it.
 - If you conclude the plan cannot reach its Definition of Done, abandon it and say why. An honest failure is a correct outcome. Silence is not — a plan you leave untouched is a plan nobody is working on.
 
-Think through the diagnosis before you call — that reasoning is for you, not shown to anyone. What you must not do is narrate to the requester or ask questions: the wake is your entire input, nothing will be added to it, and plan_correct is your only tool. Return exactly one plan_correct tool call, using the plan_id and member_ids exactly as the wake gave them to you.`
+Think through the diagnosis before you call — that reasoning is for you, not shown to anyone. What you must not do is narrate to the requester or ask questions: the wake is your entire input, nothing will be added to it. You hold exactly four tools: plan_correct, ToolSearch, Skill, and grep (tool:plan_correct, tool:ToolSearch, tool:Skill, tool:grep). plan_correct is the only one that changes anything — ToolSearch loads a deferred tool by its exact name, Skill loads the plan and define-goal skills that govern a correction, and grep seeks file evidence within your reach before you diagnose. Labels of the form tool:<name> mark a catalog tool; the prefix is not part of the name, so call the bare catalog name. Return exactly one plan_correct call, using the plan_id and member_ids exactly as the wake gave them to you.`
 
 // SystemAgentDefaultSoul returns the compiled default soul text for a seeded
 // System Agent, or "" for an id that has none (including every core/worker
@@ -740,12 +740,7 @@ func Judge() *CoreAgent {
 			"not a chat persona.",
 		Color: "#64748B",
 		Icon:  "gavel",
-		// DefaultTools is unused for the Judge (and every System Agent): its
-		// actual tool policy is systemAgentSeed's fully-enumerated verifier
-		// set (read_file/list_directory/inspect_session allow, else deny),
-		// not this field. Left nil rather than repeating that set here, to
-		// avoid two sources of truth drifting apart.
-		DefaultTools: nil,
+		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
 
@@ -779,10 +774,6 @@ func PlanSupervisor() *CoreAgent {
 			"correction per wake; not a chat persona.",
 		Color: "#0F766E",
 		Icon:  "compass-tool",
-		// DefaultTools is unused for a System Agent — the real policy is
-		// systemAgentSeed's fully-enumerated map (plan_correct allow, else
-		// deny). Left nil rather than repeating it here, to avoid two sources
-		// of truth drifting apart.
-		DefaultTools: nil,
+		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }

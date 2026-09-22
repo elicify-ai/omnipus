@@ -7,6 +7,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -344,7 +345,7 @@ func TestLiveLimits_OnDemandCacheKeyTTLCredential(t *testing.T) {
 		ll.Wait()
 		assert.Equal(t, int64(1), up.requests.Load(), "a failed fetch backs off; resolutions do not hammer the endpoint")
 		_, err := os.Stat(ll.cachePath)
-		assert.True(t, os.IsNotExist(err), "a failure writes nothing to the cache")
+		assert.True(t, errors.Is(err, os.ErrNotExist), "a failure writes nothing to the cache")
 	})
 
 	t.Run("a window the endpoint reports as 0 or absent is not cached", func(t *testing.T) {
@@ -356,7 +357,7 @@ func TestLiveLimits_OnDemandCacheKeyTTLCredential(t *testing.T) {
 		_, ok := ll.Lookup("openrouter", "https://openrouter.ai/api/v1", "z-ai/glm-5.2")
 		assert.False(t, ok)
 		_, err := os.Stat(ll.cachePath)
-		assert.True(t, os.IsNotExist(err))
+		assert.True(t, errors.Is(err, os.ErrNotExist))
 	})
 }
 

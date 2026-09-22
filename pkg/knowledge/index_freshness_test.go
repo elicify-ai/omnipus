@@ -76,7 +76,7 @@ func ifxPropPaths(t *testing.T, home, root string) map[string]propindex.IndexedN
 		// does not create missing PARENT directories (only the file itself),
 		// so calling it here would fail for a reason that has nothing to do
 		// with what this helper is answering.
-		require.True(t, os.IsNotExist(statErr), "unexpected stat error for %s: %v", p, statErr)
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "unexpected stat error for %s: %v", p, statErr)
 		return map[string]propindex.IndexedNote{}
 	}
 	store, err := propindex.Open(context.Background(), p, propindex.Options{})

@@ -14,6 +14,7 @@
 package knowledge
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -137,5 +138,5 @@ func TestKnowledgeEdit_Create_FrontmatterTypeMustBeDeclared(t *testing.T) {
 	require.Contains(t, res.ForLLM, `"dael"`, res.ForLLM)
 	require.Contains(t, res.ForLLM, "deal", res.ForLLM)
 	_, statErr := os.Stat(filepath.Join(root, "Typo.md"))
-	require.True(t, os.IsNotExist(statErr), "nothing must be written on the refusal")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "nothing must be written on the refusal")
 }

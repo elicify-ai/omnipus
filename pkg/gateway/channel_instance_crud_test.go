@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,7 +98,7 @@ func readAuditEventsForTest(t *testing.T, auditDir string) []map[string]any {
 	auditFile := filepath.Join(auditDir, "audit.jsonl")
 	data, err := os.ReadFile(auditFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		t.Fatalf("read audit file: %v", err)
@@ -235,7 +236,7 @@ func TestWorkspaceDelete_PartialCascade_AbortsIntact(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(api.homePath, 0o700) })
 
 	// Attempt to delete workspace "sales" — must fail at the channel-unbind step.
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/sales", nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "sales"), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, "sales")
 

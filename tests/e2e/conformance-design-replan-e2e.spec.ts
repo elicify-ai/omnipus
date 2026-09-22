@@ -288,7 +288,8 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // pkg/agent/plan_engine_supervise.go writes JudgeRounds,
   // PlanPhaseAwaitingSupervision, handover text and the terminal signature
   // atomically after an UNMET verdict.
-  const firstHoldDeadline = Date.now() + 600_000
+  const firstHoldBudgetMs = 600_000
+  const firstHoldDeadline = Date.now() + firstHoldBudgetMs
   while (Date.now() < firstHoldDeadline) {
     const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
@@ -300,7 +301,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   }
   expect(
     reachedHoldOnce,
-    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within 300s of approval — m2 (done, ` +
+    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within ${firstHoldBudgetMs / 1000}s of approval — m2 (done, ` +
       'DoD-flagged wrong) + m3 (its stub worker ends every run Blocked at once) make a round-1 unmet verdict ' +
       'expected reliably.',
   ).toBe(true)
@@ -332,6 +333,24 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   }
   const samples: T3Sample[] = []
   const seenSessionIds = new Set<string>()
+  // Cumulative set of every member task id this plan has ever had — seeded
+  // with the 3 ids known at plan-create time, then extended every observe
+  // tick with whatever listPlanMemberTasks returns. The product's documented
+  // behaviour (pkg/agent/plan_engine.go `AppendCorrection`) lets a committed
+  // SUPERSEDE add fresh replacement members (e.g. an `m2_replacement` after
+  // m2 is superseded), and the supervisor can legitimately issue a follow-up
+  // `targeted_retry` against such a replacement in a later correction round —
+  // in CI run 35437922067 attempt-1, the supervisor's third plan_correct
+  // call targeted exactly such a replacement (id `2f6b1d08-…`, the
+  // m2_replacement minted by its own prior SUPERSEDE) and the original
+  // assertion `realMemberIds.has(targetId)` failed against the plan-create
+  // snapshot. The E.3 intent — target id must be a REAL plan member task id,
+  // never a label string, and never a member of some other plan — is fully
+  // preserved here: replacement members created mid-supervision by THIS plan
+  // are still real members of THIS plan (listPlanMemberTasks filters on
+  // `plan_id === planId` before returning), and 'm1'/'m2'/'m3' label
+  // strings still cannot appear in that list.
+  const allObservedMemberIds = new Set<string>(Object.values(memberIds))
   let finalPlanState = ''
   let finalPlanPhase = ''
   const observeDeadline = Date.now() + 420_000
@@ -351,6 +370,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
     finalPlanPhase = poll.body.plan_phase ?? ''
     const sid = poll.body.supervision?.session_id
     if (sid) seenSessionIds.add(sid)
+    for (const m of members) allObservedMemberIds.add(m.id)
     samples.push({
       tMs: Date.now() - sampleWindowStart,
       state: finalPlanState,
@@ -410,8 +430,13 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   ).toBeGreaterThan(0)
 
   // Real member ids — the E.3 defect this test exists to catch: never a
-  // label string ('m1'/'m2'/'m3'), always a real task id from memberIds.
-  const realMemberIds = new Set(Object.values(memberIds))
+  // label string ('m1'/'m2'/'m3'), always a real task id that belongs to
+  // this plan. `allObservedMemberIds` is seeded from memberIds (the 3 ids
+  // known at plan-create) and extended with every member id returned by
+  // listPlanMemberTasks during the observe loop, so any replacement
+  // members the supervisor legitimately mints via SUPERSEDE (e.g.
+  // `m2_replacement`) are included without weakening the test's intent.
+  const realMemberIds = allObservedMemberIds
   const labelStrings = new Set(Object.keys(memberIds))
   for (const call of committed) {
     const supersededId = call.parameters.superseded_member_id as string | undefined

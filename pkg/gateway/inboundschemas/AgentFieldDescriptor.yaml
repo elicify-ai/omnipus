@@ -1,0 +1,11 @@
+type: object
+additionalProperties: false
+required: [name, editable]
+properties:
+  name:
+    type: string
+  editable:
+    type: boolean
+  reason:
+    type: string
+    description: Explanation when the field is protected or unsupported by this runtime.

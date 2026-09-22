@@ -4,6 +4,66 @@
  */
 
 export interface paths {
+    "/auth/platform/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin an omnipus.ai sign-in
+         * @description Mints a PKCE verifier (S256) and a single-use, 10-minute state, then returns the platform's authorization URL for the SPA to open in the SYSTEM browser (RFC 8252 §8.12 — never an embedded web view). The verifier never leaves the gateway. The redirect_uri is this gateway's own loopback address, http://127.0.0.1:<port>/auth/callback, which needs no OS URL-scheme registration an unsigned desktop build cannot reliably claim (ADR-0008, 'The return trip is loopback'). CSRF-exempt and unauthenticated — it is the route a signed-out user reaches first — and it seeds the __Host-csrf cookie on success. Answers 503 when security.platform_auth.issuer is unset: there is no local password to fall back to.
+         */
+        post: operations["startPlatformAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/platform/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Collect the session the browser half of a sign-in just opened
+         * @description Exists because the browser's cookie jar is not the application's. On desktop the sign-in page opens in the user's REAL browser (RFC 8252 §8.12), so the Set-Cookie written by /auth/callback lands there and the Electron renderer never sees it — without this route the app would poll /auth/session forever behind a browser tab that says "You're signed in". A successful callback records the session it minted for 60 seconds, once, under a key derived from the state; presenting that state here issues the SAME omnipus-session and CSRF cookies on THIS response, making the caller the signed-in client. Delete-on-lookup, so a second claim cannot succeed. Unauthenticated by necessity (the caller is claiming the session it does not have), rate-limited on its own bucket, and NOT CSRF-exempt — /auth/platform/start seeded the CSRF cookie already. An unknown state, an expired entry and an already-collected one are one indistinguishable 404: a caller must not learn which.
+         */
+        post: operations["claimPlatformAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report whether this request carries a valid session
+         * @description Resolves the omnipus-session cookie and returns the account it belongs to, or 401 when there is none. Deliberately the thinnest possible answer: it performs no side effects, so both the sign-in screen (waiting for the browser half to finish) and the desktop shell (waiting to raise its window) can poll it about once a second without consequence. Rate-limited: 120 requests per IP per minute.
+         */
+        get: operations["getAuthSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -14,8 +74,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Authenticate with username and password
-         * @description Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429.
+         * Authenticate with username and password (local mode)
+         * @description Local-mode sign-in (core edition; ADR-0010 WP2 auth-mode seam). Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429. Not registered at all in platform mode (desktop, hosted) — see /auth/platform/start.
          */
         post: operations["login"];
         delete?: never;
@@ -94,8 +154,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Change the authenticated user's own password
-         * @description Self-service password change. Requires the current password for verification. Requires authentication.
+         * Change the authenticated user's own password (local mode)
+         * @description Local-mode self-service password change (core edition; ADR-0010 WP2 auth-mode seam). Requires the current password for verification. Requires authentication. Not registered at all in platform mode.
          */
         post: operations["changePassword"];
         delete?: never;
@@ -114,8 +174,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Re-verify the user's password to consent to a sensitive setting change
-         * @description Single-user consent primitive (FR-12.2). Re-verifies the authenticated user's one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+         * Re-verify the user's password to consent to a sensitive setting change (local mode)
+         * @description Local-mode consent primitive (core edition; FR-12.2; ADR-0010 WP2 auth-mode seam). Re-verifies the authenticated user's one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited. Not registered at all in platform mode, where the signed-in session itself is the guard.
          */
         post: operations["reAuth"];
         delete?: never;
@@ -154,7 +214,7 @@ export interface paths {
         get?: never;
         /**
          * Configure a search or voice-input integration provider
-         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
          */
         put: operations["updateIntegrationProvider"];
         post?: never;
@@ -215,7 +275,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize first-run onboarding
-         * @description Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance's state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account's password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
          */
         post: operations["completeOnboarding"];
         delete?: never;
@@ -374,13 +434,13 @@ export interface paths {
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
          */
         put: operations["updateAgent"];
         post?: never;
         /**
          * Delete a custom agent
-         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent also clears its session history and on-disk workspace artifacts via the cascade pipeline. Audited (severity INFO, event `agent.delete`).
+         * @description Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event `agent.delete`).
          */
         delete: operations["deleteAgent"];
         options?: never;
@@ -422,7 +482,7 @@ export interface paths {
         get: operations["getAgentTools"];
         /**
          * Replace per-agent tool policy configuration
-         * @description Replaces the agent's tools_cfg in config.json. Locked (core/system) agents cannot have their tool policy overwritten via this endpoint (403). Triggers a config reload on success.
+         * @description Replaces capability settings with explicit sparse override intent and a required revision. Ordinary built-ins are editable; hidden capabilities remain fixed. Reports persistence and live activation separately.
          */
         put: operations["updateAgentTools"];
         post?: never;
@@ -1274,8 +1334,8 @@ export interface paths {
         get: operations["getGodMode"];
         put?: never;
         /**
-         * Toggle the global god-mode switch (O14, password step-up)
-         * @description Flips the global god-mode ("bypass-permissions") switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required=true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
+         * Toggle the global god-mode switch (O14, confirmation dialog)
+         * @description Flips the global god-mode ("bypass-permissions") switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required=true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
          */
         post: operations["setGodMode"];
         delete?: never;
@@ -1379,7 +1439,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate the credential vault key via a new passphrase
-         * @description Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022). No restart is required; the in-memory key is updated in place.
+         * @description Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — the SPA confirms it with the operator before sending (ADR-0008 ruling 6). No restart is required; the in-memory key is updated in place.
          */
         post: operations["rotateCredentials"];
         delete?: never;
@@ -3527,6 +3587,53 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes. */
+        ConfigurationRevision: string;
+        /**
+         * @description Whether all, some, or none of the requested resource components were saved.
+         * @enum {string}
+         */
+        ConfigurationPersistenceStatus: "complete" | "partial" | "none";
+        /**
+         * @description Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+         * @enum {string}
+         */
+        ConfigurationActivationStatus: "active" | "failed" | "not_attempted";
+        ConfigurationMutationState: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields: string[];
+            error_stage?: string;
+            message?: string;
+        };
+        /** @description Mutation failure state. Revision is omitted when no live resource remains to read or revise. */
+        ConfigurationMutationFailureState: {
+            revision?: components["schemas"]["ConfigurationRevision"];
+            persistence_status: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields: string[];
+            error_stage: string;
+            message: string;
+        };
+        AgentFieldDescriptor: {
+            name: string;
+            editable: boolean;
+            /** @description Explanation when the field is protected or unsupported by this runtime. */
+            reason?: string;
+        };
+        AgentMCPBinding: {
+            id: string;
+            /** @description Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation. */
+            tools?: string[];
+        };
+        /** @description Sparse override changes. A tool cannot occur in both set and remove. Tool names are validated against the live static catalog. Null members are rejected. */
+        ToolPolicyChanges: {
+            set?: {
+                [key: string]: "allow" | "ask" | "deny";
+            };
+            remove?: string[];
+        };
         /** @description Standard error envelope returned by all non-2xx responses. */
         ErrorResponse: {
             /**
@@ -3576,6 +3683,45 @@ export interface components {
              */
             warning?: string;
         };
+        /** @description Which omnipus.ai sign-in method the user picked on the in-app sign-in screen (ADR-0008 ruling 5, revised). It is only a HINT passed through to the platform's own sign-in page — the platform decides what it actually offers, and the instance never sees a credential either way. */
+        PlatformAuthStartRequest: {
+            /**
+             * @description The provider the user chose. "google" and "email" are the launch set (ADR-0008, "What a user may sign in with"); Sign in with Apple is deliberately not offered until there is an iOS client.
+             * @example google
+             * @enum {string}
+             */
+            method: "google" | "email";
+        };
+        /** @description Where to send the user's system browser to sign in, and the opaque handle that ties the eventual redirect back to this attempt. The PKCE verifier behind it NEVER leaves the gateway — the client sees only the challenge, already embedded in authorize_url. */
+        PlatformAuthStartResponse: {
+            /**
+             * Format: uri
+             * @description The platform's authorization URL, complete with client_id, the loopback redirect_uri, response_type=code, the S256 code_challenge, state and the chosen method hint. Open it in the SYSTEM browser, never in an embedded web view (RFC 8252 §8.12).
+             * @example https://api.omnipus.ai/v1/oauth/authorize?client_id=omnipus-desktop&code_challenge=...
+             */
+            authorize_url: string;
+            /**
+             * @description The single-use, 10-minute anti-forgery value the platform will echo back to /auth/callback. Keep it in memory for as long as the sign-in is in progress: for the 60 seconds after a successful callback it is also what POST /auth/platform/claim accepts to hand the resulting session to the application, so during that window it IS a credential. Do not store it, log it or show it.
+             * @example T1c0bWl0aGVzdGF0ZXZhbHVlZXhhbXBsZQ
+             */
+            state: string;
+        };
+        /** @description The state the caller received from POST /auth/platform/start, presented to collect the session that the browser half of the sign-in just opened. The desktop app needs this because the browser's cookie jar is not its own: the Set-Cookie written by /auth/callback lands in the user's real browser, and without this route the application would poll for a session it can never see. */
+        PlatformAuthClaimRequest: {
+            /**
+             * @description The state value from PlatformAuthStartResponse. For the 60 seconds after a successful callback it is what identifies the waiting session, so treat it as a credential for that window and keep it in memory only.
+             * @example T1c0bWl0aGVzdGF0ZXZhbHVlZXhhbXBsZQ
+             */
+            state: string;
+        };
+        /** @description Who the omnipus-session cookie on this request belongs to. Returned by GET /auth/session, which answers 200 with this body when the cookie resolves to a user and 401 when it does not — nothing else. The sign-in screen polls it while the user finishes in their browser, and the desktop shell polls it to know when to bring its window back to the front. */
+        AuthSessionResponse: {
+            /**
+             * @description The signed-in account's email address. Since ADR-0008 the account IS the login, so this is an email and not a locally chosen name.
+             * @example daniel@elicify.ai
+             */
+            username: string;
+        };
         /**
          * BrowserInspectRequest
          * @description Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
@@ -3621,13 +3767,13 @@ export interface components {
         };
         /**
          * OnboardingCompleteRequest
-         * @description Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+         * @description Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: in local mode (open-source edition) the route runs BEFORE any session exists and mints the instance's first account — `admin` is REQUIRED, upstream's behaviour restored. In platform mode (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1 and 2: the omnipus.ai account is the login) — `admin` is REFUSED (400) because no local credential is ever minted on that edition. `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is optional in both modes.
          */
         OnboardingCompleteRequest: {
             /** @description LLM provider configuration to persist, discriminated by `auth_method`. */
             provider: components["schemas"]["OnboardingProviderApiKey"] | components["schemas"]["OnboardingProviderSignIn"];
-            /** @description Initial admin account credentials. */
-            admin: {
+            /** @description Initial admin account credentials. Required in local mode; refused (400) in platform mode. */
+            admin?: {
                 /**
                  * @description Admin login name.
                  * @example admin
@@ -3639,6 +3785,27 @@ export interface components {
                  */
                 password: string;
             };
+            preferences?: components["schemas"]["OnboardingPreferences"];
+        };
+        /** @description Step 1's name and tone/detail preferences (spec: onboarding-and-profile-spec.md FR-OB-010..-018). Onboarding has no per-step persistence, so these ride in the same POST /onboarding/complete request as the provider — the server writes them into the global USER.md as prose (FR-OB-013/-013a) after the config transaction succeeds. */
+        OnboardingPreferences: {
+            /**
+             * @description Display name as typed on step 1. The server strips control characters, leading `#`/backticks and collapses whitespace before writing it into USER.md (FR-OB-014) — this field itself carries the raw typed value.
+             * @example Daniel
+             */
+            name: string;
+            /**
+             * @description How the person wants agents to talk to them.
+             * @example direct
+             * @enum {string}
+             */
+            tone: "direct" | "warm" | "formal";
+            /**
+             * @description How much detail the person wants by default.
+             * @example brief
+             * @enum {string}
+             */
+            detail: "brief" | "thorough";
         };
         /** @description The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). Discriminated by `auth_method` following the ADR-034 inline oneOf mechanism; `api_key` is REQUIRED here and is not a property of the sign-in variant. */
         OnboardingProviderApiKey: {
@@ -3667,6 +3834,11 @@ export interface components {
              * @example https://my-resource.openai.azure.com/openai/deployments/gpt-4o
              */
             endpoint?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions), persisted as the provider entry's `region`. Ignored for a provider whose catalog entry carries no `regions`.
+             * @example eu-central-1
+             */
+            region?: string;
         };
         /** @description The `sign_in` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). The vendor CLI holds the login; Omnipus stores no credential, so `api_key` is not a property here and a body carrying one is a schema violation (400 "api_key not allowed with sign_in"). */
         OnboardingProviderSignIn: {
@@ -3793,7 +3965,21 @@ export interface components {
              */
             interval_seconds?: number;
         };
-        OnboardingCompleteResponse: components["schemas"]["LoginResponse"];
+        /** @description Returned on a successful POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: `token` is present ONLY in local mode — the caller had no session before this call, so completion bootstraps one via a one-shot bearer token, upstream's behaviour restored. In platform mode the caller already held a session (ADR-0008 ruling 2 — the omnipus.ai account is the login, and completion runs behind that session), so no token is issued and the field is absent. `username` is always present: the account the instance was set up for (the admin username just minted, in local mode; the authenticated account, in platform mode) — echoed back so the SPA does not have to re-read it. */
+        OnboardingCompleteResponse: {
+            /**
+             * @description The account the instance was set up for.
+             * @example operator@example.com
+             */
+            username: string;
+            /** @description Local-mode-only bootstrap bearer token for the admin account this completion just created. Absent in platform mode. */
+            token?: components["schemas"]["BearerToken"];
+            /**
+             * @description Non-fatal advisory message, present for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead.
+             * @example Couldn't reach OpenAI to check the key — check your internet connection. Continuing for now; the key will be used as entered.
+             */
+            warning?: string;
+        };
         /** @description Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked). */
         ProbeProviderRequest: {
             /**
@@ -3822,6 +4008,11 @@ export interface components {
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a provider whose catalog entry carries `regions` (CatalogProvider.regions) — same name and semantics as ProviderUpdateRequest.region. The probe resolves the region-derived endpoint (bedrock.ValidateRegion, then the SSRF guard) and rewrites the probed model id with its cross-region inference profile group prefix when the model's inference_profiles lists it, so the key check runs against the region the operator actually picked rather than the catalog's default. `probed_model` still echoes the caller's own model id, never the AWS-facing rewritten one. Ignored for a provider whose catalog entry carries no `regions`.
+             * @example eu-central-1
+             */
+            region?: string;
             /**
              * @description Wire protocol for a custom row. Required with api_base when id is not a catalog id.
              * @example openai-compatible
@@ -7734,6 +7925,13 @@ export interface components {
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
+            editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
             /**
              * @description Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
              * @example 550e8400-e29b-41d4-a716-446655440000
@@ -7745,13 +7943,13 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+             * @description Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
              * @example core
              * @enum {string}
              */
             type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
             /**
-             * @description When true, name, description, and soul are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
+             * @description Identity is fixed on built-ins. Ordinary built-in souls are fixed; hidden Judge/Supervisor souls are editable. Use editable_fields for capability and runtime-specific editability.
              * @example false
              */
             locked: boolean;
@@ -7976,7 +8174,7 @@ export interface components {
             /** @description Controls builtin tool visibility for this agent. */
             builtin?: {
                 /**
-                 * @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
                  * @example {
                  *       "bash": "deny",
                  *       "remember": "allow"
@@ -7989,34 +8187,37 @@ export interface components {
             /** @description MCP server bindings for this agent. */
             mcp?: {
                 /** @description List of MCP server bindings. */
-                servers?: {
-                    /**
-                     * @description MCP server identifier as registered in config.json.
-                     * @example my-mcp-server
-                     */
-                    id: string;
-                    /**
-                     * @description Specific tool names to expose from this server. When absent, all tools from the server are available.
-                     * @example [
-                     *       "search",
-                     *       "fetch"
-                     *     ]
-                     */
-                    tools?: string[];
-                }[];
+                servers?: components["schemas"]["AgentToolsMcpServerBinding"][];
             };
         };
         /**
+         * AgentToolsMcpServerBinding
+         * @description A single MCP server binding in an agent's tool configuration: which server is assigned and which of its tools are exposed. Shared by AgentToolsCfg (config.mcp.servers) and AgentToolsUpdateRequest (mcp.servers).
+         */
+        AgentToolsMcpServerBinding: {
+            /**
+             * @description MCP server identifier as registered in config.json.
+             * @example my-mcp-server
+             */
+            id: string;
+            /**
+             * @description Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
+             * @example [
+             *       "search",
+             *       "fetch"
+             *     ]
+             */
+            tools?: string[];
+        };
+        /**
          * AgentToolsUpdateRequest
-         * @description Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
-         *     ROUND-TRIP SHAPE (UAT 2026-09-13 D-86): the body of a GET /api/v1/agents/{id}/tools response (AgentToolsResponse — config + tools + agent_type) is ALSO accepted as-is. When the top-level `builtin` is absent and `config.builtin` is present, the server reads the policy map from `config.builtin` (and MCP bindings from `config.mcp`); `tools` and `agent_type` are read-only echoes and are ignored on write. A body carrying neither `builtin` nor `config.builtin` is rejected with 400, never persisted as an empty policy map.
+         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
          */
         AgentToolsUpdateRequest: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            /** @description Stored local override keys; an empty list removes all local overrides. */
+            override_names: string[];
             config?: components["schemas"]["AgentToolsCfg"];
-            /** @description Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server. */
-            tools?: components["schemas"]["AgentToolEntry"][];
-            /** @description Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); an agent's type is not editable here. Deliberately NOT an enum: a second copy of the agent-type enum changes oapi-codegen's collision-avoidance constant naming for the whole file and breaks the hand-written pkg/api/generated/fixtures.go. */
-            agent_type?: string;
             /** @description Builtin tool policy configuration for this agent. */
             builtin?: {
                 /** @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
@@ -8034,12 +8235,7 @@ export interface components {
             /** @description MCP server bindings for this agent. */
             mcp?: {
                 /** @description List of MCP server bindings. */
-                servers?: {
-                    /** @description MCP server identifier as registered in config.json. */
-                    id: string;
-                    /** @description Specific tool names to expose from this server. When absent, all tools from the server are available. */
-                    tools?: string[];
-                }[];
+                servers?: components["schemas"]["AgentToolsMcpServerBinding"][];
             };
         };
         /** @description Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired). */
@@ -8049,6 +8245,9 @@ export interface components {
          * @description Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
          */
         AgentCreateRequestMain: {
+            /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
+            mcp_servers?: components["schemas"]["AgentMCPBinding"][];
+            tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
              * @description Discriminator. Must be exactly "Main" for this variant.
              *      (enum property replaced by openapi-typescript)
@@ -8111,30 +8310,6 @@ export interface components {
                  */
                 max_tokens?: number;
             };
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
             /**
              * @description Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
              * @example [
@@ -8154,11 +8329,6 @@ export interface components {
             voice?: string | null;
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
-             * @description Maximum seconds a single agent turn may run before being interrupted.
-             * @example 300
-             */
-            timeout_seconds?: number;
-            /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
              */
@@ -8169,6 +8339,9 @@ export interface components {
          * @description Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
          */
         AgentCreateRequestSubagent: {
+            /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
+            mcp_servers?: components["schemas"]["AgentMCPBinding"][];
+            tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
              * @description Discriminator. Must be exactly "Subagent" for this variant.
              *      (enum property replaced by openapi-typescript)
@@ -8231,30 +8404,6 @@ export interface components {
                  */
                 max_tokens?: number;
             };
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
             /**
              * @description Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
              * @example [
@@ -8268,11 +8417,6 @@ export interface components {
              */
             soul: string;
             shell_policy?: components["schemas"]["AgentShellPolicy"];
-            /**
-             * @description Maximum seconds a single agent turn may run before being interrupted.
-             * @example 300
-             */
-            timeout_seconds?: number;
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8356,14 +8500,12 @@ export interface components {
              */
             timeout_seconds?: number;
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. Exception (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul` mutations — soul/rubric unification means the Judge's soul is its judging rubric, editable while the agent stays otherwise locked. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
+        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. */
         AgentUpdateRequest: {
-            /**
-             * Format: date-time
-             * @description ISO 8601 timestamp from the last GET /agents/{id} response. When provided, the request is rejected with 409 Conflict if it does not match the current server value.
-             * @example 2026-06-19T12:34:56Z
-             */
-            updated_at?: string;
+            revision: components["schemas"]["ConfigurationRevision"];
+            /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
+            mcp_servers?: components["schemas"]["AgentMCPBinding"][];
+            tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
              * @description New display name. Rejected on locked agents.
              * @example My Renamed Agent
@@ -8395,30 +8537,10 @@ export interface components {
              */
             soul?: string;
             /**
-             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-             * @example Check queue every hour.
-             */
-            heartbeat?: string;
-            /**
-             * @description New timeout in seconds per turn. Allowed on all agents.
-             * @example 600
-             */
-            timeout_seconds?: number;
-            /**
              * @description New maximum tool calls per turn. Allowed on all agents.
              * @example 100
              */
             max_tool_iterations?: number;
-            /**
-             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-             * @example false
-             */
-            heartbeat_enabled?: boolean;
-            /**
-             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-             * @example 1800
-             */
-            heartbeat_interval?: number;
             /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
             shell_policy?: {
                 /** @example true */
@@ -8466,33 +8588,9 @@ export interface components {
                  */
                 max_tokens?: number;
             };
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Main only — workers never default (rejected with 400 if attempted).
+             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
              * @example false
              */
             default?: boolean;
@@ -8510,7 +8608,7 @@ export interface components {
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
             /**
-             * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Allowed on all agents.
+             * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
              * @example true
              */
             memory_enabled?: boolean;
@@ -9381,7 +9479,7 @@ export interface components {
         };
         /**
          * GodModeUpdateRequest
-         * @description Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
+         * @description Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
          */
         GodModeUpdateRequest: {
             /**
@@ -9632,7 +9730,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description True iff this row's id is not in the catalog — an operator-named custom endpoint configured with api_base + protocol (ADR-067 FR-035, X-13). Every check keys on this flag, never on a literal id. Absent = false.
              * @example false
@@ -9643,6 +9741,11 @@ export interface components {
              * @example Z.ai
              */
             company?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a row whose catalog entry carries `regions` (CatalogProvider.regions), echoed back from ProviderUpdateRequest.region. Absent when the row has no region setting.
+             * @example eu-central-1
+             */
+            region?: string;
             /**
              * @description ADR-067 FR-039's single local/cloud predicate, derived by the gateway; the only such classification the UI uses.
              * @example cloud
@@ -9900,7 +10003,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /** @description Optional secondary protocols a provider offers (e.g. Z.ai's Anthropic endpoint). When present MUST include the primary with the same api; entries unique. A config may select one via ProviderUpdateRequest.protocol. */
             protocols?: components["schemas"]["CatalogProtocol"][];
             /**
@@ -9915,6 +10018,28 @@ export interface components {
              * @example intl
              */
             region?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the regions offered in this provider's own region picker, each with its cross-region inference profile group. Distinct from `region` above (a company's plan x region VARIANT split, a different provider id per region) — this field lists the regions ONE provider row itself can be pointed at, e.g. Bedrock's AWS regions. Absent or empty on a provider with no such picker.
+             * @example [
+             *       {
+             *         "id": "us-east-1",
+             *         "group": "us"
+             *       },
+             *       {
+             *         "id": "eu-central-1",
+             *         "group": "eu"
+             *       },
+             *       {
+             *         "id": "ap-northeast-1",
+             *         "group": "jp"
+             *       },
+             *       {
+             *         "id": "us-gov-west-1",
+             *         "group": ""
+             *       }
+             *     ]
+             */
+            regions?: components["schemas"]["CatalogProviderRegion"][];
             /**
              * @description Billing plan label when the provider has plan variants (e.g. "coding-plan").
              * @example coding-plan
@@ -10022,6 +10147,14 @@ export interface components {
              * @example false
              */
             disputed?: boolean;
+            /**
+             * @description Issue #800 (Bedrock region contract): the cross-region inference profile groups in which a cross-region inference profile exists for this base model. Region-variant ids (e.g. models.dev's `eu.anthropic.claude-sonnet-4-6`) are folded into this field on the base model, never listed as a separate model. Runtime model-id resolution prefixes the bare id with `<group>.` only when the selected region's group is non-empty AND present in this list; a `global` profile is never auto-selected. Absent or empty means only on-demand (regional, unprefixed) access exists.
+             * @example [
+             *       "us",
+             *       "eu"
+             *     ]
+             */
+            inference_profiles?: ("us" | "eu" | "apac" | "jp" | "au" | "global")[];
             window_source?: components["schemas"]["ContextWindowSource"];
             /**
              * @description ADR-066 projection (X-08): true iff the provider has locality "local" and the live limits query failed or reported no context length. The SPA renders "No context length" with a link to Settings → Models → Model overrides. Never a Provider.status value.
@@ -10038,12 +10171,29 @@ export interface components {
              * @example anthropic
              * @enum {string}
              */
-            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description Absolute https base URL for this protocol (FR-033 URL rule; local rows may use http).
              * @example https://api.z.ai/api/anthropic
              */
             api: string;
+        };
+        /**
+         * CatalogProviderRegion
+         * @description One region offered in a provider's region picker (issue #800 / Bedrock region contract). `group` names the cross-region inference profile group that region belongs to (`us`, `eu`, `apac`, `jp`, `au`, `global`), or the empty string when the region has no cross-region inference profile group (on-demand only). Runtime model-id resolution reads `group` against a model's `inference_profiles` (CatalogModel.yaml) — see "Runtime model-id resolution" in the Bedrock region contract.
+         */
+        CatalogProviderRegion: {
+            /**
+             * @description The region identifier as the provider's API expects it (e.g. an AWS region code).
+             * @example us-east-1
+             */
+            id: string;
+            /**
+             * @description The cross-region inference profile group this region belongs to, or "" when the region offers on-demand access only (no cross-region profile).
+             * @example us
+             * @enum {string}
+             */
+            group: "" | "us" | "eu" | "apac" | "jp" | "au" | "global";
         };
         /**
          * CatalogResizeLimits
@@ -10222,7 +10372,7 @@ export interface components {
              */
             active_voice?: string;
         };
-        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Because integration edits are sensitive, the SPA must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid token are rejected 403. */
+        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). */
         IntegrationProviderUpdateRequest: {
             /**
              * @description Whether this provider is a search engine or a voice transcriber.
@@ -10261,6 +10411,12 @@ export interface components {
         };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
             /**
              * @description Unique skill identifier (typically the skill directory name or npm package name).
              * @example web-research
@@ -10959,6 +11115,7 @@ export interface components {
              * @example true
              */
             onboarding_complete: boolean;
+            identity: components["schemas"]["AppStateIdentity"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp of the last health-check run. Absent if never run.
@@ -10992,6 +11149,57 @@ export interface components {
              *     ]
              */
             video_embed_hosts?: string[];
+        };
+        /**
+         * AppStateIdentity
+         * @description Which edition this binary was built as, and whether the caller is signed in (ADR-0010, docs/specs/login-and-onboarding-spec.md §2.2). This is the ONLY field the UI reads to branch on edition or sign-in state — no build-time flag, no `window.isElectron` sniffing. `mode` mirrors `config.EditionAuthMode()` (derived from the stamped edition, never a runtime setting); `edition` mirrors the stamped `config.Edition`. `account` is present only when `signed_in` is true; `blocked_reason` is present only when it is false. `sign_in.start_url` is deliberately NOT carried here — the app starts sign-in itself.
+         */
+        AppStateIdentity: {
+            /**
+             * @description How this build authenticates its users — mirrors `security.platform_auth.mode` (FR-PA-080). `local` is the open-source edition's own password login; `platform` delegates sign-in to a registered omnipus.ai provider.
+             * @example local
+             * @enum {string}
+             */
+            mode: "local" | "platform";
+            /**
+             * @description The product this binary was built as, stamped at build time.
+             * @example core
+             * @enum {string}
+             */
+            edition: "core" | "desktop" | "hosted";
+            /**
+             * @description Whether the caller of this request is authenticated.
+             * @example false
+             */
+            signed_in: boolean;
+            account?: components["schemas"]["AppStateIdentityAccount"];
+            /**
+             * @description Present only when `signed_in` is false.
+             * @example signed_out
+             * @enum {string}
+             */
+            blocked_reason?: "none" | "signed_out" | "expired" | "revoked" | "no_account" | "subject_mismatch" | "unreachable";
+        };
+        /**
+         * AppStateIdentityAccount
+         * @description The signed-in account, present on `AppState.identity.account` only when `identity.signed_in` is true (docs/specs/login-and-onboarding-spec.md §2.2).
+         */
+        AppStateIdentityAccount: {
+            /**
+             * @description Display name for the signed-in account.
+             * @example Daniel Piątkowski
+             */
+            label: string;
+            /**
+             * @description The account's email, masked for display — never the full address.
+             * @example d•••@elicify.ai
+             */
+            email_masked: string;
+            /**
+             * @description The signed-in account's organization, or null.
+             * @example null
+             */
+            org: string | null;
         };
         /**
          * ValidateTokenResponse
@@ -11450,11 +11658,18 @@ export interface components {
          * @description Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
          */
         AgentToolsResponse: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
+            override_names: string[];
             config: components["schemas"]["AgentToolsCfg"];
             /** @description Per-tool effective policy entries. */
             tools: components["schemas"]["AgentToolEntry"][];
             /**
-             * @description Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
+             * @description Agent classification. Built-in roster (Mia / Jim / Ava / Admin) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
              * @example Main
              * @enum {string}
              */
@@ -11824,7 +12039,7 @@ export interface components {
         };
         /**
          * WorkspaceInstructionsRequest
-         * @description Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file.
+         * @description Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file. revision is the opaque SHA-256 returned by GET and is required; a mismatch is 409 with zero writes (ADR-090 FR-007).
          */
         WorkspaceInstructionsRequest: {
             /**
@@ -11832,10 +12047,11 @@ export interface components {
              * @example Use TypeScript. Prefer functional components. Ship small PRs.
              */
             content: string;
+            revision: components["schemas"]["ConfigurationRevision"];
         };
         /**
          * WorkspaceInstructionsResponse
-         * @description Response from GET and PUT /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. An empty string means the file does not exist or has not been written yet.
+         * @description Response from GET /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md and the opaque SHA-256 revision of those bytes. An empty string means the file does not exist or has not been written yet; that empty state still has a revision.
          */
         WorkspaceInstructionsResponse: {
             /**
@@ -11843,6 +12059,7 @@ export interface components {
              * @example Use TypeScript. Prefer functional components. Ship small PRs.
              */
             content: string;
+            revision: components["schemas"]["ConfigurationRevision"];
         };
         /**
          * TaskCreateRequest
@@ -12371,7 +12588,7 @@ export interface components {
              * @example openai-compatible
              * @enum {string}
              */
-            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+            protocol?: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli" | "bedrock";
             /**
              * @description Auth method for this row (ADR-068). Absent → api_key. sign_in is accepted only for providers whose catalog auth_methods include it (400 otherwise) and must not be combined with api_key.
              * @example api_key
@@ -12379,10 +12596,15 @@ export interface components {
              */
             auth_method?: "api_key" | "sign_in";
             /**
-             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked.
+             * @description Explicit base URL. Required for a custom row; optional override for a catalog provider (wins over the catalog row). SSRF-checked. For a provider with a `regions` picker (e.g. amazon-bedrock), this is the optional custom/private endpoint override (e.g. a VPC endpoint) — when set it wins over the region-derived endpoint.
              * @example https://my-proxy.example.com/v1
              */
             api_base?: string;
+            /**
+             * @description Issue #800 (Bedrock region contract): the selected region for a provider row whose catalog entry carries `regions` (CatalogProvider.regions). Precedence at runtime is row setting → `AWS_REGION` environment variable → the catalog's own default `region`. Ignored for a provider whose catalog entry carries no `regions`.
+             * @example eu-central-1
+             */
+            region?: string;
             /**
              * @description API key for the provider. Stored encrypted (AES-256-GCM) in credentials.json. Required when adding a new provider; optional when updating an existing one (omit to leave the current key unchanged).
              * @example sk-abc123
@@ -12432,20 +12654,23 @@ export interface components {
         };
         /**
          * SkillInstallRequest
-         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
+         * @description Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
          */
         SkillInstallRequest: {
+            revision?: components["schemas"]["ConfigurationRevision"];
             /**
              * @description Slug of the skill to install from the ClawHub registry.
              * @example web-search
              */
-            slug: string;
+            slug?: string;
+            /** @description Opaque media ref returned in UploadedFile.ref for a caller-authorized uploaded .md SKILL.md file or bounded .zip skill package. Filesystem paths and UploadedFile.path values are not accepted. */
+            upload_id?: string;
             /**
              * @description Optional version to pin. When omitted the latest published version is installed.
              * @example 1.4.0
              */
             version?: string;
-        };
+        } & (unknown | unknown);
         /**
          * SkillSearchResult
          * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
@@ -12553,7 +12778,7 @@ export interface components {
         };
         /**
          * CredentialRotateRequest
-         * @description Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
+         * @description Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
          */
         CredentialRotateRequest: {
             /**
@@ -12979,6 +13204,14 @@ export interface components {
         };
         /** @description A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate. */
         Workspace: {
+            /** @description Authoritative workspace delegation edges; revision covers membership and this graph. */
+            delegation?: components["schemas"]["WorkspaceDelegationEdge"][];
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
             /**
              * @description UUID workspace identifier
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
@@ -13150,6 +13383,9 @@ export interface components {
         };
         /** @description Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
         WorkspaceUpdateRequest: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            /** @description Explicit replacement of the candidate graph. Omission preserves valid existing edges and applies the existing new-member seed rule; [] clears all edges. */
+            delegation?: components["schemas"]["WorkspaceDelegationEdge"][];
             name?: string;
             description?: string;
             /**
@@ -13193,6 +13429,12 @@ export interface components {
         };
         /** @description The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces. */
         WorkspaceDelegation: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
             /**
              * @description ID of the workspace this delegation graph belongs to.
              * @example 01J8Z9ABCDEF0123456789ABCD
@@ -13217,8 +13459,9 @@ export interface components {
              */
             default_depth: number;
         };
-        /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to a known agent; self-edges and depths above the global subturn ceiling are rejected. */
+        /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. Only explicit Jim and General Purpose self-edges are permitted, bounded by the global and edge depth. Revision covers both membership and the authoritative graph. */
         WorkspaceDelegationUpdateRequest: {
+            revision: components["schemas"]["ConfigurationRevision"];
             /** @description The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time. */
             edges: components["schemas"]["WorkspaceDelegationEdge"][];
         };
@@ -15883,6 +16126,100 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    startPlatformAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformAuthStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Sign-in started. Open authorize_url in the system browser. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformAuthStartResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Platform sign-in is not configured on this instance. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    claimPlatformAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformAuthClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description The session was handed over; this response carries the cookies. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSessionResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            /** @description Nothing is waiting to be collected — unknown, expired or already claimed, deliberately not distinguished. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getAuthSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cookie resolves to a signed-in account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSessionResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     login: {
         parameters: {
             query?: never;
@@ -16159,16 +16496,17 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Onboarding completed successfully. Bearer token ready. */
+            /** @description Onboarding completed successfully for the authenticated account. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LoginResponse"];
+                    "application/json": components["schemas"]["OnboardingCompleteResponse"];
                 };
             };
             400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
             409: components["responses"]["409Conflict"];
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
@@ -16545,12 +16883,29 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Revision or inherited global policy changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     deleteAgent: {
         parameters: {
-            query?: never;
+            query: {
+                revision: components["schemas"]["ConfigurationRevision"];
+            };
             header?: never;
             path: {
                 /**
@@ -16563,18 +16918,35 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Agent deleted. */
-            204: {
+            /** @description Agent deleted. Reports persisted and activated state. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Revision or inherited global policy changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     listAgentSessions: {
@@ -16668,7 +17040,22 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Revision or inherited global policy changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     testAgentRunner: {
@@ -18913,15 +19300,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Re-auth required or invalid consent token. */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
             /** @description Credential store locked. */
             503: {
                 headers: {
@@ -19688,6 +20066,15 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             409: components["responses"]["409Conflict"];
+            /** @description Publication failed after storage changed; reports the actual persisted state. Revision is omitted when no live package remains. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
             502: components["responses"]["502BadGateway"];
         };
     };
@@ -19743,7 +20130,10 @@ export interface operations {
     };
     deleteSkill: {
         parameters: {
-            query?: never;
+            query: {
+                /** @description Revision returned by GET /skills for the reviewed installed skill. */
+                revision: components["schemas"]["ConfigurationRevision"];
+            };
             header?: never;
             path: {
                 /** @description Skill slug (matches the `id` field on Skill). */
@@ -21201,11 +21591,29 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description Workspace membership or graph revision changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     deleteWorkspace: {
         parameters: {
-            query?: never;
+            query: {
+                revision: components["schemas"]["ConfigurationRevision"];
+            };
             header?: never;
             path: {
                 id: string;
@@ -21214,17 +21622,34 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Deleted */
-            204: {
+            /** @description Workspace record deleted. Reports persisted and activated state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Workspace membership or graph revision changed, or the default workspace cannot be deleted; no authoritative delete occurred. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Storage failed after the workspace record was removed; reports actual partial state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     listWorkspaceMedia: {
@@ -22403,6 +22828,22 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description Workspace membership or graph revision changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     createWorkspaceMount: {
@@ -22514,13 +22955,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated AGENT.md content (echoed back). */
+            /** @description Instructions saved. Reports persisted and activated state; GET instructions for content readback. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceInstructionsResponse"];
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -22535,7 +22976,22 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            500: components["responses"]["500InternalServerError"];
+            /** @description Instructions revision changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     listWorkspacePlans: {
@@ -22889,13 +23345,26 @@ export interface operations {
 // Convenience exports so consumers can write `import type { Agent } from "./openapi-types"`
 // rather than `components["schemas"]["Agent"]`.
 
+export type ConfigurationRevision = components["schemas"]["ConfigurationRevision"];
+export type ConfigurationPersistenceStatus = components["schemas"]["ConfigurationPersistenceStatus"];
+export type ConfigurationActivationStatus = components["schemas"]["ConfigurationActivationStatus"];
+export type ConfigurationMutationState = components["schemas"]["ConfigurationMutationState"];
+export type ConfigurationMutationFailureState = components["schemas"]["ConfigurationMutationFailureState"];
+export type AgentFieldDescriptor = components["schemas"]["AgentFieldDescriptor"];
+export type AgentMCPBinding = components["schemas"]["AgentMCPBinding"];
+export type ToolPolicyChanges = components["schemas"]["ToolPolicyChanges"];
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type LoginResponse = components["schemas"]["LoginResponse"];
+export type PlatformAuthStartRequest = components["schemas"]["PlatformAuthStartRequest"];
+export type PlatformAuthStartResponse = components["schemas"]["PlatformAuthStartResponse"];
+export type PlatformAuthClaimRequest = components["schemas"]["PlatformAuthClaimRequest"];
+export type AuthSessionResponse = components["schemas"]["AuthSessionResponse"];
 export type BrowserInspectRequest = components["schemas"]["BrowserInspectRequest"];
 export type BrowserInspectResponse = components["schemas"]["BrowserInspectResponse"];
 export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 export type OnboardingCompleteRequest = components["schemas"]["OnboardingCompleteRequest"];
+export type OnboardingPreferences = components["schemas"]["OnboardingPreferences"];
 export type OnboardingProviderApiKey = components["schemas"]["OnboardingProviderApiKey"];
 export type OnboardingProviderSignIn = components["schemas"]["OnboardingProviderSignIn"];
 export type SignInStartResponse = components["schemas"]["SignInStartResponse"];
@@ -23017,6 +23486,7 @@ export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
 export type AgentShellPolicy = components["schemas"]["AgentShellPolicy"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
+export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
 export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
 export type AgentCreateRequestMain = components["schemas"]["AgentCreateRequestMain"];
@@ -23076,6 +23546,7 @@ export type ProvidersCatalog = components["schemas"]["ProvidersCatalog"];
 export type CatalogProvider = components["schemas"]["CatalogProvider"];
 export type CatalogModel = components["schemas"]["CatalogModel"];
 export type CatalogProtocol = components["schemas"]["CatalogProtocol"];
+export type CatalogProviderRegion = components["schemas"]["CatalogProviderRegion"];
 export type CatalogResizeLimits = components["schemas"]["CatalogResizeLimits"];
 export type ContextWindowSource = components["schemas"]["ContextWindowSource"];
 export type ContextModelOverride = components["schemas"]["ContextModelOverride"];
@@ -23099,6 +23570,8 @@ export type McpServerUpdate = components["schemas"]["McpServerUpdate"];
 export type McpServerTestResponse = components["schemas"]["McpServerTestResponse"];
 export type McpServerToolsResponse = components["schemas"]["McpServerToolsResponse"];
 export type AppState = components["schemas"]["AppState"];
+export type AppStateIdentity = components["schemas"]["AppStateIdentity"];
+export type AppStateIdentityAccount = components["schemas"]["AppStateIdentityAccount"];
 export type ValidateTokenResponse = components["schemas"]["ValidateTokenResponse"];
 export type DoctorIssue = components["schemas"]["DoctorIssue"];
 export type DoctorResult = components["schemas"]["DoctorResult"];

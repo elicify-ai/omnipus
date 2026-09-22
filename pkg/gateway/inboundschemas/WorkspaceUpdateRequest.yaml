@@ -2,7 +2,16 @@ type: object
 description: >
   Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics —
   only fields present in the request body are updated; absent fields are unchanged.
+required:
+  - revision
 properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  delegation:
+    type: array
+    description: Explicit replacement of the candidate graph. Omission preserves valid existing edges and applies the existing new-member seed rule; [] clears all edges.
+    items:
+      $ref: './WorkspaceDelegationEdge.yaml'
   name:
     type: string
     minLength: 1
@@ -31,3 +40,5 @@ properties:
       present, replaces the config for each listed agent and garbage-collects
       entries for agents no longer on the core team. session_id is server-managed
       (set at heartbeat-enable time) and ignored on input.
+additionalProperties: false
+minProperties: 2

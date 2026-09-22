@@ -21,9 +21,20 @@
 #      is NOT the gate's (wrapper-exit-code false-green, CLAUDE.md trap 3).
 #   5. ASSERT every worker printed the same `HEAD:` sha and that it is the ref
 #      requested (stale-checkout false-red, CLAUDE.md trap 1).
-#   6. STOP every machine this run started — normal exit, gate failure, AND Ctrl-C
-#      (EXIT trap). A dispatcher that leaves 8-CPU machines running on an error is
-#      worse than no dispatcher. Machines that were ALREADY running when we arrived
+#   6. COLLECT every dispatched gate's run log off its machine (`fly ssh sftp
+#      get` — the console cannot transfer files, it does not forward stdin)
+#      and VERIFY each copy: non-zero size AND the run's `HEAD:` line with the
+#      expected sha. This happens BEFORE any stop, on every exit path. /tmp
+#      dies with the machine, and on 2026-09-16 stopping first destroyed a
+#      whole night of failure evidence (4 races, 10 SPA failures, 1 e2e shard,
+#      every trace unread). A machine whose evidence cannot be secured is LEFT
+#      RUNNING and named in the summary with its hand-retrieval command — a
+#      running machine costs money; destroyed evidence costs a night.
+#   7. STOP every machine this run started — normal exit, gate failure, AND
+#      Ctrl-C (EXIT trap) — but only AFTER its logs are verified local. A
+#      dispatcher that leaves 8-CPU machines running on an error is worse than
+#      no dispatcher, so pre-flight refusals (nothing ever dispatched) still
+#      stop their machines. Machines that were ALREADY running when we arrived
 #      are never stopped: another session may own them.
 #
 # Usage:
@@ -33,8 +44,11 @@
 #                 whose machine id is present)
 #
 # Exit codes:
-#   0  every dispatched gate PASSed (and HEAD shas all matched)
-#   1  any gate failed, any log has no RESULT line (incomplete), or a HEAD mismatch
+#   0  every dispatched gate PASSed (and HEAD shas all matched) and every
+#      dispatched machine's logs were collected+verified local
+#   1  any gate failed, any log has no RESULT line (incomplete), a HEAD
+#      mismatch, or a machine's evidence could not be collected+verified —
+#      that machine is LEFT RUNNING and named in the summary
 #   2  usage/config error or pre-flight refusal (no fly, unresolvable ref, machine
 #      unreachable, runci.sh md5 mismatch)
 #
@@ -76,6 +90,16 @@ STARTED_IDS=()   # machine ids THIS run started (and only those — stopped on e
 TIER_PIDS=()     # background tier jobs
 PID_TIERS=()     # pid → tier name, for progress messages
 LOG_DIR=""
+# Globals published for the EXIT trap: it runs after main has returned, where
+# main's locals no longer exist, and the collection phase (and the stop gate
+# below) must still work there — Ctrl-C must collect before it stops.
+PLAN_TIERS=()    # tier plan mirrors, published when dispatch begins
+PLAN_MACHINES=()
+PLAN_GATES=()
+VERIFIED_IDS=""  # space-separated machine ids whose logs are verified LOCAL
+COLLECTION_DONE=0
+EXPECTED_FULL="" # published so trap-time collection can verify HEAD shas
+EXPECTED_SHORT=""
 
 info() { printf '[ci-cluster] %s\n' "$*"; }
 warn() { printf '[ci-cluster] WARNING: %s\n' "$*" >&2; }
@@ -272,6 +296,84 @@ head_matches() { # $1 reported-short-sha $2 expected-full-sha
   esac
 }
 
+# --- evidence collection (BEFORE any stop) --------------------------------------------------
+#
+# /tmp dies with the machine. On 2026-09-16 three machines were stopped with
+# real defects (4 data races, 10 SPA failures, 1 e2e shard) still only in
+# their /tmp logs — every trace destroyed unread. runci.sh now tee's each run
+# to /cache/logs/<gate>@<ref>-<stamp>.log (persistent), and this phase copies
+# those files off BEFORE anything is stopped. `fly ssh sftp get` because the
+# console cannot transfer files (it does not forward stdin). Every copy is
+# VERIFIED: non-zero size AND the run's `HEAD:` line — a zero-byte or
+# HEAD-less file looks like evidence and is not.
+
+# Remote run-log path for a gate this run dispatched. Prefers the machine-
+# readable `RUNLOG: <path>` line runci.sh prints as its FIRST output — it is
+# present in the local console capture even when the SSH stream later drops
+# mid-run. Falls back to the newest matching file on the machine (guarded by
+# the HEAD-sha verification in collect_machine_logs, which rejects another
+# run's file). Prints nothing when neither yields a path.
+remote_runlog_for_gate() { # $1 tier $2 gate $3 machine-id
+  local tier="$1" gate="$2" id="$3" path
+  path=$(sed -n 's/^RUNLOG: \(\/cache\/logs\/.*\)$/\1/p' "$LOG_DIR/$tier-$gate.log" 2>/dev/null | head -1)
+  if [ -z "$path" ]; then
+    path=$(fly ssh console --app "$APP" --machine "$id" \
+             -C "ls -1t '/cache/logs/${gate}@'* 2>/dev/null | head -1" 2>/dev/null \
+           | tr -d '\r' | sed -n '/^\/cache\/logs\//p' | head -1)
+  fi
+  printf '%s' "$path"
+}
+
+# Copy one machine's dispatched-gate run logs off the machine and VERIFY each
+# one (non-zero size, HEAD sha = this run's ref). Gates with no local console
+# log were never dispatched — nothing to collect, not a failure. Returns
+# non-zero if any dispatched gate's evidence is not verified local.
+collect_machine_logs() { # $1 tier $2 machine-id $3 gates(space-separated)
+  local tier="$1" id="$2" gates="$3" gate remote dest sha rc=0
+  for gate in $gates; do
+    [ -f "$LOG_DIR/$tier-$gate.log" ] || continue
+    dest="$LOG_DIR/worker/$tier-$gate.log"
+    remote=$(remote_runlog_for_gate "$tier" "$gate" "$id")
+    if [ -z "$remote" ] \
+       || ! fly ssh sftp get "$remote" "$dest" --app "$APP" --machine "$id" >/dev/null 2>&1 \
+       || [ ! -s "$dest" ]; then
+      warn "[$tier] evidence NOT collected: gate $gate log on machine $id could not be copied non-empty (${remote:-no run log found on the machine})"
+      rc=1
+      continue
+    fi
+    sha=$(head_sha_of_log "$dest")
+    if [ -z "$sha" ] || ! head_matches "$sha" "$EXPECTED_FULL"; then
+      warn "[$tier] evidence NOT verified: gate $gate log copied from machine $id has HEAD '${sha:-none}', expected ${EXPECTED_SHORT} — possibly another run's file, not this one"
+      rc=1
+      continue
+    fi
+    info "[$tier] collected + verified $dest (from machine $id: $remote)"
+  done
+  return "$rc"
+}
+
+# Collection phase over EVERY machine this run used. Verified machines are
+# recorded in VERIFIED_IDS — stop_started_machines only stops those. Safe to
+# call twice (main's happy path and, if interrupted first, the EXIT trap): the
+# second run just re-verifies.
+collect_all_and_verify() {
+  local i rc=0
+  COLLECTION_DONE=1
+  [ -n "$LOG_DIR" ] || return 0
+  mkdir -p "$LOG_DIR/worker" || warn "cannot create $LOG_DIR/worker — worker copies will fail (machines will be left running)"
+  for i in "${!PLAN_MACHINES[@]}"; do
+    if collect_machine_logs "${PLAN_TIERS[$i]}" "${PLAN_MACHINES[$i]}" "${PLAN_GATES[$i]}"; then
+      case " $VERIFIED_IDS " in
+        *" ${PLAN_MACHINES[$i]} "*) ;;
+        *) VERIFIED_IDS="$VERIFIED_IDS ${PLAN_MACHINES[$i]}" ;;
+      esac
+    else
+      rc=1
+    fi
+  done
+  return "$rc"
+}
+
 # --- teardown ------------------------------------------------------------------------------
 
 stop_started_machines() {
@@ -279,9 +381,33 @@ stop_started_machines() {
     info "no machines were started by this run — nothing to stop"
     return 0
   fi
-  local id
+  local id p dispatched
   for id in "${STARTED_IDS[@]}"; do
-    info "stopping machine $id (started by this run)"
+    # Collect-before-stop (2026-09-16 incident): a machine this run DISPATCHED
+    # gates on is stopped only once its logs are verified local. A machine that
+    # was started but never dispatched to (pre-flight refusal) carries no
+    # evidence — stopping it destroys nothing and saves the billing.
+    dispatched=""
+    for p in ${PLAN_MACHINES[@]+"${PLAN_MACHINES[@]}"}; do
+      [ "$p" = "$id" ] && dispatched=1
+    done
+    if [ -n "$dispatched" ]; then
+      case " $VERIFIED_IDS " in
+        *" $id "*)
+          info "stopping machine $id (started by this run; evidence verified local)" ;;
+        *)
+          warn "machine $id LEFT RUNNING — this run dispatched gates on it and their logs are NOT verified local."
+          warn "Stopping it would risk destroying the only evidence (2026-09-16: a night of failure traces was lost exactly this way)."
+          warn "Collect by hand, then stop it — a running machine costs money; destroyed evidence costs a night:"
+          echo "  fly ssh console --app $APP --machine $id -C 'ls -1t /cache/logs/'" >&2
+          echo "  fly ssh sftp get /cache/logs/<file> <local-copy> --app $APP --machine $id" >&2
+          echo "  fly machine stop $id --app $APP   # once the evidence is safe" >&2
+          continue
+          ;;
+      esac
+    else
+      info "stopping machine $id (started by this run; nothing was dispatched on it)"
+    fi
     if ! fly machine stop "$id" --app "$APP"; then
       warn "could not stop machine $id — STOP IT MANUALLY, it is billing:"
       echo "  fly machine stop $id --app $APP" >&2
@@ -301,6 +427,13 @@ cleanup() {
     for pid in "${TIER_PIDS[@]}"; do
       pkill -TERM -P "$pid" 2>/dev/null || true
     done
+  fi
+  # Collect-then-stop, not stop-never: if the run never reached the collection
+  # phase (interrupt, or a death after dispatch began), collect best-effort
+  # NOW, then stop whatever verified. Do not weaken or remove this trap.
+  if [ "$COLLECTION_DONE" -ne 1 ]; then
+    info "exit before the collection phase — collecting evidence best-effort before any stop"
+    collect_all_and_verify || true
   fi
   stop_started_machines
   exit "$rc"
@@ -393,6 +526,12 @@ write_run_header() { # $@ = tier filters; records what this run dispatched, for 
 
 dispatch_all_and_wait() { # one tier per machine concurrently; gates sequential within a tier
   local a pid rc
+  # Publish the plan to globals BEFORE dispatching: the EXIT trap's collection
+  # phase runs after main has returned, where main's TIER_* locals no longer
+  # exist, and it must know which machines this run dispatched gates on.
+  PLAN_TIERS=("${TIER_NAMES[@]}")
+  PLAN_MACHINES=("${TIER_MACHINES[@]}")
+  PLAN_GATES=("${TIER_GATES[@]}")
   for a in "${!TIER_NAMES[@]}"; do
     dispatch_tier "${TIER_NAMES[$a]}" "${TIER_MACHINES[$a]}" "${TIER_GATES[$a]}" &
     pid=$!
@@ -405,7 +544,7 @@ dispatch_all_and_wait() { # one tier per machine concurrently; gates sequential 
 }
 
 summarize_run() { # verdicts + HEAD-sha assertion from the logs; returns 0 only if all PASSed
-  local overall=0 a gate log verdict sha
+  local overall=0 a gate log verdict sha p left=""
   printf '\n=== ci-cluster summary — app %s, ref %s @ %s ===\n' "$APP" "$REF" "$EXPECTED_SHORT"
   printf '%-8s %-14s %-20s %s\n' TIER MACHINE GATE VERDICT
   for a in "${!TIER_NAMES[@]}"; do
@@ -425,14 +564,29 @@ summarize_run() { # verdicts + HEAD-sha assertion from the logs; returns 0 only 
       fi
     done
   done
-  printf 'logs: %s\n' "$LOG_DIR"
+  # Loud, in the summary, per the collect-before-stop contract: these machines
+  # are still running because their evidence could not be verified local.
+  for p in ${PLAN_MACHINES[@]+"${PLAN_MACHINES[@]}"}; do
+    case " $VERIFIED_IDS " in
+      *" $p "*) ;;
+      *) left="$left $p" ;;
+    esac
+  done
+  if [ -n "$left" ]; then
+    warn "LEFT RUNNING (this run's evidence not verified local — collect by hand before stopping):$left"
+    echo "  per machine: fly ssh console --app $APP --machine <id> -C 'ls -1t /cache/logs/'" >&2
+    echo "              fly ssh sftp get /cache/logs/<file> <local-copy> --app $APP --machine <id>" >&2
+  fi
+  printf 'logs: %s (worker copies of the run logs under worker/)\n' "$LOG_DIR"
   return "$overall"
 }
 
 # --- main ----------------------------------------------------------------------------------
 
 main() {
-  local REF EXPECTED_FULL EXPECTED_SHORT LOCAL_MD5 overall
+  # EXPECTED_FULL/EXPECTED_SHORT are deliberately NOT local: the EXIT trap's
+  # collection phase verifies HEAD shas after main has returned and needs them.
+  local REF LOCAL_MD5 overall COLLECT_RC
   local -a TIER_NAMES=() TIER_MACHINES=() TIER_GATES=() ALL_NAMES=()
 
   [ $# -ge 1 ] || { usage >&2; exit 2; }
@@ -470,11 +624,16 @@ main() {
     preflight_machine "${TIER_NAMES[$a]}" "${TIER_MACHINES[$a]}" "$LOCAL_MD5"
   done
 
-  # ---- dispatch concurrently, collect verdicts, summarize ----
+  # ---- dispatch concurrently, COLLECT the evidence, then verdicts, summarize ----
   dispatch_all_and_wait
+  collect_all_and_verify; COLLECT_RC=$?
   summarize_run; overall=$?
+  if [ "$COLLECT_RC" -ne 0 ]; then
+    overall=1
+    warn "OVERALL: FAIL — at least one machine's evidence is NOT secured local; that machine is LEFT RUNNING (see LEFT RUNNING above for ids and hand-retrieval commands)"
+  fi
   if [ "$overall" -eq 0 ]; then
-    info "OVERALL: PASS — all dispatched gates green"
+    info "OVERALL: PASS — all dispatched gates green, all evidence collected+verified"
   else
     warn "OVERALL: FAIL — see verdicts above (FAIL:no-result-line means the log is incomplete: SSH drop or interruption)"
   fi

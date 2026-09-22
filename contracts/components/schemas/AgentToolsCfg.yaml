@@ -13,10 +13,10 @@ properties:
       policies:
         type: object
         description: >
-          Complete per-tool policy map. Every static builtin tool name MUST be
-          present as an explicit, literal key (e.g. "bash", "remember") with an
-          "allow"/"ask"/"deny" value — this is not a sparse override set with a
-          fallback default, and wildcard keys are not valid for the static
+          Policy map. GET tools returns the complete effective catalog while persisted
+          ordinary built-in maps contain sparse overrides. Dedicated replacement
+          requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an
+          "allow"/"ask"/"deny" value — wildcard keys are not valid for the static
           builtin catalog. There is no default_policy field; every new custom
           agent is seeded fully deny-by-default (every static tool explicitly
           "deny"), with only a narrow, deliberately conservative allow-list for
@@ -38,21 +38,5 @@ properties:
         type: array
         description: List of MCP server bindings.
         items:
-          type: object
-          required:
-            - id
-          properties:
-            id:
-              type: string
-              description: MCP server identifier as registered in config.json.
-              example: "my-mcp-server"
-            tools:
-              type: array
-              items:
-                type: string
-              description: >
-                Specific tool names to expose from this server. When absent,
-                all tools from the server are available.
-              example:
-                - "search"
-                - "fetch"
+          $ref: './AgentToolsMcpServerBinding.yaml'
+          x-go-type: AgentToolsMcpServerBinding

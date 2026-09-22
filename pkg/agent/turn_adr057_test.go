@@ -40,6 +40,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -176,8 +177,7 @@ func TestTurnTranscriptWriters_SurfaceUnresolvableSession(t *testing.T) {
 
 			sessionDir := filepath.Join(store.BaseDir(), unresolvableID)
 			_, statErr := os.Stat(sessionDir)
-			assert.True(t, os.IsNotExist(statErr),
-				"%s: AC-1's no-directory property must survive through AppendTranscriptStrict (stat err=%v)",
+			assert.True(t, errors.Is(statErr, os.ErrNotExist), "%s: AC-1's no-directory property must survive through AppendTranscriptStrict (stat err=%v)",
 				tc.name, statErr)
 		})
 	}

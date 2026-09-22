@@ -112,6 +112,7 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 		}
 		return err
 	}
+	c.logSkippedProviders(doc)
 
 	// Anti-downgrade (US-3.AC6): a pulled version below the served one is
 	// refused; an equal version is a permitted no-op re-apply.
@@ -185,6 +186,21 @@ func (c *Catalog) logInfo(msg string, args ...any) {
 func (c *Catalog) logWarn(msg string, args ...any) {
 	if c.log != nil {
 		c.log.Warn(msg, args...)
+	}
+}
+
+// logSkippedProviders emits one WARN per provider ParseDocument left out of
+// doc — the unknown-protocol forward-compat skip (parse.go's
+// unknownProtocolError) — naming the provider id and the unrecognized
+// protocol. A nil doc or an empty SkippedProviders is a no-op; a nil
+// Logger is a no-op via logWarn.
+func (c *Catalog) logSkippedProviders(doc *Document) {
+	if doc == nil {
+		return
+	}
+	for _, sp := range doc.SkippedProviders {
+		c.logWarn("catalog: skipping provider with unrecognized protocol",
+			"provider", sp.ID, "protocol", sp.Protocol)
 	}
 }
 

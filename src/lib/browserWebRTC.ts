@@ -140,7 +140,7 @@ interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of
   active?: boolean
 }
 
-const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
+export const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
 // Exported (external review F6, 2026-08-13): BrowserLiveView.tsx's own
 // FIRST_FRAME_TIMEOUT_MS — how long it waits for a decoded VIDEO FRAME,
@@ -211,16 +211,17 @@ export interface BrowserICEServer { // not-wire-format: local view of the genera
   credential?: string
 }
 
+export function iceServersWithDefaults(servers: readonly RTCIceServer[]): RTCIceServer[] {
+  return [
+    { urls: DEFAULT_STUN_SERVER },
+    ...servers
+      .filter((server) => server.urls.length > 0)
+      .map((server) => ({ ...server })),
+  ]
+}
+
 export function pcFactoryWithICEServers(servers: readonly BrowserICEServer[]): () => RTCPeerConnection {
-  return () =>
-    new RTCPeerConnection({
-      iceServers: [
-        { urls: DEFAULT_STUN_SERVER },
-        ...servers
-          .filter((s) => s.urls.length > 0)
-          .map((s) => ({ urls: s.urls, username: s.username, credential: s.credential })),
-      ],
-    })
+  return () => new RTCPeerConnection({ iceServers: iceServersWithDefaults(servers) })
 }
 
 /**
@@ -284,7 +285,16 @@ function webrtcFallbackHeadline(reason: string): string {
     case 'disabled':
       return 'Live video is turned off for this installation. Ask your operator to enable it in Settings.'
     case 'not_capable':
-      return "Live video isn't supported on this server (WebRTC capture isn't available on this platform or build)."
+      // Squad K (founder ruling 2026-09-19, contract — installer route only):
+      // the previous copy said "isn't supported on this server", which read
+      // like a platform limitation and hid the fact that the gateway is
+      // running the headless-shell build (or no managed chrome at all) when
+      // the WebRTC tabCapture-required full build is what the installer was
+      // asked to fetch. The honest copy names both the symptom and the
+      // concrete next step (run the installer, or pin tools.browser.exec_path
+      // to a local full Chrome binary). `reason_detail` from the gateway
+      // appends the exact server-side cause verbatim when present.
+      return 'Live video is not available because the managed Chrome build cannot capture the browser tab. Run the gateway installer to download a full Chrome build, or set tools.browser.exec_path to a local full Chrome binary. See gateway logs for the exact cause.'
     case 'lite_build':
       return "Live video isn't available in this lite build."
     case 'error':

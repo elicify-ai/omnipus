@@ -38,6 +38,7 @@ function makeWorker(overrides: Partial<Agent> = {}): Agent {
     // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
     memory_enabled: true,
     ...overrides,
+    revision: overrides.revision ?? '0'.repeat(64),
   }
 }
 
@@ -75,6 +76,11 @@ describe('WorkerCard — content', () => {
   it('shows "opencode" executor badge for external-cli/opencode', () => {
     renderCard(makeWorker({ executor: { kind: 'external-cli', cli: 'opencode' } }))
     expect(screen.getByText('opencode')).toBeInTheDocument()
+  })
+
+  it('shows a visible Running state while the worker has an active turn', () => {
+    renderCard(makeWorker({ status: 'active' }))
+    expect(screen.getByText('Running')).toBeInTheDocument()
   })
 })
 

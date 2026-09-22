@@ -683,11 +683,16 @@ func (t *DelegateTool) collectCancelDescendantSessionIDs(rootSessionID string) (
 // force-cancelled (pkg/agent/subturn.go's armSubTurnForceCancel). It lives here,
 // not in pkg/agent, because this package cannot import pkg/agent — it is the
 // one discriminator executeSync/executeAsync use to tell the delegator the
-// truth about a timeout: the child is STOPPED (no further tool calls or
-// writes), not "failed" in some state that might still be running (UAT A-17,
-// where an orchestrator read "SubTurn failed: turn timed out" as "possibly
-// still alive" and raced its own re-delegations).
+// truth about a timeout. A cooperative child is stopped; ErrDelegationDetached
+// additionally identifies the exceptional case where the child turn's
+// in-flight operation ignored cancellation and may still be unwinding.
 var ErrDelegationTimedOut = errors.New("delegation timed out")
+
+// ErrDelegationDetached additionally marks a timed-out native child whose
+// in-flight operation ignored cancellation. The parent has stopped waiting
+// and no new model/tool call can start, but that operation may still be
+// unwinding. User-facing timeout copy must preserve that distinction.
+var ErrDelegationDetached = fmt.Errorf("%w: detached after ignoring cancellation", ErrDelegationTimedOut)
 
 // delegateTaskStatusTimedOut is the in-memory DelegateTaskState.Status for a
 // delegation that reached its time limit and was force-cancelled. It mirrors
@@ -877,6 +882,7 @@ func (dt *delegateToolExecuteAsync) runSubturn() {
 		Critical:          true,
 		Timeout:           dt.timeout,
 		TaskLabel:         dt.label,
+		TaskID:            dt.taskID,
 		ResolvedMaxDepth:  dt.resolvedMaxDepth,
 		ContextSnapshot:   dt.snap,
 		DelegateSessionID: dt.delegateSessionID,
@@ -921,7 +927,7 @@ func (dt *delegateToolExecuteAsync) runSubturn() {
 	timedOut := !requestedSkillFailure && errors.Is(err, ErrDelegationTimedOut)
 	var timedOutResult *ToolResult
 	if timedOut {
-		timedOutResult = dt.t.timedOutDelegationResult(dt.delegateSessionID, dt.label, err)
+		timedOutResult = dt.t.timedOutDelegationResult(dt.delegateSessionID, dt.taskID, dt.label, err)
 	}
 
 	dt.t.mu.Lock()
@@ -1050,7 +1056,10 @@ func (dt *delegateToolExecuteAsync) runSubturn() {
 			headline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", dt.requestedSkill)
 		}
 		result = &ToolResult{
-			ForLLM:    fmt.Sprintf("%s:\nLabel: %s\nResult: %s", headline, labelStr, result.ForLLM),
+			ForLLM: fmt.Sprintf(
+				"%s:\nLabel: %s\nTask ID: %s\nSession: %s\nResult: %s",
+				headline, labelStr, dt.taskID, dt.delegateSessionID, result.ForLLM,
+			),
 			IsError:   result.IsError,
 			ParksTurn: result.ParksTurn,
 			Async:     true,
@@ -1130,6 +1139,7 @@ func (t *DelegateTool) executeSync(
 		SystemPrompt:      task,
 		TargetAgentID:     agentID, // "" → parent's own soul; non-empty → named agent's soul
 		TaskLabel:         label,
+		TaskID:            taskID,
 		MaxTokens:         t.maxTokens,
 		Temperature:       t.temperature,
 		Async:             false,
@@ -1170,7 +1180,7 @@ func (t *DelegateTool) executeSync(
 	// nothing about whether the child was still running. Checked before that
 	// shortcut so the timeout discriminator is never flattened into it.
 	if errors.Is(err, ErrDelegationTimedOut) {
-		timedOut := t.timedOutDelegationResult(delegateSessionID, label, err)
+		timedOut := t.timedOutDelegationResult(delegateSessionID, taskID, label, err)
 		t.transitionLifecycle(delegateSessionID, session.LifecycleTimedOut, "")
 		t.finalizeSyncTask(taskID, delegateTaskStatusTimedOut, timedOut.ForLLM)
 		return timedOut
@@ -1232,8 +1242,10 @@ func (t *DelegateTool) executeSync(
 	if requestedSkill != "" {
 		llmHeadline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", requestedSkill)
 	}
-	llmContent := fmt.Sprintf("%s:\nLabel: %s\nResult: %s",
-		llmHeadline, labelStr, result.ForLLM)
+	llmContent := fmt.Sprintf(
+		"%s:\nLabel: %s\nTask ID: %s\nSession: %s\nResult: %s",
+		llmHeadline, labelStr, taskID, delegateSessionID, result.ForLLM,
+	)
 
 	return &ToolResult{
 		ForLLM:      llmContent,
@@ -1275,12 +1287,14 @@ func (t *DelegateTool) finalizeSyncTask(taskID, status, resultText string) {
 // it kills the child's (and its descendants') background shells, so a backgrounded
 // command cannot keep writing after the delegator was told the delegation ended.
 //
-// The wording is deliberate (UAT A-17): an orchestrator that read the old
+// The ordinary force-cancel wording is deliberate (UAT A-17): an orchestrator that read the old
 // "SubTurn failed: turn timed out: context deadline exceeded" concluded "a
 // timed-out delegation is not necessarily dead", then fought a phantom writer.
-// The message must state plainly that the child is stopped, that there is
-// nothing to cancel, and that partial work may already be on disk.
-func (t *DelegateTool) timedOutDelegationResult(delegateSessionID, label string, err error) *ToolResult {
+// The message states plainly when the child is stopped and when partial work
+// may remain. ErrDelegationDetached takes a separate truthful branch: no new
+// work can start, but the cancellation-ignoring in-flight operation may still be
+// unwinding.
+func (t *DelegateTool) timedOutDelegationResult(delegateSessionID, taskID, label string, err error) *ToolResult {
 	_, killFailed, walkIncomplete := t.killChildBackgroundShells(delegateSessionID)
 
 	labelStr := label
@@ -1291,14 +1305,25 @@ func (t *DelegateTool) timedOutDelegationResult(delegateSessionID, label string,
 	if t.sessionManager == nil {
 		shells = "No background-shell manager is configured, so none could be checked."
 	}
-	msg := fmt.Sprintf(
-		"Subagent task TIMED OUT and was force-cancelled:\nLabel: %s\nSession: %s\nDetail: %v\n"+
-			"The subagent is STOPPED: it will make no further tool calls or file changes. %s "+
-			"There is nothing left to cancel. Work it finished before the time limit (for example "+
-			"files it had already written) may still be on disk, possibly incomplete — inspect the "+
-			"current state before re-delegating, and raise timeout_seconds if the task needs longer.",
-		labelStr, delegateSessionID, err, shells,
-	)
+	var msg string
+	if errors.Is(err, ErrDelegationDetached) {
+		msg = fmt.Sprintf(
+			"Subagent task TIMED OUT, ignored cancellation, and was detached:\nLabel: %s\nTask ID: %s\nSession: %s\nDetail: %v\n"+
+				"The parent stopped waiting and no new model or tool call will be dispatched, but the "+
+				"already-running operation may still be unwinding. %s Work completed before the time limit "+
+				"may still be on disk, possibly incomplete — inspect the current state before re-delegating.",
+			labelStr, taskID, delegateSessionID, err, shells,
+		)
+	} else {
+		msg = fmt.Sprintf(
+			"Subagent task TIMED OUT and was force-cancelled:\nLabel: %s\nTask ID: %s\nSession: %s\nDetail: %v\n"+
+				"The subagent is STOPPED: it will make no further tool calls or file changes. %s "+
+				"There is nothing left to cancel. Work it finished before the time limit (for example "+
+				"files it had already written) may still be on disk, possibly incomplete — inspect the "+
+				"current state before re-delegating, and raise timeout_seconds if the task needs longer.",
+			labelStr, taskID, delegateSessionID, err, shells,
+		)
+	}
 	msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
 	return ErrorResult(msg).WithError(err)
 }

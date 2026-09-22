@@ -42,10 +42,8 @@ func TestAdmit_AgainstTheEmbeddedSnapshot(t *testing.T) {
 			wantMsg: `unknown provider "z-ai"`,
 		},
 		{
-			name:    "a cloud-IAM row carries the catalog's reason",
-			id:      "amazon-bedrock",
-			wantErr: ErrUnsupportedProvider,
-			wantMsg: "cloud-iam",
+			name: "the API-key Bedrock row is admitted as a normal catalog provider",
+			id:   "amazon-bedrock",
 		},
 		{
 			name:       "an unknown id with a base and a protocol is a custom row",

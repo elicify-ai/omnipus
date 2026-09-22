@@ -29,6 +29,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -745,6 +746,37 @@ func (h *PathHandle) Open() (fs.File, error) {
 	f, err := h.root.Open(h.rel)
 	if err != nil {
 		return nil, wrapOpenErr(err)
+	}
+	return f, nil
+}
+
+// OpenRegularNonBlocking opens through the already-authorized anchored handle
+// and verifies the opened object. On Unix the platform flags include
+// O_NONBLOCK, so a concurrent replacement with a FIFO cannot block the turn.
+func (h *PathHandle) OpenRegularNonBlocking() (fs.File, error) {
+	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return nil, err
+		}
+		f, err := os.OpenFile(h.abs, regularReadOpenFlags(), 0)
+		if err != nil {
+			return nil, wrapOpenErr(err)
+		}
+		info, err := f.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			f.Close()
+			return nil, ErrImageSourceNotRegular
+		}
+		return f, nil
+	}
+	f, err := h.root.OpenFile(h.rel, regularReadOpenFlags(), 0)
+	if err != nil {
+		return nil, wrapOpenErr(err)
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		f.Close()
+		return nil, ErrImageSourceNotRegular
 	}
 	return f, nil
 }
@@ -1538,7 +1570,7 @@ func resolveRealpathUnderWorkDir(rawPath, workDir string) (string, error) {
 
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		return filepath.Clean(resolved), nil
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("resolve symlinks for %q: %w", abs, err)
 	}
 
@@ -1549,7 +1581,7 @@ func resolveRealpathUnderWorkDir(rawPath, workDir string) (string, error) {
 		if err == nil {
 			return filepath.Clean(filepath.Join(resolved, remainder)), nil
 		}
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("resolve ancestor %q: %w", dir, err)
 		}
 		parent := filepath.Dir(dir)
@@ -1584,7 +1616,7 @@ func resolveAncestorRealpath(absPath string) (resolvedDir, remainder string, err
 		if evalErr == nil {
 			return filepath.Clean(resolved), remainder, nil
 		}
-		if !os.IsNotExist(evalErr) {
+		if !errors.Is(evalErr, os.ErrNotExist) {
 			return "", "", fmt.Errorf("resolve ancestor %q: %w", dir, evalErr)
 		}
 		parent := filepath.Dir(dir)
@@ -1642,10 +1674,10 @@ func safeRelPath(workDir, rawPath string) (string, error) {
 // implementation with the two original names kept as one-line delegators
 // below so every existing call site's behavior is unchanged).
 func wrapFSErr(verb string, err error) error {
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to %s file: file not found: %w", verb, err)
 	}
-	if os.IsPermission(err) || strings.Contains(err.Error(), "escapes from parent") ||
+	if errors.Is(err, os.ErrPermission) || strings.Contains(err.Error(), "escapes from parent") ||
 		strings.Contains(err.Error(), "permission denied") {
 		return fmt.Errorf("failed to %s file: access denied: %w", verb, err)
 	}

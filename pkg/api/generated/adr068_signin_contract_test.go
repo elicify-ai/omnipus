@@ -246,36 +246,52 @@ func TestContract_OnboardingProviderSignIn_ApiKeyRejected(t *testing.T) {
 
 // OnboardingCompleteRequest — the wrapper's provider is the oneOf; a body
 // without auth_method matches neither variant.
-
-func onboardingAdminJSON() string {
-	return `"admin":{"username":"admin","password":"s3cr3tpassword"}`
-}
+//
+// Every fixture below also carries `preferences`, which became REQUIRED when
+// onboarding gained step 1 (FR-OB-010..-018). These tests are about the
+// provider discriminator, so the field is fixture noise here — but it is not
+// optional on the wire, and TestContract_OnboardingCompleteRequest_MissingPreferencesRejected
+// is what pins that.
 
 func TestContract_OnboardingCompleteRequest_ApiKeyVariantPasses(t *testing.T) {
-	raw := []byte(`{"provider":{"auth_method":"api_key","id":"anthropic","api_key":"sk-ant","model":"claude-sonnet-4-6"},` + onboardingAdminJSON() + `}`)
+	raw := []byte(`{"provider":{"auth_method":"api_key","id":"anthropic","api_key":"sk-ant","model":"claude-sonnet-4-6"},"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`)
 	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw))
 }
 
 func TestContract_OnboardingCompleteRequest_SignInVariantPasses(t *testing.T) {
-	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.4"},` + onboardingAdminJSON() + `}`)
+	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.4"},"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`)
 	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw))
 }
 
+// TestContract_OnboardingCompleteRequest_MissingPreferencesAccepted pins the
+// WP5 (ADR-0010) redesign on the wire: commit f232d1755 made `preferences`
+// optional in BOTH modes (OnboardingCompleteRequest.yaml's own description:
+// "`preferences` ... is optional in BOTH modes and, when present, is written
+// into the global USER.md after the transaction succeeds"). This test used to
+// assert the OPPOSITE (a pre-WP5 invariant, when step 1 was the only path to
+// completion) and was left stale when the schema changed under it — a body
+// without preferences must be ACCEPTED, not rejected.
+func TestContract_OnboardingCompleteRequest_MissingPreferencesAccepted(t *testing.T) {
+	raw := []byte(`{"provider":{"auth_method":"api_key","id":"anthropic","api_key":"sk-ant","model":"claude-sonnet-4-6"}}`)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
+		"preferences is optional in both modes (WP5/ADR-0010) — omitting it must not be rejected")
+}
+
 func TestContract_OnboardingCompleteRequest_MissingAuthMethodRejected(t *testing.T) {
-	raw := []byte(`{"provider":{"id":"anthropic","api_key":"sk-ant"},` + onboardingAdminJSON() + `}`)
+	raw := []byte(`{"provider":{"id":"anthropic","api_key":"sk-ant"},"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
 		"auth_method discriminator is required — the historical omit default is retired")
 }
 
 func TestContract_OnboardingCompleteRequest_SignInWithKeyRejected(t *testing.T) {
-	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli","api_key":"k"},` + onboardingAdminJSON() + `}`)
+	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli","api_key":"k"}}`)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
 		"api_key not allowed with sign_in")
 }
 
 func TestContract_OnboardingCompleteRequest_UnionRoundTrip(t *testing.T) {
 	// The generated wrapper must carry the variant through the union accessors.
-	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli"},` + onboardingAdminJSON() + `}`)
+	raw := []byte(`{"provider":{"auth_method":"sign_in","id":"codex-cli"}}`)
 	var req OnboardingCompleteRequest
 	require.NoError(t, json.Unmarshal(raw, &req))
 	disc, err := req.Provider.Discriminator()

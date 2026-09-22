@@ -5,12 +5,15 @@ description: >
 type: object
 required:
   - onboarding_complete
+  - identity
 additionalProperties: false
 properties:
   onboarding_complete:
     type: boolean
     description: Whether the first-run onboarding wizard has been completed.
     example: true
+  identity:
+    $ref: './AppStateIdentity.yaml'
   last_doctor_run:
     type: string
     format: date-time

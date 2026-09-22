@@ -6,6 +6,7 @@ package credentials
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -367,8 +368,7 @@ func TestUnlock_SkipsAutoGenerateWhenStoreExists(t *testing.T) {
 
 	// master.key must NOT have been created — we refuse to strand existing data.
 	_, statErr := os.Stat(filepath.Join(dir, DefaultKeyFileName))
-	assert.True(t, os.IsNotExist(statErr),
-		"master.key must not exist after refused auto-generate")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "master.key must not exist after refused auto-generate")
 }
 
 // TestCredentialStoreIntegration verifies full set-encrypt-persist-load-decrypt cycle.

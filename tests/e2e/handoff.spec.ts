@@ -291,12 +291,16 @@ test(
     await selectAgent(page, /Jim/i);
 
     // Deterministic prompt: explicit tool name, exact arguments, no prose allowed.
-    // temperature=0 + seed=42 are plumbed into OpenRouter requests for determinism.
-    // The delegated subagent inherits Jim's toolset (which includes `bash`); it calls
-    // `bash` once, producing the tool_call_badge the expanded block asserts.
+    // The subagent's tool policy is the RESOLVED TARGET agent's policy, never the
+    // parent's (pkg/agent/subturn.go StoreToolPolicy(execSource.LoadToolPolicy())).
+    // Worker (id "worker") is the only target in Jim's delegation graph whose
+    // ADR-090 policy allows bash, so the delegate call pins agent_id="worker" —
+    // the mandated bash call would be denied under any other target. The subagent
+    // calls `bash` once, producing the tool_call_badge the expanded block asserts.
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
+        '  agent_id: "worker"',
         '  label: "handoff-b test"',
         '  task: "You are the subagent. Call the `bash` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',

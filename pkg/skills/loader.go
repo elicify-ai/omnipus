@@ -42,6 +42,7 @@ func ValidSlug(s string) bool {
 // Supports both basic (name/description) and ClawHub-extended fields.
 type SkillMetadata struct {
 	Name         string   `json:"name"`
+	DisplayName  string   `json:"display_name,omitempty"`
 	Description  string   `json:"description"`
 	Author       string   `json:"author"`        // optional frontmatter: author/publisher
 	Version      string   `json:"version"`       // optional frontmatter: semver string
@@ -59,9 +60,10 @@ type SkillInfo struct {
 	// activation allowlists, and built-in detection (DefaultSkillNames returns
 	// slugs). It is always present and always slug-shaped (validated).
 	ID string `json:"id"`
-	// Name is the human-readable display name, sourced from SKILL.md frontmatter
-	// `name:` (e.g. "Daily Briefing"). It falls back to the slug when no
-	// frontmatter name is present. Unlike ID it is free-form and NOT slug-validated.
+	// Name is the human-readable display name. Anthropic-compatible SKILL.md
+	// files keep the portable slug in frontmatter `name:`; Omnipus derives the
+	// display label from `metadata.display_name` (preferred) or the Markdown
+	// H1, and falls back to the slug only when neither is available.
 	Name         string `json:"name"`
 	Path         string `json:"path"`
 	Source       string `json:"source"`
@@ -159,7 +161,7 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 		}
 		dirs, err := os.ReadDir(dir)
 		if err != nil {
-			if !os.IsNotExist(err) {
+			if !errors.Is(err, os.ErrNotExist) {
 				slog.Warn("skills: failed to read skills directory", "dir", dir, "source", source, "error", err)
 			}
 			return
@@ -193,12 +195,15 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 			metadata := sl.getSkillMetadata(skillFile)
 			if metadata != nil {
 				info.Description = metadata.Description
-				// Name is the human-readable display name from frontmatter
-				// (falls back to the slug). It is kept separate from ID so a
-				// proper English name like "Daily Briefing" does not change the
-				// addressable identifier "daily-briefing".
+				// Name is the human-readable display label. It is kept separate
+				// from ID so "Daily Briefing" does not change the addressable
+				// identifier "daily-briefing". Prefer explicit Agent Skills
+				// metadata, then the Markdown H1, then the portable slug.
 				if metadata.Name != "" {
 					info.Name = metadata.Name
+				}
+				if metadata.DisplayName != "" {
+					info.Name = metadata.DisplayName
 				}
 				info.Author = metadata.Author
 				info.Version = metadata.Version
@@ -439,6 +444,7 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 
 	metadata := &SkillMetadata{
 		Name:        dirName,
+		DisplayName: title,
 		Description: bodyDescription,
 	}
 	if title != "" && namePattern.MatchString(title) && len(title) <= MaxNameLength {
@@ -470,6 +476,20 @@ func (sl *SkillsLoader) getSkillMetadata(skillPath string) *SkillMetadata {
 			metadata.Version = jsonMeta.Version
 		}
 		return metadata
+	}
+
+	// Agent Skills `metadata` is a nested string map, so parse it separately
+	// from the loader's flat convenience map. `display_name` is an agreed key
+	// within that standard-supported extension map, not a non-standard
+	// top-level field.
+	var skillExtensions struct {
+		Metadata struct {
+			DisplayName string `yaml:"display_name" json:"display_name"`
+		} `yaml:"metadata" json:"metadata"`
+	}
+	if err := yaml.Unmarshal([]byte(frontmatter), &skillExtensions); err == nil &&
+		strings.TrimSpace(skillExtensions.Metadata.DisplayName) != "" {
+		metadata.DisplayName = strings.TrimSpace(skillExtensions.Metadata.DisplayName)
 	}
 
 	// Fall back to simple YAML parsing

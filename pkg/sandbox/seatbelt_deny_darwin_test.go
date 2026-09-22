@@ -7,6 +7,7 @@
 package sandbox
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,7 +108,7 @@ func TestSeatbelt_DenyCoversWriteNotOnlyRead(t *testing.T) {
 // extant paths would leave a window in which the file is created and readable.
 func TestSeatbelt_DenyEmittedForNonExistentPath(t *testing.T) {
 	home := t.TempDir()
-	if _, err := os.Stat(filepath.Join(home, "master.key")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, "master.key")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("precondition: master.key must not exist, stat err = %v", err)
 	}
 	profile, err := renderSeatbeltProfile(openPolicy(home))

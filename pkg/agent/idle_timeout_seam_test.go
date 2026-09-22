@@ -8,6 +8,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,7 +137,7 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 	for time.Now().Before(retroDeadline) {
 		dateDirs, rerr := os.ReadDir(retrosDir)
 		if rerr != nil {
-			if !os.IsNotExist(rerr) {
+			if !errors.Is(rerr, os.ErrNotExist) {
 				t.Fatalf("read retros dir (unexpected): %v", rerr)
 			}
 			time.Sleep(20 * time.Millisecond)

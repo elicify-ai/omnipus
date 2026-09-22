@@ -66,7 +66,22 @@ import { useUiStore } from '@/store/ui'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 
-const APP_STATE_OK: AppState = { onboarding_complete: true, dev_mode_bypass: false }
+// ADR-0010 / login-and-onboarding-spec.md §2.2 — `identity` is a required
+// field on AppState. This fixture describes an unauthenticated core build;
+// these tests are about the notification/connection banners, not identity,
+// so it stays fixed rather than parameterized.
+const DEFAULT_IDENTITY: AppState['identity'] = {
+  mode: 'local',
+  edition: 'core',
+  signed_in: false,
+  blocked_reason: 'signed_out',
+}
+
+const APP_STATE_OK: AppState = {
+  onboarding_complete: true,
+  dev_mode_bypass: false,
+  identity: DEFAULT_IDENTITY,
+}
 const NOTIFICATIONS_EMPTY: NotificationList = { notifications: [], unread_count: 0 }
 
 function makeClient() {
@@ -413,6 +428,7 @@ describe('AppShell — banner announcements', () => {
     vi.mocked(api.fetchAppState).mockResolvedValue({
       onboarding_complete: true,
       dev_mode_bypass: true,
+      identity: DEFAULT_IDENTITY,
     })
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
 
@@ -523,6 +539,7 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
     vi.mocked(api.fetchWorkspaces).mockResolvedValue([
       {
+        revision: '0'.repeat(64),
         id: 'ws-other',
         name: 'UAT-T2',
         status: 'active',

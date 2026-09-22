@@ -359,7 +359,6 @@ export function LibraryExplorer({
   // the fullscreen pop-out's URL from wherever the panel actually is.
   useEffect(() => {
     onSelectionChange?.({ path: selectedPath, folder: browsedDir })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPath, browsedDir])
 
   // A file address implies its folder, and that implication is the whole of
@@ -386,7 +385,6 @@ export function LibraryExplorer({
   useEffect(() => {
     if (!addressed || selectedPath !== null || addressFolder === undefined) return
     setBrowsedDir((cur) => (cur === addressFolder ? cur : addressFolder))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addressFolder])
 
   // UAT D-64 (2026-09-13): switching workspace BY URL kept the previous
@@ -474,7 +472,6 @@ export function LibraryExplorer({
     if (!deepLinkIsFolder || selectedPath === null) return
     setBrowsedDir(selectedPath)
     goTo(workspaceId, null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkIsFolder, selectedPath])
   // A dot-prefixed target IS in the folder, just filtered out of the listing.
   // Saying "not found" there would be a plain falsehood, so it gets its own

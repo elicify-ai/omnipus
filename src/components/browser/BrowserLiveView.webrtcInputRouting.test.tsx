@@ -412,7 +412,7 @@ describe('BrowserLiveView — input routing: dedicated input during media connec
     const identity = { capture_id: 'capture-test', capture_generation: 1 }
     expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
       { kind: 'key_up', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 0, ...identity },
-      { kind: 'mouse_up', x: 10, y: 10, button: 'left', modifiers: 0, ...identity },
+      { kind: 'mouse_up', x: 10, y: 10, button: 'left', modifiers: 0, capture_width: 1280, capture_height: 720, ...identity },
     ])
     fireEvent.blur(window)
     expect(mockSendInput).toHaveBeenCalledTimes(2)
@@ -584,8 +584,10 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
     expect(mockMachineSendInput).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledTimes(1)
     const payload = mockSendInput.mock.calls[0][0]
+    // capture_width/height name the CSS space x/y were mapped into — without
+    // them the gateway dispatches raw capture coordinates (2026-09-07 regression).
     expect(payload).toEqual(
-      { kind: 'mouse_down', x: 10, y: 10, button: 'left', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'mouse_down', x: 10, y: 10, button: 'left', modifiers: 0, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
     )
   })
 
@@ -621,7 +623,7 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
         .filter((p) => p.kind === 'wheel')
       expect(wheels).toHaveLength(1)
       expect(wheels[0]).toEqual(
-        { kind: 'wheel', x: 10, y: 10, delta_x: 0, delta_y: 120, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'wheel', x: 10, y: 10, delta_x: 0, delta_y: 120, modifiers: 0, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
       )
     } finally {
       vi.useRealTimers()
@@ -678,8 +680,8 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
       await vi.advanceTimersByTimeAsync(60)
       const wheels = mockSendInput.mock.calls.map(c => c[0]).filter(p => p.kind === 'wheel')
       expect(wheels).toEqual([
-        { kind: 'wheel', x: 10, y: 10, modifiers: 0, delta_x: 0, delta_y: 100, capture_id: 'capture-test', capture_generation: 1 },
-        { kind: 'wheel', ...secondPoint, delta_x: 0, delta_y: 1, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'wheel', x: 10, y: 10, modifiers: 0, delta_x: 0, delta_y: 100, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'wheel', ...secondPoint, delta_x: 0, delta_y: 1, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
       ])
     } finally {
       vi.useRealTimers()
@@ -736,8 +738,10 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
 
       expect(mockSendInput).toHaveBeenCalledTimes(1)
       const payload = mockSendInput.mock.calls[0][0]
+      // Dims still describe the event-time css space (1280x720), not the
+      // rebuilt stream's 320x160 — carried, never re-derived at flush.
       expect(payload).toEqual(
-        { kind: 'mouse_move', x: 10, y: 10, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'mouse_move', x: 10, y: 10, modifiers: 0, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
       )
     } finally {
       vi.useRealTimers()
@@ -1091,6 +1095,39 @@ describe('BrowserLiveView fresh viewer fallback for missing received timestamps'
     presentWithoutRtp(secondFresh)
     typeA()
     expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+  })
+
+  // The satisfied fresh-viewer requirement must not linger. requiresFreshViewerRef
+  // used to stay true forever after one needs-fresh-viewer, so every recovered
+  // boundary with a new rtp_timestamp rebuilt the media peer via
+  // requestFreshViewerRef — one stop()/start() cycle per recovery event, each
+  // re-locking input and leaving a dead stream bound mid-renegotiation. Once
+  // the demanded fresh viewer has been authorized, a later boundary that the
+  // CURRENT stream can prove by RTP timestamp must keep that stream: no
+  // rebuild, input stays dispatchable. (Timestamp-free streams re-arm the
+  // requirement on their own — the previous test pins that path.)
+  it('keeps the satisfied fresh viewer for a later boundary its own RTP timestamps prove', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const original = incoming(1)
+    boundary(1, 100)
+    presentWithoutRtp(original)
+    expect(mockMachineStop).toHaveBeenCalledTimes(1)
+    expect(mockMachineStart).toHaveBeenCalledTimes(1)
+    const fresh = incoming(2)
+    presentWithoutRtp(fresh)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+    mockSendInput.mockClear()
+    // The fresh viewer now carries real RTP timestamps: a newer boundary on
+    // the same generation is provable in place, without another peer.
+    act(() => emitBrowserFrame(fresh, { rtpTimestamp: 150, expectedDisplayTime: performance.now() - 1 }))
+    boundary(1, 200)
+    act(() => emitBrowserFrame(fresh, { rtpTimestamp: 200, expectedDisplayTime: performance.now() - 1 }))
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+    expect(mockMachineStop).toHaveBeenCalledTimes(1)
+    expect(mockMachineStart).toHaveBeenCalledTimes(1)
   })
 
   it('cannot authorize an old fallback peer when another generation commits during negotiation', () => {

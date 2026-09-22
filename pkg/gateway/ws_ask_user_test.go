@@ -9,14 +9,39 @@
 package gateway
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func findAskUserGatewayLog(t *testing.T, buf *bytes.Buffer, message string) map[string]any {
+	t.Helper()
+	recordCount := 0
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			continue
+		}
+		recordCount++
+		if record["msg"] == message {
+			return record
+		}
+	}
+	t.Fatalf("missing gateway log message %q (captured_record_count=%d)", message, recordCount)
+	return nil
+}
 
 func askSetFixture() *askuser.PendingSet {
 	return &askuser.PendingSet{
@@ -116,6 +141,7 @@ func TestToAskUserCard_TerminalCarriesAnswers(t *testing.T) {
 // send buffer drops it (counted, never blocking) while the others still
 // receive theirs — the exact behavior of the pre-extraction inline loop.
 func TestBroadcastAskUserCard_FanOutAndDropCounter(t *testing.T) {
+	logBuf := captureSlogJSON(t)
 	wcOK := &wsConn{sendCh: make(chan []byte, 4)}
 	wcFull := &wsConn{sendCh: make(chan []byte)} // unbuffered, nobody reading → drop
 	h := &WSHandler{sessions: map[string]*wsConn{"ok": wcOK, "full": wcFull}}
@@ -136,6 +162,28 @@ func TestBroadcastAskUserCard_FanOutAndDropCounter(t *testing.T) {
 	assert.Equal(t, int32(1), wcFull.droppedFrames.Load(),
 		"full-buffer client must count exactly one dropped frame")
 	assert.Equal(t, int32(0), wcOK.droppedFrames.Load())
+
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user_question broadcast")
+	assert.Equal(t, "WARN", record["level"], "a dropped fan-out is genuine production-visible trouble")
+	assert.Equal(t, "ask_1", record["card_id"])
+	assert.Equal(t, float64(2), record["fanout_count"])
+	assert.Equal(t, float64(1), record["enqueued_count"])
+	assert.Equal(t, float64(1), record["drop_count"])
+}
+
+func TestBroadcastAskUserCard_NoDropsLogsInfo(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	wcA := &wsConn{sendCh: make(chan []byte, 1)}
+	wcB := &wsConn{sendCh: make(chan []byte, 1)}
+	h := &WSHandler{sessions: map[string]*wsConn{"a": wcA, "b": wcB}}
+
+	h.broadcastAskUserCard(toAskUserCard(askSetFixture(), 30*time.Minute))
+
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user_question broadcast")
+	assert.Equal(t, "INFO", record["level"])
+	assert.Equal(t, float64(2), record["fanout_count"])
+	assert.Equal(t, float64(2), record["enqueued_count"])
+	assert.Equal(t, float64(0), record["drop_count"])
 }
 
 // The resume origin heuristic: a human submission/cancel is user-initiated;
@@ -162,3 +210,195 @@ func TestAskUserResumeDispatcher_OriginHeuristic(t *testing.T) {
 	assert.False(t, resumeIsUserInitiated(autoSet))
 	assert.True(t, resumeIsUserInitiated(cancelledSet))
 }
+
+// TestAskUserResumeDispatcher_PublishesToBus is the SQUAD-R reproduction at
+// the publish-path seam: it wires the PRODUCTION askUserResumeDispatcher to
+// a REAL bus.MessageBus and verifies that a human-submitted answer lands on
+// the bus with the exact §0.2 correlated user-role message shape, the
+// channel/chatID/sessionID that the turn machinery needs to route the
+// resume, and the origin signal (UserInitiated) the turn options expect.
+// The brief's primary suspect is the live-resolve branch ending here at
+// Submit → dispatchResume; this test pinpoints whether the publish itself
+// drops or fails on the current release/v0.1.1 head.
+func TestAskUserResumeDispatcher_PublishesToBus(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	mb := bus.NewMessageBus()
+	t.Cleanup(mb.Close)
+	disp := &askUserResumeDispatcher{msgBus: mb}
+
+	// Park a set, then submit a human answer — the answer carries one
+	// non-auto answer so resumeIsUserInitiated returns true.
+	set := askSetFixture()
+	set.Owner = "daniel"
+	set.Status = askuser.StatusAnswered
+	const secretDelivered = "DELIVERED-ANSWER-DO-NOT-LOG"
+	set.Answers = []askuser.Answer{
+		{Header: "Scope", QuestionText: "Which emails?", Selected: []string{secretDelivered}},
+		{Header: "Deploy", QuestionText: "Deploy where?", Selected: []string{"Staging", "Prod"}},
+	}
+
+	wantText, err := askuser.ResumeMessage(set)
+	require.NoError(t, err)
+
+	err = disp.DispatchResume(set, wantText)
+	require.NoError(t, err, "DispatchResume must not error with a wired bus")
+
+	select {
+	case got := <-mb.InboundChan():
+		assert.Equal(t, "webchat", got.Channel, "resume must carry the SPA channel so resolveMessageRoute keys on webchat")
+		assert.Equal(t, "chat-1", got.ChatID, "resume must carry the original chatID so resolveSessionConns reaches it")
+		assert.Equal(t, "session_owner_1", got.SessionID, "resume must carry the transcript session id so per-session worker scope matches")
+		assert.Equal(t, "daniel", got.GatewayUserID, "resume must carry the owner so audit User stamps")
+		assert.True(t, got.UserInitiated, "human-submitted answer is a user-initiated turn by the field's own definition")
+		assert.Equal(t, "webchat_user", got.Sender.CanonicalID)
+		require.NotNil(t, got.Metadata)
+		assert.Equal(t, "mia", got.Metadata["agent_id"], "resume must carry the parking agent so route resolution picks the same agent")
+		assert.Equal(t, wantText, got.Content, "resume content must be the §0.2 correlated user-role message verbatim")
+	default:
+		t.Fatal("resume message never landed on the bus — the live-resolve branch drops the answer before the loop can pick it up")
+	}
+
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user resume dispatch completed")
+	assert.Equal(t, "INFO", record["level"])
+	assert.Equal(t, "ask_1", record["card_id"])
+	assert.Equal(t, "delivered", record["outcome"])
+	assert.Equal(t, "message_bus", record["delivery_stage"])
+	assert.Equal(t, float64(2), record["answer_count"])
+	if strings.Contains(logBuf.String(), secretDelivered) {
+		t.Fatal("delivered resume log exposed answer content")
+	}
+}
+
+func TestAskUserResumeDispatcher_LogsStrandedWithoutBus(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	set := askSetFixture()
+	set.Status = askuser.StatusAnswered
+	set.Answers = []askuser.Answer{{Header: "Scope", FreeText: strpGateway("STRANDED-ANSWER-DO-NOT-LOG")}}
+	resumeText, err := askuser.ResumeMessage(set)
+	require.NoError(t, err)
+
+	err = (&askUserResumeDispatcher{}).DispatchResume(set, resumeText)
+	require.Error(t, err)
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user resume dispatch completed")
+	assert.Equal(t, "WARN", record["level"])
+	assert.Equal(t, "stranded", record["outcome"])
+	assert.Equal(t, "no_message_bus", record["reason"])
+	if strings.Contains(logBuf.String(), "DO-NOT-LOG") {
+		t.Fatal("stranded resume log exposed answer content")
+	}
+}
+
+func TestAskUserResumeDispatcher_LogsTimeout(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	mb := bus.NewMessageBus()
+	t.Cleanup(mb.Close)
+	fillCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for i := 0; i < 64; i++ {
+		require.NoError(t, mb.PublishInbound(fillCtx, bus.InboundMessage{}))
+	}
+
+	set := askSetFixture()
+	set.CardID = "ask_timeout"
+	set.Status = askuser.StatusAnswered
+	set.Answers = []askuser.Answer{{Header: "Scope", FreeText: strpGateway("TIMEOUT-ANSWER-DO-NOT-LOG")}}
+	resumeText, err := askuser.ResumeMessage(set)
+	require.NoError(t, err)
+	err = (&askUserResumeDispatcher{msgBus: mb}).DispatchResume(set, resumeText)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user resume dispatch completed")
+	assert.Equal(t, "WARN", record["level"])
+	assert.Equal(t, "timed_out", record["outcome"])
+	if strings.Contains(logBuf.String(), "DO-NOT-LOG") {
+		t.Fatal("timed-out resume log exposed answer content")
+	}
+}
+
+func TestAskUserResumeDispatcher_LogsClosedBusAsStranded(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	mb := bus.NewMessageBus()
+	mb.Close()
+
+	set := askSetFixture()
+	set.Status = askuser.StatusAnswered
+	set.Answers = []askuser.Answer{{Header: "Scope", Selected: []string{"Only unanswered"}}}
+	resumeText, err := askuser.ResumeMessage(set)
+	require.NoError(t, err)
+
+	err = (&askUserResumeDispatcher{msgBus: mb}).DispatchResume(set, resumeText)
+	require.ErrorIs(t, err, bus.ErrBusClosed)
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user resume dispatch completed")
+	assert.Equal(t, "WARN", record["level"])
+	assert.Equal(t, "stranded", record["outcome"])
+	assert.Equal(t, "bus_closed", record["reason"])
+}
+
+func TestHandleAskUserAnswer_RejectionLogDoesNotExposeSubmittedContent(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	reg := askuser.NewRegistry(nil, nil, askuser.Options{})
+	require.NoError(t, reg.CreatePending(askSetFixture()))
+	t.Cleanup(reg.Quiesce)
+
+	const secret = "SECRET-INVALID-OPTION-DO-NOT-LOG"
+	var frame generated.AskUserAnswerFrame
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"type":"ask_user_answer",
+		"card_id":"ask_1",
+		"session_id":"session_owner_1",
+		"answers":[
+			{"header":"Scope","selected":["SECRET-INVALID-OPTION-DO-NOT-LOG"]},
+			{"header":"Deploy","selected":["Staging"]}
+		]
+	}`), &frame))
+
+	h := &WSHandler{askUserReg: reg}
+	h.handleAskUserAnswer(&wsConn{userID: "daniel", sendCh: make(chan []byte, 1)}, frame)
+
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user_answer rejected")
+	assert.Equal(t, "INFO", record["level"])
+	assert.Equal(t, "invalid_answer", record["reason"])
+	if strings.Contains(logBuf.String(), secret) {
+		t.Fatal("rejected-answer log exposed submitted answer content")
+	}
+}
+
+func TestHandleAskUserAnswer_AcceptedAnswerWithResumeFailureIsNotRejected(t *testing.T) {
+	logBuf := captureSlogJSON(t)
+	mb := bus.NewMessageBus()
+	mb.Close()
+	const secretAccepted = "ACCEPTED-ANSWER-DO-NOT-LOG"
+	set := askSetFixture()
+	set.Questions[0].Options[0].Label = secretAccepted
+	set.Questions[0].Recommended = secretAccepted
+	reg := askuser.NewRegistry(nil, &askUserResumeDispatcher{msgBus: mb}, askuser.Options{})
+	require.NoError(t, reg.CreatePending(set))
+	t.Cleanup(reg.Quiesce)
+
+	var frame generated.AskUserAnswerFrame
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"type":"ask_user_answer",
+		"card_id":"ask_1",
+		"session_id":"session_owner_1",
+		"answers":[
+			{"header":"Scope","selected":["ACCEPTED-ANSWER-DO-NOT-LOG"]},
+			{"header":"Deploy","selected":["Staging"]}
+		]
+	}`), &frame))
+
+	h := &WSHandler{askUserReg: reg}
+	h.handleAskUserAnswer(&wsConn{userID: "daniel", sendCh: make(chan []byte, 1)}, frame)
+
+	record := findAskUserGatewayLog(t, logBuf, "ws: ask_user_answer accepted; resume failed")
+	assert.Equal(t, "WARN", record["level"])
+	assert.Equal(t, "stranded", record["outcome"])
+	assert.Equal(t, "bus_closed", record["reason"])
+	if strings.Contains(logBuf.String(), `"msg":"ws: ask_user_answer rejected"`) {
+		t.Fatal("accepted answer was incorrectly logged as rejected after resume failure")
+	}
+	if strings.Contains(logBuf.String(), secretAccepted) {
+		t.Fatal("accepted-answer resume-failure log exposed answer content")
+	}
+}
+
+func strpGateway(value string) *string { return &value }

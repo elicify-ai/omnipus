@@ -2,6 +2,15 @@
 
 _Note for reading outside the TUI. Written 2026-07-13 from codebase walk of Settings → Security, sandbox, tool policy, god mode._
 
+> **Correction 2026-09-20 (issue #761).** This note is kept as written. One fact in it has since
+> changed: where it says god mode "floors tools to allow" (§1's diagram and §3 C), that is no
+> longer what happens. God mode sets the **global** tool policy to allow for every tool and removes
+> global permission prompting; the per-agent policy still applies, and an agent is never granted a
+> tool its own policy denies. Everything else the note says about god mode — kernel sandbox off,
+> egress open, shell guard off, audit and prompt guard still on — still holds, and so does its UX
+> argument. Recorded in
+> [ADR-084 §12](../architecture/ADR-084-judge-as-an-active-reviewer.md).
+
 ---
 
 ## 1. How security actually works (layered model)
@@ -13,10 +22,14 @@ User message → Agent turn → wants tool X
         │
         ▼
 ┌───────────────────────────────────────┐
-│ 0. God mode (Gateway tab)             │  If ON: floors tools to allow,
+│ 0. God mode (Gateway tab)             │  If ON: floors tools to allow,   [1]
 │    global bypass (restart to arm)     │  kills kernel sandbox, opens egress,
 └───────────────────────────────────────┘  kills shell-guard. Audit/prompt-guard/
         │                                  rate limits stay on.
+        │                                  [1] SUPERSEDED 2026-09-20 (#761):
+        │                                      it floors the GLOBAL tool policy
+        │                                      to allow. Per-agent policy still
+        │                                      applies; a per-agent deny denies.
         ▼
 ┌───────────────────────────────────────┐
 │ 1. Tool policy (allow / ask / deny)   │  Global + per-agent. Global Deny wins.
@@ -131,7 +144,7 @@ Under Advanced: Landlock ABI, seccomp, blocked syscalls, enforce/permissive/off,
 
 ### C. God mode is the nuclear option, off-tab
 
-God mode disables kernel sandbox, floors tool policies to allow, opens egress, kills shell-guard—while Security may still show “Must ask first” until doctor re-runs. Split surface = false confidence.
+God mode disables kernel sandbox, ~~floors tool policies to allow~~ **floors the *global* tool policy to allow — superseded 2026-09-20 (issue #761); the per-agent policy still applies and a per-agent deny still denies**, opens egress, kills shell-guard—while Security may still show “Must ask first” until doctor re-runs. Split surface = false confidence.
 
 ### D. Restart semantics are uneven
 

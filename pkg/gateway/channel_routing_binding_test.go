@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -151,15 +152,15 @@ func TestWorkspaceDelete_CascadesToInstances(t *testing.T) {
 	require.Equal(t, "sales", preInst.WorkspaceID, "pre-condition: channel must be bound")
 
 	// Delete the workspace.
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/sales", nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "sales"), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, "sales")
-	require.Equal(t, http.StatusNoContent, w.Code, "workspace delete must succeed with 204")
+	require.Equal(t, http.StatusOK, w.Code, "workspace delete must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2)")
 
 	// Workspace file must be gone.
 	wsPath := filepath.Join(api.homePath, "workspaces", "sales.json")
 	_, statErr := os.Stat(wsPath)
-	assert.True(t, os.IsNotExist(statErr), "workspace file must be removed after delete")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "workspace file must be removed after delete")
 
 	// Channel instance must be disabled and unbound.
 	afterCfg := api.agentLoop.GetConfig()
@@ -178,7 +179,7 @@ func TestWorkspaceDelete_CascadesToInstances(t *testing.T) {
 func TestWorkspaceDelete_NonExistent_Returns404(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/nonexistent", nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "nonexistent"), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, "nonexistent")
 
@@ -191,7 +192,7 @@ func TestWorkspaceDelete_DefaultWorkspace_Returns409(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	writeTestWorkspaceJSON(t, api, "myws", "active", nil, true /* isDefault */)
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/myws", nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "myws"), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, "myws")
 

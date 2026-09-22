@@ -21,6 +21,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 )
 
 // --- Config ---
@@ -530,13 +531,15 @@ func (a *restAPI) refreshConfigAndRewireServices(configPath string) error {
 		slog.Warn("refreshConfigAndRewireServices: bundle resolution error", "error", e)
 	}
 	// Replace (not append) the entire sensitive-values set so rotated secrets
-	// are evicted and the scrubber reflects exactly the current config state.
+	// are evicted and the scrubber reflects the current config refs plus every
+	// OAuth grant Omnipus owns in the encrypted store.
 	values := make([]string, 0, len(bundle))
 	for _, v := range bundle {
 		if v != "" {
 			values = append(values, v)
 		}
 	}
+	values = append(values, providers.CollectOAuthSensitiveValues(a.credStore)...)
 	newCfg.RegisterSensitiveValues(values)
 	// Atomically swap the config pointer so all subsequent requests see the
 	// new config with scrubbing fully re-armed.

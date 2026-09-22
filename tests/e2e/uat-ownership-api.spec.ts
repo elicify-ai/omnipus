@@ -48,7 +48,14 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
-import { test, expect, request as apiRequest, type APIRequestContext, type TestInfo } from '@playwright/test';
+import {
+  test,
+  expect,
+  request as apiRequest,
+  type APIRequestContext,
+  type APIResponse,
+  type TestInfo,
+} from '@playwright/test';
 
 /** the-internet.herokuapp.com / example.com — the plan's §3.4 fixture hosts. */
 const PAGE_A = 'https://the-internet.herokuapp.com/dropdown';
@@ -285,7 +292,11 @@ test.beforeAll(async ({ playwright }) => {
   const mkSession = async (agentId: string): Promise<string> =>
     (await json<{ id: string }>(await request.post('/api/v1/sessions', { headers, data: { agent_id: agentId, type: 'chat' } }))).id;
   const setTeam = async (wsId: string, team: string[]): Promise<void> => {
-    await json(await request.put(`/api/v1/workspaces/${wsId}`, { headers, data: { core_team: team } }));
+    // ADR-090 makes every workspace mutation revision-checked. Read the
+    // opaque current revision rather than guessing it from create time.
+    const workspace = await json<{ revision?: string }>(await request.get(`/api/v1/workspaces/${wsId}`));
+    if (!workspace.revision) throw new Error(`BLOCKED: workspace ${wsId} did not expose its ADR-090 revision`);
+    await json(await request.put(`/api/v1/workspaces/${wsId}`, { headers, data: { core_team: team, revision: workspace.revision } }));
   };
 
   const wsA = await mkWorkspace(`UAT-Own-A-${stamp}`);
@@ -365,12 +376,29 @@ test.afterAll(async ({ playwright }) => {
   });
   try {
     const headers = await csrf(request);
+    const readJson = async <T>(res: APIResponse): Promise<T> => {
+      if (!res.ok()) throw new Error(`BLOCKED: ${res.url()} returned ${res.status()}`);
+      return (await res.json()) as T;
+    };
+    // Deletion is a mutation too. Read the current entity revision instead of
+    // leaving the teardown one API revision behind ADR-090.
+    const deleteWithRevision = async (
+      url: string,
+      revision: string | undefined,
+    ): Promise<APIResponse> => {
+      if (!revision) throw new Error(`BLOCKED: ${url} did not expose its ADR-090 revision`);
+      return request.delete(`${url}?revision=${encodeURIComponent(revision)}`, { headers });
+    };
     for (const id of [fx.wsA, fx.wsB]) {
-      const res = await request.delete(`/api/v1/workspaces/${id}`, { headers });
+      const workspace = await readJson<{ revision?: string }>(
+        await request.get(`/api/v1/workspaces/${id}`),
+      );
+      const res = await deleteWithRevision(`/api/v1/workspaces/${id}`, workspace.revision);
       if (!res.ok()) console.log(`[UAT cleanup] DELETE workspace ${id} returned ${res.status()}`);
     }
     for (const id of [fx.agentA, fx.agentA2, fx.agentB, fx.noTeamAgent, fx.multiAgent]) {
-      const res = await request.delete(`/api/v1/agents/${id}`, { headers });
+      const agent = await readJson<{ revision?: string }>(await request.get(`/api/v1/agents/${id}`));
+      const res = await deleteWithRevision(`/api/v1/agents/${id}`, agent.revision);
       if (!res.ok()) console.log(`[UAT cleanup] DELETE agent ${id} returned ${res.status()}`);
     }
   } catch (err) {

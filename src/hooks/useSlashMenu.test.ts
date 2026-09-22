@@ -1351,7 +1351,7 @@ describe('useSlashMenu — "@" agent-mention menu', () => {
   it('matches by agent NAME (prefix or substring) only — a divergent id does not leak a match', () => {
     mentionAgentsOverride = [
       ...mockAgents,
-      makeAgent({ id: 'ops-7', name: 'Marcus', type: 'core', status: 'active', description: 'Support' }),
+      makeAgent({ id: 'ops-7', name: 'Marcus', type: 'Main', status: 'active', description: 'Support' }),
     ]
     const { result } = renderHook(() => useSlashMenu(baseParams()))
 
@@ -1916,8 +1916,8 @@ describe('useSlashMenu — empty-items keyboard handling (Fix D, bugfixes3 sign-
 describe('useSlashMenu — prefix-then-substring matching (deferred item 4)', () => {
   it('"@code" ranks the prefix match ("Code Assistant") above the substring-only match ("Assist Code")', () => {
     mentionAgentsOverride = [
-      makeAgent({ id: 'assist-code', name: 'Assist Code', type: 'core', status: 'active' }),
-      makeAgent({ id: 'code-asst', name: 'Code Assistant', type: 'core', status: 'active' }),
+      makeAgent({ id: 'assist-code', name: 'Assist Code', type: 'Main', status: 'active' }),
+      makeAgent({ id: 'code-asst', name: 'Code Assistant', type: 'Main', status: 'active' }),
     ]
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@code'))
@@ -1931,8 +1931,8 @@ describe('useSlashMenu — prefix-then-substring matching (deferred item 4)', ()
 
   it('"@assist" finds "Code Assistant" via the substring rank (not just the literal prefix match "Assist Code")', () => {
     mentionAgentsOverride = [
-      makeAgent({ id: 'assist-code', name: 'Assist Code', type: 'core', status: 'active' }),
-      makeAgent({ id: 'code-asst', name: 'Code Assistant', type: 'core', status: 'active' }),
+      makeAgent({ id: 'assist-code', name: 'Assist Code', type: 'Main', status: 'active' }),
+      makeAgent({ id: 'code-asst', name: 'Code Assistant', type: 'Main', status: 'active' }),
     ]
     const { result } = renderHook(() => useSlashMenu(baseParams()))
     act(() => result.current.onInputChange('@assist'))

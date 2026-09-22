@@ -24,7 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Info, Lock } from '@phosphor-icons/react'
 
-import { ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
+import { DISCOVERY_TOOL_NAME, ToolPolicyEditor } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicyValue } from '@/components/shared/ToolPolicyEditor'
 import type { ToolPolicy } from '@/components/shared/PolicyBadge'
 import { resolvePolicy } from '@/lib/toolCategories'
@@ -33,10 +33,13 @@ import {
   fetchRegistryTools,
   fetchAgentTools,
   fetchGlobalToolPolicies,
+  fetchMcpServersForAgent,
   updateAgentTools,
   type AgentKind,
   type AgentToolsCfg,
 } from '@/lib/api'
+import { MCPServerPicker } from './MCPServerPicker'
+import { Button } from '@/components/ui/button'
 import { AutoSaveIndicator } from '@/components/ui/AutoSaveIndicator'
 import { useReAuthGate, isReAuthCancelled } from '@/components/settings/useReAuthGate'
 import { useUiStore } from '@/store/ui'
@@ -47,6 +50,10 @@ interface ToolsAndPermissionsProps {
   agentType: AgentKind
   /** Whether the agent is locked (core/identity-locked). Read-only when true. */
   isLocked?: boolean
+  /** Backend field descriptor result for tool_policy_changes. Overrides blanket lock UI. */
+  isEditable?: boolean
+  /** Backend field descriptor result for mcp_servers. */
+  isMcpEditable?: boolean
   tools: AgentToolsCfg
   /**
    * Called when the server-hydrated config has been loaded (to keep parent
@@ -55,6 +62,7 @@ interface ToolsAndPermissionsProps {
    * every user edit. Real saves go through the re-auth-gated mutation below.
    */
   onChange: (tools: AgentToolsCfg) => void
+  onRevisionChange?: (revision: string) => void
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -83,8 +91,11 @@ export function ToolsAndPermissions({
   agentId,
   agentType,
   isLocked = false,
+  isEditable,
+  isMcpEditable = false,
   tools,
   onChange,
+  onRevisionChange,
 }: ToolsAndPermissionsProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -95,6 +106,7 @@ export function ToolsAndPermissions({
   // the whole Tools & Permissions section for external agents; this is the
   // defense-in-depth guard for any other caller of this component.
   const isExternal = isExternalType(agentType)
+  const toolsEditable = isEditable ?? !isLocked
 
   // Re-auth gate — mirrors GlobalToolPoliciesSection (SecuritySection.tsx).
   // The gate opens a consent dialog if the server returns a re-auth 403.
@@ -110,24 +122,47 @@ export function ToolsAndPermissions({
     queryFn: fetchRegistryTools,
   })
 
-  const { data: agentToolsData } = useQuery({
+  const {
+    data: agentToolsData,
+    isError: agentToolsError,
+    refetch: refetchAgentTools,
+  } = useQuery({
     queryKey: ['agent-tools', agentId],
     queryFn: () => fetchAgentTools(agentId!),
     enabled: !!agentId,
   })
 
+  const {
+    data: mcpServers = [],
+    isError: mcpServersError,
+    refetch: refetchMcpServers,
+  } = useQuery({
+    queryKey: ['mcp-servers'],
+    queryFn: fetchMcpServersForAgent,
+    enabled: isMcpEditable && !!agentId,
+  })
+
   // Global (Settings → Security) tool policy — locks per-agent controls that
   // would contradict a global deny/ask (most-restrictive-wins; no contradictions).
-  const { data: globalPolicies } = useQuery({
+  const {
+    data: globalPolicies,
+    isError: globalPoliciesError,
+    refetch: refetchGlobalPolicies,
+  } = useQuery({
     queryKey: ['global-tool-policies'],
     queryFn: fetchGlobalToolPolicies,
   })
   const globalPolicyValue: ToolPolicyValue | undefined = globalPolicies
     ? { policies: globalPolicies.policies ?? {} }
     : undefined
+  const ceilingReady = globalPolicyValue !== undefined
 
   // Local copy for ToolPolicyEditor (controlled).
   const [editorValue, setEditorValue] = useState<ToolPolicyValue>(() => cfgToValue(tools))
+  const [overrideNames, setOverrideNames] = useState<string[]>([])
+  // undefined = GET omitted mcp (preserve on policy-only save).
+  // { servers: [] } = operator explicitly assigned none.
+  const [mcpConfig, setMcpConfig] = useState<AgentToolsCfg['mcp']>(undefined)
 
   // isDraftReady gates useAutoSave: stays false until the server data has
   // arrived and hydrated editorValue. This prevents a spurious save on open
@@ -144,6 +179,8 @@ export function ToolsAndPermissions({
   // the current id even if the agent changes between debounce and fire.
   const agentIdRef = useRef(agentId)
   agentIdRef.current = agentId
+  const revisionRef = useRef<string | null>(null)
+  const overrideNamesRef = useRef<string[]>([])
 
   // Hydrate editorValue from the dedicated GET /agents/{id}/tools response.
   // This fires once when agentToolsData arrives (and again if the agent id
@@ -165,6 +202,15 @@ export function ToolsAndPermissions({
     if (!agentToolsData || !agentId) return
     if (isDraftReady) return // user has edited — do NOT snap back
     const incomingValue = cfgToValue(agentToolsData.config)
+    revisionRef.current = agentToolsData.revision
+    const names = (agentToolsData.override_names ?? []).filter((name) => name !== DISCOVERY_TOOL_NAME)
+    overrideNamesRef.current = names
+    setOverrideNames(names)
+    setMcpConfig(
+      Object.prototype.hasOwnProperty.call(agentToolsData.config, 'mcp')
+        ? agentToolsData.config.mcp
+        : undefined,
+    )
     setEditorValue(incomingValue)
     setIsDraftReady(true)
      
@@ -195,14 +241,46 @@ export function ToolsAndPermissions({
   //     before the debounce settles.
   //
   // Mirrors GlobalToolPoliciesSection in SecuritySection.tsx exactly.
+  const draft = useMemo(
+    () => ({
+      policies: editorValue.policies,
+      overrideNames,
+      mcp: mcpConfig,
+    }),
+    [editorValue.policies, overrideNames, mcpConfig],
+  )
+  const mcpEditable = isMcpEditable && !isExternal
+
   const { status: saveStatus, error: saveError } = useAutoSave(
-    editorValue,
+    draft,
     async (value) => {
       const id = agentIdRef.current
       if (!id) return
-      const cfg = valueToCfg(value, toolsRef.current)
-      const result = await runGated((token) => updateAgentTools(id, cfg, token))
-      // Propagate to parent and invalidate the cache after a successful save.
+      const cfg: AgentToolsCfg = {
+        ...valueToCfg({ policies: value.policies }, toolsRef.current),
+      }
+      // Omit mcp when GET did not return it and the operator has not edited
+      // connectors. Sending { servers: [] } would unassign every server.
+      if (mcpEditable) {
+        if (value.mcp !== undefined) cfg.mcp = { servers: value.mcp.servers ?? [] }
+        else delete cfg.mcp
+      }
+      const revision = revisionRef.current
+      if (!revision) throw new Error('Tool settings have no reviewed revision. Reload before saving.')
+      const nextOverrideNames = [...value.overrideNames]
+        .filter((name) => name !== DISCOVERY_TOOL_NAME)
+        .sort()
+      overrideNamesRef.current = nextOverrideNames
+      const result = await runGated((token) => updateAgentTools(id, {
+        revision,
+        override_names: nextOverrideNames,
+        config: cfg,
+      }, token))
+      revisionRef.current = result.revision
+      onRevisionChange?.(result.revision)
+      // Do not write the response override list into live React state.
+      // A response acknowledges its request snapshot. Replacing the current
+      // draft with it can overwrite newer edits and trigger another save.
       onChange(result.config)
       queryClient.invalidateQueries({ queryKey: ['agent-tools', id] })
     },
@@ -249,7 +327,7 @@ export function ToolsAndPermissions({
     // "not hydrated" (safe to re-arm) and a separate `readOnly` for
     // isLocked/isExternal that hides/disables the UI WITHOUT going through
     // useAutoSave's `disabled` re-arm path at all.
-    { disabled: isLocked || isExternal || !isDraftReady },
+    { disabled: (!toolsEditable && !mcpEditable) || isExternal || !isDraftReady },
   )
 
   // Surface runGated cancellation and API errors as toasts. useAutoSave catches
@@ -271,9 +349,62 @@ export function ToolsAndPermissions({
   // observe the change and fire the debounced gated PUT with the latest value.
   // It never skips or drops an edit regardless of in-flight saves.
   function handleEditorChange(next: ToolPolicyValue) {
-    if (isLocked || isExternal || !agentId) return
+    // !isDraftReady: an edit recorded before hydration lands would be
+    // overwritten by the hydration effect and could never save (see
+    // handleMcpChange). The editor is disabled below until hydration.
+    if (!toolsEditable || isExternal || !agentId || !ceilingReady || !isDraftReady) return
+    const previous = editorValue.policies
+    const changed = Object.keys(next.policies).filter((name) => next.policies[name] !== previous[name] && name !== DISCOVERY_TOOL_NAME)
+    const nextOverrides = new Set(overrideNames)
+    const ceiling = globalPolicyValue?.policies ?? {}
+    if (changed.length > 1) {
+      // Role presets rewrite many tools at once. Ignore them until the
+      // global ceiling is loaded so an empty map cannot densify overrides.
+      if (!ceilingReady) return
+      nextOverrides.clear()
+      for (const [name, policy] of Object.entries(next.policies)) {
+        if (name === DISCOVERY_TOOL_NAME) continue
+        if (policy !== ceiling[name]) nextOverrides.add(name)
+      }
+    } else {
+      // A single badge click stays an explicit override even when the
+      // value equals the ceiling. Inherit is the only unlist path.
+      for (const name of changed) nextOverrides.add(name)
+    }
+    if (previous[DISCOVERY_TOOL_NAME] !== undefined) {
+      next.policies[DISCOVERY_TOOL_NAME] = previous[DISCOVERY_TOOL_NAME]
+    }
+    setOverrideNames([...nextOverrides].sort())
     setEditorValue(next)
   }
+
+  function handleInherit(toolName: string) {
+    // Same pre-hydration window as handleEditorChange.
+    if (!toolsEditable || isExternal || !agentId || !isDraftReady || toolName === DISCOVERY_TOOL_NAME) return
+    const ceiling = (globalPolicyValue?.policies?.[toolName] as ToolPolicy | undefined)
+      ?? editorValue.policies[toolName]
+    setEditorValue({ policies: { ...editorValue.policies, [toolName]: ceiling } })
+    setOverrideNames(overrideNames.filter((name) => name !== toolName))
+  }
+
+  function handleMcpChange(mcp: NonNullable<AgentToolsCfg['mcp']>) {
+    // Pre-hydration edit swallow (browser acceptance run 3, 2026-09-18): the
+    // hydration effect overwrites mcpConfig while isDraftReady is false and
+    // useAutoSave is disabled, so an edit accepted here would be silently
+    // reverted with no save and no toast. The picker's controls are disabled
+    // below until hydration; this guard is the state-write boundary.
+    if (!mcpEditable || !agentId || !isDraftReady) return
+    setMcpConfig(mcp)
+  }
+
+  const mcpToolNamesByServer = useMemo(() => {
+    const map: Record<string, string[]> = {}
+    for (const tool of registryTools) {
+      if (tool.source !== 'mcp' || !tool.server_id) continue
+      ;(map[tool.server_id] ??= []).push(tool.name)
+    }
+    return map
+  }, [registryTools])
 
   // Shell/fs conflict detection (retained from previous version).
   // Uses the per-tool policy map from `tools` prop. A tool with no explicit
@@ -317,18 +448,37 @@ export function ToolsAndPermissions({
     )
   }
 
+  if (agentToolsError) {
+    return (
+      <div className="space-y-[var(--space-2)] py-[var(--space-3)]" data-testid="agent-tools-load-error">
+        <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
+          Failed to load this agent&apos;s tool settings.
+        </p>
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          data-testid="agent-tools-retry"
+          onClick={() => { void refetchAgentTools() }}
+          className="h-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
+        >
+          Retry
+        </Button>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-[var(--space-3)]">
       {/* B-2 (US-D5 / #332): locked agent read-only notice */}
-      {isLocked && (
+      {!toolsEditable && (
         <div
           data-testid="locked-agent-readonly-notice"
           className="flex items-start gap-[var(--space-2)] rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-[var(--space-2-5)] py-[var(--space-2)]"
         >
           <Lock size={13} className="text-[var(--color-muted)] shrink-0 mt-[var(--space-0-5)]" />
           <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] leading-relaxed">
-            Tool policies for locked core agents are read-only. To change tool access,
-            create a custom agent.
+            Tool policies are read-only for this agent: the backend marks this capability as fixed.
           </p>
         </div>
       )}
@@ -372,11 +522,11 @@ export function ToolsAndPermissions({
       )}
 
       {/* Save status — hidden for locked/external agents (no writes ever fire) */}
-      {!isLocked && !isExternal && (
+      {toolsEditable && !isExternal && (
         <div className="flex items-center gap-[var(--space-2-5)]">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
-            {Object.keys(policies).length} tool polic{Object.keys(policies).length !== 1 ? 'ies' : 'y'} configured
+            {overrideNames.length} local override{overrideNames.length !== 1 ? 's' : ''}
           </span>
         </div>
       )}
@@ -388,13 +538,68 @@ export function ToolsAndPermissions({
           - MCP tools grouped per-server with a source badge
           - Summary pill per category
           - disabled=true when isLocked (B-2 / #332) */}
+      {globalPoliciesError && (
+        <div className="space-y-[var(--space-2)]" data-testid="global-policies-load-error">
+          <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
+            Failed to load the global permission ceiling. Tool policies remain read-only until it is available.
+          </p>
+          <Button
+            type="button"
+            variant="link"
+            size="sm"
+            data-testid="global-policies-retry"
+            onClick={() => { void refetchGlobalPolicies() }}
+            className="h-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
       <ToolPolicyEditor
         tools={registryTools}
         value={editorValue}
         onChange={handleEditorChange}
-        disabled={isLocked || isExternal}
+        disabled={!toolsEditable || isExternal || !ceilingReady || !isDraftReady}
+        presetsDisabled={!ceilingReady}
         globalPolicies={globalPolicyValue}
+        overrideNames={overrideNames}
+        onInherit={handleInherit}
       />
+
+      {mcpEditable && (
+        <section className="space-y-[var(--space-2)]" data-testid="mcp-assignment-section">
+          <p className="text-[length:var(--type-utility-xs-size)] font-medium text-[var(--color-secondary)]">Assigned connectors</p>
+          <p className="text-[length:var(--type-caption-size)] text-[var(--color-muted)]">
+            An installed server grants no execution access until it is assigned here.
+            Empty means no connectors.
+          </p>
+          {mcpServersError ? (
+            <div className="space-y-[var(--space-2)]" data-testid="mcp-servers-load-error">
+              <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)]">
+                Failed to load configured MCP servers. Existing connector assignments are preserved.
+              </p>
+              <Button
+                type="button"
+                variant="link"
+                size="sm"
+                data-testid="mcp-servers-retry"
+                onClick={() => { void refetchMcpServers() }}
+                className="h-auto p-0 text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] underline underline-offset-2 hover:text-[var(--color-secondary)]"
+              >
+                Retry
+              </Button>
+            </div>
+          ) : (
+            <MCPServerPicker
+              servers={mcpServers}
+              mcpConfig={mcpConfig}
+              onChange={handleMcpChange}
+              disabled={!mcpEditable || !isDraftReady}
+              serverToolNames={mcpToolNamesByServer}
+            />
+          )}
+        </section>
+      )}
 
       {/* Re-auth consent dialog — rendered once here; opened by runGated when
           the server demands re-auth on the tools PUT. */}

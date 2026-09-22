@@ -8,12 +8,14 @@ package datamodel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 )
 
@@ -33,7 +35,16 @@ var omnipusDirs = []dirEntry{
 	{"pins", 0o700},
 	{"channels", 0o700},
 	{"skills", 0o700},
-	{"backups", 0o700},
+	// NOTE: "backups" is deliberately absent from this fixed list. It is
+	// created conditionally in Init below, only when the edition auth mode
+	// is local (WP4, ADR-0010): a platform (hosted/desktop) instance would
+	// put master.key in the same tarball as the credential store it
+	// decrypts if a whole-vault archive were ever written there, which
+	// contradicts this product's key-custody model. The fspolicy DENY on
+	// $OMNIPUS_HOME/backups stays regardless — see
+	// fspolicy.SecretEntriesAlways: an install that ever ran the local
+	// backup feature still has whole-vault archives on disk, and that deny
+	// matches by NAME, not by the directory existing.
 	{"system", 0o700},
 	{"logs", 0o700},
 }
@@ -105,9 +116,21 @@ func Init(home string) error {
 		}
 	}
 
+	// WP4: local backup — off in platform mode. The backups directory is
+	// created only in local mode; its only writers are
+	// HandleCreateBackup/HandleListBackups/HandleRestore in
+	// pkg/gateway/rest_settings.go, which are themselves routed only in
+	// local mode (pkg/gateway/rest.go).
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		backupsDir := filepath.Join(home, "backups")
+		if err := os.MkdirAll(backupsDir, 0o700); err != nil {
+			return fmt.Errorf("datamodel: create dir %q: %w", backupsDir, err)
+		}
+	}
+
 	// Write default config.json if it does not exist.
 	configPath := filepath.Join(home, "config.json")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
 			return fmt.Errorf("datamodel: marshal default config: %w", err)
@@ -123,7 +146,7 @@ func Init(home string) error {
 
 	// Write system/state.json if it does not exist.
 	statePath := filepath.Join(home, "system", "state.json")
-	if _, err := os.Stat(statePath); os.IsNotExist(err) {
+	if _, err := os.Stat(statePath); errors.Is(err, os.ErrNotExist) {
 		state := map[string]any{
 			"version":    1,
 			"created_at": time.Now().UTC().Format(time.RFC3339),

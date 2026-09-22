@@ -40,7 +40,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	// (~/.omnipus/system/audit.jsonl per audit package).
 	auditPath := filepath.Join(a.homePath, "system", "audit.jsonl")
 	f, err := os.Open(auditPath)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		// AuditLogResponse envelope: no entries, chain not checkable.
 		jsonOK(w, map[string]any{"entries": []json.RawMessage{}, "chain_status": "unknown"})
 		return
@@ -340,7 +340,15 @@ func (a *restAPI) rotateCredentials(w http.ResponseWriter, r *http.Request) {
 
 // HandleCreateBackup handles POST /api/v1/backup.
 // Creates a tar.gz of ~/.omnipus/ excluding logs and backups directories.
+//
+// WP4: local backup — off in platform mode. The route is also only
+// registered in local mode (rest.go); this 404 is defence in depth in case
+// the handler is ever reached by another path.
 func (a *restAPI) HandleCreateBackup(w http.ResponseWriter, r *http.Request) {
+	if config.EditionAuthMode() != config.AuthModeLocal {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -451,7 +459,15 @@ func createTarGz(srcDir, destPath string) error {
 
 // HandleListBackups handles GET /api/v1/backups.
 // Lists all .tar.gz files in ~/.omnipus/backups/.
+//
+// WP4: local backup — off in platform mode. The route is also only
+// registered in local mode (rest.go); this 404 is defence in depth in case
+// the handler is ever reached by another path.
 func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
+	if config.EditionAuthMode() != config.AuthModeLocal {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
 	if r.Method != http.MethodGet {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -459,7 +475,7 @@ func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
 	backupsDir := filepath.Join(a.homePath, "backups")
 	entries, err := os.ReadDir(backupsDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			jsonOK(w, []any{})
 			return
 		}
@@ -493,9 +509,29 @@ func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
 
 // HandleRestore handles POST /api/v1/restore.
 // Extracts a backup tar.gz over ~/.omnipus/, skipping config.json to preserve settings.
+//
+// WP4: local backup — off in platform mode. The route is also only
+// registered in local mode (rest.go); this 404 is defence in depth in case
+// the handler is ever reached by another path.
 func (a *restAPI) HandleRestore(w http.ResponseWriter, r *http.Request) {
+	if config.EditionAuthMode() != config.AuthModeLocal {
+		jsonErr(w, http.StatusNotFound, "not found")
+		return
+	}
 	if r.Method != http.MethodPost {
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	// A restore overwrites master.key, credentials.json, state.json and every
+	// entity under $OMNIPUS_HOME — strictly more than the vault writes that
+	// already require the step-up gate — so it takes the same gate. (Sent
+	// upstream as a fix: upstream's restore is reachable with a session alone.)
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	if !a.requireReAuth(w, r, user.Username) {
 		return
 	}
 	var req gen.RestoreBackupRequest
@@ -518,7 +554,7 @@ func (a *restAPI) HandleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	backupPath := filepath.Join(a.homePath, "backups", req.Filename)
 	if _, err := os.Stat(backupPath); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("backup %q not found", req.Filename))
 			return
 		}
@@ -540,6 +576,14 @@ const maxRestoreFileSize = 256 * 1024 * 1024 // 256 MB
 // extractTarGz extracts archivePath into destDir, skipping config.json and
 // rejecting any entries with unsafe paths (absolute or traversal).
 func extractTarGz(archivePath, destDir string) error {
+	// destRoot is where destDir really is; the per-entry check below resolves
+	// each entry's parent the same way so a symlink left under the home (an
+	// agent with workspace write can create one) cannot redirect a write
+	// outside it. The lexical prefix check alone cannot see links.
+	destRoot, rootErr := filepath.EvalSymlinks(destDir)
+	if rootErr != nil {
+		destRoot = filepath.Clean(destDir)
+	}
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("open archive: %w", err)
@@ -582,6 +626,14 @@ func extractTarGz(archivePath, destDir string) error {
 		}
 		if hdr.Typeflag == tar.TypeDir {
 			continue
+		}
+		if fi, lerr := os.Lstat(destPath); lerr == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write through symlink %q", clean)
+		}
+		if parent, perr := filepath.EvalSymlinks(filepath.Dir(destPath)); perr == nil {
+			if parent != destRoot && !strings.HasPrefix(parent, destRoot+string(os.PathSeparator)) {
+				return fmt.Errorf("refusing to write %q: its directory resolves outside the destination", clean)
+			}
 		}
 		out, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode)&0o700)
 		if err != nil {

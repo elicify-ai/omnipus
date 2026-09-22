@@ -7,10 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
@@ -32,6 +34,7 @@ type agentLoopRunTurnToolsExecute struct {
 	toctouPolicy              string
 	toolCallID                string
 	asyncCallback             func(_ context.Context, result *tools.ToolResult)
+	asyncCallbackGate         *asyncToolCallbackGate
 	toolCBSig                 string
 	toolResult                *tools.ToolResult
 	toolDuration              time.Duration
@@ -41,6 +44,42 @@ type agentLoopRunTurnToolsExecute struct {
 	toolResultMsg             providers.Message
 	tcRecord                  session.ToolCall
 	ret0                      agentLoopRunTurnToolsFlow
+}
+
+// asyncToolCallbackGate keeps an executor that completes inline from publishing
+// its terminal result before the loop has recorded the async-start result. A
+// genuinely later callback passes straight through on the executor's caller.
+type asyncToolCallbackGate struct {
+	mu      sync.Mutex
+	ready   bool
+	pending *tools.ToolResult
+	handle  func(*tools.ToolResult)
+}
+
+func (g *asyncToolCallbackGate) callback(result *tools.ToolResult) {
+	g.mu.Lock()
+	if !g.ready {
+		g.pending = result
+		g.mu.Unlock()
+		return
+	}
+	g.mu.Unlock()
+	g.handle(result)
+}
+
+func (g *asyncToolCallbackGate) release() {
+	g.mu.Lock()
+	if g.ready {
+		g.mu.Unlock()
+		return
+	}
+	g.ready = true
+	pending := g.pending
+	g.pending = nil
+	g.mu.Unlock()
+	if pending != nil {
+		g.handle(pending)
+	}
 }
 
 // agentLoopRunTurnToolsExecuteFlow reports how a block stage of agentLoopRunTurnToolsExecute wants the conductor to proceed.
@@ -983,6 +1022,15 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 
 // prepareDispatch records dispatch metadata and prepares asynchronous result handling.
 func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
+	ts := ex.rx.rr.rq.ri.rf.rt.ts
+	// Temporary origin containment until the compiled per-turn publication
+	// policy replaces these distributed predicates. Automatic tool feedback is
+	// top-level only for root, non-task turns: delegated children inherit the
+	// parent route but must not publish standalone feedback there, while native
+	// task and verifier turns use internal webchat-labelled routes. depth and
+	// IsTaskRun are existing origin proxies, not new flags.
+	allowTopLevelToolFeedback := !ts.opts.SuppressToolFeedback && ts.depth == 0 && !ts.opts.IsTaskRun
+
 	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
 	if marshalErr != nil {
 		logger.WarnCF("agent", "failed to marshal tool args for preview", map[string]any{"tool": ex.toolName, "error": marshalErr.Error()})
@@ -1021,8 +1069,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// channels suppress feedback because the UI already renders tool calls
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
-		!ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
-		isMessagingChannel(ex.rx.rr.rq.ri.rf.rt.ts.channel) {
+		allowTopLevelToolFeedback &&
+		isMessagingChannel(ts.channel) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
 			ex.rx.rr.rq.ri.cfg.Agents.Defaults.GetToolFeedbackMaxArgsLength(),
@@ -1043,102 +1091,15 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	ex.toolCallID = tc.ID
 	toolIteration := ex.rx.rr.rq.ri.rf.rt.iteration
 	asyncToolName := ex.toolName
+	asyncToolCallID := tc.ID
+	gate := &asyncToolCallbackGate{
+		handle: func(result *tools.ToolResult) {
+			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration, allowTopLevelToolFeedback)
+		},
+	}
+	ex.asyncCallbackGate = gate
 	ex.asyncCallback = func(_ context.Context, result *tools.ToolResult) {
-		// Send ForUser content directly to the user (immediate feedback),
-		// mirroring the synchronous tool execution path. This stays a
-		// separate concern from AsyncNotifier (FR-N2, async-notifier-spec.md)
-		// — it happens regardless of whether ContentForLLM() also triggers
-		// a new turn below.
-		if !result.Silent && result.ForUser != "" {
-			outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer outCancel()
-			// M1: capture and log publish errors instead of silently discarding them.
-			if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
-				Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
-				ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-				Content: result.ForUser,
-			}); pubErr != nil {
-				logger.WarnCF("agent", "Async tool ForUser content failed to publish",
-					map[string]any{
-						"tool":    asyncToolName,
-						"channel": ex.rx.rr.rq.ri.rf.rt.ts.channel,
-						"error":   pubErr.Error(),
-					})
-			}
-		}
-
-		// Determine content for the agent loop (ForLLM or error). Nothing to
-		// relay back into the conversation — skip AsyncNotifier entirely
-		// rather than publish an empty follow-up (Notify's own contract
-		// permits empty Content, e.g. a silent kill, but this call site
-		// chooses not to invoke it at all here, preserving today's
-		// skip-when-empty behavior exactly).
-		content := result.ContentForLLM()
-		if content == "" {
-			return
-		}
-
-		// FIX 3: a turn that was ever the target of a cancel claim
-		// (ts.cancelFired — set exactly once, and never reset, by
-		// ClaimCancel/handleCancel; see cancel.go's RequestCancel) must
-		// not spring back to life through this async completion. This
-		// closure captures the PARENT ts that dispatched the async
-		// tool call (delegate/background bash); the callback fires
-		// independently, on its own goroutine, whenever that tool
-		// finishes — which is routinely AFTER the user has already
-		// clicked Stop, since the whole point of async dispatch is
-		// that the parent turn moves on immediately (see executeAsync's
-		// doc comment in pkg/tools/delegate.go). Without this guard,
-		// Notify below publishes an inbound "system" message
-		// unconditionally, and processSystemMessage (this file) turns
-		// it into a BRAND NEW, fully-tooled turn — the agent can then
-		// narrate the delegation and even issue ANOTHER delegate call,
-		// seconds after being told to stop (live-reproduced: a third
-		// turn, ID parent+2, arriving ~3s after the cancel completed,
-		// calling delegate again). Skipping Notify here does not lose
-		// the async tool's own result: spawnSubTurn inherits the
-		// parent's TranscriptSessionID/TranscriptStore (subturn.go), so
-		// the child's own tool calls and final answer are already
-		// persisted to the SAME session's transcript via its own turn
-		// — only this callback's REACTIVE continuation turn is
-		// suppressed, which is exactly the behavior a canceled turn
-		// should have.
-		if ex.rx.rr.rq.ri.rf.rt.ts.cancelFired.Load() {
-			logger.InfoCF("agent", "Suppressing async-notify continuation turn: originating turn was canceled",
-				map[string]any{
-					"tool":        asyncToolName,
-					"channel":     ex.rx.rr.rq.ri.rf.rt.ts.channel,
-					"chat_id":     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-					"agent_id":    ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-					"content_len": len(content),
-				})
-			return
-		}
-
-		// AsyncNotifier.Notify (async-notifier-spec.md) now owns
-		// sensitive-data filtering, truncation, EventKindFollowUpQueued
-		// emission, and the inbound bus publish that used to be inlined
-		// here. The EventMeta carried via context preserves today's
-		// TurnID/SessionKey/Iteration on the emitted event byte-for-byte.
-		notifyCtx := withAsyncNotifyEventMeta(
-			context.Background(),
-			ex.rx.rr.rq.ri.rf.rt.ts.scope.meta(toolIteration, "runTurn", "turn.follow_up.queued"),
-		)
-		if notifyErr := ex.rx.rr.rq.ri.rf.rt.al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
-			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
-			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			AgentID: ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-			// FIX 5d: thread the originating turn's transcript binding
-			// through so the reconstructed turn persists into the SAME
-			// session, independent of whether a live WS connection is
-			// still open when the async result lands.
-			TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
-			SourceKind:          asyncToolName,
-			Content:             content,
-		}); notifyErr != nil {
-			logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
-				map[string]any{"tool": asyncToolName, "channel": ex.rx.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
-		}
+		gate.callback(result)
 	}
 
 	// SEC-26: Per-agent tool call rate limit check. The system agent is exempt.
@@ -1206,6 +1167,116 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	return agentLoopRunTurnToolsExecuteNext
 }
 
+func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
+	result *tools.ToolResult,
+	toolName string,
+	toolCallID string,
+	toolIteration int,
+	allowTopLevelToolFeedback bool,
+) {
+	ts := ex.rx.rr.rq.ri.rf.rt.ts
+	// Ordinary async feedback follows the captured top-level origin gate.
+	// System-woken roots are the one error-only exception: SendResponse
+	// distinguishes them from internal task/verifier turns, while depth and
+	// IsTaskRun keep delegated children and task work contained.
+	allowSuppressedErrorFeedback := result.IsError &&
+		ts.opts.SuppressToolFeedback && ts.opts.SendResponse &&
+		ts.depth == 0 && !ts.opts.IsTaskRun
+	if allowTopLevelToolFeedback || allowSuppressedErrorFeedback {
+		// Send ForUser content directly to the user (immediate feedback),
+		// mirroring the synchronous tool execution path. This stays separate
+		// from AsyncNotifier, which owns the reactive continuation turn below.
+		userContent := asyncToolResultUserContent(
+			toolName,
+			ts.channel,
+			ts.opts.SuppressToolFeedback,
+			result,
+		)
+		if userContent != "" && result.IsError && ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
+			ex.rx.rr.rq.ri.rf.rt.ts.channel == "webchat" {
+			persistAsyncToolErrorNotice(ex.rx.rr.rq.ri.rf.rt.ts, toolCallID, userContent)
+			callbackSID, callbackProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+			callbackNoticeID := fmt.Sprintf("%s:async-error:%d", toolCallID, time.Now().UnixNano())
+			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
+				EventKindToolExecEnd,
+				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.async.error"),
+				ToolExecEndPayload{
+					ToolCallID:         session.ToolCallID(callbackNoticeID),
+					ChatID:             ex.rx.rr.rq.ri.rf.rt.ts.chatID,
+					SessionID:          callbackSID,
+					Tool:               toolName,
+					ForLLMLen:          len(result.ContentForLLM()),
+					ForUserLen:         len(result.ForUser),
+					IsError:            true,
+					Async:              true,
+					Result:             userContent,
+					ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+					AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
+					ProducingSessionID: callbackProducingSID,
+				},
+			)
+		} else if userContent != "" {
+			outboundSessionID := ""
+			if allowSuppressedErrorFeedback {
+				outboundSessionID = ts.transcriptSessionID
+			}
+			outCtx, outCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer outCancel()
+			if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(outCtx, bus.OutboundMessage{
+				Channel:   ts.channel,
+				ChatID:    ts.chatID,
+				SessionID: outboundSessionID,
+				Content:   userContent,
+			}); pubErr != nil {
+				logger.WarnCF("agent", "Async tool ForUser content failed to publish",
+					map[string]any{
+						"tool":    toolName,
+						"channel": ex.rx.rr.rq.ri.rf.rt.ts.channel,
+						"error":   pubErr.Error(),
+					})
+			}
+		}
+	}
+
+	content := result.ContentForLLM()
+	if content == "" {
+		return
+	}
+
+	// A canceled parent turn must not spring back to life through an async
+	// completion. The completion notice above remains visible; only the new
+	// reactive continuation turn is suppressed.
+	if ex.rx.rr.rq.ri.rf.rt.ts.cancelFired.Load() {
+		logger.InfoCF("agent", "Suppressing async-notify continuation turn: originating turn was canceled",
+			map[string]any{
+				"tool":        toolName,
+				"channel":     ex.rx.rr.rq.ri.rf.rt.ts.channel,
+				"chat_id":     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
+				"agent_id":    ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+				"content_len": len(content),
+			})
+		return
+	}
+
+	// AsyncNotifier owns sensitive-data filtering, truncation, the queued
+	// event, and the inbound publish that starts the continuation turn.
+	notifyCtx := withAsyncNotifyEventMeta(
+		context.Background(),
+		ex.rx.rr.rq.ri.rf.rt.ts.scope.meta(toolIteration, "runTurn", "turn.follow_up.queued"),
+	)
+	if notifyErr := ex.rx.rr.rq.ri.rf.rt.al.asyncNotifier.Notify(notifyCtx, AsyncNotifyEvent{
+		Channel:             ex.rx.rr.rq.ri.rf.rt.ts.channel,
+		ChatID:              ex.rx.rr.rq.ri.rf.rt.ts.chatID,
+		AgentID:             ex.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+		TranscriptSessionID: ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID,
+		SourceKind:          toolName,
+		Content:             content,
+	}); notifyErr != nil {
+		logger.ErrorCF("agent", "Failed to publish async tool result; result permanently lost",
+			map[string]any{"tool": toolName, "channel": ex.rx.rr.rq.ri.rf.rt.ts.channel, "error": notifyErr.Error()})
+	}
+}
+
 // guardAndDispatch checks dispatch guards, executes the tool, and normalizes its result.
 func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ex.toolCBSig = toolCallSignature(ex.toolName, ex.toolArgs)
@@ -1260,6 +1331,11 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	// field, not a second discriminator: two independently-computed
 	// answers to "is anyone there" would eventually disagree.
 	execCtx = tools.WithAutoDenyAsk(execCtx, ex.rx.rr.rq.ri.rf.rt.ts.opts.AutoDenyAsk)
+	// Approval can wait while configuration changes. Recheck current authority
+	// immediately before dispatch, including connector assignments removed meanwhile.
+	if flow := ex.enforceExecutionPolicy(tc); flow != agentLoopRunTurnToolsExecuteNext {
+		return flow
+	}
 	ex.toolResult = ex.rx.rr.rq.ri.rf.rt.ts.agent.Tools.ExecuteWithContext(
 		execCtx,
 		ex.toolName,
@@ -1271,6 +1347,7 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 	ex.toolDuration = time.Since(toolStart)
 
 	if ex.rx.rr.rq.ri.rf.rt.ts.hardAbortRequested() {
+		ex.releaseAsyncCallback()
 		ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
 		ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "after_tool_exec", hardInterruptAbortReason)
 		ex.ret0 = agentLoopRunTurnToolsReturn
@@ -1298,12 +1375,14 @@ func (ex *agentLoopRunTurnToolsExecute) guardAndDispatch(tc providers.ToolCall) 
 				}
 			}
 		case HookActionAbortTurn:
+			ex.releaseAsyncCallback()
 			ex.rx.rr.rq.ri.turnStatus = TurnEndStatusError
 			ex.rx.ret0 = turnResult{}
 			ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.hookAbortError(ex.rx.rr.rq.ri.rf.rt.ts, "after_tool", decision)
 			ex.ret0 = agentLoopRunTurnToolsReturn
 			return agentLoopRunTurnToolsExecuteReturn
 		case HookActionHardAbort:
+			ex.releaseAsyncCallback()
 			_ = ex.rx.rr.rq.ri.rf.rt.ts.requestHardAbort()
 			ex.rx.rr.rq.ri.turnStatus = TurnEndStatusAborted
 			ex.rx.ret0, ex.rx.ret1 = ex.rx.rr.rq.ri.rf.rt.al.abortTurn(ex.rx.rr.rq.ri.rf.rt.ts, "after_tool", decision.Reason)
@@ -1452,11 +1531,17 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 		ex.toolResult.ArtifactTags = buildArtifactTags(ex.rx.rr.rq.ri.turnMediaStore, ex.toolResult.Media)
 	}
 
-	if !ex.toolResult.Silent && ex.toolResult.ForUser != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse {
+	userContent := toolResultUserContent(
+		ex.toolName,
+		ex.rx.rr.rq.ri.rf.rt.ts.channel,
+		ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback,
+		ex.toolResult,
+	)
+	if userContent != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			Content: ex.toolResult.ForUser,
+			Content: userContent,
 		}); pubErr != nil {
 			logger.WarnCF("agent", "PublishOutbound failed for tool result",
 				map[string]any{
@@ -1467,9 +1552,71 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 			logger.DebugCF("agent", "Sent tool result to user",
 				map[string]any{
 					"tool":        ex.toolName,
-					"content_len": len(ex.toolResult.ForUser),
+					"content_len": len(userContent),
 				})
 		}
+	}
+}
+
+// toolResultUserContent applies the turn-origin feedback policy at both the
+// synchronous and asynchronous publication sites. System-woken turns keep
+// successful tool output suppressed. Their failures are already attributable
+// in webchat's structured tool frame, while external messaging channels need a
+// labeled text fallback because they have no structured execution UI.
+func toolResultUserContent(toolName, channel string, suppress bool, result *tools.ToolResult) string {
+	if result == nil || result.Silent || result.ForUser == "" {
+		return ""
+	}
+	if !suppress {
+		return result.ForUser
+	}
+	channelType, _ := config.ParseInstanceKey(channel)
+	if result.IsError && isMessagingChannel(channelType) {
+		return attributedToolErrorNotice(toolName, result.ForUser)
+	}
+	return ""
+}
+
+// asyncToolResultUserContent also covers webchat because the ordinary
+// ToolExecEnd event describes only the async start acknowledgement; the later
+// callback needs its own attributed completion update.
+func asyncToolResultUserContent(toolName, channel string, suppress bool, result *tools.ToolResult) string {
+	if content := toolResultUserContent(toolName, channel, suppress, result); content != "" {
+		return content
+	}
+	if suppress && channel == "webchat" && result != nil && !result.Silent && result.IsError && result.ForUser != "" {
+		return attributedToolErrorNotice(toolName, result.ForUser)
+	}
+	return ""
+}
+
+func attributedToolErrorNotice(toolName, detail string) string {
+	return fmt.Sprintf("Tool `%s` failed:\n%s", toolName, detail)
+}
+
+func persistAsyncToolErrorNotice(ts *turnState, toolCallID, content string) {
+	if ts == nil || ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+		return
+	}
+	now := time.Now().UTC()
+	entry := session.TranscriptEntry{
+		ID:        fmt.Sprintf("async-tool-error-%s-%d", toolCallID, now.UnixNano()),
+		Type:      session.EntryTypeSystem,
+		Role:      "system",
+		AgentID:   ts.resolveActiveAgentID(),
+		Content:   content,
+		Timestamp: now,
+		Status:    "error",
+		TurnID:    ts.turnID,
+	}
+	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
+		transcriptWriteFailures.Add(1)
+		logger.WarnCF("agent", "could not record async tool error notice to transcript",
+			map[string]any{
+				"session_id":   ts.transcriptSessionID,
+				"tool_call_id": toolCallID,
+				"error":        err.Error(),
+			})
 	}
 }
 
@@ -1565,6 +1712,12 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// for Verbose chat); the window form is toolResultMsg.
 	ex.contentForLLM = ex.admitted.Archived.Content
 	ex.toolResultMsg = ex.admitted.Message
+	if len(ex.toolResult.InspectionImages) > 0 {
+		if ex.rx.rr.rq.ri.rf.rt.inspectionImages == nil {
+			ex.rx.rr.rq.ri.rf.rt.inspectionImages = make(map[string][]tools.InspectionImage)
+		}
+		ex.rx.rr.rq.ri.rf.rt.inspectionImages[ex.toolCallID] = ex.toolResult.InspectionImages
+	}
 	endSID, endProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecEnd,
@@ -1726,6 +1879,7 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 		ex.tcRecord.ContentState = string(memory.ProjectionCapped)
 	}
 	ex.rx.rr.rq.ri.rf.rt.ts.appendToolCallTranscript(ex.tcRecord)
+	ex.releaseAsyncCallback()
 	ex.rx.rr.rq.ri.messages = append(ex.rx.rr.rq.ri.messages, ex.toolResultMsg)
 	// ADR-066 D5.4 (FR-041): the recalled text joins the in-memory
 	// slice HERE — the same mutation point every mid-turn request
@@ -1745,10 +1899,6 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 		return agentLoopRunTurnToolsExecuteReturn
 	}
 
-	if steerMsgs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
-		ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
-	}
-
 	// C2 (ADR-057 UAT 2026-08-03): a successful message_parent(kind=
 	// question, wait=true) call parks the CALLING child's own durable
 	// LifecycleRecord in needs_input (pkg/tools/message_parent.go's
@@ -1762,6 +1912,35 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 	// FIRST (highest priority) because a park must win over an
 	// in-flight steering message or graceful interrupt too.
 	parked := ex.toolResult.ParksTurn
+
+	// Steering-queue dequeue (the issue #760 fix). The parking
+	// early-return at the end of this function does NOT carry
+	// pendingMessages out of the turnResult — a parked turn's
+	// turnResult has followUps/turnFailed but no pendingMessages
+	// field. A naive "always dequeue here" therefore drains
+	// steering messages into a buffer that nobody reads when the
+	// tool parks, AND processTurn's post-turn drain
+	// (session_worker.go:543, `for al.pendingSteeringCountForScope
+	// (target.SessionKey) > 0`) sees the queue empty and skips
+	// Continue. The resume message is silently dropped — exactly
+	// the founder's "answering the AskUserQuestion card kills the
+	// running turn; answers only surface on the next prompt"
+	// symptom in pkg/agent/loop_run_turn_tools.go:1759-1761 (pre-fix).
+	// Gate the dequeue on !parked so a parked tool leaves the
+	// steering queue intact for the post-turn drain to drive the
+	// resume turn via AgentLoop.Continue
+	// (pkg/agent/steering.go:378) — which dequeues the message,
+	// calls runAgentLoop with InitialSteeringMessages=[msg], and
+	// the resume turn runs as a normal continuation of the parked
+	// session's LLM history. The user-initiated §0.2 correlated
+	// user-role resume message reaches the chat target's next
+	// turn, and the parked turn's waiter resolves instead of
+	// dying. ASKUSER-FIX.
+	if !parked {
+		if steerMsgs := ex.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(ex.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+			ex.rx.rr.rq.ri.pendingMessages = append(ex.rx.rr.rq.ri.pendingMessages, steerMsgs...)
+		}
+	}
 
 	// ADR-088 FR-010: the question door was genuinely taken on a
 	// narrowed goal turn — bump the persisted per-generation
@@ -1875,6 +2054,14 @@ func (ex *agentLoopRunTurnToolsExecute) finishCall(i int) agentLoopRunTurnToolsE
 		}
 	}
 	return agentLoopRunTurnToolsExecuteNext
+}
+
+func (ex *agentLoopRunTurnToolsExecute) releaseAsyncCallback() {
+	gate := ex.asyncCallbackGate
+	ex.asyncCallbackGate = nil
+	if gate != nil {
+		gate.release()
+	}
 }
 
 // finishToolIteration ticks tool state and stops a turn that repeats successful calls without progress.

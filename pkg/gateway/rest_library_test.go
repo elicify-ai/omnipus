@@ -9,6 +9,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -170,7 +171,7 @@ func TestLibraryWorkspaces_ListsWithEntryCounts(t *testing.T) {
 
 	// Confirm listing did NOT create the work/ directory as a side effect.
 	_, statErr := os.Stat(workDir(api, id))
-	assert.True(t, os.IsNotExist(statErr))
+	assert.True(t, errors.Is(statErr, os.ErrNotExist))
 
 	// Write a file via PUT content, then list again — count must reflect it.
 	require.Equal(t, http.StatusOK,

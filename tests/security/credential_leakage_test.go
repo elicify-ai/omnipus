@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -204,7 +205,7 @@ func TestCredentialLeakage(t *testing.T) {
 		logDir := filepath.Join(gw.HomeDir(), "logs")
 		entries, err := os.ReadDir(logDir)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				t.Skip("no $OMNIPUS_HOME/logs directory — nothing to scan")
 			}
 			require.NoError(t, err)
@@ -243,7 +244,7 @@ func TestCredentialLeakage(t *testing.T) {
 		auditPath := filepath.Join(gw.HomeDir(), "system", "audit.jsonl")
 		f, err := os.Open(auditPath)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				t.Skip("no audit.jsonl written — skipping provider-update redaction check")
 			}
 			require.NoError(t, err)
@@ -283,7 +284,7 @@ func assertNoLeaksInFile(t *testing.T, path string, tokens []leakScanToken,
 	t.Helper()
 	f, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			t.Logf("skipping %s (does not exist)", path)
 			return
 		}

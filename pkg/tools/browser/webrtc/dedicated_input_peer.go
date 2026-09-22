@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -38,6 +39,8 @@ type DedicatedInputPeer struct {
 	closeOnce       sync.Once
 	nativeCloseOnce sync.Once
 	closed          chan struct{}
+	inbound         atomic.Int64 // inbound data-channel messages seen (diagnostic)
+	inboundDropped  atomic.Int64 // inbound messages dropped because ctx was done
 }
 
 func NewDedicatedInputPeer(parent context.Context, cfg Config, epoch, control int, sink func(context.Context, generated.BrowserInputFrame), validate func([]byte) error, state func(string)) *DedicatedInputPeer {
@@ -109,7 +112,9 @@ func (p *DedicatedInputPeer) fail(reason string) {
 // retaining its healthy peer. Install before Answer. Callers must fence the
 // supplied control epoch and explicitly advance control after joining/releasing
 // the old source; no queued action is replayed. Without a handler expiry remains
-// a visible fatal failure rather than silently leaving a caller paused.
+// a visible fatal failure rather than silently leaving a caller paused. Expiry
+// may invoke the handler from the queue's timer goroutine, after internal locks
+// are released; handlers must synchronize access to any shared state.
 func (p *DedicatedInputPeer) SetControlFailureHandler(handler func(int, string)) {
 	p.mu.Lock()
 	p.controlFailure = handler
@@ -181,8 +186,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	if err := p.ctx.Err(); err != nil {
 		return "", err
 	}
-	// A dedicated offer must contain only an application section. Reuse the
-	// existing viewer ICE settings/mux ownership, never the ingest settings.
+	// A dedicated offer must contain only an application section.
 	applications := 0
 	for _, line := range strings.Split(sdp, "\n") {
 		if strings.HasPrefix(line, "m=") {
@@ -195,12 +199,30 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	if applications != 1 {
 		return "", errors.New("input offer must have one application section")
 	}
-	session := NewSession(p.cfg, nil, nil)
+	// Warn, not Info: the gateway's default log level is "warn"
+	// (pkg/config/defaults.go's LogLevel), so an Info line here is invisible in
+	// every default deployment — which is exactly how this peer's ICE
+	// instrumentation sat merged, tested, and silent while three lanes argued
+	// its defect from absence. The lines are one-shot per negotiation (offer
+	// summary, one line per candidate, state transitions), so Warn-level noise
+	// is bounded the way pion's own ICE warnings already are.
+	logf := func(format string, args ...any) {
+		slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
+	}
+	session := NewSession(p.cfg, nil, logf)
 	pc, err := session.buildPeerConnection(session.apiViewer, true)
 	if err != nil {
 		return "", err
 	}
 	p.pc = pc
+	prefix := fmt.Sprintf("[input-%d]", p.queue.peer)
+	diag := newICEDiag(prefix, "input", logf)
+	pc.OnICECandidate(diag.noteLocalCandidate)
+	pc.OnICEGatheringStateChange(diag.noteGatheringState)
+	pc.OnICEConnectionStateChange(func(state pion.ICEConnectionState) {
+		logf("%s ICE connection state -> %s", prefix, state.String())
+		diag.noteICEState(state, pc)
+	})
 	pc.OnDataChannel(p.bindChannel)
 	pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
 		switch state {
@@ -208,6 +230,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 			p.fail("input connection closed")
 		}
 	})
+	diag.noteRemoteOffer(sdp)
 	if err = pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeOffer, SDP: sdp}); err != nil {
 		return "", fmt.Errorf("input offer: %w", err)
 	}
@@ -255,19 +278,23 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 }
 func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	hover := dc.Label() == "input-hover"
-	valid := dc.Label() == "input-reliable" || hover
-	valid = valid && dc.Protocol() == InputBinaryProtocol && !dc.Negotiated() && dc.MaxPacketLifeTime() == nil
-	if hover {
-		valid = valid && !dc.Ordered() && dc.MaxRetransmits() != nil && *dc.MaxRetransmits() == 0
-	} else {
-		valid = valid && dc.Ordered() && dc.MaxRetransmits() == nil
-	}
+	valid := inputChannelShapeValid(dc)
 	p.mu.Lock()
 	if !valid || p.channels[dc.Label()] != nil || p.ctx.Err() != nil {
+		duplicate := p.channels[dc.Label()] != nil
+		ctxErr := p.ctx.Err()
 		p.mu.Unlock()
+		// Say WHICH predicate rejected the channel. This branch surfaces to the
+		// operator as "Could not negotiate the input connection", and until now
+		// it named nothing — so a peer whose ICE connects fine, and whose input
+		// then silently never arrives, gave the investigator no way to tell a
+		// label mismatch from a protocol mismatch from a duplicate. That
+		// ambiguity cost several rounds on the ui-browser shard.
+		logRejectedInputChannel(dc, duplicate, ctxErr)
 		p.fail("invalid input data channel")
 		return
 	}
+	dedicatedInputLogf("input data channel accepted: label=%q protocol=%q ordered=%t", dc.Label(), dc.Protocol(), dc.Ordered())
 	p.channels[dc.Label()] = dc
 	p.mu.Unlock()
 	dc.OnOpen(func() {
@@ -289,44 +316,112 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	dc.OnClose(func() { p.fail("input data channel closed") })
 	dc.OnError(func(error) { p.fail("input data channel failed") })
 	dc.OnMessage(func(message pion.DataChannelMessage) {
-		if p.ctx.Err() != nil {
-			return
+		p.handleInputMessage(dc, hover, message)
+	})
+}
+
+// handleInputMessage validates and submits one inbound binary input frame.
+// Reached from bindChannel's OnMessage callback; receives the channel and its
+// hover flag as parameters because the closure captured them at bind time.
+//
+// First inbound message per channel is reported, and a context-cancelled
+// drop is reported too. Every OTHER rejection below calls p.fail() and
+// reaches the operator; this one returned silently, so a peer whose
+// context had already been cancelled swallowed every input byte with no
+// trace anywhere. From outside that is identical to "the SPA never sent"
+// — and the two have opposite fixes. The ui-browser shard spent several
+// investigations unable to tell them apart.
+func (p *DedicatedInputPeer) handleInputMessage(dc *pion.DataChannel, hover bool, message pion.DataChannelMessage) {
+	if n := p.inbound.Add(1); n == 1 {
+		dedicatedInputLogf("first inbound input message on %q (%d bytes, string=%t)", dc.Label(), len(message.Data), message.IsString)
+	}
+	if err := p.ctx.Err(); err != nil {
+		if p.inboundDropped.Add(1) == 1 {
+			dedicatedInputLogf("input message DROPPED on %q: peer context already done (%v) — further drops counted, not logged", dc.Label(), err)
 		}
-		p.mu.Lock()
-		ready := len(p.opened) == 2
-		p.mu.Unlock()
-		if !ready {
-			p.fail("input channels not ready")
-			return
-		}
-		if message.IsString || len(message.Data) > inputBinaryMaxBytes {
-			p.fail("invalid input message")
-			return
-		}
-		frame, err := DecodeInputPacket(message.Data)
+		return
+	}
+	p.mu.Lock()
+	ready := len(p.opened) == 2
+	p.mu.Unlock()
+	if !ready {
+		p.fail("input channels not ready")
+		return
+	}
+	if message.IsString || len(message.Data) > inputBinaryMaxBytes {
+		p.fail("invalid input message")
+		return
+	}
+	frame, err := DecodeInputPacket(message.Data)
+	if err != nil {
+		p.fail("invalid input payload")
+		return
+	}
+	if p.validate != nil {
+		raw, err := json.Marshal(frame)
 		if err != nil {
 			p.fail("invalid input payload")
 			return
 		}
-		if p.validate != nil {
-			raw, err := json.Marshal(frame)
-			if err != nil {
-				p.fail("invalid input payload")
-				return
-			}
-			if err := p.validate(raw); err != nil {
-				p.fail("invalid input payload")
-				return
-			}
-		}
-		if frame.Type != "browser_input" {
+		if err := p.validate(raw); err != nil {
 			p.fail("invalid input payload")
 			return
 		}
-		if (frame.Kind == "mouse_down" || frame.Kind == "mouse_up") && (frame.X == nil || frame.Y == nil) {
-			p.fail("button input requires coordinates")
-			return
-		}
-		p.queue.submit(hover, frame)
-	})
+	}
+	if frame.Type != "browser_input" {
+		p.fail("invalid input payload")
+		return
+	}
+	if (frame.Kind == "mouse_down" || frame.Kind == "mouse_up") && (frame.X == nil || frame.Y == nil) {
+		p.fail("button input requires coordinates")
+		return
+	}
+	p.queue.submit(hover, frame)
+}
+
+// dedicatedInputLogf mirrors the peer's existing Warn-level logging shape (see
+// the logf closure built in Answer). bindChannel is reached from pion's
+// OnDataChannel callback, which has no access to that closure, and the gateway
+// filters below Warn — so Info here would be invisible, which is the exact trap
+// the ICE diagnostics fell into.
+func dedicatedInputLogf(format string, args ...any) {
+	slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
+}
+
+// logRejectedInputChannel reports every attribute bindChannel checked next to
+// what was expected. Extracted from bindChannel so the diagnostic's branches do
+// not count against that function's complexity budget — the reporting is
+// incidental to the decision, and the budget should measure the decision.
+func logRejectedInputChannel(dc *pion.DataChannel, duplicate bool, ctxErr error) {
+	retx := "nil"
+	if v := dc.MaxRetransmits(); v != nil {
+		retx = fmt.Sprintf("%d", *v)
+	}
+	life := "nil"
+	if v := dc.MaxPacketLifeTime(); v != nil {
+		life = fmt.Sprintf("%d", *v)
+	}
+	dedicatedInputLogf("input data channel REJECTED: label=%q protocol=%q negotiated=%t ordered=%t max_retransmits=%s max_packet_lifetime=%s duplicate=%t ctx_err=%v (want label input-reliable|input-hover, protocol %q, negotiated=false, lifetime=nil; reliable: ordered=true retransmits=nil; hover: ordered=false retransmits=0)",
+		dc.Label(), dc.Protocol(), dc.Negotiated(), dc.Ordered(), retx, life, duplicate, ctxErr, InputBinaryProtocol)
+}
+
+// inputChannelShapeValid answers the one question bindChannel needs: does this
+// data channel have the shape the input protocol requires? Extracted so the
+// predicate's branches are budgeted where the decision lives, not inside the
+// bind path that also handles locking, duplicate detection and failure
+// reporting. Reliable is ordered with no retransmit cap; hover is unordered
+// with a zero cap; both carry the binary protocol, are not negotiated, and set
+// no packet lifetime.
+func inputChannelShapeValid(dc *pion.DataChannel) bool {
+	hover := dc.Label() == "input-hover"
+	if dc.Label() != "input-reliable" && !hover {
+		return false
+	}
+	if dc.Protocol() != InputBinaryProtocol || dc.Negotiated() || dc.MaxPacketLifeTime() != nil {
+		return false
+	}
+	if hover {
+		return !dc.Ordered() && dc.MaxRetransmits() != nil && *dc.MaxRetransmits() == 0
+	}
+	return dc.Ordered() && dc.MaxRetransmits() == nil
 }

@@ -8,6 +8,7 @@ package propindex
 
 import (
 	"context"
+	"errors"
 	"os"
 	"reflect"
 	"testing"
@@ -121,7 +122,7 @@ func TestRebuild_DeleteTheFileAndReopenYieldsIdenticalResults(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatalf("removing the index file: %v", err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the index file survived its own deletion: %v", err)
 	}
 

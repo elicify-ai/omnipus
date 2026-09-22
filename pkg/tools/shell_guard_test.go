@@ -25,11 +25,64 @@ package tools
 //     reason. This is the test that would have caught the original defect.
 
 import (
+	"context"
 	"regexp/syntax"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+// TestBashSafetyGuard_PreciseDenyPatterns is the issue #767 two-sided oracle:
+// ordinary prose must not trip shell-syntax or secret-path backstops, while
+// the concrete destructive, expansion, substitution, and secret-path shapes
+// those backstops protect must remain blocked.
+func TestBashSafetyGuard_PreciseDenyPatterns(t *testing.T) {
+	tool, err := NewExecTool(t.TempDir(), false)
+	require.NoError(t, err)
+
+	benign := []struct {
+		name string
+		cmd  string
+	}{
+		{"backticked_template", "printf '%s\\n' 'Use the `template` key'"},
+		{"backticked_regex", "printf '%s\\n' 'The pattern is `.*?`'"},
+		{"backticked_setting", "printf '%s\\n' '`sandbox.god_mode = true` is deprecated'"},
+		{"system_in_prose", "printf '%s\\n' 'System status is healthy'"},
+		{"config_filename_in_prose", "printf '%s\\n' 'Document config.json in the setup guide'"},
+	}
+
+	t.Run("benign_commands_are_allowed", func(t *testing.T) {
+		for _, tc := range benign {
+			t.Run(tc.name, func(t *testing.T) {
+				if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg != "" {
+					t.Errorf("benign command was blocked: %s\ncommand: %q", msg, tc.cmd)
+				}
+			})
+		}
+	})
+
+	dangerous := []struct {
+		name string
+		cmd  string
+	}{
+		{"recursive_forced_remove", "rm -rf build"},
+		{"secret_parameter_expansion", "echo ${GITHUB_TOKEN:+YES}"},
+		{"dangerous_dollar_substitution", "echo $(find . -name '*.go')"},
+		{"dangerous_backtick_substitution", "echo `find . -name '*.go'`"},
+		{"omnipus_config_path", "cat ~/.omnipus/config.json"},
+		{"omnipus_system_path", "cat ~/.omnipus/system/audit.jsonl"},
+	}
+
+	t.Run("dangerous_commands_stay_blocked", func(t *testing.T) {
+		for _, tc := range dangerous {
+			t.Run(tc.name, func(t *testing.T) {
+				if msg := tool.guardCommand(context.Background(), tc.cmd, t.TempDir()); msg == "" {
+					t.Errorf("SECURITY REGRESSION: dangerous command was allowed: %q", tc.cmd)
+				}
+			})
+		}
+	})
+}
 
 // TestDefaultDenyPatterns_HeredocsArePermitted asserts that the deny-pattern
 // layer allows heredocs.

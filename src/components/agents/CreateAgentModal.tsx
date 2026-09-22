@@ -131,7 +131,6 @@ function payloadToCreateRequest(
     if (description) req.description = description
     if (payload.model.trim()) req.model = payload.model.trim()
     if (payload.provider?.trim()) req.provider = payload.provider.trim()
-    if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
     if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
     return req
   }
@@ -164,8 +163,6 @@ function payloadToCreateRequest(
     if (!inheritSkills && payload.skills !== undefined) req.skills = payload.skills
     if (payload.model_params !== undefined) req.model_params = payload.model_params
     if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
-    if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
-    if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
     if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
     return req
   }
@@ -187,8 +184,6 @@ function payloadToCreateRequest(
   if (payload.fallback_models !== undefined) req.fallback_models = payload.fallback_models
   if (payload.model_params !== undefined) req.model_params = payload.model_params
   if (payload.shell_policy !== undefined) req.shell_policy = payload.shell_policy
-  if (payload.rate_limits !== undefined) req.rate_limits = payload.rate_limits
-  if (payload.timeout_seconds !== undefined) req.timeout_seconds = payload.timeout_seconds
   if (payload.max_tool_iterations !== undefined) req.max_tool_iterations = payload.max_tool_iterations
   return req
 }

@@ -41,7 +41,7 @@ test('all major routes pass axe serious/critical accessibility checks', async ({
 // The spec is explicit that axe alone does not discharge these (MAJ-012): axe
 // has NO rule for focus-ring contrast (2.4.11) and its target-size rule is
 // best-practice only, so each row below carries its OWN assertion. They run on
-// onboarding step 3 — the one state on this branch that renders the shared
+// onboarding step 4 — the one state on this branch that renders the shared
 // ProviderPicker, its second-level ProviderDetailPanel and the Custom endpoint
 // row together.
 //
@@ -67,24 +67,29 @@ const POPULAR_TILES = popularTiles();
 /** The FIRST Popular tile, used wherever "some tile" is enough. */
 const FIRST_TILE = POPULAR_TILES[0];
 
-/** Walk onboarding to step 3, where the shared picker renders. */
+/** Walk onboarding to step 4, where the shared picker renders.
+ *  The wizard is four steps in local mode (WP5 / ADR-0010): admin
+ *  username, admin password, personal preferences, provider. */
 async function openOnboardingPicker(page: import('@playwright/test').Page): Promise<void> {
   await page.goto(`${BASE_URL}/#/onboarding`);
-  await expect(page.getByText('Step 1 of 3').first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Step 1 of 4').first()).toBeVisible({ timeout: 15_000 });
   await page.locator('#admin-username').fill('a11y-admin');
   await page.getByRole('button', { name: /^continue$/i }).click();
-  await expect(page.getByText('Step 2 of 3').first()).toBeVisible();
+  await expect(page.getByText('Step 2 of 4').first()).toBeVisible();
   await page.locator('#admin-password').fill('a11y-passw0rd!');
   await page.locator('#admin-password-confirm').fill('a11y-passw0rd!');
   await page.getByRole('button', { name: /^continue$/i }).click();
-  await expect(page.getByText('Step 3 of 3').first()).toBeVisible();
+  await expect(page.getByText('Step 3 of 4').first()).toBeVisible();
+  await page.locator('#pref-name').fill('a11y-admin');
+  await page.getByRole('button', { name: /^continue$/i }).click();
+  await expect(page.getByText('Step 4 of 4').first()).toBeVisible();
   await expect(page.getByTestId('picker-popular')).toBeVisible();
 }
 
-// ── axe: onboarding step 3, picker and second-level panel ────────────────────
+// ── axe: onboarding step 4, picker and second-level panel ────────────────────
 
 baseTest(
-  'axe reports 0 serious/critical on onboarding step 3 — picker, expanded list and detail panel',
+  'axe reports 0 serious/critical on onboarding step 4 — picker, expanded list and detail panel',
   async ({ page }) => {
     await stubOnboarding(page);
     await openOnboardingPicker(page);

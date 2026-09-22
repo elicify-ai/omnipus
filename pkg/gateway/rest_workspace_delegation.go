@@ -5,11 +5,10 @@
 package gateway
 
 import (
-	"log/slog"
+	"errors"
 	"net/http"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -31,11 +30,12 @@ import (
 // this helper is not delegation-*policy*-specific, it is a shared depth-ceiling
 // lookup consumed by handleWorkspaceDelegationPut (this file, validating an
 // operator-submitted edge's depth) and by workspace create/team validation
-// (rest_workspaces.go, x2). NOT consumed by defaultWorkspaceDelegationEdges
-// below — that function seeds edges from the fixed coreagent matrix and
-// copies each seeded Depth verbatim, with no ceiling clamp (the coreagent
-// seed data is trusted, hardcoded Go, not operator input).
+// (rest_workspaces.go, x2). Also consumed by defaultWorkspaceDelegationEdges
+// for the ADR-090 FR-006 self-edge pin: a lowered ceiling must clamp a
+// fresh jim→jim / worker→worker depth so Validate cannot drop the edge.
 const delegationDepthCeilingFallback = 3
+
+var workspaceSaveDelegationFn = workspace.SaveDelegation
 
 // delegationDepthCeiling returns the effective maximum delegation chain depth a
 // caller may request, reusing the global subturn depth cap rather than inventing
@@ -94,7 +94,7 @@ func delegationEdgeToWire(e storedDelegationEdge) gen.WorkspaceDelegationEdge {
 // pkg/workspace/delegationstore.go. It is passed in rather than loaded here so
 // the PUT handler can render the set it just persisted without a re-read.
 func workspaceDelegationToWire(
-	ws storedWorkspace, stored []storedDelegationEdge, defaultDepth int,
+	ws storedWorkspace, stored []storedDelegationEdge, defaultDepth int, revision string,
 ) gen.WorkspaceDelegation {
 	edges := make([]gen.WorkspaceDelegationEdge, 0, len(stored))
 	for _, e := range stored {
@@ -111,7 +111,12 @@ func workspaceDelegationToWire(
 		WorkspaceId:  ws.ID,
 		Edges:        edges,
 		DefaultDepth: defaultDepth,
+		Revision:     revision,
 	}
+	persistence := gen.WorkspaceDelegationPersistenceStatusComplete
+	activation := gen.WorkspaceDelegationActivationStatusActive
+	changed := []string{}
+	out.PersistenceStatus, out.ActivationStatus, out.ChangedFields = &persistence, &activation, &changed
 	if len(team) > 0 {
 		out.Team = &team
 	}
@@ -125,23 +130,20 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
-	ws, ok := a.loadWorkspace(w, id)
-	if !ok {
+	state, err := workspace.ReadState(a.homePath, id)
+	if err != nil {
+		writeWorkspaceReadError(w, err)
 		return
 	}
+	ws := state.Workspace
 	// Edges come from the delegation store, not the workspace record (see
 	// pkg/workspace/delegationstore.go). An untrusted store record is a 500,
 	// never an empty graph: rendering "no edges" for a corrupt/tampered record
 	// would invite the operator to "fix" it by saving over it, silently
 	// destroying the real graph and hiding the tampering.
-	stored, storeOK := workspace.LoadDelegation(a.homePath, id)
-	if !storeOK {
-		slog.Error("rest: read workspace delegation: store record unreadable or untrusted", "id", id)
-		jsonErr(w, http.StatusInternalServerError, "workspace delegation record is unreadable")
-		return
-	}
+	stored := state.Delegation
 	cfg := a.agentLoop.GetConfig()
-	jsonOK(w, workspaceDelegationToWire(ws, stored, delegationDepthCeiling(cfg)))
+	jsonOK(w, workspaceDelegationToWire(ws, stored, delegationDepthCeiling(cfg), state.Revision))
 }
 
 // handleWorkspaceDelegationPut replaces the workspace's delegation edge set.
@@ -151,8 +153,8 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //   - every from_agent / to_agent must be a member of the workspace team
 //     (core_team ∪ existing-edge endpoints) — an edge write may NOT silently
 //     expand the team with an off-team agent
-//   - self-edges (from_agent == to_agent) are rejected
-//   - the resulting graph must be acyclic (no A→B→A delegation cycle)
+//   - self-edges are allowed only for Jim and General Purpose (worker)
+//   - excluding those permitted self-edges, the graph must be acyclic
 //   - modes ⊆ {direct, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //
@@ -194,10 +196,19 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 	unlock := workspace.LockID(id)
 	defer unlock()
 
-	ws, ok := a.loadWorkspace(w, id)
-	if !ok {
+	state, revisionErr := workspace.CheckRevisionLocked(a.homePath, id, req.Revision)
+	if revisionErr != nil {
+		switch {
+		case errors.Is(revisionErr, workspace.ErrInvalidRevision):
+			jsonErr(w, http.StatusBadRequest, revisionErr.Error())
+		case errors.Is(revisionErr, workspace.ErrRevisionConflict):
+			jsonErr(w, http.StatusConflict, revisionErr.Error())
+		default:
+			writeWorkspaceReadError(w, revisionErr)
+		}
 		return
 	}
+	ws := state.Workspace
 
 	// The EXISTING edge set comes from the delegation store, not the workspace
 	// record. An untrusted store record fails the write closed rather than
@@ -205,12 +216,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 	// narrow the team to core_team and reject legitimate edges for a reason the
 	// operator can neither see nor act on). Repair is to remove the corrupt
 	// entities/delegation/<id>.json and re-save from the Team tab.
-	existing, storeOK := workspace.LoadDelegation(a.homePath, id)
-	if !storeOK {
-		slog.Error("rest: update workspace delegation: store record unreadable or untrusted", "id", id)
-		jsonErr(w, http.StatusInternalServerError, "workspace delegation record is unreadable")
-		return
-	}
+	existing := state.Delegation
 
 	cfg := a.agentLoop.GetConfig()
 	// Validate edge endpoints against the workspace TEAM (core_team ∪ existing-edge
@@ -227,14 +233,19 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 
 	// Persist to the delegation store. LockID(id) is already held above, which
 	// is SaveDelegation's stated caller contract.
-	if err := workspace.SaveDelegation(a.homePath, id, edges); err != nil {
-		slog.Error("rest: update workspace delegation", "error", err, "id", id)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
+	if err := workspaceSaveDelegationFn(a.homePath, id, edges); err != nil {
+		logsafeError("rest: update workspace delegation", "error", err, "id", id)
+		stage := "delegation"
+		message := "delegation graph was not saved; read the workspace again before retrying"
+		writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationState{
+			PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusNone,
+			ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
+			Revision:          state.Revision, ChangedFields: []string{}, ErrorStage: &stage, Message: &message,
+		})
 		return
 	}
-	ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
-		slog.Error("rest: update workspace delegation: touch record", "error", err, "id", id)
+	revision, err := workspace.RevisionForState(ws, edges)
+	if err != nil {
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
@@ -245,19 +256,21 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 			Decision: audit.DecisionAllow,
 			Details:  map[string]any{"id": ws.ID, "edge_count": len(edges)},
 		}); err != nil {
-			slog.Warn("audit write failed", "event", "workspace.delegation.update", "id", ws.ID, "error", err)
+			logsafeWarn("audit write failed", "event", "workspace.delegation.update", "id", ws.ID, "error", err)
 		}
 	}
 
-	jsonOK(w, workspaceDelegationToWire(ws, edges, ceiling))
+	jsonOK(w, workspaceDelegationToWire(ws, edges, ceiling, revision))
 }
 
 // defaultWorkspaceDelegationEdges derives the seed delegation graph for a new
 // workspace directly from coreagent's seeded trust graph (ADR-037, Wave 2).
 // Each core agent ID's coreagent.SeedDelegationEdges result becomes one edge
-// per target, carrying that policy's modes and depth. This keeps a single
-// source of truth: coreagent's seeded trust graph (Jim→Ava/Ray/worker,
-// Mia/Ray/Ava→worker, the Planner→Explorer/Researcher specialist edges) is
+// per target, carrying that policy's modes and (for non-self edges) depth.
+// Fresh Jim→Jim and Worker→Worker edges get an explicit max_depth of 3 or
+// the lower configured global ceiling (ADR-090 FR-006) rather than inheriting
+// a raised cap. This keeps a single source of truth: coreagent's seeded trust
+// graph) is
 // replayed onto the workspace graph so a fresh workspace works out of the box.
 // Remote-a2a refs and wildcard ("*") refs are skipped — they have no concrete
 // in-roster node to draw an edge to.
@@ -290,6 +303,7 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 	if cfg == nil {
 		return nil
 	}
+	ceiling := delegationDepthCeiling(cfg)
 	var edges []storedDelegationEdge
 	// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately replays
 	// this exact loop independently (not via a shared helper) so it can catch a
@@ -318,20 +332,15 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 			seenMode[wm] = true
 			modes = append(modes, wm)
 		}
-		var depth *int
-		if dp.Depth != nil {
-			d := *dp.Depth
-			depth = &d
-		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == ac.ID {
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == ac.ID && !workspace.PermittedSelfDelegationID(ac.ID)) {
 				continue
 			}
 			edges = append(edges, storedDelegationEdge{
 				FromAgent: ac.ID,
 				ToAgent:   ref.ID,
 				Modes:     append([]workspace.DelegationMode(nil), modes...),
-				Depth:     depth,
+				Depth:     coreagent.SeededEdgeDepth(ac.ID, ref.ID, dp.Depth, ceiling),
 			})
 		}
 	}
@@ -356,6 +365,12 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 // Ava/Ray could not delegate to Worker on a pristine default workspace even
 // though coreagent.SeedDelegationEdges defines those edges. That was UAT
 // DEF-001 (2026-07-13).
+//
+// Admin and the hidden System Agents are intentionally EXCLUDED
+// (coreagent.ExcludedFromWorkspaceTeams, ADR-090 FR-001): Admin is the
+// standalone operator — chat-able core, "no team membership" — so blindly
+// iterating coreagent.All() (which includes Admin) used to seed exactly the
+// membership every write path now refuses.
 func defaultWorkspaceTeam(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
@@ -371,7 +386,7 @@ func defaultWorkspaceTeam(cfg *config.Config) []string {
 	team := make([]string, 0, len(all))
 	for _, a := range all {
 		id := string(a.ID)
-		if present[id] {
+		if present[id] && !coreagent.ExcludedFromWorkspaceTeams(a.ID) {
 			team = append(team, id)
 		}
 	}
@@ -437,7 +452,7 @@ func seedEdgesForTeam(edges []storedDelegationEdge, team []string) []storedDeleg
 			out = append(out, e)
 			continue
 		}
-		slog.Debug("seedEdgesForTeam: dropping default delegation edge — endpoint not on team",
+		logsafeDebug("seedEdgesForTeam: dropping default delegation edge — endpoint not on team",
 			"from_agent", e.FromAgent, "to_agent", e.ToAgent,
 			"from_on_team", member[e.FromAgent], "to_on_team", member[e.ToAgent])
 	}
@@ -549,6 +564,9 @@ func buildWorkspaceDelegationEdges(
 
 	// Rebuild adjacency from the deduplicated edge set, then reject cycles.
 	for _, e := range out {
+		if e.FromAgent == e.ToAgent && workspace.PermittedSelfDelegationID(e.FromAgent) {
+			continue
+		}
 		adj[e.FromAgent] = append(adj[e.FromAgent], e.ToAgent)
 	}
 	if cycleNode := detectDelegationCycle(adj); cycleNode != "" {

@@ -12,6 +12,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,7 +86,7 @@ func TestSeedSystemAgentSoulFile_NoDefaultSoulIsAnError(t *testing.T) {
 		if err == nil {
 			t.Errorf("SeedSystemAgentSoulFile(%q) must return an error, got nil", id)
 		}
-		if _, statErr := os.Stat(filepath.Join(workspace, "SOUL.md")); !os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(filepath.Join(workspace, "SOUL.md")); !errors.Is(statErr, os.ErrNotExist) {
 			t.Errorf("SeedSystemAgentSoulFile(%q) must not create a SOUL.md, stat err = %v", id, statErr)
 		}
 	}

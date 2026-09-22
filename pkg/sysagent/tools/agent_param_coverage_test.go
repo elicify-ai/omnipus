@@ -53,8 +53,11 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 	consumedByExecute := map[string]bool{
 		"name": true, "description": true, "soul": true, "model": true,
 		"color": true, "icon": true, "agent_type": true, "cli": true,
-		"cli_path": true, "provider": true, "model_fallbacks": true,
+		"cli_path": true, "provider": true, "fallback_models": true,
 		"heartbeat": true, "max_tool_iterations": true,
+		"skills": true, "mcp_servers": true, "tool_policy_changes": true,
+		"memory_enabled": true, "default": true, "voice": true,
+		"shell_policy": true, "context_window_override": true, "model_params": true,
 	}
 
 	for name := range declared {
@@ -96,10 +99,13 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 	declared := declaredObjectProperties(t, tool.Parameters())
 
 	consumedByExecute := map[string]bool{
-		"id": true, "name": true, "description": true, "soul": true,
-		"model": true, "model_fallbacks": true, "provider": true,
-		"color": true, "icon": true, "heartbeat": true,
+		"id": true, "revision": true, "name": true, "description": true, "soul": true,
+		"model": true, "fallback_models": true, "provider": true,
+		"color": true, "icon": true, "skills": true, "mcp_servers": true,
+		"tool_policy_changes": true,
 		"max_tool_iterations": true,
+		"memory_enabled":      true, "default": true, "voice": true,
+		"shell_policy": true, "context_window_override": true, "model_params": true,
 	}
 
 	for name := range declared {
@@ -205,6 +211,7 @@ func TestAgentUpdate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 	tool := systools.NewAgentUpdateTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
 		"id":                  "my-agent",
+		"revision":            currentAgentRevision(t, deps, "my-agent"),
 		"provider":            "openrouter",
 		"max_tool_iterations": float64(99),
 	})
@@ -226,6 +233,7 @@ func TestAgentUpdate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 	// Now clear the provider with an explicit empty string.
 	result2 := tool.Execute(context.Background(), map[string]any{
 		"id":       "my-agent",
+		"revision": currentAgentRevision(t, deps, "my-agent"),
 		"provider": "",
 	})
 	if result2.IsError {
@@ -242,5 +250,85 @@ func TestAgentUpdate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 	// in its args).
 	if cleared.MaxToolIterations != 99 {
 		t.Errorf("MaxToolIterations after unrelated update = %d, want unchanged 99", cleared.MaxToolIterations)
+	}
+}
+
+func objectAt(t *testing.T, root map[string]any, keys ...string) map[string]any {
+	t.Helper()
+	cur := root
+	for _, key := range keys {
+		next, ok := cur[key]
+		if !ok {
+			t.Fatalf("missing %q under %#v", key, cur)
+		}
+		obj, ok := next.(map[string]any)
+		if !ok {
+			t.Fatalf("%q is %T, want object: %#v", key, next, next)
+		}
+		cur = obj
+	}
+	return cur
+}
+
+func TestAgentToolNestedParameterSchemasAreTyped(t *testing.T) {
+	deps, _ := newTestDeps()
+	for _, tool := range []interface{ Parameters() map[string]any }{
+		systools.NewAgentCreateTool(deps),
+		systools.NewAgentUpdateTool(deps),
+	} {
+		params := tool.Parameters()
+		props := objectAt(t, params, "properties")
+
+		mcp := objectAt(t, props, "mcp_servers")
+		if mcp["type"] != "array" {
+			t.Errorf("mcp_servers.type=%v, want array", mcp["type"])
+		}
+		mcpItems := objectAt(t, mcp, "items")
+		if mcpItems["additionalProperties"] != false {
+			t.Errorf("mcp_servers.items.additionalProperties=%v, want false", mcpItems["additionalProperties"])
+		}
+		mcpProps := objectAt(t, mcpItems, "properties")
+		if _, ok := mcpProps["id"]; !ok {
+			t.Error("mcp_servers.items.properties missing id")
+		}
+		if _, ok := mcpProps["tools"]; !ok {
+			t.Error("mcp_servers.items.properties missing tools")
+		}
+
+		patch := objectAt(t, props, "tool_policy_changes")
+		if patch["additionalProperties"] != false {
+			t.Errorf("tool_policy_changes.additionalProperties=%v, want false", patch["additionalProperties"])
+		}
+		patchProps := objectAt(t, patch, "properties")
+		if _, ok := patchProps["set"]; !ok {
+			t.Error("tool_policy_changes.properties missing set")
+		}
+		if _, ok := patchProps["remove"]; !ok {
+			t.Error("tool_policy_changes.properties missing remove")
+		}
+
+		model := objectAt(t, props, "model_params")
+		if model["additionalProperties"] != false {
+			t.Errorf("model_params.additionalProperties=%v, want false", model["additionalProperties"])
+		}
+		modelProps := objectAt(t, model, "properties")
+		if _, ok := modelProps["temperature"]; !ok {
+			t.Error("model_params.properties missing temperature")
+		}
+		if _, ok := modelProps["max_tokens"]; !ok {
+			t.Error("model_params.properties missing max_tokens")
+		}
+
+		shell := objectAt(t, props, "shell_policy")
+		if shell["additionalProperties"] != false {
+			t.Errorf("shell_policy.additionalProperties=%v, want false", shell["additionalProperties"])
+		}
+		shellProps := objectAt(t, shell, "properties")
+		if _, ok := shellProps["enable_deny_patterns"]; !ok {
+			t.Error("shell_policy.properties missing enable_deny_patterns")
+		}
+		if _, ok := shellProps["custom_deny_patterns"]; !ok {
+			t.Error("shell_policy.properties missing custom_deny_patterns")
+		}
 	}
 }

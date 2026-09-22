@@ -53,10 +53,14 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
     expect(mock.online).toBe(false)
   })
 
+})
+
+describe('API contract: agent and supporting resource shapes', () => {
   // ── Agent ─────────────────────────────────────────────────────────────────
 
   it('Agent (locked core type) mock shape satisfies interface', () => {
     const mock = {
+      revision: '0'.repeat(64),
       id: 'mia',
       name: 'Mia',
       description: 'Built-in core agent with compiled prompt',
@@ -80,6 +84,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Agent (custom type) mock shape satisfies interface', () => {
     const mock = {
+      revision: '0'.repeat(64),
       id: 'my-agent',
       name: 'My Agent',
       description: '',
@@ -178,6 +183,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Skill mock shape satisfies interface', () => {
     const mock = {
+      revision: '0'.repeat(64),
       id: 'my-skill',
       name: 'My Skill',
       version: '1.0.0',
@@ -246,11 +252,11 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
     expect(typeof mock.workspace_size_bytes).toBe('number')
   })
 
-  // ── AppState ──────────────────────────────────────────────────────────────
+  // ── AppState ── identity mode/edition/signed-in coverage: sibling describe below (budget) ──
 
   it('AppState (fresh install) mock shape satisfies interface', () => {
     const mock = {
-      onboarding_complete: false,
+      onboarding_complete: false, identity: { mode: 'local', edition: 'core', signed_in: false, blocked_reason: 'signed_out' },
     } satisfies AppState
 
     expect(mock.onboarding_complete).toBe(false)
@@ -260,7 +266,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
     const mock = {
       onboarding_complete: true,
       last_doctor_run: '2026-03-29T00:00:00Z',
-      last_doctor_score: 85,
+      last_doctor_score: 85, identity: { mode: 'local', edition: 'core', signed_in: false, blocked_reason: 'signed_out' },
     } satisfies AppState
 
     expect(mock.onboarding_complete).toBe(true)
@@ -298,5 +304,36 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
     expect(mock.score).toBe(80)
     expect(mock.issues).toHaveLength(1)
+  })
+})
+
+// A sibling top-level describe, not nested in the one above (lint-budgets'
+// grandfathered "arg of describe" line-count entry for this file is a debt
+// that may only shrink, per engine/omnipus/CLAUDE.md — new coverage goes in
+// its own describe rather than growing that one).
+describe('API contract: AppState identity shapes (ADR-0010)', () => {
+  it('signed-out core mock shape satisfies interface', () => {
+    const mock = {
+      onboarding_complete: true,
+      identity: { mode: 'local', edition: 'core', signed_in: false, blocked_reason: 'signed_out' },
+    } satisfies AppState
+
+    expect(mock.identity.mode).toBe('local')
+    expect(mock.identity.signed_in).toBe(false)
+  })
+
+  it('signed-in hosted mock shape (with account) satisfies interface', () => {
+    const mock = {
+      onboarding_complete: true,
+      identity: {
+        mode: 'platform',
+        edition: 'hosted',
+        signed_in: true,
+        account: { label: 'Daniel Piątkowski', email_masked: 'd•••@elicify.ai', org: null },
+      },
+    } satisfies AppState
+
+    expect(mock.identity.mode).toBe('platform')
+    expect(mock.identity.signed_in).toBe(true)
   })
 })

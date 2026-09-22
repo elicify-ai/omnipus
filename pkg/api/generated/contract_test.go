@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Bidirectional contract tests — run with go test ./pkg/api/generated/...
 //
 // Verifies Go structs marshal to schema-valid JSON (contracts/asyncapi.yaml
@@ -10,10 +8,11 @@
 // Manual break test: change cloneStringAnyMap to return nil, run the tests,
 // observe the regression guard fail, restore, observe it pass.
 //
-// Build constraint: !windows because the yamlLoader uses file:// URLs with
-// POSIX paths (/absolute/path). Windows file:// URLs require drive-letter
-// handling (file:///C:/path) which is not implemented — this project is
-// Linux-primary (see CLAUDE.md hard constraints).
+// The schema-loading harness (validateAgainstComponentSchema and friends)
+// lives in schema_harness_test.go and is portable across Linux/macOS/Windows,
+// so this file carries no build constraint. It previously carried
+// //go:build !windows only because that harness's file-URL handling was
+// POSIX-only — see the history note in schema_harness_test.go (TEST-008).
 
 package generated
 
@@ -23,232 +22,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
-
-// ── Schema loader setup ──────────────────────────────────────────────────────
-
-var (
-	schemaSetupOnce sync.Once
-	errSchemaSetup  error
-
-	// asyncapiFilePath is the absolute path to contracts/asyncapi.yaml.
-	// Used to build file:// URLs for asyncapi schema fragments.
-	asyncapiFilePath string
-
-	// componentSchemaDir is the absolute path to contracts/components/schemas/.
-	// Used to build file:// URLs for component schema files.
-	componentSchemaDir string
-
-	// sharedCompiler is the singleton compiler with all schemas pre-loaded.
-	sharedCompiler *jsonschema.Compiler
-
-	// sharedCompilerMu guards concurrent calls to sharedCompiler.Compile.
-	// jsonschema/v6's Compiler mutates internal state during Compile (it
-	// caches resolved schemas in an unsynchronised map), so calling Compile
-	// from multiple goroutines on the same instance is a data race —
-	// observed as "fatal error: concurrent map read and map write" on CI
-	// runners running TestCompileInboundSchema_ConcurrentDifferentSchemas.
-	// We serialize access here; the lock is held only across the Compile
-	// call so the cache hit path stays fast.
-	sharedCompilerMu sync.Mutex
-)
-
-// contractsDir returns the absolute path to the contracts/ directory.
-// Resolved relative to the location of this test file (pkg/api/generated/).
-func contractsDir() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		panic("runtime.Caller failed — cannot resolve contracts dir")
-	}
-	// file is /path/to/pkg/api/generated/contract_test.go
-	// contracts/ is three dirs up
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "contracts")
-}
-
-// yamlLoader is a URLLoader that reads .yaml files by parsing them with yaml.v3.
-// The jsonschema/v6 library's built-in FileLoader only handles JSON; this wrapper
-// intercepts .yaml URLs and returns parsed YAML as map[string]any.
-type yamlLoader struct{}
-
-func (yamlLoader) Load(rawURL string) (any, error) {
-	// Strip the file:// prefix to get the file path.
-	// On Linux: file:///absolute/path → after trim: /absolute/path (correct).
-	// Windows is excluded via the //go:build !windows tag at the top of this file.
-	path := strings.TrimPrefix(rawURL, "file://")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("yamlLoader: read %s: %w", path, err)
-	}
-
-	// Try JSON first (some .gen.go files embed JSON); fall back to YAML.
-	if len(data) > 0 && data[0] == '{' {
-		var doc any
-		if jsonErr := json.Unmarshal(data, &doc); jsonErr == nil {
-			return doc, nil
-		}
-	}
-
-	// Parse as YAML.
-	var doc any
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("yamlLoader: unmarshal %s: %w", path, err)
-	}
-	return doc, nil
-}
-
-// initSchemas initializes the shared compiler once per test binary run.
-// Called lazily from validateAgainstSchema — not from TestMain so tests can
-// run individually without requiring the full environment.
-func initSchemas(t *testing.T) *jsonschema.Compiler {
-	t.Helper()
-
-	schemaSetupOnce.Do(func() {
-		cdir := contractsDir()
-		asyncapiFilePath = filepath.Join(cdir, "asyncapi.yaml")
-		componentSchemaDir = filepath.Join(cdir, "components", "schemas")
-
-		// Verify the contracts directory is accessible before building the compiler.
-		if _, statErr := os.Stat(asyncapiFilePath); statErr != nil {
-			errSchemaSetup = fmt.Errorf("contracts/asyncapi.yaml not found at %s: %w", asyncapiFilePath, statErr)
-			return
-		}
-		if _, statErr := os.Stat(componentSchemaDir); statErr != nil {
-			errSchemaSetup = fmt.Errorf(
-				"contracts/components/schemas/ not found at %s: %w",
-				componentSchemaDir, statErr,
-			)
-			return
-		}
-
-		c := jsonschema.NewCompiler()
-
-		// Use our YAML-capable loader for file:// URLs.
-		c.UseLoader(jsonschema.SchemeURLLoader{
-			"file": yamlLoader{},
-		})
-
-		sharedCompiler = c
-	})
-
-	require.NoError(t, errSchemaSetup, "schema compiler setup failed")
-	return sharedCompiler
-}
-
-// fileURL converts an absolute file path to a file:// URL string.
-func fileURL(absPath string) string {
-	return "file://" + filepath.ToSlash(absPath)
-}
-
-// validateAgainstAsyncAPISchema validates v against a named schema from asyncapi.yaml.
-// schemaName is the key under components.schemas in asyncapi.yaml
-// (e.g. "ToolApprovalRequiredFrame", "DoneFrame").
-func validateAgainstAsyncAPISchema(t *testing.T, schemaName string, v any) error {
-	t.Helper()
-	c := initSchemas(t)
-
-	raw, err := json.Marshal(v)
-	require.NoError(t, err, "json.Marshal failed for fixture")
-
-	var doc any
-	require.NoError(t, json.Unmarshal(raw, &doc), "json.Unmarshal of marshaled fixture failed")
-
-	// Compile the schema as a fragment of the asyncapi.yaml document.
-	// Fragment path: /components/schemas/<schemaName>
-	// URL encodes as: file:///path/to/asyncapi.yaml#/components/schemas/SchemaName
-	fragment := "/components/schemas/" + schemaName
-	url := fileURL(asyncapiFilePath) + "#" + fragment
-
-	sharedCompilerMu.Lock()
-	sch, err := c.Compile(url)
-	sharedCompilerMu.Unlock()
-	require.NoError(t, err, "could not compile asyncapi schema %q", schemaName)
-
-	return sch.Validate(doc)
-}
-
-// validateAgainstComponentSchema validates v against a named component schema file.
-// schemaName is the filename without .yaml extension
-// (e.g. "Session", "LoginResponse", "ToolApprovalRequiredFrame").
-func validateAgainstComponentSchema(t *testing.T, schemaName string, v any) error {
-	t.Helper()
-	c := initSchemas(t)
-
-	raw, err := json.Marshal(v)
-	require.NoError(t, err, "json.Marshal failed for fixture")
-
-	var doc any
-	require.NoError(t, json.Unmarshal(raw, &doc), "json.Unmarshal of marshaled fixture failed")
-
-	schemaPath := filepath.Join(componentSchemaDir, schemaName+".yaml")
-	url := fileURL(schemaPath)
-
-	sharedCompilerMu.Lock()
-	sch, err := c.Compile(url)
-	sharedCompilerMu.Unlock()
-	require.NoError(t, err, "could not compile component schema %q from %s", schemaName, schemaPath)
-
-	return sch.Validate(doc)
-}
-
-// validateAgainstComponentSchemaRawJSON validates pre-marshaled JSON bytes against a component schema.
-func validateAgainstComponentSchemaRawJSON(t *testing.T, schemaName string, raw []byte) error {
-	t.Helper()
-	c := initSchemas(t)
-
-	var doc any
-	require.NoError(t, json.Unmarshal(raw, &doc))
-
-	schemaPath := filepath.Join(componentSchemaDir, schemaName+".yaml")
-	url := fileURL(schemaPath)
-
-	sharedCompilerMu.Lock()
-	sch, err := c.Compile(url)
-	sharedCompilerMu.Unlock()
-	require.NoError(t, err, "could not compile component schema %q", schemaName)
-
-	return sch.Validate(doc)
-}
-
-// ── Helper assertions ────────────────────────────────────────────────────────
-
-// mustPassComponent asserts the fixture validates against a component schema file.
-func mustPassComponent(t *testing.T, schemaName string, fixture any) {
-	t.Helper()
-	err := validateAgainstComponentSchema(t, schemaName, fixture)
-	assert.NoError(t, err, "fixture must validate against component schema %q", schemaName)
-}
-
-// mustFailComponent asserts the fixture produces schema-INVALID JSON.
-func mustFailComponent(t *testing.T, schemaName string, fixture any, reason string) {
-	t.Helper()
-	err := validateAgainstComponentSchema(t, schemaName, fixture)
-	assert.Error(t, err, "expected validation error for component schema %q — %s", schemaName, reason)
-}
-
-// mustPassAsyncAPI asserts the fixture validates against an asyncapi schema.
-func mustPassAsyncAPI(t *testing.T, schemaName string, fixture any) {
-	t.Helper()
-	err := validateAgainstAsyncAPISchema(t, schemaName, fixture)
-	assert.NoError(t, err, "fixture must validate against asyncapi schema %q", schemaName)
-}
-
-// mustFailAsyncAPI asserts the fixture produces schema-INVALID JSON.
-func mustFailAsyncAPI(t *testing.T, schemaName string, fixture any, reason string) {
-	t.Helper()
-	err := validateAgainstAsyncAPISchema(t, schemaName, fixture)
-	assert.Error(t, err, "expected validation error for asyncapi schema %q — %s", schemaName, reason)
-}
 
 // ── ToolApprovalRequiredFrame — the Ava-chat bug type ─────────────────────────
 // Traces to: contracts/components/schemas/ToolApprovalRequiredFrame.yaml
@@ -774,29 +555,36 @@ func TestContract_DevicePairingRequestFrame_ZeroValue(t *testing.T) {
 
 // ── REST response types (OpenAPI) ─────────────────────────────────────────────
 
-// LoginResponse — bearer token response
-// Traces to: contracts/components/schemas/LoginResponse.yaml
+// OnboardingCompleteResponse — the token-less completion response
+// Traces to: contracts/components/schemas/OnboardingCompleteResponse.yaml. It
+// is its own schema, not an alias of LoginResponse: the local password login
+// and the bearer token it returned are both deleted (ADR-0008 ruling 2), and
+// LoginResponse.yaml went with them.
 
-func TestContract_LoginResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "LoginResponse", FixtureLoginResponse_Populated())
+func TestContract_OnboardingCompleteResponse_Populated(t *testing.T) {
+	mustPassComponent(t, "OnboardingCompleteResponse", FixtureOnboardingCompleteResponse_Populated())
 }
 
-func TestContract_LoginResponse_ZeroValue(t *testing.T) {
-	// token="", username="" — both required, token must match BearerToken's
-	// minLength/pattern constraints.
-	mustFailComponent(t, "LoginResponse", FixtureLoginResponse_ZeroValue(),
-		"zero value has empty required fields and token doesn't match BearerToken pattern")
+func TestContract_OnboardingCompleteResponse_MissingUsername(t *testing.T) {
+	// `username` is the one required property left once `token` is gone. The Go
+	// zero value can no longer express this case — Username is a non-pointer
+	// string, so it always marshals as "" and satisfies "required" — so the
+	// negative is stated on raw JSON instead, at the same strength.
+	raw, err := json.Marshal(map[string]any{})
+	require.NoError(t, err)
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteResponse", raw),
+		"a response with no username must fail — username is required")
 }
 
-func TestContract_LoginResponse_Edge(t *testing.T) {
+func TestContract_OnboardingCompleteResponse_Edge(t *testing.T) {
 	// no warning, unicode username
-	mustPassComponent(t, "LoginResponse", FixtureLoginResponse_Edge())
+	mustPassComponent(t, "OnboardingCompleteResponse", FixtureOnboardingCompleteResponse_Edge())
 }
 
-func TestContract_LoginResponse_Differentiation(t *testing.T) {
+func TestContract_OnboardingCompleteResponse_Differentiation(t *testing.T) {
 	// Two populated fixtures produce different JSON — guards against hardcoded stubs.
-	f1 := FixtureLoginResponse_Populated()
-	f2 := FixtureLoginResponse_Edge()
+	f1 := FixtureOnboardingCompleteResponse_Populated()
+	f2 := FixtureOnboardingCompleteResponse_Edge()
 
 	raw1, err := json.Marshal(f1)
 	require.NoError(t, err)
@@ -806,8 +594,8 @@ func TestContract_LoginResponse_Differentiation(t *testing.T) {
 	assert.NotEqual(t, string(raw1), string(raw2),
 		"two different fixtures must produce different JSON (differentiation test)")
 
-	mustPassComponent(t, "LoginResponse", f1)
-	mustPassComponent(t, "LoginResponse", f2)
+	mustPassComponent(t, "OnboardingCompleteResponse", f1)
+	mustPassComponent(t, "OnboardingCompleteResponse", f2)
 }
 
 // Session — core session metadata
@@ -1678,15 +1466,18 @@ func TestContract_McpServerCreate_Edge(t *testing.T) {
 // Traces to: contracts/components/schemas/AppState.yaml
 
 func TestContract_AppState_Populated(t *testing.T) {
-	// All optional fields set alongside the required onboarding_complete bool.
-	// Traces to: AppState.yaml — required: [onboarding_complete]
+	// All optional fields set alongside the required onboarding_complete bool
+	// and identity object (identity added by ADR-0010 WP1).
+	// Traces to: AppState.yaml — required: [onboarding_complete, identity]
 	mustPassComponent(t, "AppState", FixtureAppState_Populated())
 }
 
 func TestContract_AppState_ZeroValue(t *testing.T) {
-	// ZeroValue passes: onboarding_complete=false is a valid boolean.
-	// AppState is one of the few types where Go zero value is schema-valid.
-	// Traces to: AppState.yaml — boolean fields have no enum constraint
+	// onboarding_complete=false is a valid boolean, and every OTHER optional
+	// field is Go-zero (absent). identity is required and its mode/edition
+	// subfields are enum-constrained (ADR-0010 WP1), so it can no longer be
+	// true Go-zero end to end — the fixture fills only that one field.
+	// Traces to: AppState.yaml — required: [onboarding_complete, identity]
 	mustPassComponent(t, "AppState", FixtureAppState_ZeroValue())
 }
 
@@ -2011,48 +1802,6 @@ func TestContract_DevicesResponse_NilPairedRejected(t *testing.T) {
 	validationErr := validateAgainstComponentSchemaRawJSON(t, "DevicesResponse", raw)
 	assert.Error(t, validationErr,
 		"paired:null MUST fail validation — DevicesResponse.paired is required type: array")
-}
-
-// ── BackupEntry ───────────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupEntry.yaml
-// Note: oapi-codegen inlined BackupEntry inside the listBackups response;
-// we test the schema directly via raw JSON.
-
-func TestContract_BackupEntry_Populated(t *testing.T) {
-	// All required fields set.
-	// Traces to: BackupEntry.yaml — required: [filename, size_bytes, created_at]
-	raw, err := json.Marshal(FixtureBackupEntryJSON_Populated())
-	require.NoError(t, err)
-	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
-		"fully-populated BackupEntry must validate")
-}
-
-func TestContract_BackupEntry_ZeroValue(t *testing.T) {
-	// Empty map — missing all required fields.
-	// Traces to: BackupEntry.yaml
-	raw, err := json.Marshal(FixtureBackupEntryJSON_ZeroValue())
-	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
-		"empty object must fail BackupEntry schema — all required fields missing")
-}
-
-func TestContract_BackupEntry_Edge(t *testing.T) {
-	// Zero-byte size (valid), long filename.
-	// Traces to: BackupEntry.yaml — size_bytes: minimum: 0
-	raw, err := json.Marshal(FixtureBackupEntryJSON_Edge())
-	require.NoError(t, err)
-	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "BackupEntry", raw),
-		"zero-byte backup entry must validate — minimum: 0 is valid")
-}
-
-func TestContract_BackupEntry_Differentiation(t *testing.T) {
-	// Two BackupEntry fixtures must produce different JSON.
-	raw1, err := json.Marshal(FixtureBackupEntryJSON_Populated())
-	require.NoError(t, err)
-	raw2, err := json.Marshal(FixtureBackupEntryJSON_Edge())
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different BackupEntry fixtures must produce different JSON")
 }
 
 // ── StorageStats ──────────────────────────────────────────────────────────────
@@ -2521,37 +2270,6 @@ func TestContract_ChannelTestResponse_Differentiation(t *testing.T) {
 	mustPassComponent(t, "ChannelTestResponse", f2)
 }
 
-// ── BackupCreateResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupCreateResponse.yaml
-
-func TestContract_BackupCreateResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_Populated())
-}
-
-func TestContract_BackupCreateResponse_ZeroValue(t *testing.T) {
-	// JSON Schema "required" checks key presence, not non-empty values.
-	// path="", size_bytes=0, and created_at="0001-01-01T00:00:00Z" all satisfy
-	// the presence requirement — the zero value passes schema validation.
-	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_ZeroValue())
-}
-
-func TestContract_BackupCreateResponse_Edge(t *testing.T) {
-	mustPassComponent(t, "BackupCreateResponse", FixtureBackupCreateResponse_Edge())
-}
-
-func TestContract_BackupCreateResponse_Differentiation(t *testing.T) {
-	f1 := FixtureBackupCreateResponse_Populated()
-	f2 := FixtureBackupCreateResponse_Edge()
-	raw1, err := json.Marshal(f1)
-	require.NoError(t, err)
-	raw2, err := json.Marshal(f2)
-	require.NoError(t, err)
-	assert.NotEqual(t, string(raw1), string(raw2),
-		"two different BackupCreateResponse fixtures must produce different JSON")
-	mustPassComponent(t, "BackupCreateResponse", f1)
-	mustPassComponent(t, "BackupCreateResponse", f2)
-}
-
 // ── OperationResult ───────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/OperationResult.yaml
 
@@ -2790,35 +2508,6 @@ func TestContract_AuthFrame_TokenPatternRejects(t *testing.T) {
 			require.NoError(t, err)
 			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "AuthFrame", raw),
 				"token %q must fail AuthFrame pattern validation — %s", tc.token, tc.reason)
-		})
-	}
-}
-
-// ── LoginResponse token exact-72-char ────────────────────────────────────────
-// Traces to: contracts/components/schemas/LoginResponse.yaml (minLength:72, maxLength:72)
-
-func TestContract_LoginResponse_Token72ExactRejects(t *testing.T) {
-	// Traces to: LoginResponse.yaml — token: minLength:72, maxLength:72
-	// 71-char token (too short) and 73-char token (too long) must fail.
-	cases := []struct {
-		name   string
-		token  string
-		reason string
-	}{
-		{"71_chars", "omnipus_" + repeatStr("a", 63), "71 chars is below minLength:72"},
-		{"73_chars", "omnipus_" + repeatStr("a", 65), "73 chars is above maxLength:72"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			doc := map[string]any{
-				"token":    tc.token,
-				"role":     "admin",
-				"username": "admin",
-			}
-			raw, err := json.Marshal(doc)
-			require.NoError(t, err)
-			assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "LoginResponse", raw),
-				"token %q (len=%d) must fail LoginResponse — %s", tc.token, len(tc.token), tc.reason)
 		})
 	}
 }
@@ -3209,33 +2898,67 @@ func TestContract_SessionStateFrame_TooManyPending(t *testing.T) {
 
 // ── Closed-shape rejection tests (additionalProperties: false) ────────────────
 
-func TestContract_LoginResponse_RejectsExtraneousField(t *testing.T) {
-	// Traces to: LoginResponse.yaml — additionalProperties: false
+func TestContract_OnboardingCompleteResponse_RejectsExtraneousField(t *testing.T) {
+	// Traces to: OnboardingCompleteResponse.yaml — additionalProperties: false.
+	// The body is otherwise VALID, so the extraneous key is the only thing that
+	// can reject it. `token` is one such key now: the response that used to
+	// carry it is closed against it (ADR-0008 ruling 2).
 	doc := map[string]any{
-		"token":          "omnipus_" + repeatStr("a", 64),
 		"username":       "admin",
 		"injected_field": "should be rejected",
 	}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
-	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "LoginResponse", raw),
-		"LoginResponse with extraneous field must fail — additionalProperties: false")
+	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteResponse", raw),
+		"OnboardingCompleteResponse with extraneous field must fail — additionalProperties: false")
 }
 
 func TestContract_OnboardingCompleteRequest_RejectsExtraneousField(t *testing.T) {
-	// Traces to: OnboardingCompleteRequest.yaml — additionalProperties: false
+	// Traces to: OnboardingCompleteRequest.yaml — additionalProperties: false.
+	// The body is otherwise VALID, so the only thing that can reject it is the
+	// extraneous key — without that, this test would pass for the wrong reason.
 	doc := map[string]any{
-		"username":   "admin",
-		"password":   "securepassword",
-		"api_key":    "key123",
-		"provider":   "anthropic",
-		"model":      "claude-sonnet-4-6",
+		"provider": map[string]any{
+			"auth_method": "api_key",
+			"id":          "anthropic",
+			"api_key":     "key123",
+			"model":       "claude-sonnet-4-6",
+		},
 		"extra_flag": true, // extraneous
 	}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	assert.Error(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
 		"OnboardingCompleteRequest with extraneous field must fail — additionalProperties: false")
+}
+
+// TestContract_OnboardingCompleteRequest_AcceptsAdminBlockAtSchemaLevel pins
+// the WP5 (ADR-0010) redesign on the wire: commit f232d1755 restored `admin`
+// as a schema-level property (required in local mode, refused with a 400 in
+// platform mode — see OnboardingCompleteRequest.yaml's own description). This
+// test used to assert `admin` must be rejected outright, pinning the earlier
+// ADR-0008-ruling-2 world where the local account had been deleted entirely;
+// that invariant no longer holds now that local mode mints a real admin
+// account again. The static component schema cannot see which edition is
+// running, so it accepts a structurally valid `admin` block unconditionally —
+// the platform-mode 400 refusal is mode-dependent and is enforced by the
+// gateway handler's strict decode instead, pinned by
+// pkg/gateway/rest_onboarding_authority_test.go's
+// TestOnboardingComplete_BodyCarryingAnAdminBlock_Is400.
+func TestContract_OnboardingCompleteRequest_AcceptsAdminBlockAtSchemaLevel(t *testing.T) {
+	doc := map[string]any{
+		"provider": map[string]any{
+			"auth_method": "api_key",
+			"id":          "anthropic",
+			"api_key":     "key123",
+			"model":       "claude-sonnet-4-6",
+		},
+		"admin": map[string]any{"username": "admin", "password": "s3cr3tpassword"},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "OnboardingCompleteRequest", raw),
+		"admin is a valid schema-level property since WP5 restored local-mode admin creation (ADR-0010)")
 }
 
 func TestContract_GlobalToolPolicies_RejectsExtraneousField(t *testing.T) {
@@ -3390,61 +3113,13 @@ func TestContract_AgentUpdateRequest_EmptyObjectRejected(t *testing.T) {
 		"empty AgentUpdateRequest {} must fail — minProperties: 1 requires at least one field")
 }
 
-func TestContract_AgentUpdateRequest_SingleFieldAccepted(t *testing.T) {
-	// One field is the minimum that satisfies minProperties:1.
-	doc := map[string]any{"model": "gpt-4o"}
+func TestContract_AgentUpdateRequest_SingleChangeWithRevisionAccepted(t *testing.T) {
+	// ADR-090 requires the revision plus at least one changed field.
+	doc := map[string]any{"revision": strings.Repeat("a", 64), "model": "gpt-4o"}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "AgentUpdateRequest", raw),
-		"AgentUpdateRequest with one field (model) must pass — satisfies minProperties:1")
-}
-
-// ── Concurrent compile race test ──────────────────────────────────────────────
-// Traces to: Phase 7 fix-Y — concurrent schema compilation must be race-free
-
-func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
-	// This test must be run with -race to detect data races in the schema compiler cache.
-	// Traces to: pkg/gateway/rest_inbound_validate.go — compileInboundSchema with sync.Map cache.
-	t.Parallel()
-
-	// 10 different schema names to compile concurrently.
-	schemas := []string{
-		"AgentCreateRequestMain", "AgentUpdateRequest", "SessionCreateRequest",
-		"ProbeProviderRequest", "SandboxConfigUpdate", "ExecAllowlist",
-		"SessionScopeRequest", "AuditLogToggleRequest", "SkillTrustUpdateRequest",
-		"PromptGuardUpdateRequest",
-	}
-
-	type result struct {
-		name string
-		err  error
-	}
-	results := make(chan result, len(schemas))
-
-	for _, name := range schemas {
-		n := name
-		go func() {
-			// Always call initSchemas first — sync.Once serializes the write
-			// to componentSchemaDir + sharedCompiler. Reading the global var
-			// directly (the previous "skip init if non-empty" optimisation)
-			// races with the in-flight Once.Do on the first call, producing
-			// "fatal error: concurrent map read and map write" under -race
-			// when many goroutines hit this path on a cold cache.
-			_ = initSchemas(t)
-			raw := []byte(`{"name":"test"}`)
-			err := validateAgainstComponentSchemaRawJSON(t, n, raw)
-			// We expect validation to either pass or fail — no panic or race.
-			// The nil-vs-error outcome depends on the schema, but the important
-			// thing is no data race occurs.
-			results <- result{name: n, err: err}
-		}()
-	}
-
-	for range schemas {
-		r := <-results
-		// Each schema must compile without panicking (err may be non-nil for invalid fixture data).
-		t.Logf("schema %s: validate result=%v", r.name, r.err != nil)
-	}
+		"AgentUpdateRequest with revision and one change must pass")
 }
 
 // ── pkg/session.TranscriptEntry → Message.yaml round-trip ───────────────────
@@ -3870,15 +3545,6 @@ func TestContract_IntegrationProvider_ZeroValue(t *testing.T) {
 		"kind is \"\" (not in [search, voice])")
 }
 
-func TestContract_ReAuthResponse_Populated(t *testing.T) {
-	mustPassComponent(t, "ReAuthResponse", FixtureReAuthResponse_Populated())
-}
-
-func TestContract_ReAuthResponse_ZeroValue(t *testing.T) {
-	// All required fields are scalars with no value constraints → zero value is valid.
-	mustPassComponent(t, "ReAuthResponse", FixtureReAuthResponse_ZeroValue())
-}
-
 func TestContract_PerformanceSettings_Populated(t *testing.T) {
 	mustPassComponent(t, "PerformanceSettings", FixturePerformanceSettings_Populated())
 }
@@ -4024,10 +3690,9 @@ func TestContract_AgentUpdateRequest_Populated(t *testing.T) {
 	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_Populated())
 }
 
-func TestContract_AgentUpdateRequest_UpdatedAt(t *testing.T) {
-	// A patch body with only a valid updated_at timestamp satisfies minProperties:1
-	// and the date-time format constraint.
-	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_UpdatedAt())
+func TestContract_AgentUpdateRequest_Revision(t *testing.T) {
+	// ADR-090 replaces the timestamp precondition with an opaque state revision.
+	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_Revision())
 }
 
 // ── ChannelRouting ────────────────────────────────────────────────────────────

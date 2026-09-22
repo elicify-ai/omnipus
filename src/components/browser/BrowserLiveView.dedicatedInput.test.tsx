@@ -158,6 +158,15 @@ it('shows the real backlog pause and enables explicit resume only after release 
   expect(s.peer.connectionState).not.toBe('closed')
   fireEvent.keyDown(s.frame, { key: ' ', code: 'Space', keyCode: 32 })
   expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
+  // The suppressed key above must SAY why it was suppressed. Without this the
+  // gate is a silent four-way AND: the click is simply not sent, and from the
+  // gateway's side that is indistinguishable from a broken transport (ICE
+  // connected, data channels accepted, zero frames arriving) — which is what
+  // sent several ui-browser investigations after the transport.
+  expect(
+    document.querySelector('[data-input-mode="dedicated"]')?.getAttribute('data-input-blocked-by'),
+    'input was suppressed but the panel named no reason',
+  ).toBeTruthy()
   act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 1 }))
   expect(screen.getByRole('button', { name: 'Resume input' })).toBeEnabled()
   expect(document.querySelector('[data-input-state="paused"]')).not.toBeNull()
@@ -167,6 +176,10 @@ it('shows the real backlog pause and enables explicit resume only after release 
   expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole('button', { name: 'Resume input' }))
   expect(document.querySelector('[data-input-state="ready"]')).not.toBeNull()
+  expect(
+    document.querySelector('[data-input-mode="dedicated"]')?.getAttribute('data-input-blocked-by'),
+    'input is ready, so no blocking reason should be reported',
+  ).toBeNull()
   expect(Peer.instances).toHaveLength(1)
   expect(s.video.srcObject).toBe(media)
   expect(s.socket.frames.filter(f => f.type === 'browser_input')).toEqual([])

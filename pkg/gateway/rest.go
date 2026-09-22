@@ -111,6 +111,24 @@ type restAPI struct {
 	// classifies nothing — rows keep their credential-derived status. Wired
 	// at boot by T067-10; until then only tests set it.
 	providerCatalog *catalog.Catalog
+	// bedrockControlPlaneBaseOverride is issue #800's own follow-up (live
+	// AWS ListInferenceProfiles refresh, rest_providers.go): a test seam
+	// for the Bedrock control-plane base URL (httptest.Server), empty in
+	// every production path — production always derives
+	// bedrock.ControlPlaneEndpoint(region).
+	bedrockControlPlaneBaseOverride string
+	// bedrockRuntimeBaseOverride is a TEST-ONLY seam (orchestrator review
+	// round 2, D1), empty in every production path: when set, the onboarding
+	// probe (HandleOnboardingProbeProvider) and the PUT-triggered save-time
+	// key check (providerPutValidateKey) build the Bedrock RUNTIME (Converse)
+	// base as this value + "/" + the resolved region, instead of
+	// bedrock.RegionalEndpoint(region) — production always derives the real
+	// bedrock-runtime.<region>.amazonaws.com host. An httptest.Server's own
+	// host cannot BE a per-region AWS DNS name, so this lets a test's fake
+	// server observe which region a probe actually resolved to via the
+	// request PATH (r.URL.Path's leading segment), the same way
+	// bedrockControlPlaneBaseOverride above tests the control-plane call.
+	bedrockRuntimeBaseOverride string
 	// entitlements is the ADR-067 FR-021 "Check with my account" cache:
 	// one annotated model list per (provider, credential ref NAME) for the
 	// life of the process, evicted on provider DELETE, on a key-changing
@@ -260,8 +278,17 @@ type restAPI struct {
 	// RequireNotBypass (a 503 dev-mode guard). Lazily initialized via
 	// reauthStoreOrInit so test setups that construct restAPI literals without
 	// this field still function.
+	//
+	// These fields are upstream's own local-mode state (ADR-0010 WP2): harmless
+	// in platform mode, where requireReAuth short-circuits to true before ever
+	// touching the store (see requireReAuth's doc comment, rest_integrations_auth.go).
 	reauthOnce sync.Once
 	reauth     *reauthStore
+
+	// corsAllowHeaders' one-time composition (auth_mode.go): the mode never
+	// changes after boot, so the header string is computed on first use.
+	corsAllowHeadersOnce  sync.Once
+	corsAllowHeadersValue string
 
 	// restarter performs the graceful self-restart triggered by
 	// POST /api/v1/gateway/restart (O4-backend). It is an indirection so the
@@ -338,7 +365,7 @@ func (a *restAPI) setCORSHeaders(w http.ResponseWriter, r ...*http.Request) {
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Csrf-Token, X-Reauth-Token")
+	w.Header().Set("Access-Control-Allow-Headers", a.corsAllowHeaders())
 	// Access-Control-Allow-Credentials must only be sent when the origin is
 	// explicitly configured — never when falling back to wildcard or localhost
 	// reflection. Per CORS spec, "true" + wildcard is illegal; restricting to
@@ -690,9 +717,9 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// O4-backend: UI-triggerable graceful self-restart. High blast radius —
 	// RequireNotBypass (dev_mode_bypass → 503) via adminWrap.
 	rae.cm.RegisterHTTPHandler("/api/v1/gateway/restart", rae.a.adminWrap(rae.a.HandleGatewayRestart))
-	// O14 god-mode toggle. High blast radius — RequireNotBypass via adminWrap,
-	// and the POST additionally requires a password re-auth consent token
-	// (enforced inside the handler via requireReAuth).
+	// O14 god-mode toggle. High blast radius — RequireNotBypass via adminWrap.
+	// The SPA confirms the flip with the operator before POSTing (ADR-0008
+	// ruling 6).
 	rae.cm.RegisterHTTPHandler("/api/v1/gateway/god-mode", rae.a.adminWrap(rae.a.HandleGodMode))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/audit-log", rae.a.adminWrap(rae.a.HandleSandboxAuditLog))
 	rae.cm.RegisterHTTPHandler("/api/v1/security/skill-trust", rae.a.adminWrap(rae.a.HandleSkillTrust))
@@ -725,36 +752,74 @@ func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes(
 	// Chain: withAuth (verifies token) → handler.
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials", rae.a.withAuth(rae.a.HandleCredentials))
 	rae.cm.RegisterHTTPHandler("/api/v1/credentials/", rae.a.withAuth(rae.a.HandleCredentials))
+	// WP4: local backup — off in platform mode
+	if config.EditionAuthMode() == config.AuthModeLocal {
+		rae.cm.RegisterHTTPHandler("/api/v1/backup", rae.a.withAuth(rae.a.HandleCreateBackup))
+		rae.cm.RegisterHTTPHandler("/api/v1/backups", rae.a.withAuth(rae.a.HandleListBackups))
+		rae.cm.RegisterHTTPHandler("/api/v1/restore", rae.a.withAuth(rae.a.HandleRestore))
+	}
 	// Option A keeps workspace and media IDs as separately validated path segments;
 	// the legacy global media route remains below for backward compatibility.
 	rae.cm.RegisterHTTPHandler("/api/v1/media/workspace/", rae.a.withOptionalAuth(rae.a.HandleMediaByRef))
 	rae.cm.RegisterHTTPHandler("/api/v1/media/", rae.a.withOptionalAuth(rae.a.HandleMedia))
-	rae.cm.RegisterHTTPHandler("/api/v1/backup", rae.a.withAuth(rae.a.HandleCreateBackup))
-	rae.cm.RegisterHTTPHandler("/api/v1/backups", rae.a.withAuth(rae.a.HandleListBackups))
-	rae.cm.RegisterHTTPHandler("/api/v1/restore", rae.a.withAuth(rae.a.HandleRestore))
 	// Exact match takes precedence over the /sessions/ prefix handler for this specific path.
 	rae.cm.RegisterHTTPHandler("/api/v1/sessions/all", rae.a.withAuth(rae.a.HandleClearSessions))
 	rae.cm.RegisterHTTPHandler("/api/v1/about", rae.a.withAuth(rae.a.HandleAbout))
 	rae.cm.RegisterHTTPHandler("/api/v1/user-context", rae.a.withAuth(rae.a.HandleUserContext))
-	rae.cm.RegisterHTTPHandler(
-		"/api/v1/onboarding/complete",
-		rae.a.withOptionalAuth(withRateLimit(onboardingCompleteLimiter, rae.a.HandleCompleteOnboarding)),
-	)
-	rae.cm.RegisterHTTPHandler(
-		"/api/v1/onboarding/probe-provider",
-		rae.a.withOptionalAuth(withRateLimit(onboardingCompleteLimiter, rae.a.HandleOnboardingProbeProvider)),
-	)
-	rae.cm.RegisterHTTPHandler("/api/v1/auth/login", rae.a.withOptionalAuth(rae.a.HandleLogin))
+	// Auth mode composition seam (ADR-0010 WP2, auth_mode.go): the mode
+	// derived from the stamped edition — never a config key — picks which
+	// sign-in routes exist at all and how each is wrapped. Local mode
+	// registers upstream's own /api/v1/auth/login, /auth/change-password and
+	// /auth/reauth; platform mode registers the omnipus.ai
+	// start/session/claim/callback routes. An unknown edition (the empty
+	// mode) registers none of them, so sign-in answers 404 rather than
+	// guessing which mode a misbuilt binary meant to be.
+	mode := activeAuthMode(rae.a)
+	for _, rt := range mode.authRoutes {
+		rae.cm.RegisterHTTPHandler(rt.path, rae.a.wrapRoute(rt))
+	}
+	// Onboarding's auth posture is the other half of the FR-050 property this
+	// seam carries: local mode runs onboarding BEFORE any session exists
+	// (withOptionalAuth, upstream's own posture — the pre-auth window this
+	// route used to carry when the local account it protects still exists);
+	// platform mode runs it AFTER sign-in (withAuth — ADR-0008 rulings 1 and
+	// 2, onboarding-and-profile-spec §0.4 FR-OB-060: the caller already holds
+	// the session the platform issued, so an unauthenticated POST is a 401
+	// rather than something the handler has to decide). Gated on mode.known()
+	// for the same reason the loop above registers nothing for an unknown
+	// edition — the zero-value onboardingWrap (authWrapBare) would otherwise
+	// register onboarding with NO auth check at all.
+	if mode.known() {
+		rae.cm.RegisterHTTPHandler(
+			"/api/v1/onboarding/complete",
+			rae.a.wrapRoute(authRoute{
+				handler: rae.a.HandleCompleteOnboarding,
+				wrap:    mode.onboardingWrap,
+				limiter: onboardingCompleteLimiter,
+			}),
+		)
+		// The provider probe runs INSIDE the wizard, so it shares the
+		// wizard's own auth posture. In platform mode it is additionally
+		// authenticated because it carries a caller-supplied API key to an
+		// upstream host, and an anonymous caller has no business doing that;
+		// its remaining gate (onboardingSetupWindowGate) refuses only after
+		// onboarding is finished.
+		rae.cm.RegisterHTTPHandler(
+			"/api/v1/onboarding/probe-provider",
+			rae.a.wrapRoute(authRoute{
+				handler: rae.a.HandleOnboardingProbeProvider,
+				wrap:    mode.onboardingWrap,
+				limiter: onboardingCompleteLimiter,
+			}),
+		)
+	}
+	// Common to both modes: validating a token and logging out never depend
+	// on how the caller signed in.
 	rae.cm.RegisterHTTPHandler("/api/v1/auth/validate", rae.a.withAuth(withRateLimit(validateLimiter, rae.a.HandleValidateToken)))
 	rae.cm.RegisterHTTPHandler("/api/v1/auth/logout", rae.a.withAuth(rae.a.HandleLogout))
-	rae.cm.RegisterHTTPHandler("/api/v1/auth/change-password", rae.a.withAuth(rae.a.HandleChangePassword))
-	// Password re-auth consent primitive (Spec-6 FR-12.2). Distinct from
-	// RequireNotBypass (a 503 dev-mode guard) — this re-verifies the user's one
-	// password before a sensitive settings change.
-	rae.cm.RegisterHTTPHandler("/api/v1/auth/reauth", rae.a.withAuth(withRateLimit(reauthLimiter, rae.a.HandleReAuth)))
 
 	// Integrations provider-picker — search + voice-input providers (Spec-6
-	// FR-12.1). GET lists; PUT (gated by the re-auth consent token) configures.
+	// FR-12.1). GET lists; PUT configures.
 	rae.cm.RegisterHTTPHandler("/api/v1/integrations/providers", rae.a.withAuth(rae.a.HandleIntegrationProviders))
 	rae.cm.RegisterHTTPHandler("/api/v1/integrations/providers/", rae.a.withAuth(rae.a.HandleIntegrationProviders))
 	// Automations — trigger→action display projection over schedules (W3-AC

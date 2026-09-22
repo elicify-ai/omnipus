@@ -5,6 +5,7 @@
 package library
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 
@@ -42,7 +43,7 @@ func (r *Root) caseInsensitiveMatch(dir, baseName string) (match string, found b
 	rt, sub := r.resolve(name)
 	entries, readErr := fs.ReadDir(rt.FS(), sub)
 	if readErr != nil {
-		if os.IsNotExist(readErr) {
+		if errors.Is(readErr, os.ErrNotExist) {
 			return "", false, nil
 		}
 		return "", false, translateErr(readErr)

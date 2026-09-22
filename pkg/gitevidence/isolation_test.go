@@ -6,6 +6,7 @@
 package gitevidence
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,7 +63,7 @@ func TestGitEvidence_Isolation_OpenAtSystemGitWorktreeRung(t *testing.T) {
 	if err := ic.Cleanup(); err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
-	if _, statErr := os.Stat(ic.Dir); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(ic.Dir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("isolated worktree dir still present after Cleanup: statErr=%v", statErr)
 	}
 	// Make Cleanup idempotent-safe for the deferred call above (git
@@ -109,7 +110,7 @@ func TestGitEvidence_Isolation_ForcedGoGitCloneRungProducesIndependentCopy(t *te
 	if err := ic.Cleanup(); err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
-	if _, statErr := os.Stat(ic.Dir); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(ic.Dir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("clone dir still present after Cleanup")
 	}
 }
@@ -138,7 +139,7 @@ func TestGitEvidence_Isolation_ForcedSubdirRungSharesTheSameCheckout(t *testing.
 	if err := ic.Cleanup(); err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
-	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(target); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("subdir checkout still present after Cleanup")
 	}
 	if _, statErr := os.Stat(dir); statErr != nil {
@@ -239,7 +240,7 @@ func assertTreeMatchesC1(t *testing.T, treeDir string) {
 	if string(data) != "bee" {
 		t.Errorf("restored sub/b.txt = %q, want %q", data, "bee")
 	}
-	if _, statErr := os.Stat(filepath.Join(treeDir, "c2only.txt")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(treeDir, "c2only.txt")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("c2only.txt present in tree restored at c1 (statErr=%v) — tree does not match the recorded commit", statErr)
 	}
 }
@@ -303,7 +304,7 @@ func TestGitEvidence_Isolation_RestoreAtCommit_RejectsMalformedHash(t *testing.T
 			t.Errorf("OpenIsolatedCheckoutAtCommit(hash=%q) = nil error, want a validation error", bad)
 		}
 	}
-	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(target); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("target dir materialized despite hash rejection: statErr=%v", statErr)
 	}
 }
@@ -350,7 +351,7 @@ func TestGitEvidence_Isolation_RemoveIsolatedCheckout(t *testing.T) {
 	if err := RemoveIsolatedCheckout(dir, target); err != nil {
 		t.Fatalf("RemoveIsolatedCheckout: %v", err)
 	}
-	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(target); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("resume tree still present after RemoveIsolatedCheckout: statErr=%v", statErr)
 	}
 	// Idempotent: removing an already-absent checkout is not an error.

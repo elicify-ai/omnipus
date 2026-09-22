@@ -12,6 +12,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -1331,8 +1332,9 @@ func (rf *agentLoopRunTurnFallbacks) synthesizeImageRejection(pe *ProviderError,
 	return true
 }
 
-// callProvider calls the configured provider or fallback chain and records streaming progress.
-func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
+// callProviderOnce calls the configured provider or fallback chain once and records streaming progress.
+// Delegated-turn rate-limit retries wrap this method in loop_provider_retry.go.
+func (rt *agentLoopRunTurn) callProviderOnce(messagesForCall []providers.Message, toolDefsForCall []providers.ToolDefinition) (*providers.LLMResponse, error) {
 	// Clear tool-argument progress when the round ends, on EVERY exit
 	// path (success, error, retry, recovery). Placed here rather than
 	// at the four call sites so no future path can forget it.
@@ -1369,6 +1371,12 @@ func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, to
 			providerCtx,
 			rt.activeCandidates,
 			func(ctx context.Context, provider, model string) (*providers.LLMResponse, error) {
+				cat := rt.al.getCapabilityCatalog()
+				budget := resizeBudgetForModel(cat, provider, model, int(catalog.DefaultResizeLimits.MaxBytes))
+				candidateMessages, imageErr := attachTurnInspectionImagesWithBudget(ctx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, provider, model), budget)
+				if imageErr != nil {
+					return nil, imageErr
+				}
 				// FR-007: look up the provider instance that matches
 				// this candidate's pinned Provider. Without this,
 				// every fallback routes through activeProvider (the
@@ -1380,7 +1388,7 @@ func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, to
 				if p == nil {
 					p = rt.activeProvider
 				}
-				return p.Chat(ctx, messagesForCall, toolDefsForCall, model, rt.llmOpts)
+				return p.Chat(ctx, candidateMessages, toolDefsForCall, model, rt.llmOpts)
 			},
 		)
 		if fbErr != nil {
@@ -1400,6 +1408,17 @@ func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, to
 		rt.ts.setLastProducedModel(fbResult.Model)
 		rt.ts.markLastStreamerProducedModel(fbResult.Model)
 		return fbResult.Response, nil
+	}
+	providerName := ""
+	if len(rt.activeCandidates) > 0 {
+		providerName = rt.activeCandidates[0].Provider
+	}
+	var imageErr error
+	cat := rt.al.getCapabilityCatalog()
+	budget := resizeBudgetForModel(cat, providerName, rt.llmModel, int(catalog.DefaultResizeLimits.MaxBytes))
+	messagesForCall, imageErr = attachTurnInspectionImagesWithBudget(providerCtx, messagesForCall, rt.inspectionImages, modelSupportsImage(cat, providerName, rt.llmModel), budget)
+	if imageErr != nil {
+		return nil, imageErr
 	}
 	// Use streaming if the provider supports it and we have a streamer for this channel.
 	if sp, ok := rt.activeProvider.(providers.StreamingProvider); ok && rt.al.bus != nil {
@@ -1456,6 +1475,12 @@ func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, to
 				delta := visible[len(lastChunk):]
 				lastChunk = visible
 				if delta != "" {
+					// This attempt-local counter is independent of the concrete
+					// streamer. Some channels expose no buffer-length method, and
+					// WebSocket creates a fresh streamer per round. Count before
+					// Update so an attempted partial emit fails closed even if the
+					// client disconnects during the write.
+					rt.providerCallStreamedBytes.Add(int64(len(delta)))
 					if err := streamer.Update(providerCtx, delta); err != nil {
 						logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 					}

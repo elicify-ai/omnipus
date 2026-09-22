@@ -18,6 +18,7 @@ package fileutiltest
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -105,7 +106,7 @@ func WaitDone(t testing.TB, done <-chan error) {
 func RequireAbsentOrCompleteJSON(t testing.TB, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	require.NoError(t, err)
@@ -129,7 +130,7 @@ func RequireCompleteJSON(t testing.TB, path string) {
 func RequireAbsentOrCompleteJSONL(t testing.TB, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	require.NoError(t, err)

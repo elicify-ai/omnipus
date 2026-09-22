@@ -89,6 +89,13 @@ var SecretEntriesRelative = append(append(append([]string{}, SecretEntriesAlways
 //	           reads as correct and protects nothing. Before this branch,
 //	           FSScopeConfined refused it for a reason unrelated to secrecy;
 //	           opening reads removed that accidental protection.
+//
+//	           WP4 (ADR-0010): the endpoints that write this directory are
+//	           restored behind the edition auth-mode switch — local mode
+//	           only (config.EditionAuthMode() == config.AuthModeLocal); a
+//	           hosted/desktop instance never registers them, so the
+//	           directory is never created there and this deny is
+//	           belt-and-braces. On a local-mode install the writer is live.
 //	auth.json  A LEGACY plaintext OAuth store. pkg/auth used to write
 //	           per-provider AccessToken and RefreshToken here as PLAINTEXT
 //	           JSON, outside the encrypted credential store; that writer has

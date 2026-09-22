@@ -11,8 +11,13 @@ import type { ToolApprovalPreviewContext } from './types'
  * Formats a `bash` command string for display: separates any leading
  * `KEY=value` env-var assignments from the binary name and highlights the
  * binary.
+ *
+ * Exported for EnvironmentSetupApprovalPreview (generic-install lane): an
+ * environment_setup command/script is displayed with the same formatting
+ * pattern — the approver reads the agent-supplied text exactly as it will
+ * run, multiline scripts included (`whitespace-pre-wrap` in the caller).
  */
-function formatBashCommand(command: string): { envPrefix: string; binary: string; args: string } {
+export function formatBashCommand(command: string): { envPrefix: string; binary: string; args: string } {
   const parts = command.split(' ')
   let binaryIndex = 0
   for (let i = 0; i < parts.length; i++) {

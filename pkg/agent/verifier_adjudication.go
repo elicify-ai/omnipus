@@ -317,7 +317,7 @@ func SeedSystemAgentSoulFile(workspace string, id coreagent.CoreAgentID) error {
 		if strings.TrimSpace(string(existing)) != "" {
 			return nil // operator (or a prior seed) already put real content here
 		}
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("verifier: read existing %q soul %q: %w", id, soulPath, err)
 	}
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
@@ -1418,26 +1418,16 @@ func (al *AgentLoop) runVerifierAdjudication(
 			})
 	}()
 
-	// JUDGE-FR-057/FR-057a (review finding 5): god mode floors EVERY tool at
-	// "allow" (Constraint #6's sandbox-off posture), which erases the
-	// verifier's narrow read-only surface and makes FR-058's "mcp_*": deny
-	// stamp resolve to nothing — resolveEffectivePolicyWith short-circuits on
-	// cfg.GodMode before any per-agent map is consulted. An adjudication run
-	// under that posture cannot be trusted, so it is refused BEFORE a verifier
-	// session is created and BEFORE any Judge turn runs, exactly as FR-057
-	// requires. Returned as unavailable (round NOT consumed) carrying the
-	// machine-readable "god_mode: " reason, so the operator sees a distinct,
-	// actionable state — not silence, and not a fail-closed unmet that would
-	// burn the goal's rounds for a posture problem. Deliberately NOT retried
-	// on the backoff schedule: god mode clears by operator action, not by
-	// waiting, and a retry loop would only spin.
-	if godModeReason, refuse := VerifierGodModeRefusalReason(GodModeActive(vs.va.al.GetConfig())); refuse {
-		logger.ErrorCF("agent",
-			"verifier: adjudication refused — god mode is active (JUDGE-FR-057); "+
-				"no verifier session was created and no Judge turn ran",
-			map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "reason": godModeReason})
-		return nil, "", "", true, godModeReason, nil, nil
-	}
+	// There is deliberately NO god-mode refusal here (issue #761, removing
+	// JUDGE-FR-057/FR-057a). That refusal rested on one premise: that god mode
+	// floors EVERY tool at "allow" and so erases the verifier's narrow
+	// read-only surface. It no longer holds — god mode now floors only the
+	// GLOBAL policy layer and leaves the per-agent policy in force, so under
+	// god mode the verifier KEEPS its deny-all-except-read-only ceiling
+	// (read_file, list_directory, inspect_session) and FR-058's "mcp_*": deny
+	// stamp still resolves. With its premise gone the refusal had no basis, so
+	// it was removed rather than left standing as a posture check that only
+	// looked protective. Do not re-add it.
 
 	vs.va.windowText = vs.va.al.resolveVerifierWindowText(vs.va.in)
 
@@ -1834,8 +1824,7 @@ func (va *agentLoopRunVerifierAdjudication) finalizeVerdicts() agentLoopRunVerif
 //   - the turn was refused for a cause only an operator can fix: the Judge's
 //     provider or model is not configured, its context window is unknown, or
 //     the provider rejected its credentials. Retrying only held the goal card
-//     on "judging" until the round timeout (the god-mode refusal above is the
-//     precedent for refusing to spin);
+//     on "judging" until the round timeout, so refusing beats spinning;
 //   - the turn ended at the output-token limit before its verdict was
 //     complete. The same request truncates the same way again (ADR-087 D1's
 //     rationale, translate_error.go's isRetryable).
@@ -1845,7 +1834,7 @@ func (va *agentLoopRunVerifierAdjudication) finalizeVerdicts() agentLoopRunVerif
 
 // JudgeMisconfiguredReasonPrefix prefixes the Reason of an adjudication withheld
 // because the Judge's turn was refused for a cause only an operator can clear.
-// Distinct from VerifierGodModeRefusalReasonPrefix and from a transient-outage
+// Distinct from JudgeOutputTruncatedReasonPrefix and from a transient-outage
 // reason, so the three are never merged in what the operator sees.
 const JudgeMisconfiguredReasonPrefix = "judge_misconfigured: "
 
@@ -2157,29 +2146,52 @@ func verifierHandleReleased(registry VerifierSessionPublisher, unitID, chatID st
 // transient retry now repaints the pill: `judge_unavailable` with a
 // plain-language reason naming the cause, the wait and the next try (the
 // pill's expanded panel renders latest_reason), then `judging` again when that
-// try starts. Existing wire states and fields only — no contract change. Task
-// and plan adjudications have no goal pill and are untouched.
+// try starts. Existing wire states and fields only — no contract change.
+// Plan-scope adjudications have no goal pill; they stamp Plan.PausedReason
+// so the board does not look like ordinary Judging during a D7 wait.
 
 // noteGoalJudgeRetryWait paints the wait before a Judge retry.
 func (al *AgentLoop) noteGoalJudgeRetryWait(in JudgeCriteriaInput, attempt int, cause string) {
-	rec := goalForJudgeRetryNotice(in)
-	if rec == nil {
-		return
-	}
 	wait := judgeBackoffDuration(attempt)
-	reason := fmt.Sprintf("The Judge could not finish checking this goal: %s. Trying again in %d s (try %d).",
-		cause, int(wait.Round(time.Second)/time.Second), attempt+2)
-	al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, reason, goalPillJudgeUnavailable)
+	if rec := goalForJudgeRetryNotice(in); rec != nil {
+		reason := fmt.Sprintf("The Judge could not finish checking this goal: %s. Trying again in %d s (try %d).",
+			cause, int(wait.Round(time.Second)/time.Second), attempt+2)
+		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, reason, goalPillJudgeUnavailable)
+	}
+	al.notePlanJudgeRetryWait(in, cause, wait)
 }
 
 // noteGoalJudgeRetrying paints the Judge retry itself starting.
 func (al *AgentLoop) noteGoalJudgeRetrying(in JudgeCriteriaInput, attempt int) {
-	rec := goalForJudgeRetryNotice(in)
-	if rec == nil {
+	if rec := goalForJudgeRetryNotice(in); rec != nil {
+		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
+			fmt.Sprintf("Checking this goal again (try %d).", attempt+1), goalPillJudging)
+	}
+	al.notePlanJudgeRetrying(in)
+}
+
+// notePlanJudgeRetryWait stamps a plan-scope D7 wait onto Plan.PausedReason.
+func (al *AgentLoop) notePlanJudgeRetryWait(in JudgeCriteriaInput, cause string, wait time.Duration) {
+	if in.Scope != task.VerdictScopePlan || in.PlanID == "" {
 		return
 	}
-	al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
-		fmt.Sprintf("Checking this goal again (try %d).", attempt+1), goalPillJudging)
+	pe := GetPlanEngine(al)
+	if pe == nil {
+		return
+	}
+	pe.noteJudgeUnavailable(in.PlanID, cause, wait)
+}
+
+// notePlanJudgeRetrying retracts the in-round pause as the next Judge turn starts.
+func (al *AgentLoop) notePlanJudgeRetrying(in JudgeCriteriaInput) {
+	if in.Scope != task.VerdictScopePlan || in.PlanID == "" {
+		return
+	}
+	pe := GetPlanEngine(al)
+	if pe == nil {
+		return
+	}
+	pe.clearJudgeUnavailablePause(in.PlanID)
 }
 
 // goalForJudgeRetryNotice returns the ACTIVE chat goal a retry notice belongs

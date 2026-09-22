@@ -134,15 +134,6 @@ function describeNonActiveState(state: Exclude<GoalPillState, 'active' | 'queued
         text: 'cleared',
         className: 'text-[var(--color-muted)]',
       }
-    case 'judge_refused_god_mode':
-      // JUDGE-FR-057a: distinct, operator-actionable state — god mode is
-      // blocking every adjudication; the operator can fix it by turning
-      // god mode off, unlike judge_unavailable which is a wait-it-out state.
-      return {
-        testId: 'goal-indicator-judge-refused-god-mode',
-        text: 'god mode is blocking judging — see Settings → Security',
-        className: 'text-[color:var(--color-warning)]',
-      }
     case 'judge_cas_loss':
       // JUDGE-FR-083: a verifier_registry compare-and-swap loss — another
       // adjudication for this unit is already in flight (its own verdict

@@ -27,10 +27,16 @@ import (
 // pair the operator picked, config.json carries no model_name key, and a
 // subsequent ReloadProviderAndConfig leaves the pair untouched (FR-020).
 func TestOnboardingComplete_ApiKey_WritesDefaultModelPair_ReloadDoesNotOverwrite(t *testing.T) {
+	// postOnboardingComplete drives HandleCompleteOnboarding through the
+	// signed-in (platform-mode) shape this test's body carries — no `admin`
+	// block. WP5 (ADR-0010) composes the handler by config.EditionAuthMode(),
+	// and the source default is core/local, so pin the mode this test means.
+	withEdition(t, config.EditionHosted)
 	api, tmpDir := newAuthMethodOnboardingAPI(t)
 	upstream := startFakeProviderUpstream(t)
 	body := withProviderEndpoint(
-		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-pin-key","model":"gpt-4o"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-pin-key","model":"gpt-4o"},`+
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
 		upstream,
 	)
 

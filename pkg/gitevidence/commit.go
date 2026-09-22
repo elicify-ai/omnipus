@@ -6,6 +6,7 @@
 package gitevidence
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -218,13 +219,13 @@ func (r *Repo) Commit(boundary Boundary, meta CommitMeta, writeSet []string) (*C
 				"dir": r.dir, "boundary": string(boundary), "path": f.relPath,
 			})
 			continue
-		} else if lstatErr != nil && !os.IsNotExist(lstatErr) {
+		} else if lstatErr != nil && !errors.Is(lstatErr, os.ErrNotExist) {
 			return nil, fmt.Errorf("gitevidence: lstat write-set file %s: %w", f.relPath, lstatErr)
 		}
 
 		data, readErr := os.ReadFile(abs)
 		if readErr != nil {
-			if os.IsNotExist(readErr) {
+			if errors.Is(readErr, os.ErrNotExist) {
 				// A path git status reports dirty but that's absent on
 				// disk is a deletion of a PREVIOUSLY TRACKED file (status
 				// only reports paths it has some record of); Worktree.Add
@@ -330,7 +331,7 @@ func sizeOfExpandedSet(root string, files []expandedFile) (count int, totalBytes
 		abs := filepath.Join(root, filepath.FromSlash(f.relPath))
 		fi, statErr := os.Stat(abs)
 		if statErr != nil {
-			if os.IsNotExist(statErr) {
+			if errors.Is(statErr, os.ErrNotExist) {
 				count++
 				continue
 			}

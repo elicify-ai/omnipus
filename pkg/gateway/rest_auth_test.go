@@ -22,6 +22,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
+	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -2264,7 +2265,7 @@ func TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning(t *testing.T) {
 
 	logFile := filepath.Join(t.TempDir(), "change-password-reload-timeout.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {
@@ -2302,4 +2303,97 @@ func TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning(t *testing.T) {
 		"a reload that timed out unconfirmed must now be logged distinctly, "+
 			"not silently indistinguishable from a confirmed reload")
 	assert.Contains(t, string(logged), "cpuser-reload-timeout")
+}
+
+// TestSessionUsableWithoutRestart verifies that a session written to disk via
+// safeUpdateConfigJSON authenticates immediately, with no process restart.
+//
+// Before the A2 fix, safeUpdateConfigJSON only wrote to disk. The in-memory config
+// (used by withAuth via GetConfig()) still had no session hash, so the request
+// fell through to the "no credential" branch and returned 401 for every request.
+//
+// After the fix, safeUpdateConfigJSON calls refreshConfigAndRewireServices so GetConfig()
+// returns the config carrying the freshly issued session immediately.
+//
+// The writer used to be POST /onboarding/complete, which created an account and
+// issued its cookie in one call. Under ADR-0008 ruling 2 it does neither — the
+// account comes from the platform and the session is issued against it — so this
+// test drives IssueSessionCookie, which is the call that now performs the write
+// whose in-memory visibility is the whole point here.
+func TestSessionUsableWithoutRestart(t *testing.T) {
+	tmpDir := t.TempDir()
+	// A gateway that knows the account but has no session for it yet — the
+	// state a platform instance is in between provisioning and first sign-in.
+	// version:1 is required — any other version now fails to load outright
+	// (there is no legacy migration path).
+	minimalCfg := []byte(`{"version":1,"agents":{"defaults":{},"list":[]},"providers":[],` +
+		`"gateway":{"users":[{"username":"operator@example.com","password_hash":""}]}}`)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), minimalCfg, 0o600))
+
+	cfg := &config.Config{
+		Gateway: config.GatewayConfig{
+			Host: "127.0.0.1", Port: 8080,
+			Users: []config.UserConfig{{Username: "operator@example.com"}},
+		},
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Home:         tmpDir,
+				DefaultModel: config.DefaultModel{Model: "test-model"},
+				MaxTokens:    4096,
+			},
+		},
+	}
+	msgBus := bus.NewMessageBus()
+	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
+
+	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
+	credStore, credErr := func() (*credentials.Store, error) {
+		s := credentials.NewStore(filepath.Join(tmpDir, "credentials.json"))
+		if err := credentials.Unlock(s); err != nil {
+			return nil, err
+		}
+		return s, nil
+	}()
+	require.NoError(t, credErr)
+
+	api := &restAPI{
+		agentLoop:     al,
+		homePath:      tmpDir,
+		allowedOrigin: "http://localhost:3000",
+		onboardingMgr: onboarding.NewManager(tmpDir),
+		taskStore:     task.New(tmpDir + "/tasks"),
+		credStore:     credStore,
+	}
+
+	// Step 1: issue a session against the account — writes session_token_hash to
+	// disk AND refreshes the in-memory config.
+	issueReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/session", nil)
+	issueW := httptest.NewRecorder()
+	_, issueErr := middleware.IssueSessionCookie(
+		issueW, issueReq, "operator@example.com", api.safeUpdateConfigJSON)
+	require.NoError(t, issueErr, "issuing the session cookie must succeed")
+
+	var sessionCookie *http.Cookie
+	for _, c := range issueW.Result().Cookies() {
+		if c.Name == middleware.SessionCookieName {
+			sessionCookie = c
+		}
+	}
+	require.NotNil(t, sessionCookie, "a session cookie must be issued")
+
+	// Step 2: use it via withAuth (which falls back to GetConfig() since there
+	// is no configSnapshotMiddleware in unit tests). Before the A2 fix this
+	// returns 401.
+	validateHandler := api.withAuth(api.HandleValidateToken)
+	validateReq := httptest.NewRequest(http.MethodGet, "/api/v1/auth/validate", nil)
+	validateReq.AddCookie(&http.Cookie{Name: middleware.SessionCookieName, Value: sessionCookie.Value})
+	validateW := httptest.NewRecorder()
+	validateHandler(validateW, validateReq)
+
+	assert.Equal(t, http.StatusOK, validateW.Code,
+		"validate must return 200 immediately after the session write, with no restart: %s",
+		validateW.Body.String())
+	var validateResp map[string]any
+	require.NoError(t, json.Unmarshal(validateW.Body.Bytes(), &validateResp))
+	assert.Equal(t, "operator@example.com", validateResp["username"])
 }

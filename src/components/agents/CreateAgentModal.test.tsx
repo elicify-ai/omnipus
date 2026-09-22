@@ -830,14 +830,14 @@ describe('CreateAgentModal — Executor (Spec-4)', () => {
 })
 
 describe('CreateAgentModal — Advanced step fields', () => {
-  it('forwards default timeout_seconds and max_tool_iterations (steering_mode is retired — the wire field no longer exists)', async () => {
+  it('omits unsupported native timeout_seconds and forwards max_tool_iterations', async () => {
     const onCreate = vi.fn().mockResolvedValue(undefined)
     renderModal({ open: true, onClose: vi.fn(), onCreate })
     await fillAndAdvanceToStep3()
     fireEvent.click(screen.getByTestId('wizard-create'))
     await waitFor(() => expect(onCreate).toHaveBeenCalled())
     const call = onCreate.mock.calls.at(-1)![0]
-    expect(call.timeout_seconds).toBe(300)
+    expect(call.timeout_seconds).toBeUndefined()
     expect(call.max_tool_iterations).toBe(200)
     expect('steering_mode' in call).toBe(false)
   })

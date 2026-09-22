@@ -17,6 +17,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -190,7 +191,7 @@ func TestCreateSessionWithID_RejectsCollidingDirectory(t *testing.T) {
 		assert.Contains(t, string(strayBytes), "orphan-line", "the pre-existing stray file must be untouched")
 
 		_, statErr := os.Stat(filepath.Join(sessionDir, "meta.json"))
-		assert.True(t, os.IsNotExist(statErr), "no meta.json may be written into the rejected orphan directory")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "no meta.json may be written into the rejected orphan directory")
 	})
 }
 

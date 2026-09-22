@@ -14,6 +14,7 @@ package memrooms_test
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,7 +155,7 @@ func TestLogs_RoomEnsureCreatesDir(t *testing.T) {
 	tmpDir := t.TempDir()
 	room := memrooms.ResolveAgentPrivateRoom(tmpDir)
 
-	if _, err := os.Stat(room.MemoriesDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(room.MemoriesDir); !errors.Is(err, os.ErrNotExist) {
 		t.Skip("dir already exists — testing EnsureRoom creation")
 	}
 
@@ -163,7 +164,7 @@ func TestLogs_RoomEnsureCreatesDir(t *testing.T) {
 		t.Fatalf("EnsureRoom: %v", err)
 	}
 
-	if _, err := os.Stat(ensured.MemoriesDir); os.IsNotExist(err) {
+	if _, err := os.Stat(ensured.MemoriesDir); errors.Is(err, os.ErrNotExist) {
 		t.Errorf("EnsureRoom did not create MemoriesDir %s", ensured.MemoriesDir)
 	}
 }

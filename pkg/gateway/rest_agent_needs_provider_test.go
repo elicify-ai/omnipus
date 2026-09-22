@@ -203,7 +203,7 @@ func TestAgentRepair_PUTProvider_NoRestart(t *testing.T) {
 
 	// The repair: re-point the agent at a real provider.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 		strings.NewReader(`{"provider":"openrouter"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)

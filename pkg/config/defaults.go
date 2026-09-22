@@ -197,6 +197,19 @@ func defaultToolPoliciesGeneral() map[string]string {
 		"library_read":   "allow",
 		// The operator approves each grant; see ADR-063 FR-7.2.
 		"request_mount": "ask",
+		// environment_setup (ADR-090 ES-FR-01): ceiling "ask" — the
+		// existing tool-approval mechanism IS the approval; no new
+		// workflow. Founder ruling (2026-09-18): setup permission is set
+		// at BOTH levels — the global ceiling asks, and every agent
+		// permitted to set up environments (Mia, General Purpose, Admin,
+		// new custom native agents) ALSO carries an explicit per-agent
+		// "ask", so a later ceiling raise does not silently loosen any
+		// of them. As with every ceiling entry, this grants the tool to
+		// nobody by itself; the per-agent seeds (ADR090RolePolicyInventory
+		// / adr090SparseRolePolicies, the custom constructor in
+		// pkg/coreagent/seed.go) decide who holds it and at what level.
+		// One commit with allStaticToolNames and the per-agent seeds.
+		"environment_setup": "ask",
 		// list_mounts (ADR-068 §4) is the READ-ONLY counterpart and is
 		// "allow", not "ask". It mutates nothing: it reads back the
 		// grant list the operator themself approved and computes a live
@@ -242,7 +255,7 @@ func defaultToolPoliciesGeneral() map[string]string {
 		// human-facing agent allow (mirroring AskUserQuestion's own
 		// seed), Judge/PlanSupervisor explicit deny via their
 		// denyAllThenOverride stamps, Worker explicit deny via
-		// tightenGlobalCeiling (see pkg/coreagent/core.go).
+		// adr090SparseRolePolicies (see pkg/coreagent/core.go).
 		"set_goal": "allow",
 		// goal_claim (ADR-084 D12, JUDGE-FR-089, C-70): the tool-call
 		// claim channel. Ceiling "allow" for the same reason
@@ -254,7 +267,7 @@ func defaultToolPoliciesGeneral() map[string]string {
 		// goal_claim (ADR-084 §11, issue #710), so every agent a task
 		// can be assigned to must hold it. Per-agent seeds decide who
 		// holds it: every human-facing agent and the Worker allow
-		// (the Worker explicitly, via tightenGlobalCeiling — unlike its
+		// (the Worker explicitly, via adr090SparseRolePolicies — unlike its
 		// set_goal deny), Judge/PlanSupervisor explicit deny via their
 		// denyAllThenOverride stamps (see pkg/coreagent/core.go).
 		"goal_claim":          "allow",
@@ -303,13 +316,9 @@ func defaultToolPoliciesBrowser() map[string]string {
 		"browser_close_tab":  "allow",
 		"browser_open_tab":   "allow",
 		// ADR-075 D2 — the interaction verbs and the accessibility
-		// snapshot. This is the CEILING, not a grant: it closes policy
-		// coverage for every agent (validation is OR-based across the
-		// global and per-agent maps) while the per-agent seeds in
-		// pkg/coreagent/core.go decide who actually holds them. Mia
-		// and Ava name no browser tool, so denyAllThenOverride leaves
-		// them at an explicit agent-level deny, which beats this allow
-		// under most-restrictive-wins.
+		// snapshot. This is the global ceiling. ADR-090 ordinary-role seeds
+		// allow browser tools for Mia, Jim and Ava; other ordinary roles deny
+		// them. See ADR090RolePolicyInventory.
 		//
 		// These entries and the per-agent maps are ONE COMMIT with
 		// allStaticToolNames — see that literal's comment for why
@@ -328,10 +337,8 @@ func defaultToolPoliciesBrowser() map[string]string {
 		// FR-021 — ask, and it is the only browser verb that is.
 		// Attaching a host file to a page on the operator's signed-in
 		// session is the one browser action that moves their data
-		// outward, so it is consent-gated at the ceiling as well as
-		// per agent. IDWorker inherits this value through
-		// tightenGlobalCeiling's sparse map, which is intended and
-		// recorded rather than discovered.
+		// outward, so it is consent-gated at the ceiling as well as per agent.
+		// Mia, Jim and Ava use Ask; other ordinary roles deny this tool.
 		"browser_upload_file": "ask",
 		// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow.
 		// This is a decision, not an inheritance — the browser
@@ -339,14 +346,8 @@ func defaultToolPoliciesBrowser() map[string]string {
 		// "ask") — because handing the browser to the human is the
 		// conservative direction: the tool takes nothing and reaches
 		// no page, and an "ask" on it would put an approval card
-		// between the agent and its own stand-down. Per-agent seeds
-		// (pkg/coreagent/core.go) decide who holds it: IDJim, IDRay,
-		// IDExplorer, IDResearcher explicit allow; Mia and Ava need
-		// no edit at all (denyAllThenOverride's floor already
-		// resolves them deny); Worker inherits this ceiling value
-		// through tightenGlobalCeiling's sparse map, matching every
-		// other browser_* tool's existing, already-tolerated posture
-		// for Worker.
+		// between the agent and its own stand-down. Mia, Jim and Ava use
+		// Allow for browser_handover; other ordinary roles deny it.
 		"browser_handover": "allow",
 	}
 }
@@ -368,34 +369,11 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"list_models":         "allow",
 		"run_doctor":          "allow",
 		"get_usage":           "allow",
-		// add_mcp_server is DENIED in the seeded default because an MCP
-		// server definition is a program the gateway launches, and the
-		// launched process is not confined by the sandbox. An agent that
-		// can add one has escaped the cage through the front door:
-		// config.json is in the ADR-062 secret set precisely so an agent
-		// cannot write an MCP server entry with write_file, and this tool
-		// wrote the same setting through the API.
-		//
-		// This matches the competitor threat model — Claude Code does not
-		// sandbox MCP server processes either, and defends the boundary by
-		// making .mcp.json unwritable by the agent. The control is "an
-		// agent must not be able to ADD a server", not "a server must be
-		// caged".
-		//
-		// "deny" rather than "ask": the approval modal does render the full
-		// argument JSON, so the command is visible — but it is a generic,
-		// scrollable dump with no dedicated command preview (that special
-		// case exists only for `bash`), and the decision is turn-scoped
-		// while the effect is permanent and applies at every subsequent
-		// boot. An operator who has just asked for an MCP server set up
-		// cannot tell that request apart from one injected by a page the
-		// agent read.
-		//
-		// This is seeded DATA, not a code branch (CLAUDE.md constraint 6):
-		// an operator who wants an agent to install MCP servers changes
-		// this entry to "ask" or "allow" on their own install, in Settings
-		// or config.json, and keeps that power.
-		"add_mcp_server": "deny",
+		// ADR-090 raises the fresh ceiling so Admin can perform the approved
+		// installation workflow. Every other built-in and new custom agent
+		// carries an explicit local deny; an operator-set global Ask or Deny
+		// remains authoritative under strictest-wins resolution.
+		"add_mcp_server": "allow",
 		// remove_mcp_server stays "ask", deliberately asymmetric: removing
 		// a server narrows capability rather than widening it, destroys no
 		// data, and is recoverable by re-adding the entry. The server name
@@ -411,7 +389,7 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"update_task_in_workspace": "allow",
 		"delete_task_in_workspace": "ask", // irreversible delete
 		"list_tasks_in_workspace":  "allow",
-		"remove_skill":             "ask", // irreversible delete
+		"remove_skill":             "allow", // Ava confirms the combined proposal once.
 		"list_skills":              "allow",
 		"enable_channel":           "allow",
 		"configure_channel":        "allow",
@@ -420,9 +398,11 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"test_channel":             "allow",
 		"get_config":               "allow",
 		"set_config":               "allow",
+		"get_agent":                "allow",
+		"get_agent_tools":          "allow",
 		"create_agent":             "allow",
 		"update_agent":             "allow",
-		"delete_agent":             "ask", // irreversible delete
+		"delete_agent":             "allow", // Ava confirms the combined proposal once.
 	}
 }
 
@@ -454,18 +434,9 @@ func defaultToolPoliciesPlanning() map[string]string {
 		// turn blocked on the default timeout in
 		// pkg/gateway/approvals.go, and the tool never executed at all.
 		//
-		// Raising the ceiling grants these tools to NOBODY by itself —
-		// it only raises the level an agent's own policy may be granted
-		// UP TO. Every seeded agent except Jim carries an explicit
-		// per-agent "ask" for all three (pkg/coreagent/core.go's
-		// coreAgentSeed), the Judge carries an explicit "deny"
-		// (systemAgentSeed, DS-6), and the Worker's sparse
-		// tightenGlobalCeiling map carries its own explicit entries.
-		// All of those still win under strictest-wins, so the only
-		// resolution this change moves is Jim's, from "ask" to the
-		// "allow" he was always seeded. This mirrors exactly what
-		// inspect_session (below) and ADR-055's plan_correct/stop_plan
-		// already do, for the same reason.
+		// Current role policies are defined by ADR090RolePolicyInventory and
+		// systemAgentSeed; the ceiling alone is not a per-role grant. Ordinary
+		// roles persist sparse differences from the ceiling.
 		//
 		// Regression coverage:
 		// pkg/coreagent/tool_policy_effective_resolution_test.go
@@ -486,15 +457,9 @@ func defaultToolPoliciesPlanning() map[string]string {
 		// can be granted UP TO, same as every other non-destructive
 		// tool — it does not, by itself, grant the tool to anyone);
 		// EVERY seeded non-Judge agent carries an explicit per-agent
-		// "deny" for inspect_session (pkg/coreagent/core.go's
-		// coreAgentSeed/systemAgentSeed — denyAllThenOverride's
-		// fully-enumerated deny-by-default already covers every
-		// core/subagent-tier agent; the Worker's sparse
-		// tightenGlobalCeiling map now carries an explicit override
-		// too, since it would otherwise silently inherit this
-		// ceiling's "allow"), so the strictest-wins merge still
-		// resolves deny for everyone except the Judge, whose own
-		// "allow" now merges cleanly against an "allow" ceiling.
+		// "deny" for inspect_session through adr090SparseRolePolicies or
+		// systemAgentSeed, so strictest-wins resolves Deny for everyone except
+		// the Judge, whose Allow merges against the Allow ceiling.
 		// Custom/unlisted agents are NOT deny-backfilled for this
 		// tool — the coverage repair only fills gaps, and this
 		// ceiling entry means inspect_session is never a gap — so a
@@ -527,7 +492,7 @@ func defaultToolPoliciesSupervision() map[string]string {
 		//    describes, on the very next tool. Raising the ceiling
 		//    grants the tool to nobody by itself: every seeded agent
 		//    except PlanSupervisor carries an explicit per-agent
-		//    "deny" (pkg/coreagent's denyAllThenOverride), and the
+		//    "deny" through ordinary-role or hidden-role policy seeds, and the
 		//    REAL control against an agent with no per-agent entry
 		//    (e.g. one persisted before this tool name existed, which
 		//    would inherit this "allow") is the engine's exact-identity
@@ -580,13 +545,9 @@ func defaultToolPoliciesJobs() map[string]string {
 		//    inspect_session and plan_correct, third time.
 		//
 		// Raising the ceiling grants the tool to nobody who carries an
-		// entry of their own: the four base agents carry an explicit
-		// per-agent "allow" and every other seeded agent an explicit
-		// "deny" (pkg/coreagent/core.go's ROSTER VISIBILITY seed rule,
-		// including the Worker's sparse-map deny — an absent key there
-		// would inherit this "allow"). See the CEILING vs GRANT note
-		// under the ADR-068 block below for what an absent key means
-		// and what now guarantees there are none.
+		// entry of their own: Jim is the only built-in role with list_jobs
+		// Allow by default; every other built-in role denies it. The global
+		// Allow ceiling permits that role-specific grant.
 		"list_jobs": "allow",
 	}
 }
@@ -609,16 +570,12 @@ func defaultToolPoliciesKnowledge() map[string]string {
 		// GRANT — pkg/tools/compositor.go's
 		// resolveEffectivePolicyWith reads `case a == "": return g`,
 		// so silence on the agent side resolves to the global value,
-		// not to a denial. This comment used to claim the flat
-		// opposite ("allow here grants the tools to NOBODY by
-		// itself"), which was true only because every agent the seed
-		// writes is fully enumerated (pkg/coreagent/core.go's
-		// coreAgentSeed: allow on all six for Jim, allow-read +
-		// ask-write for Ava/Mia/Ray, explicit deny on all six
-		// everywhere else including the Worker's sparse map, where an
-		// absent key would silently INHERIT this allow).
+		// not to a denial. All seven ordinary roles can read knowledge.
+		// Mia, Jim and General Purpose have Ask for writes; other ordinary
+		// roles deny writes. Jim has no bash permission. See
+		// ADR090RolePolicyInventory for the current matrix.
 		//
-		// That enumeration only ever ran on a FRESH install, so on an
+		// Historically, fully enumerated seeds only ran on a FRESH install, so on an
 		// UPGRADE every agent that predated these six names had no
 		// entry for them and silently resolved this "allow" — the
 		// delegation-only subagents included. Note that
@@ -672,10 +629,8 @@ func defaultToolPoliciesKnowledge() map[string]string {
 		// knowledge_base_create (KB-1, same defect list) — makes a
 		// NEW knowledge base in the workspace's own Library. Ceiling
 		// "allow" for the same reason as the write three above: the
-		// real containment is the per-agent seed (Ava/Mia/Ray "ask",
-		// Jim "allow" — his bash exception applies here too, since
-		// bash can already create arbitrary folders+files unprompted)
-		// plus the FR-090 audit record, not the ceiling.
+		// real containment is the per-agent seed (Mia, Jim and General Purpose
+		// Ask; other ordinary roles Deny) plus the FR-090 audit record.
 		"knowledge_base_create": "allow",
 	}
 }

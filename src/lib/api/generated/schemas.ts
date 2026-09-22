@@ -1,6 +1,25 @@
 import { makeApi, Zodios, type ZodiosOptions } from "@zodios/core";
 import { z } from "zod";
 
+type ConfigurationMutationState = {
+  revision: ConfigurationRevision;
+  persistence_status: ConfigurationPersistenceStatus;
+  activation_status: ConfigurationActivationStatus;
+  changed_fields: Array<string>;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+};
+type ConfigurationRevision = string;
+type ConfigurationPersistenceStatus = "complete" | "partial" | "none";
+type ConfigurationActivationStatus = "active" | "failed" | "not_attempted";
+type ConfigurationMutationFailureState = {
+  revision?: ConfigurationRevision | undefined;
+  persistence_status: ConfigurationPersistenceStatus;
+  activation_status: ConfigurationActivationStatus;
+  changed_fields: Array<string>;
+  error_stage: string;
+  message: string;
+};
 type LoginResponse = {
   token: BearerToken;
   username: string;
@@ -9,10 +28,13 @@ type LoginResponse = {
 type BearerToken = string;
 type OnboardingCompleteRequest = {
   provider: OnboardingProviderApiKey | OnboardingProviderSignIn;
-  admin: {
-    username: string;
-    password: string;
-  };
+  admin?:
+    | {
+        username: string;
+        password: string;
+      }
+    | undefined;
+  preferences?: OnboardingPreferences | undefined;
 };
 type OnboardingProviderApiKey = {
   auth_method: "api_key";
@@ -20,12 +42,18 @@ type OnboardingProviderApiKey = {
   api_key: string;
   model?: string | undefined;
   endpoint?: string | undefined;
+  region?: string | undefined;
 };
 type OnboardingProviderSignIn = {
   auth_method: "sign_in";
   id: string;
   model?: string | undefined;
   endpoint?: string | undefined;
+};
+type OnboardingPreferences = {
+  name: string;
+  tone: "direct" | "warm" | "formal";
+  detail: "brief" | "thorough";
 };
 type SignInStartResponse =
   | SignInStartResponseCliLogin
@@ -43,7 +71,11 @@ type SignInStartResponseDeviceCode = {
   expires_at: string;
   interval_seconds: number;
 };
-type OnboardingCompleteResponse = LoginResponse;
+type OnboardingCompleteResponse = {
+  username: string;
+  token?: BearerToken | undefined;
+  warning?: string | undefined;
+};
 type ProbeProviderResponse = {
   success: boolean;
   models?: Array<string> | undefined;
@@ -1047,6 +1079,13 @@ type ValidationReport = {
   types?: Array<string> | undefined;
 };
 type Agent = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+  editable_fields?: Array<AgentFieldDescriptor> | undefined;
   id: string;
   name: string;
   type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
@@ -1080,17 +1119,23 @@ type Agent = {
   context_window_override?: number | undefined;
   memory_enabled?: boolean | undefined;
 };
+type AgentFieldDescriptor = {
+  name: string;
+  editable: boolean;
+  reason?: string | undefined;
+};
 type AgentToolsCfg = Partial<{
   builtin: {
     policies: {};
   };
   mcp: Partial<{
-    servers: Array<{
-      id: string;
-      tools?: Array<string> | undefined;
-    }>;
+    servers: Array<AgentToolsMcpServerBinding>;
   }>;
 }>;
+type AgentToolsMcpServerBinding = {
+  id: string;
+  tools?: Array<string> | undefined;
+};
 type AgentShellPolicy = Partial<{
   enable_deny_patterns: boolean;
   custom_deny_patterns: Array<string>;
@@ -1124,33 +1169,30 @@ type ExecutorConfig = Partial<{
 }>;
 type ExternalCliTool = "claude-code" | "codex" | "opencode";
 type ContextWindowSource = "operator" | "live" | "catalog" | "floor";
-type AgentToolsUpdateRequest = Partial<{
-  config: AgentToolsCfg;
-  tools: Array<AgentToolEntry>;
-  agent_type: string;
-  builtin: {
-    policies: {};
-    mode?: ("explicit" | "inherit") | undefined;
-    visible?: Array<string> | undefined;
-  };
-  mcp: Partial<{
-    servers: Array<{
-      id: string;
-      tools?: Array<string> | undefined;
-    }>;
-  }>;
-}>;
-type AgentToolEntry = {
-  name: string;
-  configured_policy: "allow" | "ask" | "deny";
-  effective_policy: "allow" | "ask" | "deny";
-  manifest_tier: "full" | "compressed" | "infra";
+type AgentToolsUpdateRequest = {
+  revision: ConfigurationRevision;
+  override_names: Array<string>;
+  config?: AgentToolsCfg | undefined;
+  builtin?:
+    | {
+        policies: {};
+        mode?: ("explicit" | "inherit") | undefined;
+        visible?: Array<string> | undefined;
+      }
+    | undefined;
+  mcp?:
+    | Partial<{
+        servers: Array<AgentToolsMcpServerBinding>;
+      }>
+    | undefined;
 };
 type AgentCreateRequest =
   | AgentCreateRequestMain
   | AgentCreateRequestSubagent
   | AgentCreateRequestSubagent3p;
 type AgentCreateRequestMain = {
+  mcp_servers?: Array<AgentMCPBinding> | undefined;
+  tool_policy_changes?: ToolPolicyChanges | undefined;
   type: "Main";
   name: string;
   description?: string | undefined;
@@ -1166,22 +1208,23 @@ type AgentCreateRequestMain = {
         max_tokens: number;
       }>
     | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
   skills?: Array<string> | undefined;
   soul: string;
   voice?: (string | null) | undefined;
   shell_policy?: AgentShellPolicy | undefined;
-  timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
 };
+type AgentMCPBinding = {
+  id: string;
+  tools?: Array<string> | undefined;
+};
+type ToolPolicyChanges = Partial<{
+  set: {};
+  remove: Array<string>;
+}>;
 type AgentCreateRequestSubagent = {
+  mcp_servers?: Array<AgentMCPBinding> | undefined;
+  tool_policy_changes?: ToolPolicyChanges | undefined;
   type: "Subagent";
   name: string;
   description?: string | undefined;
@@ -1197,18 +1240,9 @@ type AgentCreateRequestSubagent = {
         max_tokens: number;
       }>
     | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
   skills?: Array<string> | undefined;
   soul: string;
   shell_policy?: AgentShellPolicy | undefined;
-  timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
 };
 type AgentCreateRequestSubagent3p = {
@@ -1231,43 +1265,39 @@ type AgentCreateRequestSubagent3p = {
   executor: ExecutorConfig;
   timeout_seconds?: number | undefined;
 };
-type AgentUpdateRequest = Partial<{
-  updated_at: string;
-  name: string;
-  description: string;
-  model: string;
-  provider: string;
-  context_window_override: number | null;
-  soul: string;
-  heartbeat: string;
-  timeout_seconds: number;
-  max_tool_iterations: number;
-  heartbeat_enabled: boolean;
-  heartbeat_interval: number;
-  shell_policy: Partial<{
-    enable_deny_patterns: boolean;
-    custom_deny_patterns: Array<string>;
-  }>;
-  color: string;
-  icon: string;
-  fallback_models: Array<FallbackModel>;
-  model_params: Partial<{
-    temperature: number;
-    max_tokens: number;
-  }>;
-  rate_limits: Partial<{
-    use_global_defaults: boolean;
-    max_llm_calls_per_hour: number;
-    max_tool_calls_per_minute: number;
-    max_cost_per_day: number;
-  }>;
-  tools_cfg: AgentToolsCfg;
-  default: boolean;
-  skills: Array<string>;
-  voice: string | null;
-  executor: ExecutorConfig;
-  memory_enabled: boolean;
-}>;
+type AgentUpdateRequest = {
+  revision: ConfigurationRevision;
+  mcp_servers?: Array<AgentMCPBinding> | undefined;
+  tool_policy_changes?: ToolPolicyChanges | undefined;
+  name?: string | undefined;
+  description?: string | undefined;
+  model?: string | undefined;
+  provider?: string | undefined;
+  context_window_override?: (number | null) | undefined;
+  soul?: string | undefined;
+  max_tool_iterations?: number | undefined;
+  shell_policy?:
+    | Partial<{
+        enable_deny_patterns: boolean;
+        custom_deny_patterns: Array<string>;
+      }>
+    | undefined;
+  color?: string | undefined;
+  icon?: string | undefined;
+  fallback_models?: Array<FallbackModel> | undefined;
+  model_params?:
+    | Partial<{
+        temperature: number;
+        max_tokens: number;
+      }>
+    | undefined;
+  tools_cfg?: AgentToolsCfg | undefined;
+  default?: boolean | undefined;
+  skills?: Array<string> | undefined;
+  voice?: (string | null) | undefined;
+  executor?: ExecutorConfig | undefined;
+  memory_enabled?: boolean | undefined;
+};
 type ExecutorDefaults = {
   cli: ExternalCliTool;
   auto_applied_flags: Array<string>;
@@ -1346,10 +1376,18 @@ type Provider = {
     | "signed_in"
     | "expired";
   protocol?:
-    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | (
+        | "openai-compatible"
+        | "anthropic"
+        | "google"
+        | "ollama"
+        | "cli"
+        | "bedrock"
+      )
     | undefined;
   custom?: boolean | undefined;
   company?: string | undefined;
+  region?: string | undefined;
   locality?: ("local" | "cloud") | undefined;
   cli_kind?: ("codex" | "copilot") | undefined;
   auth_method: "api_key" | "sign_in";
@@ -1419,11 +1457,19 @@ type CatalogProvider = {
   company: string;
   api: string;
   protocol?:
-    | ("openai-compatible" | "anthropic" | "google" | "ollama" | "cli")
+    | (
+        | "openai-compatible"
+        | "anthropic"
+        | "google"
+        | "ollama"
+        | "cli"
+        | "bedrock"
+      )
     | undefined;
   protocols?: Array<CatalogProtocol> | undefined;
   env?: Array<string> | undefined;
   region?: string | undefined;
+  regions?: Array<CatalogProviderRegion> | undefined;
   plan?: string | undefined;
   tier: "popular" | "standard" | "unsupported";
   unsupported_reason?:
@@ -1438,8 +1484,18 @@ type CatalogProvider = {
   models: Array<CatalogModel>;
 };
 type CatalogProtocol = {
-  protocol: "openai-compatible" | "anthropic" | "google" | "ollama" | "cli";
+  protocol:
+    | "openai-compatible"
+    | "anthropic"
+    | "google"
+    | "ollama"
+    | "cli"
+    | "bedrock";
   api: string;
+};
+type CatalogProviderRegion = {
+  id: string;
+  group: "" | "us" | "eu" | "apac" | "jp" | "au" | "global";
 };
 type CatalogModel = {
   id: string;
@@ -1451,6 +1507,9 @@ type CatalogModel = {
   tool_call: boolean;
   status: "active" | "retired";
   disputed?: boolean | undefined;
+  inference_profiles?:
+    | Array<"us" | "eu" | "apac" | "jp" | "au" | "global">
+    | undefined;
   window_source?: ContextWindowSource | undefined;
   window_unknown?: boolean | undefined;
 };
@@ -1490,6 +1549,25 @@ type IntegrationProvider = {
   configured: boolean;
   requires_key: boolean;
   active?: boolean | undefined;
+};
+type Skill = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+  id: string;
+  name: string;
+  version: string;
+  description?: string | undefined;
+  author?: string | undefined;
+  source?: ("builtin" | "global" | "workspace") | undefined;
+  verified: boolean;
+  status: "active" | "disabled" | "inactive" | "error";
+  agent_assignment?: string | undefined;
+  argument_hint?: string | undefined;
+  last_invoked?: (string | null) | undefined;
 };
 type Task = {
   id: string;
@@ -1599,6 +1677,38 @@ type TaskTrigger = {
     }
   >;
 };
+type AppState = {
+  onboarding_complete: boolean;
+  identity: AppStateIdentity;
+  last_doctor_run?: string | undefined;
+  last_doctor_score?: number | undefined;
+  god_mode_available?: boolean | undefined;
+  god_mode_opted_in?: boolean | undefined;
+  dev_mode_bypass?: boolean | undefined;
+  video_embed_hosts?: Array<string> | undefined;
+};
+type AppStateIdentity = {
+  mode: "local" | "platform";
+  edition: "core" | "desktop" | "hosted";
+  signed_in: boolean;
+  account?: AppStateIdentityAccount | undefined;
+  blocked_reason?:
+    | (
+        | "none"
+        | "signed_out"
+        | "expired"
+        | "revoked"
+        | "no_account"
+        | "subject_mismatch"
+        | "unreachable"
+      )
+    | undefined;
+};
+type AppStateIdentityAccount = {
+  label: string;
+  email_masked: string;
+  org: string | null;
+};
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -1634,11 +1744,24 @@ type DevicePaired = {
   status: "active" | "revoked";
 };
 type AgentToolsResponse = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+  override_names: Array<string>;
   config: AgentToolsCfg;
   tools: Array<AgentToolEntry>;
   agent_type?:
     | ("core" | "system" | "Main" | "Subagent" | "subagent_3p")
     | undefined;
+};
+type AgentToolEntry = {
+  name: string;
+  configured_policy: "allow" | "ask" | "deny";
+  effective_policy: "allow" | "ask" | "deny";
+  manifest_tier: "full" | "compressed" | "infra";
 };
 type ChannelEnabledResponse = {
   id: ChannelId;
@@ -1687,6 +1810,14 @@ type ActivityEvent = {
 };
 type RotateTokenResponse = {
   token: BearerToken;
+};
+type WorkspaceInstructionsRequest = {
+  content: string;
+  revision: ConfigurationRevision;
+};
+type WorkspaceInstructionsResponse = {
+  content: string;
+  revision: ConfigurationRevision;
 };
 type TaskCreateRequest = {
   title: string;
@@ -1906,6 +2037,13 @@ type Notification = {
   agent_id?: string | undefined;
 };
 type Workspace = {
+  delegation?: Array<WorkspaceDelegationEdge> | undefined;
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
   id: string;
   name: string;
   description?: string | undefined;
@@ -1928,6 +2066,12 @@ type Workspace = {
   owner?: string | undefined;
   member_configs?: {} | undefined;
 };
+type WorkspaceDelegationEdge = {
+  from_agent: string;
+  to_agent: string;
+  modes?: Array<"direct" | "task"> | undefined;
+  depth?: number | undefined;
+};
 type WorkspaceMemberConfig = Partial<{
   heartbeat: WorkspaceMemberHeartbeat;
 }>;
@@ -1947,28 +2091,31 @@ type MemorySettings = Partial<{
   session_days: number;
   memory_retros_days: number;
 }>;
-type WorkspaceUpdateRequest = Partial<{
-  name: string;
-  description: string;
-  status: "active" | "archived";
-  pinned: boolean;
-  pin_order: number;
-  core_team: Array<string>;
-  member_configs: {};
-}>;
+type WorkspaceUpdateRequest = {
+  revision: ConfigurationRevision;
+  delegation?: Array<WorkspaceDelegationEdge> | undefined;
+  name?: string | undefined;
+  description?: string | undefined;
+  status?: ("active" | "archived") | undefined;
+  pinned?: boolean | undefined;
+  pin_order?: number | undefined;
+  core_team?: Array<string> | undefined;
+  member_configs?: {} | undefined;
+};
 type WorkspaceDelegation = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
   workspace_id: string;
   edges: Array<WorkspaceDelegationEdge>;
   team?: Array<string> | undefined;
   default_depth: number;
 };
-type WorkspaceDelegationEdge = {
-  from_agent: string;
-  to_agent: string;
-  modes?: Array<"direct" | "task"> | undefined;
-  depth?: number | undefined;
-};
 type WorkspaceDelegationUpdateRequest = {
+  revision: ConfigurationRevision;
   edges: Array<WorkspaceDelegationEdge>;
 };
 type Plan = {
@@ -2541,6 +2688,23 @@ type MessageParentHandback = {
   mode: "final" | "pause";
 };
 
+export const PlatformAuthStartRequest = z.object({
+  method: z.enum(["google", "email"]),
+});
+export const PlatformAuthStartResponse = z.object({
+  authorize_url: z.string().url(),
+  state: z.string().min(1),
+});
+export const ErrorResponse = z
+  .object({
+    error: z.string(),
+    code: z.string().optional(),
+    field: z.string().optional(),
+    details: z.object({}).partial().passthrough().optional(),
+  })
+  .passthrough();
+export const PlatformAuthClaimRequest = z.object({ state: z.string().min(1) });
+export const AuthSessionResponse = z.object({ username: z.string().min(1) });
 export const LoginRequest = z.object({
   username: z.string().min(1),
   password: z.string().min(1).max(72),
@@ -2553,14 +2717,6 @@ export const LoginResponse: z.ZodType<LoginResponse> = z.object({
   username: z.string(),
   warning: z.string().optional(),
 });
-export const ErrorResponse = z
-  .object({
-    error: z.string(),
-    code: z.string().optional(),
-    field: z.string().optional(),
-    details: z.object({}).partial().passthrough().optional(),
-  })
-  .passthrough();
 export const BrowserInspectRequest = z.object({
   session_id: z.string().min(1).max(128),
   agent_id: z.string().min(1).max(128),
@@ -2641,6 +2797,7 @@ export const OnboardingProviderApiKey =
     api_key: z.string().min(1),
     model: z.string().min(1).max(256).optional(),
     endpoint: z.string().optional(),
+    region: z.string().max(128).optional(),
   }) satisfies z.ZodType<OnboardingProviderApiKey>;
 export const OnboardingProviderSignIn =
   z.object({
@@ -2649,6 +2806,13 @@ export const OnboardingProviderSignIn =
     model: z.string().min(1).max(256).optional(),
     endpoint: z.string().optional(),
   }) satisfies z.ZodType<OnboardingProviderSignIn>;
+export const OnboardingPreferences: z.ZodType<OnboardingPreferences> = z.object(
+  {
+    name: z.string().max(200),
+    tone: z.enum(["direct", "warm", "formal"]),
+    detail: z.enum(["brief", "thorough"]),
+  }
+);
 export const OnboardingCompleteRequest =
   z.object({
     provider: z.discriminatedUnion("auth_method", [
@@ -2664,14 +2828,25 @@ export const OnboardingCompleteRequest =
           .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
         password: z.string().min(8),
       })
-      .passthrough(),
+      .optional(),
+    preferences: OnboardingPreferences.optional(),
   }) satisfies z.ZodType<OnboardingCompleteRequest>;
+export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
+  z.object({
+    username: z.string(),
+    token: BearerToken.min(72)
+      .max(81)
+      .regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/)
+      .optional(),
+    warning: z.string().optional(),
+  });
 export const ProbeProviderRequest = z.object({
   id: z.string().min(1).max(64),
   auth: z.enum(["api_key", "sign_in"]),
   api_key: z.string().min(1).optional(),
   model: z.string().min(1).max(256).optional(),
   api_base: z.string().max(2048).optional(),
+  region: z.string().max(128).optional(),
   protocol: z.enum(["openai-compatible", "anthropic"]).optional(),
 });
 export const ProbeProviderResponse: z.ZodType<ProbeProviderResponse> = z
@@ -2877,19 +3052,33 @@ export const SessionDetail: z.ZodType<SessionDetail> = z.object({
 export const SessionRenameRequest = z.object({
   title: z.string().min(1).max(256),
 });
+export const ConfigurationRevision = z.string();
+export const ConfigurationPersistenceStatus = z.enum([
+  "complete",
+  "partial",
+  "none",
+]);
+export const ConfigurationActivationStatus = z.enum([
+  "active",
+  "failed",
+  "not_attempted",
+]);
+export const AgentFieldDescriptor: z.ZodType<AgentFieldDescriptor> = z.object({
+  name: z.string(),
+  editable: z.boolean(),
+  reason: z.string().optional(),
+});
+export const AgentToolsMcpServerBinding: z.ZodType<AgentToolsMcpServerBinding> =
+  z
+    .object({ id: z.string(), tools: z.array(z.string()).optional() })
+    .passthrough();
 export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
   .object({
     builtin: z
       .object({ policies: z.record(z.enum(["allow", "ask", "deny"])) })
       .passthrough(),
     mcp: z
-      .object({
-        servers: z.array(
-          z
-            .object({ id: z.string(), tools: z.array(z.string()).optional() })
-            .passthrough()
-        ),
-      })
+      .object({ servers: z.array(AgentToolsMcpServerBinding) })
       .partial()
       .passthrough(),
   })
@@ -2948,6 +3137,13 @@ export const ContextWindowSource = z.enum([
 ]);
 export const Agent: z.ZodType<Agent> = z
   .object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    persistence_status: ConfigurationPersistenceStatus.optional(),
+    activation_status: ConfigurationActivationStatus.optional(),
+    changed_fields: z.array(z.string()).optional(),
+    error_stage: z.string().optional(),
+    message: z.string().optional(),
+    editable_fields: z.array(AgentFieldDescriptor).optional(),
     id: z.string(),
     name: z.string().min(1).max(100),
     type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
@@ -2985,8 +3181,20 @@ export const Agent: z.ZodType<Agent> = z
     memory_enabled: z.boolean().optional().default(true),
   })
   .passthrough();
+export const AgentMCPBinding: z.ZodType<AgentMCPBinding> = z.object({
+  id: z.string().min(1),
+  tools: z.array(z.string().min(1)).optional(),
+});
+export const ToolPolicyChanges: z.ZodType<ToolPolicyChanges> = z
+  .object({
+    set: z.record(z.enum(["allow", "ask", "deny"])),
+    remove: z.array(z.string().min(1)),
+  })
+  .partial();
 export const AgentCreateRequestMain =
   z.object({
+    mcp_servers: z.array(AgentMCPBinding).optional(),
+    tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Main"),
     name: z.string().min(1),
     description: z.string().optional(),
@@ -3004,25 +3212,16 @@ export const AgentCreateRequestMain =
       .partial()
       .passthrough()
       .optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     voice: z.string().nullish(),
     shell_policy: AgentShellPolicy.optional(),
-    timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
   z.object({
+    mcp_servers: z.array(AgentMCPBinding).optional(),
+    tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Subagent"),
     name: z.string().min(1),
     description: z.string().optional(),
@@ -3040,20 +3239,9 @@ export const AgentCreateRequestSubagent =
       .partial()
       .passthrough()
       .optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     shell_policy: AgentShellPolicy.optional(),
-    timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent>;
 export const AgentCreateRequestSubagent3p =
@@ -3088,51 +3276,52 @@ export const AgentCreateRequest =
     AgentCreateRequestSubagent,
     AgentCreateRequestSubagent3p,
   ]) satisfies z.ZodType<AgentCreateRequest>;
-export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
-  .object({
-    updated_at: z.string().datetime({ offset: true }),
-    name: z.string().min(1),
-    description: z.string(),
-    model: z.string(),
-    provider: z.string().max(64),
-    context_window_override: z.number().int().gte(1).nullable(),
-    soul: z.string().min(1),
-    heartbeat: z.string(),
-    timeout_seconds: z.number().int(),
-    max_tool_iterations: z.number().int(),
-    heartbeat_enabled: z.boolean(),
-    heartbeat_interval: z.number().int(),
-    shell_policy: z
-      .object({
-        enable_deny_patterns: z.boolean(),
-        custom_deny_patterns: z.array(z.string()),
-      })
-      .partial()
-      .passthrough(),
-    color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
-    icon: z.string().max(50),
-    fallback_models: z.array(FallbackModel).max(2),
-    model_params: z
-      .object({ temperature: z.number(), max_tokens: z.number().int() })
-      .partial()
-      .passthrough(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough(),
-    tools_cfg: AgentToolsCfg,
-    default: z.boolean(),
-    skills: z.array(z.string()),
-    voice: z.string().nullable(),
-    executor: ExecutorConfig,
-    memory_enabled: z.boolean(),
-  })
-  .partial();
+export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  mcp_servers: z.array(AgentMCPBinding).optional(),
+  tool_policy_changes: ToolPolicyChanges.optional(),
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  model: z.string().optional(),
+  provider: z.string().max(64).optional(),
+  context_window_override: z.number().int().gte(1).nullish(),
+  soul: z.string().min(1).optional(),
+  max_tool_iterations: z.number().int().optional(),
+  shell_policy: z
+    .object({
+      enable_deny_patterns: z.boolean(),
+      custom_deny_patterns: z.array(z.string()),
+    })
+    .partial()
+    .passthrough()
+    .optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/)
+    .optional(),
+  icon: z.string().max(50).optional(),
+  fallback_models: z.array(FallbackModel).max(2).optional(),
+  model_params: z
+    .object({ temperature: z.number(), max_tokens: z.number().int() })
+    .partial()
+    .passthrough()
+    .optional(),
+  tools_cfg: AgentToolsCfg.optional(),
+  default: z.boolean().optional(),
+  skills: z.array(z.string()).optional(),
+  voice: z.string().nullish(),
+  executor: ExecutorConfig.optional(),
+  memory_enabled: z.boolean().optional(),
+});
+export const ConfigurationMutationState: z.ZodType<ConfigurationMutationState> =
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    persistence_status: ConfigurationPersistenceStatus,
+    activation_status: ConfigurationActivationStatus,
+    changed_fields: z.array(z.string()),
+    error_stage: z.string().optional(),
+    message: z.string().optional(),
+  });
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   .object({
     name: z.string(),
@@ -3142,36 +3331,38 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   })
   .passthrough();
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  persistence_status: ConfigurationPersistenceStatus.optional(),
+  activation_status: ConfigurationActivationStatus.optional(),
+  changed_fields: z.array(z.string()).optional(),
+  error_stage: z.string().optional(),
+  message: z.string().optional(),
+  override_names: z.array(z.string()),
   config: AgentToolsCfg,
   tools: z.array(AgentToolEntry),
   agent_type: z
     .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
     .optional(),
 });
-export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> = z
-  .object({
-    config: AgentToolsCfg,
-    tools: z.array(AgentToolEntry),
-    agent_type: z.string(),
+export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> =
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    override_names: z.array(z.string()),
+    config: AgentToolsCfg.optional(),
     builtin: z
       .object({
         policies: z.record(z.enum(["allow", "ask", "deny"])),
         mode: z.enum(["explicit", "inherit"]).optional(),
         visible: z.array(z.string()).optional(),
       })
-      .passthrough(),
+      .passthrough()
+      .optional(),
     mcp: z
-      .object({
-        servers: z.array(
-          z
-            .object({ id: z.string(), tools: z.array(z.string()).optional() })
-            .passthrough()
-        ),
-      })
+      .object({ servers: z.array(AgentToolsMcpServerBinding) })
       .partial()
-      .passthrough(),
-  })
-  .partial();
+      .passthrough()
+      .optional(),
+  });
 export const RunnerTestResponse = z.object({
   ok: z.boolean(),
   reason: z.enum([
@@ -3696,10 +3887,18 @@ export const Provider: z.ZodType<Provider> = z.object({
     "expired",
   ]),
   protocol: z
-    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .enum([
+      "openai-compatible",
+      "anthropic",
+      "google",
+      "ollama",
+      "cli",
+      "bedrock",
+    ])
     .optional(),
   custom: z.boolean().optional(),
   company: z.string().optional(),
+  region: z.string().optional(),
   locality: z.enum(["local", "cloud"]).optional(),
   cli_kind: z.enum(["codex", "copilot"]).optional(),
   auth_method: z.enum(["api_key", "sign_in"]),
@@ -3725,9 +3924,16 @@ export const CatalogProtocol: z.ZodType<CatalogProtocol> = z.object({
     "google",
     "ollama",
     "cli",
+    "bedrock",
   ]),
   api: z.string(),
 });
+export const CatalogProviderRegion: z.ZodType<CatalogProviderRegion> = z.object(
+  {
+    id: z.string().min(1),
+    group: z.enum(["", "us", "eu", "apac", "jp", "au", "global"]),
+  }
+);
 export const CatalogModel: z.ZodType<CatalogModel> = z.object({
   id: z.string().min(1).max(256),
   name: z.string().min(1),
@@ -3740,6 +3946,9 @@ export const CatalogModel: z.ZodType<CatalogModel> = z.object({
   tool_call: z.boolean(),
   status: z.enum(["active", "retired"]),
   disputed: z.boolean().optional(),
+  inference_profiles: z
+    .array(z.enum(["us", "eu", "apac", "jp", "au", "global"]))
+    .optional(),
   window_source: ContextWindowSource.optional(),
   window_unknown: z.boolean().optional(),
 });
@@ -3749,11 +3958,19 @@ export const CatalogProvider: z.ZodType<CatalogProvider> = z.object({
   company: z.string().min(1),
   api: z.string(),
   protocol: z
-    .enum(["openai-compatible", "anthropic", "google", "ollama", "cli"])
+    .enum([
+      "openai-compatible",
+      "anthropic",
+      "google",
+      "ollama",
+      "cli",
+      "bedrock",
+    ])
     .optional(),
   protocols: z.array(CatalogProtocol).optional(),
   env: z.array(z.string()).optional(),
   region: z.string().optional(),
+  regions: z.array(CatalogProviderRegion).optional(),
   plan: z.string().optional(),
   tier: z.enum(["popular", "standard", "unsupported"]),
   unsupported_reason: z
@@ -3797,9 +4014,11 @@ export const ProviderUpdateRequest = z
       "google",
       "ollama",
       "cli",
+      "bedrock",
     ]),
     auth_method: z.enum(["api_key", "sign_in"]),
     api_base: z.string().max(2048),
+    region: z.string().max(128),
     api_key: z.string(),
     model: z.string(),
     models: z.array(z.string().min(1).max(256)).max(500),
@@ -3868,7 +4087,13 @@ export const SlashCommand = z.object({
   available_while_streaming: z.boolean().optional(),
   delivery: z.enum(["client", "agent"]),
 });
-export const Skill = z.object({
+export const Skill: z.ZodType<Skill> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  persistence_status: ConfigurationPersistenceStatus.optional(),
+  activation_status: ConfigurationActivationStatus.optional(),
+  changed_fields: z.array(z.string()).optional(),
+  error_stage: z.string().optional(),
+  message: z.string().optional(),
   id: z.string(),
   name: z.string(),
   version: z.string(),
@@ -3890,18 +4115,20 @@ export const SkillSearchResult = z.object({
   registry_name: z.string().optional(),
   owner_handle: z.string().optional(),
 });
+export const ConfigurationMutationFailureState: z.ZodType<ConfigurationMutationFailureState> =
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/).optional(),
+    persistence_status: ConfigurationPersistenceStatus,
+    activation_status: ConfigurationActivationStatus,
+    changed_fields: z.array(z.string()),
+    error_stage: z.string(),
+    message: z.string(),
+  });
 export const SkillMarketplaceStatus = z.object({
   enabled: z.boolean(),
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
-export const SkillInstallRequest = z.object({
-  slug: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[a-z0-9][a-z0-9._-]*$/),
-  version: z.string().max(64).optional(),
-});
+export const SkillInstallRequest = z.union([z.unknown(), z.unknown()]);
 export const SseChatRequest = z.object({ message: z.string() });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
@@ -3927,8 +4154,32 @@ export const UploadedFile: z.ZodType<UploadedFile> = z.object({
 export const UploadFilesResponse: z.ZodType<UploadFilesResponse> = z
   .object({ files: z.array(UploadedFile) })
   .passthrough();
-export const AppState = z.object({
+export const AppStateIdentityAccount: z.ZodType<AppStateIdentityAccount> =
+  z.object({
+    label: z.string(),
+    email_masked: z.string(),
+    org: z.string().nullable(),
+  });
+export const AppStateIdentity: z.ZodType<AppStateIdentity> = z.object({
+  mode: z.enum(["local", "platform"]),
+  edition: z.enum(["core", "desktop", "hosted"]),
+  signed_in: z.boolean(),
+  account: AppStateIdentityAccount.optional(),
+  blocked_reason: z
+    .enum([
+      "none",
+      "signed_out",
+      "expired",
+      "revoked",
+      "no_account",
+      "subject_mismatch",
+      "unreachable",
+    ])
+    .optional(),
+});
+export const AppState: z.ZodType<AppState> = z.object({
   onboarding_complete: z.boolean(),
+  identity: AppStateIdentity,
   last_doctor_run: z.string().datetime({ offset: true }).optional(),
   last_doctor_score: z.number().int().gte(0).lte(100).optional(),
   god_mode_available: z.boolean().optional(),
@@ -4001,6 +4252,16 @@ export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
         .optional()
         .default("task_session"),
     })
+    .strict()
+    .refine(
+      (behavior) =>
+        behavior.max_count === undefined ||
+        behavior.max_count >= behavior.min_count,
+      {
+        message: "max_count must be >= min_count when present (AcceptanceCriterion.yaml behavior; ADR-052 DS-7 row 6)",
+        path: ["max_count"],
+      },
+    )
     .optional(),
   author: z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1) }),
   status: z.enum(["pending", "met", "unmet"]),
@@ -4114,6 +4375,16 @@ export const AcceptanceCriterionInput: z.ZodType<AcceptanceCriterionInput> =
           .optional()
           .default("task_session"),
       })
+      .strict()
+      .refine(
+        (behavior) =>
+          behavior.max_count === undefined ||
+          behavior.max_count >= behavior.min_count,
+        {
+          message: "max_count must be >= min_count when present (AcceptanceCriterion.yaml behavior; ADR-052 DS-7 row 6)",
+          path: ["max_count"],
+        },
+      )
       .optional(),
     author: z.object({
       kind: z.enum(["agent", "user"]),
@@ -4392,6 +4663,13 @@ export const NotificationList: z.ZodType<NotificationList> = z.object({
   notifications: z.array(Notification),
   unread_count: z.number().int(),
 });
+export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
+  z.object({
+    from_agent: z.string().min(1),
+    to_agent: z.string().min(1),
+    modes: z.array(z.enum(["direct", "task"])).optional(),
+    depth: z.number().int().gte(0).optional(),
+  });
 export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
   .object({
     enabled: z.boolean(),
@@ -4405,6 +4683,13 @@ export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
   .partial();
 export const Workspace: z.ZodType<Workspace> = z
   .object({
+    delegation: z.array(WorkspaceDelegationEdge).optional(),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    persistence_status: ConfigurationPersistenceStatus.optional(),
+    activation_status: ConfigurationActivationStatus.optional(),
+    changed_fields: z.array(z.string()).optional(),
+    error_stage: z.string().optional(),
+    message: z.string().optional(),
     id: z.string(),
     name: z.string().min(1),
     description: z.string().optional(),
@@ -4437,18 +4722,18 @@ export const WorkspaceCreateRequest = z
     core_team: z.array(z.string()).optional(),
   })
   .passthrough();
-export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000),
-    status: z.enum(["active", "archived"]),
-    pinned: z.boolean(),
-    pin_order: z.number().int(),
-    core_team: z.array(z.string()),
-    member_configs: z.record(WorkspaceMemberConfig),
-  })
-  .partial()
-  .passthrough();
+export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> =
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    delegation: z.array(WorkspaceDelegationEdge).optional(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(2000).optional(),
+    status: z.enum(["active", "archived"]).optional(),
+    pinned: z.boolean().optional(),
+    pin_order: z.number().int().optional(),
+    core_team: z.array(z.string()).optional(),
+    member_configs: z.record(WorkspaceMemberConfig).optional(),
+  });
 export const MediaLibraryEntry = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().min(1).max(64),
@@ -5193,21 +5478,23 @@ export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
     warnings: z.array(z.string().min(1)),
   }
 );
-export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
-  z.object({
-    from_agent: z.string().min(1),
-    to_agent: z.string().min(1),
-    modes: z.array(z.enum(["direct", "task"])).optional(),
-    depth: z.number().int().gte(0).optional(),
-  });
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  persistence_status: ConfigurationPersistenceStatus.optional(),
+  activation_status: ConfigurationActivationStatus.optional(),
+  changed_fields: z.array(z.string()).optional(),
+  error_stage: z.string().optional(),
+  message: z.string().optional(),
   workspace_id: z.string(),
   edges: z.array(WorkspaceDelegationEdge),
   team: z.array(z.string()).optional(),
   default_depth: z.number().int().gte(0),
 });
 export const WorkspaceDelegationUpdateRequest: z.ZodType<WorkspaceDelegationUpdateRequest> =
-  z.object({ edges: z.array(WorkspaceDelegationEdge) });
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    edges: z.array(WorkspaceDelegationEdge),
+  });
 export const WorkspaceMountCreateRequest = z.object({
   name: z.string().min(1),
   host_path: z.string().min(1),
@@ -5221,10 +5508,16 @@ export const WorkspaceMountCreateResponse = z.object({
   skills_grants_message: z.string().min(1).optional(),
   skills_threshold_warning: z.string().min(1).optional(),
 });
-export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
-export const WorkspaceInstructionsRequest = z.object({
-  content: z.string().max(262144),
-});
+export const WorkspaceInstructionsResponse: z.ZodType<WorkspaceInstructionsResponse> =
+  z.object({
+    content: z.string(),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  });
+export const WorkspaceInstructionsRequest: z.ZodType<WorkspaceInstructionsRequest> =
+  z.object({
+    content: z.string().max(262144),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  });
 export const Plan: z.ZodType<Plan> = z.object({
   id: z.string(),
   workspace_id: z.string(),
@@ -5402,8 +5695,6 @@ export const CliValidateResponse = z.object({
   version: z.string().nullish(),
   detail: z.string().optional(),
 });
-export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
-  LoginResponse;
 export const KnowledgeMountConflictError = z.object({
   error: z.string().min(1),
   code: z.literal("knowledge_mount_conflict"),
@@ -6406,7 +6697,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
 `,
     requestFormat: "json",
     parameters: [
@@ -6444,9 +6735,14 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Revision or inherited global policy changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },
@@ -6454,7 +6750,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "delete",
     path: "/agents/:id",
     alias: "deleteAgent",
-    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent also clears its session history and on-disk workspace artifacts via the cascade pipeline. Audited (severity INFO, event &#x60;agent.delete&#x60;).
+    description: `Removes a custom (non-core, non-system) agent from config.json and reloads the live config. Built-in core/system agents (locked) and the &#x60;omnipus-system&#x60; agent CANNOT be deleted (403, code &#x60;agent_locked&#x60;). Deleting an agent removes its entity and applicable SOUL bytes but preserves unrelated files in the agent home. Audited (severity INFO, event &#x60;agent.delete&#x60;).
 `,
     requestFormat: "json",
     parameters: [
@@ -6463,8 +6759,13 @@ Includes session_start events from all agent stores and task lifecycle events.
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "revision",
+        type: "Query",
+        schema: z.string().regex(/^[a-f0-9]{64}$/),
+      },
     ],
-    response: z.void(),
+    response: ConfigurationMutationState,
     errors: [
       {
         status: 400,
@@ -6487,9 +6788,14 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Revision or inherited global policy changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },
@@ -6730,7 +7036,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id/tools",
     alias: "updateAgentTools",
-    description: `Replaces the agent&#x27;s tools_cfg in config.json. Locked (core/system) agents cannot have their tool policy overwritten via this endpoint (403). Triggers a config reload on success.
+    description: `Replaces capability settings with explicit sparse override intent and a required revision. Ordinary built-ins are editable; hidden capabilities remain fixed. Reports persistence and live activation separately.
 `,
     requestFormat: "json",
     parameters: [
@@ -6768,9 +7074,14 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Revision or inherited global policy changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },
@@ -6871,7 +7182,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/auth/change-password",
     alias: "changePassword",
-    description: `Self-service password change. Requires the current password for verification. Requires authentication.
+    description: `Local-mode self-service password change (core edition; ADR-0010 WP2 auth-mode seam). Requires the current password for verification. Requires authentication. Not registered at all in platform mode.
 `,
     requestFormat: "json",
     parameters: [
@@ -6909,7 +7220,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/auth/login",
     alias: "login",
-    description: `Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429.
+    description: `Local-mode sign-in (core edition; ADR-0010 WP2 auth-mode seam). Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429. Not registered at all in platform mode (desktop, hosted) — see /auth/platform/start.
 `,
     requestFormat: "json",
     parameters: [
@@ -6966,9 +7277,85 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "post",
+    path: "/auth/platform/claim",
+    alias: "claimPlatformAuth",
+    description: `Exists because the browser&#x27;s cookie jar is not the application&#x27;s. On desktop the sign-in page opens in the user&#x27;s REAL browser (RFC 8252 §8.12), so the Set-Cookie written by /auth/callback lands there and the Electron renderer never sees it — without this route the app would poll /auth/session forever behind a browser tab that says &quot;You&#x27;re signed in&quot;. A successful callback records the session it minted for 60 seconds, once, under a key derived from the state; presenting that state here issues the SAME omnipus-session and CSRF cookies on THIS response, making the caller the signed-in client. Delete-on-lookup, so a second claim cannot succeed. Unauthenticated by necessity (the caller is claiming the session it does not have), rate-limited on its own bucket, and NOT CSRF-exempt — /auth/platform/start seeded the CSRF cookie already. An unknown state, an expired entry and an already-collected one are one indistinguishable 404: a caller must not learn which.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ state: z.string().min(1) }),
+      },
+    ],
+    response: z.object({ username: z.string().min(1) }),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Nothing is waiting to be collected — unknown, expired or already claimed, deliberately not distinguished.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/auth/platform/start",
+    alias: "startPlatformAuth",
+    description: `Mints a PKCE verifier (S256) and a single-use, 10-minute state, then returns the platform&#x27;s authorization URL for the SPA to open in the SYSTEM browser (RFC 8252 §8.12 — never an embedded web view). The verifier never leaves the gateway. The redirect_uri is this gateway&#x27;s own loopback address, http://127.0.0.1:&lt;port&gt;/auth/callback, which needs no OS URL-scheme registration an unsigned desktop build cannot reliably claim (ADR-0008, &#x27;The return trip is loopback&#x27;). CSRF-exempt and unauthenticated — it is the route a signed-out user reaches first — and it seeds the __Host-csrf cookie on success. Answers 503 when security.platform_auth.issuer is unset: there is no local password to fall back to.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PlatformAuthStartRequest,
+      },
+    ],
+    response: PlatformAuthStartResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Platform sign-in is not configured on this instance.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/auth/reauth",
     alias: "reAuth",
-    description: `Single-user consent primitive (FR-12.2). Re-verifies the authenticated user&#x27;s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+    description: `Local-mode consent primitive (core edition; FR-12.2; ADR-0010 WP2 auth-mode seam). Re-verifies the authenticated user&#x27;s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited. Not registered at all in platform mode, where the signed-in session itself is the guard.
 `,
     requestFormat: "json",
     parameters: [
@@ -6998,6 +7385,27 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/auth/session",
+    alias: "getAuthSession",
+    description: `Resolves the omnipus-session cookie and returns the account it belongs to, or 401 when there is none. Deliberately the thinnest possible answer: it performs no side effects, so both the sign-in screen (waiting for the browser half to finish) and the desktop shell (waiting to raise its window) can poll it about once a second without consequence. Rate-limited: 120 requests per IP per minute.
+`,
+    requestFormat: "json",
+    response: z.object({ username: z.string().min(1) }),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
@@ -7559,7 +7967,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/credentials/rotate",
     alias: "rotateCredentials",
-    description: `Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022). No restart is required; the in-memory key is updated in place.
+    description: `Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — the SPA confirms it with the operator before sending (ADR-0008 ruling 6). No restart is required; the in-memory key is updated in place.
 `,
     requestFormat: "json",
     parameters: [
@@ -7574,11 +7982,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Invalid request (e.g. empty passphrase).`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Re-auth required or invalid consent token.`,
         schema: ErrorResponse,
       },
       {
@@ -7665,7 +8068,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/gateway/god-mode",
     alias: "setGodMode",
-    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required&#x3D;true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
+    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required&#x3D;true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
 `,
     requestFormat: "json",
     parameters: [
@@ -7781,7 +8184,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/integrations/providers/:id",
     alias: "updateIntegrationProvider",
-    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
@@ -9654,7 +10057,7 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
     method: "post",
     path: "/onboarding/complete",
     alias: "completeOnboarding",
-    description: `Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance&#x27;s state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account&#x27;s password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+    description: `AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no &#x60;admin&#x60; block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
 `,
     requestFormat: "json",
     parameters: [
@@ -9664,11 +10067,16 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
         schema: OnboardingCompleteRequest,
       },
     ],
-    response: LoginResponse,
+    response: OnboardingCompleteResponse,
     errors: [
       {
         status: 400,
         description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
@@ -11653,6 +12061,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "revision",
+        type: "Query",
+        schema: z.string().regex(/^[a-f0-9]{64}$/),
+      },
     ],
     response: z.void(),
     errors: [
@@ -11689,7 +12102,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         name: "body",
         type: "Body",
-        schema: SkillInstallRequest,
+        schema: z.union([z.unknown(), z.unknown()]),
       },
     ],
     response: Skill,
@@ -11772,6 +12185,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Publication failed after storage changed; reports the actual persisted state. Revision is omitted when no live package remains.`,
+        schema: ConfigurationMutationFailureState,
       },
       {
         status: 502,
@@ -13069,6 +13487,16 @@ Returns HTTP 201 on success.
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 409,
+        description: `Workspace membership or graph revision changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
+        status: 500,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
+      },
     ],
   },
   {
@@ -13084,8 +13512,13 @@ Returns HTTP 201 on success.
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "revision",
+        type: "Query",
+        schema: z.string().regex(/^[a-f0-9]{64}$/),
+      },
     ],
-    response: z.void(),
+    response: ConfigurationMutationState,
     errors: [
       {
         status: 400,
@@ -13103,9 +13536,14 @@ Returns HTTP 201 on success.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Workspace membership or graph revision changed, or the default workspace cannot be deleted; no authoritative delete occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed after the workspace record was removed; reports actual partial state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },
@@ -13178,6 +13616,16 @@ Returns HTTP 201 on success.
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 409,
+        description: `Workspace membership or graph revision changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
+        status: 500,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
+      },
     ],
   },
   {
@@ -13194,7 +13642,7 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: z.object({ content: z.string() }),
+    response: WorkspaceInstructionsResponse,
     errors: [
       {
         status: 401,
@@ -13229,7 +13677,7 @@ Returns HTTP 201 on success.
       {
         name: "body",
         type: "Body",
-        schema: z.object({ content: z.string().max(262144) }),
+        schema: WorkspaceInstructionsRequest,
       },
       {
         name: "id",
@@ -13237,7 +13685,7 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: z.object({ content: z.string() }),
+    response: ConfigurationMutationState,
     errors: [
       {
         status: 400,
@@ -13260,9 +13708,14 @@ Returns HTTP 201 on success.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Instructions revision changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationFailureState,
       },
     ],
   },
@@ -13689,7 +14142,7 @@ export const DoneFrame = z
 
 export const LLMError = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
     detail: z.string().max(2048).optional(),
@@ -13698,7 +14151,7 @@ export const LLMError = z
 
 export const LLMErrorReplay = z
   .object({
-    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"]),
+    code: z.enum(["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "delegated_task_limit", "context_unrecoverable", "context_window_unknown", "unknown"]),
     message: z.string().min(1).max(4096),
     retryable: z.boolean(),
   })
@@ -14448,7 +14901,7 @@ export const GoalStatusFrame = z
     latest_reason: z.string(),
     active_loops: z.number().int().min(0),
     cap: z.number().int().min(1),
-    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_refused_god_mode", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
+    state: z.enum(["queued", "active", "waiting_on_user", "judge_unavailable", "re-planning", "judging", "done", "failed", "cleared", "judge_cas_loss", "blocked", "claim_overturned", "expired"]),
     producing_session_id: z.string().min(1).optional(),
     criteria: z.array(z
     .object({

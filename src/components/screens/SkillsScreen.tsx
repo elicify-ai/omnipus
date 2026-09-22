@@ -38,6 +38,7 @@ import {
   type McpServer,
   type ToolRegistryEntry,
 } from '@/lib/api'
+import { ConfigurationSaveError } from '@/lib/api/configuration'
 import { useUiStore } from '@/store/ui'
 import { SkillBrowser } from '@/components/skills/SkillBrowser'
 import { McpServerModal } from '@/components/skills/McpServerModal'
@@ -52,7 +53,7 @@ export function SkillsScreen() {
   const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
   const [mcpModalOpen, setMcpModalOpen] = useState(false)
   const [mcpEditTarget, setMcpEditTarget] = useState<McpServer | null>(null)
-  const [confirmDeleteSkill, setConfirmDeleteSkill] = useState<string | null>(null)
+  const [confirmDeleteSkill, setConfirmDeleteSkill] = useState<{ id: string; name: string } | null>(null)
   const [confirmDeleteMcp, setConfirmDeleteMcp] = useState<string | null>(null)
   const [expandedMcp, setExpandedMcp] = useState<string | null>(null)
   const [testingMcp, setTestingMcp] = useState<string | null>(null)
@@ -75,14 +76,24 @@ export function SkillsScreen() {
   })
 
   const { mutate: doDeleteSkill } = useMutation({
-    mutationFn: (name: string) => deleteSkill(name),
+    mutationFn: (id: string) => {
+      const skill = skills.find((candidate) => candidate.id === id)
+      if (!skill) throw new Error('Skill changed or disappeared. Reload before removing it.')
+      return deleteSkill(id, skill.revision)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['skills'] })
       addToast({ message: 'Skill removed', variant: 'success' })
       setConfirmDeleteSkill(null)
     },
-    onError: (err: Error) => {
-      addToast({ message: isApiError(err) ? err.userMessage : err.message, variant: 'error' })
+    onError: (err: unknown) => {
+      if (err instanceof ConfigurationSaveError && err.state.persistence_status === 'complete') {
+        queryClient.invalidateQueries({ queryKey: ['skills'] })
+        addToast({ message: `Remove incomplete: ${err.message}`, variant: 'error' })
+        setConfirmDeleteSkill(null)
+        return
+      }
+      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Remove failed', variant: 'error' })
       setConfirmDeleteSkill(null)
     },
   })
@@ -267,7 +278,7 @@ export function SkillsScreen() {
                       type="button"
                       size="sm"
                       variant="ghost"
-                      onClick={() => setConfirmDeleteSkill(skill.name)}
+                      onClick={() => setConfirmDeleteSkill({ id: skill.id, name: skill.name })}
                       className="h-auto w-auto p-[var(--space-1)] text-[var(--color-muted)] hover:bg-transparent hover:text-[var(--color-error)] transition-colors shrink-0"
                       aria-label={`Remove ${skill.name}`}
                     >
@@ -438,13 +449,13 @@ export function SkillsScreen() {
         title="Remove skill"
         description={
           <>
-            Remove <span className="font-medium text-[var(--color-secondary)]">{confirmDeleteSkill}</span>? This cannot be undone.
+            Remove <span className="font-medium text-[var(--color-secondary)]">{confirmDeleteSkill?.name}</span>? This cannot be undone.
           </>
         }
         confirmLabel="Remove"
         destructive
         onConfirm={() => {
-          if (confirmDeleteSkill) doDeleteSkill(confirmDeleteSkill)
+          if (confirmDeleteSkill) doDeleteSkill(confirmDeleteSkill.id)
           setConfirmDeleteSkill(null)
         }}
       />

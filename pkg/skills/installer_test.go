@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -377,7 +378,7 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 		}
 
 		// Verify directory was removed
-		if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		if _, err := os.Stat(skillDir); !errors.Is(err, os.ErrNotExist) {
 			t.Error("skill directory still exists after uninstall")
 		}
 	})
@@ -402,7 +403,7 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 			t.Errorf("Uninstall() error = %v", err)
 		}
 
-		if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		if _, err := os.Stat(skillDir); !errors.Is(err, os.ErrNotExist) {
 			t.Error("skill directory still exists after uninstall")
 		}
 	})
@@ -419,7 +420,7 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 			t.Errorf("Uninstall() error = %v", err)
 		}
 
-		if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		if _, err := os.Stat(skillDir); !errors.Is(err, os.ErrNotExist) {
 			t.Error("skill directory still exists after uninstall")
 		}
 	})
@@ -443,7 +444,7 @@ func TestSkillInstaller_Uninstall(t *testing.T) {
 			t.Errorf("Uninstall(%q) error = %v, want the skill removed", slug, err)
 		}
 
-		if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		if _, err := os.Stat(skillDir); !errors.Is(err, os.ErrNotExist) {
 			t.Error("skill directory still exists after uninstall by ID")
 		}
 	})

@@ -14,6 +14,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -117,6 +118,22 @@ type Config struct {
 	// while a grant that never existed can still be introduced exactly once.
 	SeededSkillGrants []string `json:"seeded_skill_grants,omitempty" yaml:"-"`
 
+	// Security holds the platform-authentication trust anchor and the
+	// coordinates of the omnipus.ai issuer this instance signs in against
+	// (ADR-0008; platform-auth-instance-spec.md §4.1 FR-PA-040).
+	//
+	// It lives under `security.` and not `gateway.` for one reason, and it is
+	// a security property rather than tidiness: BOTH of the engine's two
+	// config-blocking tables already deny the whole `security` subtree —
+	// pkg/gateway/blocked_paths.go's blockedPaths (the REST PUT /config
+	// surface) and pkg/sysagent/tools/config.go's blockedConfigKeys (the
+	// agent's own set_config tool). A key added here is unwritable by an
+	// agent the day it is added, with no new deny entry to remember. Under
+	// `gateway.` the opposite holds: that prefix is on the agent tool's ALLOW
+	// list, so a new key there would be agent-writable by default — and an
+	// agent that can rewrite the trust anchor can point it at a key it
+	// controls and sign itself in (ADR-0005 E3).
+	Security SecurityConfig `json:"security,omitempty" yaml:"-"`
 	// SeededToolPolicyUpdates records which one-time updates to a seeded
 	// agent's stored tool policy have already run on this install. Each entry
 	// is a marker string (e.g. "adr084-worker-goal-claim-allow"); the update
@@ -678,8 +695,9 @@ type AgentMCPToolsCfg struct {
 
 // AgentMCPServerBinding binds an MCP server to an agent.
 type AgentMCPServerBinding struct {
-	ID    string   `json:"id"`
-	Tools []string `json:"tools,omitempty"` // empty or ["*"] = all tools from that server
+	ID             string   `json:"id"`
+	ToolsSpecified bool     `json:"-"`
+	Tools          []string `json:"-"`
 }
 
 // DelegationMode is the mode in which delegation is allowed.
@@ -1295,6 +1313,26 @@ type ModelConfig struct {
 	APIBase   string   `json:"api_base,omitempty"`  // API endpoint URL
 	Proxy     string   `json:"proxy,omitempty"`     // HTTP proxy URL
 	Fallbacks []string `json:"fallbacks,omitempty"` // Fallback model names for failover
+
+	// Region is issue #800's own per-provider-row setting (Bedrock region
+	// contract): the selected region for a provider whose catalog entry
+	// carries `regions` (catalog.Provider.Regions). Runtime precedence is
+	// this field -> the AWS_REGION environment variable -> the catalog's
+	// own default region. Ignored for a provider whose catalog entry
+	// carries no `regions`.
+	Region string `json:"region,omitempty"`
+
+	// BedrockInferenceProfiles caches AWS's own ListInferenceProfiles
+	// answer for this row's selected region (issue #800 follow-up,
+	// orchestrator-approved): base model id -> the region-specific
+	// inference profile id AWS reports as usable from that region for that
+	// model. Not secret — profile ids are not credentials — so it is
+	// persisted verbatim here, refreshed when the Bedrock provider row is
+	// created or its region changes. Absent (nil) whenever the live lookup
+	// has never succeeded (including every non-Bedrock row); a Bedrock row
+	// with no cached entry for a given model id falls back to the
+	// catalog's own inference_profiles rules (bedrock.ResolveModelIDLive).
+	BedrockInferenceProfiles map[string]string `json:"bedrock_inference_profiles,omitempty"`
 
 	// UpdatedAt is stamped on every PUT of this row (ADR-068 MAJ-015) and is
 	// the picker's *Recent* ordering key (Provider.updated_at on the wire).
@@ -2365,16 +2403,36 @@ func seedPublicURLFromEnv(cfg *Config) {
 	})
 }
 
+// freshInstallConfig builds the config a fresh install boots with: the
+// defaults, the devpod preview URL, and every env-tagged field.
+//
+// Code-review finding 8: this is the TRUE fresh-install path — no usable
+// config.json exists yet — and every env-tagged field
+// (OMNIPUS_MAX_PARALLEL_AGENTS, OMNIPUS_SECURITY_PLATFORM_AUTH_*, etc.) is
+// documented elsewhere in this file as something env.Parse applies on load.
+// Without this call that promise silently did not hold on a genuinely fresh
+// instance — only once config.json existed on disk (e.g. after a first
+// self-heal write) did the version-1 branch's env.Parse(cfg) ever run. A
+// fresh desktop/hosted instance provisioning its platform-auth trust anchor
+// purely via OMNIPUS_SECURITY_PLATFORM_AUTH_KEYS would see an empty anchor on
+// its very first boot and only pick up the env var on the next one.
+func freshInstallConfig() (*Config, error) {
+	c := DefaultConfig()
+	seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
+	if err := env.Parse(c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
 	logger.Debugf("loading config from %s", path)
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			logger.WarnF("config file not found, using default config", map[string]any{"path": path})
-			c := DefaultConfig()
-			seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
-			return c, nil
+			return freshInstallConfig()
 		}
 		logger.Errorf("failed to read config file: %v", err)
 		return nil, err
@@ -2397,9 +2455,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	}
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
-		c := DefaultConfig()
-		seedPublicURLFromEnv(c)
-		return c, nil
+		// An effectively-empty config.json is still a fresh install.
+		return freshInstallConfig()
 	}
 
 	// Load config based on detected version
@@ -2643,7 +2700,7 @@ func SaveConfig(path string, cfg *Config) error {
 	// Callers that need to create a new config path must ensure the directory
 	// exists first (e.g., the first-run gateway path via os.MkdirAll).
 	dir := filepath.Dir(path)
-	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("failed to create directory: directory does not exist: %s", dir)
 	}
 

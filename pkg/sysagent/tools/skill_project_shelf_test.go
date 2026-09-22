@@ -9,10 +9,12 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -101,7 +103,8 @@ func TestSkillEditTool_ProjectShelf_WritesIntoMount(t *testing.T) {
 	edit := systools.NewSkillEditTool(deps)
 	ctx := tools.WithWorkspaceID(context.Background(), wsID)
 	newContent := "---\nname: db-migrate\ndescription: EDITED-BY-R3-TEST, long enough to pass validation.\n---\n\nEdited body.\n"
-	res := edit.Execute(ctx, map[string]any{"name": "db-migrate", "content": newContent})
+	revision, _ := skills.NewSkillWriter(filepath.Join(mountRoot, ".claude", "skills")).SkillRevision("db-migrate")
+	res := edit.Execute(ctx, map[string]any{"name": "db-migrate", "content": newContent, "revision": revision})
 
 	m := parseSuccess(t, res.ForLLM)
 	if m["shelf"] != "project" {
@@ -125,7 +128,7 @@ func TestSkillEditTool_ProjectShelf_WritesIntoMount(t *testing.T) {
 	}
 
 	// D6.1: no shadow copy in the central registry.
-	if _, err := os.Stat(filepath.Join(globalDir, "db-migrate")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(globalDir, "db-migrate")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("edit_skill must NOT fork a copy into the central registry; found err=%v", err)
 	}
 }
@@ -157,9 +160,11 @@ func TestSkillEditTool_ProjectShelf_UnmountedSlugFallsThroughToRegistry(t *testi
 	}
 
 	edit := systools.NewSkillEditTool(deps)
+	revision, _ := deps.SkillWriter.SkillRevision("unrelated-skill")
 	res := edit.Execute(ctx, map[string]any{
-		"name":    "unrelated-skill",
-		"content": "---\nname: unrelated-skill\ndescription: Edited via the registry path, long enough to pass.\n---\n\nEdited.\n",
+		"name":     "unrelated-skill",
+		"content":  "---\nname: unrelated-skill\ndescription: Edited via the registry path, long enough to pass.\n---\n\nEdited.\n",
+		"revision": revision,
 	})
 	m := parseSuccess(t, res.ForLLM)
 	if _, hasShelf := m["shelf"]; hasShelf {
@@ -194,7 +199,8 @@ func TestSkillRemoveTool_ProjectShelf_DeletesMountFile(t *testing.T) {
 
 	remove := systools.NewSkillRemoveTool(deps)
 	ctx := tools.WithWorkspaceID(context.Background(), wsID)
-	res := remove.Execute(ctx, map[string]any{"name": "db-migrate", "confirm": true})
+	revision, _ := skills.NewSkillWriter(filepath.Join(mountRoot, ".claude", "skills")).SkillRevision("db-migrate")
+	res := remove.Execute(ctx, map[string]any{"name": "db-migrate", "confirm": true, "revision": revision})
 
 	m := parseSuccess(t, res.ForLLM)
 	if m["shelf"] != "project" {
@@ -205,7 +211,7 @@ func TestSkillRemoveTool_ProjectShelf_DeletesMountFile(t *testing.T) {
 	}
 
 	mountSkillDir := filepath.Join(mountRoot, ".claude", "skills", "db-migrate")
-	if _, err := os.Stat(mountSkillDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(mountSkillDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected the mount's own skill directory to be removed, stat err=%v", err)
 	}
 }

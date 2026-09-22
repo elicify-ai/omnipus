@@ -214,6 +214,11 @@ type SubTurnConfig struct {
 	// Used in SubTurnSpawnPayload.TaskLabel for the WS subagent_start frame.
 	TaskLabel string
 
+	// TaskID is DelegateTool's operator-visible handle for this run. It is
+	// carried only so controller-owned terminal notices can identify the task;
+	// it is never added to the child's prompt.
+	TaskID string
+
 	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
 	// cap the delegation-graph gate (enforceEdgeModeAndDepth, via
 	// buildDelegationDepthResolver) already authorized THIS specific delegation
@@ -422,6 +427,7 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		Timeout:            cfg.Timeout,
 		MaxContextRunes:    cfg.MaxContextRunes,
 		TaskLabel:          cfg.TaskLabel,
+		TaskID:             cfg.TaskID,
 		ResolvedMaxDepth:   cfg.ResolvedMaxDepth,
 		DelegateSessionID:  cfg.DelegateSessionID,
 		IsResume:           cfg.IsResume,
@@ -524,13 +530,15 @@ type spawnSubTurnSetupState struct {
 
 // spawnSubTurnExecutionState carries the shared state of spawnSubTurn across its stages.
 type spawnSubTurnExecutionState struct {
-	ss               *spawnSubTurnSetupState
-	semAcquired      bool
-	lastTurnStatus   TurnEndStatus
-	forceCancelFired bool
-	forceCancel      *subTurnForceCancel
-	turnRes          turnResult
-	turnErr          error
+	ss                *spawnSubTurnSetupState
+	semAcquired       bool
+	lastTurnStatus    TurnEndStatus
+	forceCancelFired  bool
+	detachedOnTimeout bool
+	detachedPhysical  bool
+	forceCancel       *subTurnForceCancel
+	turnRes           turnResult
+	turnErr           error
 }
 
 func spawnSubTurn(
@@ -600,11 +608,9 @@ func spawnSubTurn(
 	// 0. Acquire concurrency semaphore FIRST to ensure it's released even if early validation fails.
 	// Blocks if parent already has maxConcurrentSubTurns running, with a timeout to prevent indefinite blocking.
 	// Also respects context cancellation so we don't block forever if parent is aborted.
-	// NOTE: The semaphore is released immediately after runTurn completes (not in a defer) to
-	// ensure it is freed before the cleanup phase (async result delivery), which may block on
-	// a full pendingResults channel. Holding the semaphore through cleanup would allow the
-	// parent's goroutine to be blocked waiting for a semaphore slot while child turns are
-	// blocked delivering results — a deadlock.
+	// Native execution transfers the slot to the physical runTurn goroutine;
+	// its defer releases on actual exit, before spawnSubTurn's result-delivery
+	// cleanup can block. Early failures and external dispatch release explicitly.
 
 	if ex.ss.st.parentTS.concurrencySem != nil {
 		// Create a timeout context for semaphore acquisition.
@@ -685,15 +691,15 @@ func spawnSubTurn(
 	// entry if it is STILL this exact childTS, so a since-registered newer
 	// generation is left untouched — the same compare-and-delete-by-identity
 	// pattern clearActiveTurn uses for the parent's own ts.sessionKey.
-	defer ex.ss.st.al.clearActiveTurnStateEntry(ex.ss.st.childID, ex.ss.st.childTS)
+	defer ex.clearActiveTurnAfterCoordinator()
 
 	ex.ss.st.publishChildSpawn()
 
-	// lastTurnStatus mirrors turnRes.status (assigned immediately after the
-	// al.runTurn call in step 8 below) so the cleanup defer registered right
-	// here — textually BEFORE turnRes even exists as a local variable, and
-	// therefore unable to reference it directly — can still read the turn's
-	// real terminal status. M4 (2026-08-04, UAT): pkg/agent/loop.go's
+	// lastTurnStatus mirrors the effective outcome selected by
+	// executeNativeChildTurn — the real runTurn outcome, or a synthesized
+	// Aborted outcome when a cancellation-ignoring child is detached. The
+	// cleanup defer below cannot read that later-selected outcome directly.
+	// M4 (2026-08-04, UAT): pkg/agent/loop.go's
 	// abortTurn Case 1 (a tool-call-time hard interrupt/cancel) deliberately
 	// returns turnResult{status: TurnEndStatusAborted} with a NIL error (see
 	// abortTurn's own doc comment: a clean, user-initiated stop, not a
@@ -708,9 +714,9 @@ func spawnSubTurn(
 	// limit (armSubTurnForceCancel, UAT A-17) rather than by completing, failing
 	// on its own, or being cancelled by a user/parent. Declared here, beside
 	// lastTurnStatus and for the same reason (a closure upvalue the cleanup
-	// defer below must be able to read), and assigned in step 8 only AFTER
-	// forceCancel.disarm() has returned — so the defer always sees a final
-	// answer, never a timer callback still in flight.
+	// defer below must be able to read). executeNativeChildTurn assigns it
+	// only after either disarming the timer or observing the timer's completed
+	// callback/detach path, so cleanup always sees a final answer.
 
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
@@ -734,125 +740,7 @@ func spawnSubTurn(
 
 		// W1-12: only emit span end event when parentSpawnCallID was non-empty.
 		if ex.ss.st.emitSpanEvents {
-			endStatus := SubTurnStatusSuccess
-			var endReason string
-			switch {
-			case err != nil && ex.forceCancelFired:
-				// UAT A-17: this sub-turn reached its time limit and was
-				// force-cancelled. It stays SubTurnStatusError — see
-				// SubTurnStatusTimeout's doc comment (events.go) for why a
-				// timeout is deliberately reported as an error on this wire,
-				// not as a cancellation. Checked FIRST because the force-cancel
-				// is a hard abort, so runTurn's own deferred Finish(true) calls
-				// childTS.cancelFunc — childCtx.Err() is then context.Canceled
-				// and the two cases below would otherwise mislabel a timeout as
-				// an interruption, which executeSync would in turn report to the
-				// delegator as "stopped_by_user".
-				endStatus = SubTurnStatusError
-			case err != nil && errors.Is(ex.ss.st.childCtx.Err(), context.Canceled) && ex.ss.st.childTS.cancelFired.Load():
-				// FIX 4 (7-reviewer-gate follow-up on FIX 5): this SPECIFIC
-				// sub-turn's own ClaimCancel was claimed — i.e. RequestCancel
-				// targeted THIS turn directly, not the parent. Reachable, if
-				// narrow: GetActiveTurnHookForSession's fallback (turn.go)
-				// resolves to a sub-turn when its session's ROOT turn has
-				// already finished but a Critical:true sub-turn (which
-				// survives a graceful parent finish by design — see
-				// SubTurnConfig.Critical's doc comment) is still running on
-				// that same session, and a later RequestCancel against that
-				// session finds and cancels the sub-turn itself. Distinct
-				// from — and takes priority over — the more common cascade
-				// case below (childTS.cancelFired stays false there because
-				// the parent's Finish(true) calls childTS.Finish(true)
-				// directly, bypassing ClaimCancel entirely). No `reason` is
-				// set: the wire contract documents reason as meaningful only
-				// "when status is interrupted", and this is a genuine direct
-				// cancel, not a parent-caused interruption.
-				endStatus = SubTurnStatusCancelled
-			case err != nil && errors.Is(ex.ss.st.childCtx.Err(), context.Canceled):
-				// FIX 5: the child's own context was explicitly canceled —
-				// reached via the parent's hard-abort cascade
-				// (turnState.Finish(true) calling childTS.cancelFunc(),
-				// which IS childCtx's own cancel func, assigned at
-				// childTS.cancelFunc = cancel above). A user-canceling the
-				// parent turn while this async delegate was in flight must
-				// read back on replay as "interrupted" — not "error", which
-				// is indistinguishable from a genuine failure sitting right
-				// next to the parent's own correctly-labeled
-				// "(interrupted)" entry. A genuine timeout
-				// (context.DeadlineExceeded, the sub-turn's own Timeout
-				// config expiring rather than an external cancel) falls
-				// through to SubTurnStatusError below — that IS a real
-				// failure, not a cancellation.
-				endStatus = SubTurnStatusInterrupted
-				// FIX 4: populate the wire contract's SubagentEndFrame.reason
-				// (frontend already renders it — src/components/chat/SubagentBlock.tsx
-				// — but no Go path ever set it before this fix, so it silently
-				// rendered without the "(reason)" detail chip for every
-				// interrupted span). parentTS.cancelFired is the cheapest
-				// honest signal available here: it is true whenever the
-				// PARENT's own ClaimCancel was claimed, which covers both a
-				// live user cancel (web SPA/CLI/Tier A/B -> RequestCancel)
-				// AND pkg/gateway/schedules.go's watchDeadline force-abort on
-				// a scheduled run's deadline (it too calls RequestCancel,
-				// with CancelCanceller{UserID:"scheduler",Channel:"cron"}) —
-				//nolint:misspell // documents the literal wire enum value, matches frontend TS union
-				// both are honestly summarized as "parent_cancelled" here.
-				// Distinguishing "the parent was explicitly canceled" from
-				// "the parent hit its own deadline" precisely would require
-				// threading the canceller identity through turnState, which
-				// is a bigger change than this fix's scope; "unknown" is the
-				// honest fallback for any other, rarer trigger (e.g. a hook
-				// decision's hard-abort) where parentTS.cancelFired never
-				// got set at all.
-				if ex.ss.st.parentTS.cancelFired.Load() {
-					endReason = "parent_cancelled" //nolint:misspell // wire value, frontend TS union
-				} else {
-					endReason = "unknown"
-				}
-			case err != nil:
-				endStatus = SubTurnStatusError
-			case ex.lastTurnStatus == TurnEndStatusAborted:
-				// M4 (2026-08-04, UAT): every case above is gated on
-				// err != nil, but abortTurn's Case 1 (pkg/agent/loop.go) — a
-				// tool-call-time hard interrupt/cancel — deliberately
-				// returns a NIL error for that specific, intentional stop
-				// (see abortTurn's own doc comment). Without this case, a
-				// genuinely hard-aborted child (e.g. chat-wide Stop killing
-				// a child mid bash-tool-call) fell all the way through to
-				// the endStatus := SubTurnStatusSuccess initializer above,
-				// reporting a killed span as having succeeded. A hard abort
-				// is definitionally a cancellation, never a success,
-				// regardless of which specific mechanism armed it or
-				// whether childCtx itself (rather than one of its
-				// request-scoped descendants, e.g. the per-LLM-call
-				// turnCtx/providerCancel requestHardAbort actually cancels)
-				// ever observably transitions to context.Canceled. Placed
-				// after the three err != nil cases above and gated on
-				// err == nil implicitly (every err != nil abort is already
-				// handled by one of those, unchanged) so this can only ever
-				// ADD coverage for the previously-unhandled nil-error gap —
-				// it can never change the classification of an existing,
-				// already-tested err != nil path.
-				endStatus = SubTurnStatusCancelled
-			case ex.lastTurnStatus == TurnEndStatusParked:
-				// ADR-057 UAT defect C2 fix (2026-08-04): runTurn returns
-				// turnResult{status: TurnEndStatusParked} with a NIL error
-				// (pkg/agent/loop.go's park early-return, modeled on
-				// abortTurn's Case 1 above) when this sub-turn's own
-				// message_parent(kind="question", wait=true) call parked its
-				// session in needs_input. Without this case, a parked child
-				// fell all the way through to the endStatus :=
-				// SubTurnStatusSuccess initializer — the exact bug this fix
-				// closes: the live subagent_end WS frame said "success" for
-				// a child that is genuinely still waiting on its parent, so
-				// the UI showed it as finished. Mutually exclusive with the
-				// TurnEndStatusAborted case above by construction (runTurn
-				// returns exactly one terminal turnResult per invocation),
-				// so ordering relative to it is immaterial; placed after it
-				// only to read as an addendum to the same nil-error gap this
-				// file's M4 fix already established.
-				endStatus = SubTurnStatusParked
-			}
+			endStatus, endReason := ex.classifySubTurnEnd(err)
 
 			// Finding F (A-I4 round 5): mirror endStatus onto the returned/
 			// delivered result's Interrupted flag so BOTH delivery paths agree
@@ -1028,7 +916,7 @@ func spawnSubTurn(
 		// this call, a delegated child's inherited grants (FR-031 above)
 		// never expire when the child ends, and its metaCache entry leaks for
 		// the process lifetime of every ever-delegated child.
-		ex.ss.st.al.CloseSession(ex.ss.st.childID, "delegate_terminal")
+		ex.closeChildSessionAfterCoordinator()
 	}()
 
 	// 8. Execute the sub-turn. The executor on the resolved DELEGATE's config
@@ -1079,16 +967,35 @@ func spawnSubTurn(
 		result = extResult
 		err = extErr
 		if ex.forceCancelFired {
-			result, err = subTurnTimedOutResult(ex.ss.st.al, ex.ss.st.childTS, ex.ss.timeout, extErr)
+			result, err = subTurnTimedOutResult(
+				ex.ss.st.al,
+				ex.ss.st.childTS,
+				ex.ss.st.cfg.TaskID,
+				ex.ss.st.cfg.TaskLabel,
+				ex.ss.st.childID,
+				ex.ss.timeout,
+				extErr,
+				false,
+			)
 		}
 		return result, err
 	}
 
 	ex.executeNativeChildTurn()
+	ex.publishSettledNativeTimeout()
 
 	// Convert turnResult to tools.ToolResult
 	if ex.forceCancelFired {
-		result, err = subTurnTimedOutResult(ex.ss.st.al, ex.ss.st.childTS, ex.ss.timeout, ex.turnErr)
+		result, err = subTurnTimedOutResult(
+			ex.ss.st.al,
+			ex.ss.st.childTS,
+			ex.ss.st.cfg.TaskID,
+			ex.ss.st.cfg.TaskLabel,
+			ex.ss.st.childID,
+			ex.ss.timeout,
+			ex.turnErr,
+			ex.detachedOnTimeout,
+		)
 		return result, err
 	}
 	if ex.turnErr != nil {
@@ -1107,6 +1014,9 @@ func spawnSubTurn(
 			IsError: true,
 		}
 	} else {
+		if ex.turnRes.finalContent == toolLimitResponse {
+			emitSubTurnIterationLimitNotice(ex.ss.st.al, ex.ss.st.childTS, ex.ss.st.cfg)
+		}
 		result = &tools.ToolResult{
 			ForLLM:  ex.turnRes.finalContent,
 			ForUser: ex.turnRes.finalContent,
@@ -1137,16 +1047,190 @@ func spawnSubTurn(
 	return result, err
 }
 
+// publishSettledNativeTimeout publishes the live generic timeout only after
+// executeNativeChildTurn has settled timer ownership. A delegation-owned
+// timeout is published later as the identified delegated-task limit notice.
+func (ex *spawnSubTurnExecutionState) publishSettledNativeTimeout() {
+	if ex.forceCancelFired || !errors.Is(ex.turnErr, ErrTurnTimedOut) {
+		return
+	}
+	ex.ss.st.al.emitErrorEvent(
+		ex.ss.st.childTS,
+		ex.ss.st.childTS.eventMeta("runTurn", "turn.error"),
+		"llm",
+		TranslateTurnError(ex.turnErr),
+	)
+}
+
+func (ex *spawnSubTurnExecutionState) clearActiveTurnAfterCoordinator() {
+	if ex.detachedPhysical {
+		return
+	}
+	ex.ss.st.al.clearActiveTurnStateEntry(ex.ss.st.childID, ex.ss.st.childTS)
+}
+
+func (ex *spawnSubTurnExecutionState) closeChildSessionAfterCoordinator() {
+	if ex.detachedPhysical {
+		return
+	}
+	ex.ss.st.al.CloseSession(ex.ss.st.childID, "delegate_terminal")
+}
+
+// classifySubTurnEnd keeps provider failures distinct from cancellation.
+// childCtx cannot be used after runTurn returns because Finish cancels it on
+// every exit, including ordinary errors such as an exhausted provider 429.
+func (ex *spawnSubTurnExecutionState) classifySubTurnEnd(err error) (SubTurnStatus, string) {
+	parentCancelled := ex.ss.st.parentTS.cancelFired.Load() ||
+		ex.ss.st.parentTS.hardAbortRequested() || ex.ss.st.parentTS.finishedByHardAbort.Load()
+	turnCancelled := errors.Is(ex.turnErr, context.Canceled) ||
+		ex.lastTurnStatus == TurnEndStatusAborted
+	interruptReason := func() string {
+		if ex.ss.st.parentTS.cancelFired.Load() {
+			return "parent_cancelled" //nolint:misspell // wire value, frontend TS union
+		}
+		return "unknown"
+	}
+
+	switch {
+	case err != nil && ex.forceCancelFired:
+		// Delegation-owned timeouts are failures on the subturn wire, not
+		// user cancellations, including the detached timeout variant.
+		return SubTurnStatusError, ""
+	case err != nil && turnCancelled && ex.ss.st.childTS.cancelFired.Load():
+		return SubTurnStatusCancelled, ""
+	case err != nil && parentCancelled:
+		return SubTurnStatusInterrupted, interruptReason()
+	case err != nil && turnCancelled:
+		// A direct hard abort may bypass ClaimCancel and leave cancelFired
+		// false; the actual aborted result is still a child cancellation.
+		return SubTurnStatusCancelled, ""
+	case err != nil:
+		return SubTurnStatusError, ""
+	case ex.lastTurnStatus == TurnEndStatusAborted && parentCancelled:
+		return SubTurnStatusInterrupted, interruptReason()
+	case ex.lastTurnStatus == TurnEndStatusAborted:
+		return SubTurnStatusCancelled, ""
+	case ex.lastTurnStatus == TurnEndStatusParked:
+		return SubTurnStatusParked, ""
+	default:
+		return SubTurnStatusSuccess, ""
+	}
+}
+
 // executeNativeChildTurn executes native dispatch, records its status, and releases the concurrency slot.
 func (ex *spawnSubTurnExecutionState) executeNativeChildTurn() {
-	// Native path (default, existing behavior — unchanged).
-	ex.turnRes, ex.turnErr = ex.ss.st.al.runTurn(ex.ss.st.childCtx, ex.ss.st.childTS)
-	// UAT A-17: settle the force-cancel before ANYTHING reads this outcome.
-	// It counts only when the turn did not finish on its own terms — a hard
-	// abort surfaces from runTurn as either an error or TurnEndStatusAborted
-	// with a nil error (abortTurn's Case 1) — so a child that completed or
-	// parked in the same instant the timer fired keeps its real result.
-	ex.forceCancelFired = ex.forceCancel.disarm() && (ex.turnErr != nil || ex.turnRes.status == TurnEndStatusAborted)
+	// Native tool execution is cooperative: most tools return when their
+	// context is cancelled, but a faulty or third-party tool can ignore it.
+	// Run the turn behind a result channel so the delegation time limit can
+	// detach such a goroutine after the same grace used by user cancellation.
+	type nativeTurnOutcome struct {
+		result     turnResult
+		err        error
+		panicValue any
+	}
+	outcomeCh := make(chan nativeTurnOutcome, 1)
+	// Once native execution starts, the concurrency slot belongs to the
+	// physical child goroutine, not the coordinator waiting for its result.
+	// A detached cancellation-ignoring tool is still consuming resources and
+	// must keep its slot until runTurn actually exits; otherwise repeated stuck
+	// children can bypass MaxConcurrent by timing out one after another.
+	childOwnsSemaphore := ex.semAcquired
+	if childOwnsSemaphore {
+		ex.semAcquired = false
+	}
+	rootLease := rootDelegationLeaseFromContext(ex.ss.ctx)
+	childOwnsRootLease := rootLease.transferToPhysicalChild()
+	go func() {
+		outcome := nativeTurnOutcome{}
+		defer func() {
+			if childOwnsSemaphore {
+				<-ex.ss.st.parentTS.concurrencySem
+			}
+			if childOwnsRootLease {
+				rootLease.releaseSlot()
+			}
+			if recovered := recover(); recovered != nil {
+				outcome.panicValue = recovered
+				stack := debug.Stack()
+				slog.Error("subturn: child goroutine panic captured",
+					"child_id", ex.ss.st.childID,
+					"parent_id", ex.ss.st.parentTS.turnID,
+					"panic", fmt.Sprintf("%v", recovered),
+					"stack", string(stack),
+				)
+			}
+			outcomeCh <- outcome
+		}()
+		outcome.result, outcome.err = ex.ss.st.al.runTurn(ex.ss.st.childCtx, ex.ss.st.childTS)
+	}()
+	acceptOutcome := func(outcome nativeTurnOutcome) {
+		if outcome.panicValue != nil {
+			// Re-panic on spawnSubTurn's goroutine so its established recovery
+			// path still owns async delivery, lifecycle cleanup, and span-end
+			// emission. A panic after detachment remains contained above.
+			panic(outcome.panicValue)
+		}
+		ex.turnRes, ex.turnErr = outcome.result, outcome.err
+	}
+	startDetachedReaper := func() {
+		ex.detachedPhysical = true
+		go func() {
+			// runTurn owns the active-turn entry until it physically exits.
+			// Drain its eventual outcome here so session-scoped cleanup follows
+			// that real lifetime instead of the coordinator's logical detach.
+			<-outcomeCh
+			ex.ss.st.al.CloseSession(ex.ss.st.childID, "delegate_terminal")
+		}()
+	}
+	detachAfterIgnoredAbort := func(timeoutOwned bool) {
+		ex.ss.st.childTS.MarkAbandoned()
+		ex.turnRes = turnResult{status: TurnEndStatusAborted}
+		if timeoutOwned {
+			ex.turnErr = context.DeadlineExceeded
+			ex.forceCancelFired = true
+			ex.detachedOnTimeout = true
+		} else {
+			ex.turnErr = context.Canceled
+		}
+		startDetachedReaper()
+	}
+
+	detachDelay := cancelDetachDelay
+	select {
+	case outcome := <-outcomeCh:
+		acceptOutcome(outcome)
+		// UAT A-17: settle the force-cancel before ANYTHING reads this
+		// outcome. A child that completed or parked as the timer fired keeps
+		// its real result.
+		ex.forceCancelFired = ex.forceCancel.disarm() &&
+			(ex.turnErr != nil || ex.turnRes.status == TurnEndStatusAborted)
+	case <-ex.forceCancel.done:
+		timeoutOwned := ex.forceCancel.fired.Load()
+		timer := time.NewTimer(detachDelay)
+		select {
+		case outcome := <-outcomeCh:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			acceptOutcome(outcome)
+			if timeoutOwned {
+				ex.forceCancelFired = outcome.err != nil || outcome.result.status == TurnEndStatusAborted
+			}
+		case <-timer.C:
+			// The hard abort did not make the turn return. Mark it abandoned so
+			// any eventual zombie writes are suppressed. The timeout reporter has
+			// one controller-owned terminal-write path that remains available
+			// after abandonment, so replay still records why the child stopped.
+			detachAfterIgnoredAbort(timeoutOwned)
+			slog.Error("subturn: hard-aborted child ignored cancellation — detached after grace",
+				"child_id", ex.ss.st.childID,
+				"agent_id", ex.ss.st.childTS.agentID,
+				"time_limit", ex.ss.timeout,
+				"detach_grace", detachDelay,
+				"time_limit_owned_abort", timeoutOwned,
+			)
+		}
+	}
 	// M4/C2 (2026-08-04): mirror the real terminal status into the
 	// pre-declared upvalue the cleanup defer above reads — see
 	// lastTurnStatus's own doc comment for why a direct reference from that
@@ -1171,17 +1255,8 @@ func (ex *spawnSubTurnExecutionState) executeNativeChildTurn() {
 	// (registered earlier, so it runs AFTER the cleanup defer per LIFO order)
 	// removes it for real once that defer — including the persistence
 	// correction — has fully completed.
-	ex.ss.st.al.activeTurnStates.Store(ex.ss.st.childID, ex.ss.st.childTS)
-
-	// Release the concurrency semaphore immediately after runTurn completes,
-	// before the cleanup defer runs. This prevents a deadlock where:
-	// - All semaphore slots are held by sub-turns in their cleanup phase
-	// - Cleanup blocks on a full pendingResults channel
-	// - The parent goroutine is blocked waiting for a semaphore slot
-	// - The parent cannot consume pendingResults because it is blocked on the semaphore
-	if ex.semAcquired {
-		<-ex.ss.st.parentTS.concurrencySem
-		ex.semAcquired = false // prevent the defer from double-releasing
+	if !ex.detachedPhysical {
+		ex.ss.st.al.activeTurnStates.Store(ex.ss.st.childID, ex.ss.st.childTS)
 	}
 }
 
@@ -1464,6 +1539,12 @@ func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, bool,
 		// instead, so a vanished/corrupted session on disk still surfaces as
 		// a real, non-nil error here rather than silently "resuming" into
 		// nothing.
+		if active := ss.st.al.getActiveTurnState(ss.st.childID); active != nil && active.IsAlive() {
+			return nil, true, fmt.Errorf(
+				"subturn: resume child session %q: prior generation is still physically running",
+				ss.st.childID,
+			)
+		}
 		if _, getErr := ss.st.sharedStore.GetMeta(ss.st.childID); getErr != nil {
 			return nil, true, fmt.Errorf("subturn: resume child session %q: %w", ss.st.childID, getErr)
 		}

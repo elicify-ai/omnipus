@@ -27,3 +27,5 @@ or hand-copying renderers both recreate the exact drift it exists to prevent.
 
 CI group `components-misc` (pattern `src/components/library/` covers this
 subfolder). Local: `npx vitest run src/components/library/knowledge/`.
+A test file matching no group pattern runs in NO CI job while CI stays green;
+`scripts/check-vitest-coverage.mjs` is the tripwire.

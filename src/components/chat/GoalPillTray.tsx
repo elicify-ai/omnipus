@@ -45,7 +45,7 @@
 // readers without stealing focus.
 
 import { useEffect, useRef, useState } from 'react'
-import { Target, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ShieldWarning, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
+import { Target, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
 import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
 import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
@@ -68,8 +68,8 @@ function truncateCondition(raw: string): string {
 // exhaustive switch with a `never` default ensures a future 14th enum value
 // fails typecheck here instead of silently rendering nothing.
 //
-// Five states ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39,
-// plan §3 wave U2): `judge_refused_god_mode` (JUDGE-FR-057a),
+// Four states ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39,
+// plan §3 wave U2):
 // `judge_cas_loss` (JUDGE-FR-083 — the machine-readable reason string
 // stays `cas_loss`; this file only names the wire enum value
 // `judge_cas_loss`), `blocked` (JUDGE-FR-093), `claim_overturned`
@@ -112,13 +112,6 @@ function describePillState(state: Exclude<GoalStatusFrame['state'], 'queued'>): 
       // stop — NOT a failure. Neutral/muted, distinct from both `done`
       // (green success) and `failed` (red error).
       return { testId: 'goal-pill-cleared', label: 'cleared', accentClass: 'text-[var(--color-muted)]', Icon: MinusCircle }
-    case 'judge_refused_god_mode':
-      // JUDGE-FR-057a: distinct, operator-ACTIONABLE state — the operator
-      // cannot fix this by waiting (unlike judge_unavailable), only by
-      // turning god mode off. Warning tone, a shield icon rather than the
-      // flag `judge_unavailable` uses, so the two are never confusable at
-      // a glance.
-      return { testId: 'goal-pill-judge-refused-god-mode', label: 'god mode blocks judging', accentClass: 'text-[color:var(--color-warning)]', Icon: ShieldWarning }
     case 'judge_cas_loss':
       // JUDGE-FR-083: a verifier_registry compare-and-swap loss — another
       // adjudication for this unit is already in flight. A real, brief

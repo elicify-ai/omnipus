@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,7 +73,7 @@ func writeGraphFiles(t *testing.T, home, wsID string, isDefault bool, edges []gr
 	}
 	if len(edges) == 0 {
 		// "No delegation" has exactly one on-disk representation: no file.
-		if rmErr := os.Remove(storePath); rmErr != nil && !os.IsNotExist(rmErr) {
+		if rmErr := os.Remove(storePath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			t.Fatalf("remove delegation store record: %v", rmErr)
 		}
 		return

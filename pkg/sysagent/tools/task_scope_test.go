@@ -19,6 +19,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -408,6 +409,5 @@ func TestDeleteTaskInWorkspace_AgentCreatorStillAllowed(t *testing.T) {
 	require.False(t, res.IsError, "the dispatching agent must still be able to delete: %s", res.ForLLM)
 
 	_, statErr := os.Stat(filepath.Join(home, "tasks", "01JXCREATOR_DEL_ALLOWED1.json"))
-	assert.True(t, os.IsNotExist(statErr),
-		"a creator-allowed delete must remove the task file, got statErr=%v", statErr)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a creator-allowed delete must remove the task file, got statErr=%v", statErr)
 }
