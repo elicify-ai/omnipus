@@ -4,10 +4,10 @@ import "testing"
 
 func TestSteerAdmission_PromotedEntryKeepsItsReservation(t *testing.T) {
 	gate := newSteerAdmission(func() int { return 1 })
-	if admitted, _ := gate.tryAdmit("running", 1); !admitted {
+	if admitted, _, _ := gate.tryAdmit("running", 1); !admitted {
 		t.Fatal("first turn was not admitted")
 	}
-	if admitted, position := gate.tryAdmit("queued", 1); admitted || position != 1 {
+	if admitted, position, _ := gate.tryAdmit("queued", 1); admitted || position != 1 {
 		t.Fatalf("second turn = admitted %v, position %d; want queued at 1", admitted, position)
 	}
 
@@ -25,7 +25,7 @@ func TestSteerAdmission_PromotedEntryKeepsItsReservation(t *testing.T) {
 
 func TestSteerAdmission_StaleGenerationCannotReleaseRevivedTurn(t *testing.T) {
 	gate := newSteerAdmission(func() int { return 1 })
-	if admitted, _ := gate.tryAdmit("revived", 2); !admitted {
+	if admitted, _, _ := gate.tryAdmit("revived", 2); !admitted {
 		t.Fatal("revived generation was not admitted")
 	}
 

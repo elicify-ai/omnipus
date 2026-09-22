@@ -682,7 +682,7 @@ func newSteerAdmission(resolveCap func() int) *steerAdmission {
 // "Dispatch — not Launch — decides atomically under the admission lock").
 // Returns (true, 0) when admitted; (false, 1-based position) when queued —
 // never blocks.
-func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, queuePosition int) {
+func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, queuePosition, concurrencyLimit int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -694,10 +694,10 @@ func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, que
 	}
 	if len(g.active) >= effectiveCap {
 		g.queue = append(g.queue, steerQueueEntry{sessionID: sessionID, generation: gen})
-		return false, len(g.queue)
+		return false, len(g.queue), effectiveCap
 	}
 	g.active[sessionID] = gen
-	return true, 0
+	return true, 0, effectiveCap
 }
 
 // release frees sessionID's admission slot (a turn ended — D9: "a session

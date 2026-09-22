@@ -477,7 +477,7 @@ func TestDispatch_AtCap_Queued(t *testing.T) {
 
 	// Saturate the gate directly (unit-level control over the admission
 	// primitive, isolated from turn execution).
-	al.steerAdmission().tryAdmit("occupying-session", 1)
+	al.steerAdmission().tryAdmit("occupying-session", 1) //nolint:dogsled // only the reservation side effect matters
 
 	res, err := l.Launch(context.Background(), steer.LaunchRequest{
 		TargetAgentID: testDefaultAgentID, Task: "queued task",
@@ -559,9 +559,9 @@ func TestDispatch_ChildLifetimeIndependentOfCallerContext(t *testing.T) {
 	steerer := newTestSteeringSession(t, al, "ws-1")
 	launched, err := launcher.Launch(context.Background(), steer.LaunchRequest{
 		SteeringSessionID: steerer,
-		TargetAgentID: testDefaultAgentID,
-		Task:          "keep running after the delegate tool returns",
-		Origin:        steer.Origin{Kind: steer.OriginKindDelegate},
+		TargetAgentID:     testDefaultAgentID,
+		Task:              "keep running after the delegate tool returns",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate},
 	})
 	if err != nil {
 		t.Fatalf("Launch: %v", err)

@@ -540,14 +540,14 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 	}
 
 	if !reserved {
-		admitted, position := gate.tryAdmit(sessionID, gen)
+		admitted, position, concurrencyLimit := gate.tryAdmit(sessionID, gen)
 		if !admitted {
 			rec.State = session.LifecycleQueued
 			if persistErr := lifecycle.Persist(rec); persistErr != nil {
 				gate.removeQueued(sessionID, gen)
 				return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
 			}
-			return steer.DispatchResult{State: steer.DispatchQueued, QueuePosition: position, Generation: gen}, nil
+			return steer.DispatchResult{State: steer.DispatchQueued, ConcurrencyLimit: concurrencyLimit, QueuePosition: position, Generation: gen}, nil
 		}
 	}
 

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -66,9 +67,10 @@ func TestDelegateRun_UsesLauncherAndReportsQueuedDispatch(t *testing.T) {
 	launcher := &recordingSessionLauncher{
 		launchRes: steer.LaunchResult{SessionID: "child-1", Generation: 1},
 		dispatch: steer.DispatchResult{
-			State:         steer.DispatchQueued,
-			QueuePosition: 3,
-			Generation:    1,
+			State:            steer.DispatchQueued,
+			ConcurrencyLimit: 2,
+			QueuePosition:    3,
+			Generation:       1,
 		},
 	}
 	tool := NewDelegateTool("", 0, 0)
@@ -103,8 +105,13 @@ func TestDelegateRun_UsesLauncherAndReportsQueuedDispatch(t *testing.T) {
 		t.Fatalf("delegate(run) returned error: %s", result.ForLLM)
 	}
 
+	parts := strings.SplitN(result.ForLLM, "\n", 2)
+	if len(parts) != 2 || !strings.Contains(parts[1], "concurrency limit 2") ||
+		!strings.Contains(parts[1], "queue position 3") || !strings.Contains(parts[1], `delegate(action="cancel")`) {
+		t.Fatalf("queued result lacks actionable cap notice: %q", result.ForLLM)
+	}
 	var response generated.DelegateSessionResponse
-	if err := json.Unmarshal([]byte(result.ForLLM), &response); err != nil {
+	if err := json.Unmarshal([]byte(parts[0]), &response); err != nil {
 		t.Fatalf("decode delegate response: %v\npayload: %s", err, result.ForLLM)
 	}
 	if response.SessionId != "child-1" || response.Generation != 1 {

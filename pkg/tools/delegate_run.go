@@ -255,7 +255,13 @@ func (dt *delegateToolExecuteRun) launchAndDispatch(_ AsyncCallback) *ToolResult
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: encode launch response: %v", err)).WithError(err)
 	}
-	return NewToolResult(string(payload))
+	result := string(payload)
+	if dispatch.State == steer.DispatchQueued {
+		result += fmt.Sprintf("\nQueued because the concurrency limit %d is in use; queue position %d. "+
+			`Use delegate(action="cancel") with session_id=%q to drop this queued session.`,
+			dispatch.ConcurrencyLimit, dispatch.QueuePosition, launch.SessionID)
+	}
+	return NewToolResult(result)
 }
 
 // validateRequest validates and resolves the delegation request arguments.
