@@ -68,12 +68,6 @@ func TestGateway_ProjectionFrameAndContentState(t *testing.T) {
 		assert.Equal(t, "emptied", f.ContentState)
 		require.NotNil(t, f.Mark)
 		assert.Equal(t, mark, *f.Mark)
-		// ADR-091 D7/I-4: ProducingSessionID is deleted from the Go
-		// payload — the emitter no longer stamps the wire's optional
-		// producing_session_id at all (the generated field itself is
-		// removed later, by WP-E).
-		assert.Nil(t, f.ProducingSessionId, "ADR-091: producing_session_id is never stamped any more")
-
 		// Contract: the bytes on the wire validate against the schema.
 		var generic map[string]any
 		require.NoError(t, json.Unmarshal(raw, &generic))

@@ -1682,12 +1682,6 @@ components:
           minLength: 1
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type.
     TokenFrame:
       title: TokenFrame
       description: >
@@ -1713,13 +1707,6 @@ components:
           maxLength: 65536
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
     DoneStats:
       title: DoneStats
       description: 'Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted,
@@ -1794,13 +1781,6 @@ components:
           minLength: 1
         stats:
           $ref: '#/components/schemas/DoneStats'
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
     LLMError:
       title: LLMError
       description: Translated provider/LLM error safe for the live WebSocket boundary.
@@ -2201,13 +2181,6 @@ components:
           type: string
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
     TruncatedResult:
       title: TruncatedResult
       description: Sentinel for tool results exceeding 1 MiB (FR-I-011).
@@ -2695,13 +2668,6 @@ components:
           type: string
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
     SubagentStartFrame:
       title: SubagentStartFrame
       description: >
@@ -2749,13 +2715,6 @@ components:
             Optional session id of the opened child session. Present for
             steered sessions; absent for legacy/optional. Enables the open
             control on the side panel row (ADR-091 I-4).
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type — producing ==
-            routing by construction (FR-017).
     SubagentEndFrame:
       title: SubagentEndFrame
       description: >
@@ -2812,13 +2771,6 @@ components:
           type: string
         message:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type — producing ==
-            routing by construction (FR-017).
     SubagentMessageFrame:
       title: SubagentMessageFrame
       description: >
@@ -2970,12 +2922,6 @@ components:
             - failed
         agent_id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see TaskStatusChangedFrame's description.
     TaskRunStatusFrame:
       title: TaskRunStatusFrame
       description: 'Server → client task RUN status updated (open or close). Additive alongside TaskStatusChangedFrame (ADR-050
@@ -3066,13 +3012,6 @@ components:
             entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels,
             without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between).
             Omitted for legacy entries written before turn-id stamping landed.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type — emitted by the
-            gateway replay path, not by a turn.
         truncated:
           type: boolean
           description: >
@@ -3214,10 +3153,6 @@ components:
           type: string
           maxLength: 2048
           description: The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
     RateLimitFrame:
       title: RateLimitFrame
       description: >
@@ -3359,13 +3294,6 @@ components:
           maxItems: 32
           items:
             $ref: '#/components/schemas/MediaPart'
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
     AgentSwitchedFrame:
       title: AgentSwitchedFrame
       description: >
@@ -3389,12 +3317,6 @@ components:
           type: string
         message:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
     ToolApprovalRequiredFrame:
       title: ToolApprovalRequiredFrame
       description: >
@@ -3449,13 +3371,6 @@ components:
           type: integer
           minimum: 0
           maximum: 86400000
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (a) (FR-089): the child turn's own session id when this
-            frame crosses the wire from a delegated child.
         workspace_id:
           type: string
           minLength: 1
@@ -3844,12 +3759,6 @@ components:
           minLength: 1
         message:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
     ReplayWarningStats:
       title: ReplayWarningStats
       description: Diagnostic counters in a ReplayWarningFrame.
@@ -3907,12 +3816,6 @@ components:
             - graceful
             - hard
             - detached
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
         reached:
           type: array
           items:
@@ -3972,12 +3875,6 @@ components:
           minLength: 1
         id:
           type: string
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Present iff it differs from session_id.
-            Class (b) (FR-089): absent for this frame type.
     DevicePairingRequestFrame:
       title: DevicePairingRequestFrame
       description: Server → client device pairing request needs admin approval.
@@ -5172,12 +5069,6 @@ components:
             (ADR-086 GOAL-FR-028, terminal). See
             components/schemas/GoalStatusFrame.yaml for the full
             per-state crosswalk description.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
         criteria:
           type: array
           description: >
@@ -5455,12 +5346,6 @@ components:
             contract wave rather than a closed enum (unlike
             GoalStatusFrame.state) so naming it does not require a
             breaking change once Part B's implementation lands.
-        producing_session_id:
-          type: string
-          minLength: 1
-          description: >
-            ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit
-            (FR-089) — see this frame's description.
 
     PlanStatusFrame:
       title: PlanStatusFrame

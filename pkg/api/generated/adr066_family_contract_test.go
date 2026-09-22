@@ -191,15 +191,13 @@ func TestContract_ToolCallResultFrame_ADR066FamilyMembersDiscriminated(t *testin
 
 func TestContract_ToolResultProjectionFrame_Populated(t *testing.T) {
 	mark := `{"error":"tool_result_recall_mark","content_state":"emptied"}`
-	producing := "child-sess"
 	mustPassComponent(t, "ToolResultProjectionFrame", ToolResultProjectionFrame{
-		Type:               "tool_result_projection",
-		SessionId:          "sess-1",
-		ToolCallId:         "call-9",
-		ArchiveLine:        12,
-		ContentState:       "emptied",
-		Mark:               &mark,
-		ProducingSessionId: &producing,
+		Type:         "tool_result_projection",
+		SessionId:    "sess-1",
+		ToolCallId:   "call-9",
+		ArchiveLine:  12,
+		ContentState: "emptied",
+		Mark:         &mark,
 	})
 }
 

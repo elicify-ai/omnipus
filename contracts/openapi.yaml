@@ -2839,10 +2839,48 @@ paths:
                 type: object
                 required:
                 - success
+                additionalProperties: false
                 properties:
                   success:
                     type: boolean
                     example: true
+                  reached:
+                    type: array
+                    items:
+                      type: string
+                    description: >
+                      ADR-091 I-6. Every session the cascade stamped with a Stop marker
+                      (the stopped session and each reachable non-terminal descendant).
+                  unreachable:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required:
+                        - id
+                        - reason
+                      properties:
+                        id:
+                          type: string
+                          minLength: 1
+                        reason:
+                          type: string
+                    description: ADR-091 I-6. Descendants the cascade could not reach, with why.
+                  skipped_newer_generation:
+                    type: array
+                    items:
+                      type: string
+                    description: >
+                      ADR-091 I-6. Sessions whose live turn belonged to a newer generation than
+                      the one stamped (a revival landed first); their cancel was refused.
+                  skipped_terminal:
+                    type: array
+                    items:
+                      type: string
+                    description: ADR-091 I-6. Terminal descendants, left unwritten.
+                  partial:
+                    type: boolean
+                    description: ADR-091 I-6. True when `unreachable` is non-empty.
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':

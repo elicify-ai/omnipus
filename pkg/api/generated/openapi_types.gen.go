@@ -14050,9 +14050,6 @@ type DelegateRespondResponseCorrectiveSessionState string
 type DelegateRunAction struct {
 	Action DelegateRunActionAction `json:"action"`
 
-	// AllowBlockingQuestion Explicit opt-in (only meaningful with `wait: true`) permitting a bounded human-routed wait on a child `question` instead of the default rejection (P2M-14/MIN-3).
-	AllowBlockingQuestion *bool `json:"allow_blocking_question,omitempty"`
-
 	// Critical Continue running after the parent finishes gracefully.
 	Critical *bool `json:"critical,omitempty"`
 
@@ -14531,9 +14528,6 @@ type DelegateRunAction struct {
 
 	// TimeoutSeconds Maximum seconds before this delegation is force-cancelled. 0 = default (5 min).
 	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
-
-	// Wait True for a synchronous (blocking) delegation. A synchronous delegation whose child raises a `question` is rejected by default with a clear tool error (never a silent deadlock, MIN-3) unless the caller also sets `allow_blocking_question`.
-	Wait *bool `json:"wait,omitempty"`
 }
 
 // DelegateRunActionAction defines model for DelegateRunAction.Action.
