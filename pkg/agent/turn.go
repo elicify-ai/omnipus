@@ -91,6 +91,14 @@ type turnState struct {
 	turnID     string
 	agentID    string
 	sessionKey string
+	// generation is the session's LifecycleRecord.Generation at the moment
+	// this turn was registered (ADR-091 landing order I-3 reconstruction /
+	// I-6 revival). Zero for a turnState built outside reconstruction (a
+	// bare unit-test fixture, or a pre-ADR-091 turn) — requestCancelForGeneration
+	// treats a zero-vs-zero match the same as any other match, so a caller
+	// that never sets this field (today's non-steered turns) keeps working
+	// exactly as before: nothing compares against a real generation.
+	generation int
 
 	channel     string
 	chatID      string
@@ -881,6 +889,63 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 // are retiring a turn that ran to completion.
 func (al *AgentLoop) clearActiveTurnStateEntry(sessionKey string, ts *turnState) {
 	al.activeTurnStates.CompareAndDelete(sessionKey, ts)
+}
+
+// registerTurnIfAbsent is ADR-091 landing order I-3/FR-A-013's compare-and-
+// set turn registration: it admits ts only if NO turn is currently
+// registered under ts.sessionKey, returning true iff THIS call won.
+// SessionLauncher.Dispatch calls this (under the record lock, after I-6's
+// reserveDispatch) so two concurrent dispatches of the same session resolve
+// to exactly one registered turn — the loser learns immediately (a returned
+// false) rather than silently overwriting the winner's turnState the way a
+// bare registerActiveTurn's unconditional Store would.
+//
+// Built on sync.Map.LoadOrStore, which is itself the atomic primitive this
+// needs: two goroutines racing the same key can never both observe
+// loaded==false.
+func (al *AgentLoop) registerTurnIfAbsent(ts *turnState) bool {
+	_, loaded := al.activeTurnStates.LoadOrStore(ts.sessionKey, ts)
+	if loaded {
+		return false
+	}
+	// Mirrors registerActiveTurn's own post-Store step (cancel-prearm race
+	// fix): a cancel that arrived for this identity before this admission
+	// ran must still be applied now, not lost.
+	al.consumePreArmedCancel(ts)
+	return true
+}
+
+// requestCancelForGeneration is ADR-091 landing order I-6's generation-aware
+// cancel primitive: WP-D's Canceller.CancelSubtree (steer_cancel.go) calls
+// this — never al.activeTurnStates directly — so a cancel that carries an
+// older generation than the CURRENTLY registered turn's is refused rather
+// than firing on the wrong (revived) turn. This is what makes "Stop then
+// revive runs the revived generation; revive then Stop stamps and cancels
+// the new generation" (I-6) hold: the turn registry itself is the
+// tie-breaker, not caller-side ordering.
+//
+// Returns ok=false with a non-empty reason when: no turn is registered for
+// sessionKey (the caller reports this as terminal/not-running — I-6's
+// SkippedTerminal), or the registered turn's generation differs from gen
+// (I-6's SkippedNewerGeneration). On a match it fires the turn's hard-abort
+// cascade (turn_exit.go::requestHardAbort — the same cascade
+// InterruptSessionHard dispatches) and returns ok=true; requestHardAbort's
+// own first-cancel-wins guard makes a repeat call for an already-cancelled
+// turn a safe no-op (ok still true — the generation matched; idempotency is
+// requestHardAbort's concern, not this function's).
+func (al *AgentLoop) requestCancelForGeneration(sessionKey string, gen int) (ok bool, reason string) {
+	ts := al.getActiveTurnState(sessionKey)
+	if ts == nil {
+		return false, "no active turn registered for this session"
+	}
+	ts.mu.RLock()
+	turnGen := ts.generation
+	ts.mu.RUnlock()
+	if turnGen != gen {
+		return false, "stale generation: cancel targeted a generation the registered turn has moved past"
+	}
+	ts.requestHardAbort()
+	return true, ""
 }
 
 func (al *AgentLoop) getActiveTurnState(sessionKey string) *turnState {
