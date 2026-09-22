@@ -13,8 +13,8 @@ import "strings"
 //
 // Why this exists (W4, sync path): that async defer no-ops for synchronous
 // delegation. It fires before the parent's delegate tool_call record has been
-// written — spawnSubTurn returns (running its defer) before DelegateTool.
-// executeSync returns to the turn loop — so the record-lookup finds nothing,
+// written — the delegated run can finish before the delegate tool returns to
+// the turn loop — so the record lookup finds nothing,
 // and its "not found, retry" budget is gated on cfg.Async. For the sync path
 // the turn loop's own tool_call write (loop.go) is therefore the FINAL
 // persisted state; without populating Result there, the record kept a terminal

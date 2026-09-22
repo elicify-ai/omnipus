@@ -402,13 +402,8 @@ func (te *TaskExecutor) onTaskCompleteAfterUpwardDelivery(t *task.Task) {
 	te.advanceBlockedTasks(context.Background(), t.ID)
 }
 
-// deliverTaskCompletionUpward replaces notifyParentIfAllSiblingsDone
-// (deleted — landing order D3/FR-B-003: "the system MUST wake per child;
-// task_executor_judge.go::notifyParentIfAllSiblingsDone is deleted").
-// notifyParentIfAllSiblingsDone built its address from the parent TASK id
-// ("task:" + parent.ID, never parent.SessionID) and fired only once every
-// sibling was terminal; this routes t's own outcome through the ONE
-// upward-delivery operation (I-5), per child, as each finishes — a `t`
+// deliverTaskCompletionUpward routes t's own outcome through the single I-5
+// upward-delivery operation, per child, as each finishes. A `t`
 // whose own session is not steered (an ordinary-root task: human-,
 // schedule- or plan-created) has no steering session to wake, and this is
 // a deliberate no-op for it, not a bug.

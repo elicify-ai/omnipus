@@ -684,29 +684,10 @@ const defaultOwnershipWalkMaxDepth = 3
 // SetOwnershipWalkMaxDepth overrides the ancestor-chain walk's depth bound
 // (FR-039). Zero/negative values fall back to defaultOwnershipWalkMaxDepth.
 //
-// PRODUCTION WIRING GAP (flagged, not fixed, by this comment): unlike
-// delegationDepthResolver (SetDelegationDepthResolver, wired in
-// pkg/agent/loop.go alongside the deny-checker setters for this same
-// delegateTool), nothing in the production call graph calls this setter —
-// its only callers repo-wide are this package's own tests. Onward-
-// delegation depth is fully operator-configurable
-// (cfg.Agents.Defaults.SubTurn.MaxDepth — pkg/agent/delegation_depth.go's
-// buildDelegationDepthResolver reads this exact same field as its
-// globalDepthCap), but this walk's bound stays hardcoded at
-// defaultOwnershipWalkMaxDepth (3) regardless of that config. An operator
-// who raises max_depth beyond 3 gets cancel/steer/peek/respond/follow_up
-// ownership errors on a legitimate deeper descendant that are
-// indistinguishable from a real cross-tenant attempt. The fix is a
-// one-line call in pkg/agent/loop.go, right after the existing
-// SetDelegationDepthResolver wiring for this same delegateTool
-// (currently ~line 1787, inside registerSharedTools):
-//
-//	delegateTool.SetOwnershipWalkMaxDepth(cfg.Agents.Defaults.SubTurn.MaxDepth)
-//
-// (n<=0 already no-ops back to today's default via this setter, so that
-// call is safe unconditionally — an unset config leaves current behavior
-// unchanged.) Not made here: pkg/agent/loop.go is outside this file's
-// ownership for this change.
+// Production wiring resolves performance.max_delegation_depth through the
+// shared effective-depth function before calling this setter. The ownership
+// walk and delegation authorization therefore use the same bound; n<=0 keeps
+// the local safety default for isolated callers.
 func (t *DelegateTool) SetOwnershipWalkMaxDepth(n int) {
 	if n > 0 {
 		t.ownershipWalkMaxDepth = n

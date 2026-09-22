@@ -90,7 +90,7 @@ func (te *TaskExecutor) runTask(
 		map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "session_id": taskSessionID})
 	// FR-118/G-13: the goroutine is now genuinely executing this attempt —
 	// mirrors pkg/tools/delegate.go's transitionLifecycle(..., LifecycleRunning,
-	// "") at the start of its own executeAsync/executeSync.
+	// "") at the start of its own dispatch path.
 	te.transitionTaskLifecycle(taskSessionID, session.LifecycleRunning, "")
 
 	// Test seam: when goroutineCtxHook is set, invoke it and return without

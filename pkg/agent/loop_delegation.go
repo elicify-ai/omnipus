@@ -239,7 +239,7 @@ func EdgeModeCategory(mode config.DelegationMode) workspace.DelegationMode {
 //     tool's real 3-value config.DelegationMode parameter, so the two are never
 //     directly comparable.
 //   - depth: edge.Depth (when non-nil) is the per-edge onward-delegation cap; nil
-//     inherits — no per-edge cap. The global SubTurn.MaxDepth ceiling (passed as
+//     inherits — no per-edge cap. The performance depth ceiling (passed as
 //     globalDepthCap, 0 = none) ALWAYS applies as an additional, independent cap.
 func enforceEdgeModeAndDepth(
 	ctx context.Context,
@@ -303,7 +303,7 @@ func enforceEdgeModeAndDepth(
 	}
 
 	// Otherwise enforce the effective depth cap: the tighter of the per-edge
-	// cap (edge.Depth, nil = inherit) and the global SubTurn.MaxDepth ceiling,
+	// cap (edge.Depth, nil = inherit) and the performance depth ceiling,
 	// falling back to the safety-backstop default when NEITHER source
 	// expresses an explicit value. Resolved via resolveEffectiveDelegationDepth
 	// — the SAME shared function spawnSubTurn's own depth check
@@ -346,7 +346,7 @@ func enforceEdgeModeAndDepth(
 //     must be in the edge's Modes (empty Modes = all allowed).
 //  3. depth     — the current delegation-chain depth must be below the edge's
 //     Depth cap (nil = inherit; 0 = no onward delegation). The global
-//     SubTurn.MaxDepth ceiling always applies as an additional cap.
+//     performance depth ceiling always applies as an additional cap.
 //
 // FAIL-CLOSED: a graph load error, a missing workspace, or no default workspace
 // all DENY — a delegation check with no readable governing graph never falls

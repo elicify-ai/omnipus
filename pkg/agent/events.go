@@ -367,17 +367,9 @@ type ToolExecStartPayload struct {
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
 	//
-	// ADR-057 FR-012 (W5/U23): the WS forwarder (pkg/gateway/websocket.go,
-	// U11) stamps the outbound tool_call_start frame's wire `session_id`
-	// straight from this field, so it MUST hold the ROUTING session id —
-	// the id inherited verbatim from the root of the delegation subtree
-	// (session.RoutingSessionID's contract) — not necessarily this turn's
-	// own store-backed session when the call fires several delegation
-	// levels deep. Emitting code (turn.go, U3/U9) is responsible for
-	// sourcing it from the emitting turnState's routing identity.
-	// ADR-091 D7/I-4 deleted this payload's former ProducingSessionID
-	// field — see u9ToolExecSessionIDs' own doc comment (loop.go) for the
-	// residual gap this leaves.
+	// The WS forwarder stamps the outbound tool_call_start frame's wire
+	// session_id directly from this field. It therefore holds the producing
+	// turn's own transcript identity.
 	SessionID string
 	Tool      string
 	Arguments map[string]any
@@ -388,12 +380,6 @@ type ToolExecStartPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_start frames must carry agent_id to match replay frame parity.
 	AgentID string
-	// ProducingSessionID (ADR-057 FR-013, W5d) is DELETED — ADR-091 D7/I-4:
-	// "every frame carries its own session_id (the producing session) —
-	// producing_session_id — the workaround — is deleted from every schema
-	// that carries it". See u9ToolExecSessionIDs' own doc comment (loop.go)
-	// for the residual gap this leaves (SessionID above is still the
-	// routing id, not yet the true producing session, for this payload).
 }
 
 // ToolExecEndPayload describes the outcome of a tool execution.
@@ -405,11 +391,8 @@ type ToolExecEndPayload struct {
 	ChatID     string
 	// SessionID is the transcript-store session ID for this turn.
 	//
-	// ADR-057 FR-012 (W5/U23): the WS forwarder (pkg/gateway/websocket.go,
-	// U11) stamps the outbound tool_call_result frame's wire `session_id`
-	// straight from this field, so it MUST hold the ROUTING session id — see
-	// ToolExecStartPayload.SessionID's doc comment for the full rationale,
-	// which applies identically here.
+	// The WS forwarder stamps tool_call_result.session_id directly from this
+	// producing turn's transcript identity.
 	SessionID  string
 	Tool       string
 	Duration   time.Duration
@@ -427,9 +410,6 @@ type ToolExecEndPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_result frames must carry agent_id to match replay frame parity.
 	AgentID string
-	// ProducingSessionID (ADR-057 FR-013, W5d) is DELETED — see
-	// ToolExecStartPayload's own doc comment for the ADR-091 D7/I-4
-	// rationale, which applies identically here.
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.
@@ -558,9 +538,7 @@ type SubTurnSpawnPayload struct {
 	// U3's turn.go role split (W4) lands, that becomes
 	// parentTS.routingSessionID, still parent-scoped. subagent_start is
 	// class (b) per the W5 audit (FR-089, BDD-98): emitted by the PARENT
-	// about the child, so producing_session_id would always equal this
-	// field and is therefore always absent (FR-013's "iff it differs") —
-	// no ProducingSessionID sibling exists on this payload for that reason.
+	// about the child, so SessionID names the producing parent.
 	// The child's own identity already rides this same payload as Label
 	// (set to childID at the spawn call site) and SpanID/ParentSpawnCallID.
 	// Repointing SessionID to the child here would split a delegation's
@@ -840,10 +818,8 @@ type TaskRunStatusPayload struct {
 
 // ToolResultProjectionPayload is EventKindToolResultProjection's payload
 // (ADR-066 D5 / FR-022). SessionID is the routing id on the wire's
-// session_id (u9ToolExecSessionIDs). ADR-091 D7/I-4 deleted
-// ProducingSessionID (the workaround field this payload used to also
-// carry) — see u9ToolExecSessionIDs' own doc comment (loop.go) for the
-// residual gap this leaves.
+// session_id (u9ToolExecSessionIDs), which is the producing session's own
+// transcript identity.
 type ToolResultProjectionPayload struct {
 	ChatID     string
 	SessionID  string

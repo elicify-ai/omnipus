@@ -410,13 +410,9 @@ func streamReplay(
 					return framesEmitted, err2
 				}
 
-				// ADR-091 D7: "the nesting of child steps into parent
-				// transcripts (replay.go::emitNestedToolCalls) become dead
-				// and are deleted" — a delegated/task child now owns its
-				// OWN store-backed session (D1), so its tool calls are
-				// NEVER recorded with ParentToolCallID under this outer
-				// span in the PARENT's own transcript any more; there is
-				// nothing left here for emitNestedToolCalls to find. A
+				// A delegated/task child owns its own store-backed session,
+				// so its tool calls are never recorded under this outer span
+				// in the parent's transcript. A
 				// pre-ADR-091 transcript that DOES carry nested child tool
 				// calls this way loses their nested replay (greenfield
 				// migration, §6: old delegate sessions stay readable as
@@ -435,8 +431,8 @@ func streamReplay(
 				// Emit subagent_end.
 				//
 				// Wave 3 fix 5b: the span's own Status/DurationMs are read directly
-				// from tc — the spawn/delegate ToolCall's OWN persisted record —
-				// instead of emitNestedToolCalls' aggregate over child tool calls.
+				// from tc — the spawn/delegate ToolCall's own persisted record —
+				// instead of aggregating child tool calls.
 				// pkg/agent/subturn.go's spawnSubTurn (EventKindSubTurnEnd) now
 				// persists the sub-turn's REAL completion status/wall-clock
 				// duration onto this exact record via session.UnifiedStore.
@@ -759,9 +755,7 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	sr.isOrphan = sr.isNested && !parentIsSpawn
 
 	if sr.isNested && parentIsSpawn {
-		// ADR-091 D7: emitNestedToolCalls (which used to emit this call
-		// nested under its parent span) is deleted — a delegated/task
-		// child owns its own transcript now (D1), so this branch is dead
+		// A delegated/task child owns its own transcript, so this branch is dead
 		// for any transcript ADR-091's real launcher produced. Still
 		// skipped here (not re-processed as a top-level call) for a
 		// pre-ADR-091 transcript that DOES carry a nested recording —
@@ -809,9 +803,8 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	// so pkg/gateway/websocket.go's eventForwarder always emits a
 	// live subagent_start/subagent_end pair too. This used to be
 	// gated on spawnIDsWithChildren (spans requiring at least one
-	// RECORDED NESTED CHILD tool call) — correct for deciding
-	// whether emitNestedToolCalls has anything to emit, but wrong as
-	// the gate for whether to bracket at all: a delegate whose child
+	// recorded nested child tool call), which was wrong as the gate for
+	// whether to bracket at all: a delegate whose child
 	// replies directly with zero tool calls (a common case — many
 	// delegated tasks are simple, no-tool Q&A, and it's also exactly
 	// what a child interrupted before its first tool call looks
@@ -819,9 +812,8 @@ func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEn
 	// dropping the nested "label, 0 steps, status, duration"
 	// progress row live always shows, even though the outer call's
 	// own Status/DurationMS are fully known and persisted either
-	// way. isDelegateSpawnCall (above) is the correct test — it
-	// doesn't require any children to exist; emitNestedToolCalls
-	// below naturally emits zero nested frames when there are none.
+	// way. isDelegateSpawnCall (above) is the correct test because it
+	// does not require any child tool calls to exist.
 	sr.isSpawnParent = isDelegateSpawnCall
 
 	// stillActive is true when isSpanActive (wired to
@@ -1093,13 +1085,9 @@ func buildSpanRealAgentIDs(entries []session.TranscriptEntry, withChildren map[s
 
 type tcAddr struct{ entryIdx, tcIdx int }
 
-// emitNestedToolCalls (formerly here) is DELETED — ADR-091 D7: "the nesting
-// of child steps into parent transcripts (replay.go::emitNestedToolCalls)
-// become dead and are deleted". A delegated/task child owns its own
-// store-backed session (D1), so its tool calls are never recorded with
-// ParentToolCallID under an outer span in the PARENT's own transcript any
-// more — see classifyToolCall's and buildSubagentStart's call sites above
-// for where this function used to be invoked.
+// Delegated/task child steps stay in the child's own store-backed session.
+// Parent replay reconstructs only the persisted lifecycle span around that
+// session; it never searches the parent's transcript for child tool calls.
 
 // applyPersistedFailureReason restores live/replay parity for a failed tool
 // call's reason. It is shared by BOTH frame builders deliberately: they are

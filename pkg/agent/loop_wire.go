@@ -974,7 +974,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 		)
 		// Same rationale as taskCreate above: the subagent_3p reassignment
 		// guard is retired now that processTaskDirect dispatches an
-		// external-CLI worker's task run through runExternalCLISubTurn.
+		// external-CLI worker's task run through the shared command-line runner.
 		agent.Tools.RegisterReplacing(taskUpdate)
 
 		setTodos := tools.NewSetTodosTool(rw.rs.al.taskStore)

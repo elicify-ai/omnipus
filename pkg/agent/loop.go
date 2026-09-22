@@ -1481,10 +1481,6 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 // contract requires on the wire for a session-scoped frame, for the two Go
 // event payloads ToolExecStartPayload and ToolExecEndPayload.
 //
-// ADR-091 D7/I-4: ProducingSessionID — the workaround field this function
-// used to ALSO compute, so the WS forwarder could stamp an optional
-// producing_session_id "present iff it differs from session_id" — is
-// deleted (events.go), and this function now returns only sessionID.
 // SessionID is the producer's own transcript identity. routingSessionID is
 // retained only for cascade cancellation and is never a frame destination.
 func u9ToolExecSessionIDs(ts *turnState) (sessionID string) {
@@ -2307,13 +2303,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// inherited verbatim from the root of the delegation subtree
 				// — not this turn's own store-backed transcriptSessionID,
 				// which for a delegated child differs from the root's. No
-				// ProducingSessionID sibling exists on this payload today
-				// (events.go/U23 added that field only to
-				// ToolExecStart/EndPayload) even though the W5 audit already
-				// classifies "done" as carrying both ids on the wire schema
-				// (contracts/asyncapi.yaml) — closing that gap is events.go's
-				// (U23) and the WS forwarder's (U11) cross-unit follow-up,
-				// not something addable from this file.
+				// The frame is keyed by this producing turn's routing identity;
+				// the payload carries no second session identity.
 				SessionID: string(rz.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID),
 				IsRoot:    rz.rc.rx.rr.rq.ri.rf.rt.ts.parentTurnID == "",
 			},
@@ -2414,7 +2405,8 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 //   - one transcript entry with the typed code (replay).
 //
 // A delegated child timeout is the exception: typedTurnExit records the
-// child-local transcript entry but leaves live publication to spawnSubTurn.
+// child-local transcript entry but leaves live publication to the session
+// completion path.
 // The coordinator waits until it has either disarmed the delegation timer or
 // observed its completed callback before choosing either the generic
 // child-timeout frame or the identified delegated-task-limit frame. That

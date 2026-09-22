@@ -1049,10 +1049,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
 			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see u9ToolExecSessionIDs
 			// and ToolExecStartPayload.SessionID's doc comments (events.go,
-			// U23) for the full rationale. ADR-091 D7/I-4 deleted
-			// ProducingSessionID (the workaround field) — see
-			// u9ToolExecSessionIDs' own doc comment for the residual gap
-			// this leaves.
+			// U23) for the full rationale. The session ID is always the
+			// tool-producing session's own transcript identity.
 			SessionID:         toolExecSID,
 			Tool:              ex.toolName,
 			Arguments:         cloneEventArguments(ex.toolArgs),

@@ -805,11 +805,7 @@ func (f *eventForwardState) onToolExecStart(evt agent.Event) {
 		pc := string(p.ParentSpawnCallID)
 		startF.ParentCallId = &pc
 	}
-	// ADR-091 D7/I-4: ProducingSessionID (the Go payload field this reader
-	// used to stamp onto the wire's optional producing_session_id) is
-	// deleted — "every frame carries its own session_id (the producing
-	// session)". This reader no longer reads or sets it; the generated
-	// wire field itself is removed later, by WP-E.
+	// The payload's session ID is the tool-producing session's identity.
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallStart), startF)
 }
 
@@ -944,11 +940,7 @@ func (f *eventForwardState) onToolExecEnd(evt agent.Event) {
 		liveErr := truncateRunesForFrame(p.Result, maxLiveErrorChars)
 		resultF.Error = &liveErr
 	}
-	// ADR-091 D7/I-4: ProducingSessionID (the Go payload field this reader
-	// used to stamp onto the wire's optional producing_session_id) is
-	// deleted — "every frame carries its own session_id (the producing
-	// session)". This reader no longer reads or sets it; the generated
-	// wire field itself is removed later, by WP-E.
+	// The payload's session ID is the tool-producing session's identity.
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallResult), resultF)
 	// When switch_agent succeeds, notify the frontend to switch agents.
 	// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
@@ -1496,8 +1488,6 @@ func (f *eventForwardState) onToolResultProjection(evt agent.Event) {
 		mark := p.Mark
 		projF.Mark = &mark
 	}
-	// ADR-091 D7/I-4: ProducingSessionID (the Go payload field this reader
-	// used to stamp onto the wire's optional producing_session_id) is
-	// deleted. The generated wire field itself is removed later, by WP-E.
+	// The payload's session ID is the projection-producing session's identity.
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolResultProjection), projF)
 }

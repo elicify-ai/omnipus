@@ -13,7 +13,7 @@ import (
 
 // resolveEffectiveDelegationDepth returns the effective onward-delegation depth
 // cap: the tighter of the edge's own Depth (nil = inherit, no per-edge cap) and
-// the global SubTurn.MaxDepth (0 = unset, falls back to the safety-backstop
+// performance.max_delegation_depth (0 = unset, falls back to the safety-backstop
 // default). Returns the safety-backstop default (defaultMaxSubTurnDepth) only
 // when NEITHER source expresses an explicit value — an operator's explicit
 // per-edge Depth (even when the global config is left unset) governs instead of

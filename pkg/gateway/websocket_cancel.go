@@ -217,8 +217,8 @@ func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID st
 // generic one logged here.
 //
 // Guards against a corrupted or cyclic SteeringSessionID chain with a visited
-// set rather than trusting the system's own delegation-depth cap
-// (config.SubTurn.MaxDepth) to bound recursion — this walk must terminate
+// set rather than trusting the configured delegation-depth cap to bound
+// recursion — this walk must terminate
 // even over on-disk state that predates or violates that cap. A nil store
 // (no delegation lifecycle store wired — most webchat-only installs never
 // mint one) yields an empty slice, so the caller degrades to exactly
