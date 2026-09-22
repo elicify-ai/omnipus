@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -211,5 +212,123 @@ func TestCascade_SecondPassStampsLateChild(t *testing.T) {
 	}
 	if rec.Stop == nil || rec.Stop.Generation != rec.Generation {
 		t.Fatalf("late child Stop = %#v, generation = %d", rec.Stop, rec.Generation)
+	}
+}
+
+func TestRevive_NewGeneration_OldMarkerInert(t *testing.T) {
+	store := session.NewLifecycleStore(t.TempDir())
+	rec := testSteerLifecycleRecord("child", "root", session.LifecycleRunning, 2)
+	rec.Stop = &session.Stop{
+		At:         time.Now().Add(-time.Minute).UTC(),
+		Generation: 2,
+		By:         steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"},
+	}
+	persistSteerLifecycle(t, store, rec)
+
+	var emittedGeneration int
+	canceller := NewSteerCanceller(store).SetRevivalStateWriter(func(_ context.Context, sessionID string, generation int) error {
+		persisted, err := store.Load(sessionID)
+		if err != nil {
+			return err
+		}
+		if persisted.Generation != generation || persisted.State != session.LifecycleRunning {
+			return errors.New("revival state was emitted before the durable running write")
+		}
+		emittedGeneration = generation
+		return nil
+	})
+
+	generation, err := canceller.Revive(context.Background(), "child", steer.Principal{Kind: steer.PrincipalKindHuman, ID: "operator"})
+	if err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	if generation != 3 || emittedGeneration != 3 {
+		t.Fatalf("generation = %d, emitted = %d, want 3", generation, emittedGeneration)
+	}
+	revived, err := store.Load("child")
+	if err != nil {
+		t.Fatalf("load revived child: %v", err)
+	}
+	if revived.State != session.LifecycleRunning || revived.Generation != 3 {
+		t.Fatalf("revived record = state %q generation %d", revived.State, revived.Generation)
+	}
+	if revived.Stop == nil || revived.Stop.Generation != 2 {
+		t.Fatalf("old Stop marker = %#v, want generation 2 retained as inert history", revived.Stop)
+	}
+	if ok, reason := reserveDispatch(revived, 3); !ok {
+		t.Fatalf("new generation refused by old marker: %s", reason)
+	}
+}
+
+func TestRevive_TerminalFollowUpMintsGeneration(t *testing.T) {
+	store := session.NewLifecycleStore(t.TempDir())
+	rec := testSteerLifecycleRecord("child", "root", session.LifecycleFailed, 4)
+	rec.FailedReason = "prior failure"
+	rec.NeedsInput = &session.NeedsInput{CorrelationID: "obsolete-question"}
+	persistSteerLifecycle(t, store, rec)
+
+	generation, err := NewSteerCanceller(store).Revive(
+		context.Background(),
+		"child",
+		steer.Principal{Kind: steer.PrincipalKindAgent, ID: "parent-agent"},
+	)
+	if err != nil {
+		t.Fatalf("Revive terminal record: %v", err)
+	}
+	if generation != 5 {
+		t.Fatalf("generation = %d, want 5", generation)
+	}
+	revived, err := store.Load("child")
+	if err != nil {
+		t.Fatalf("load terminal follow-up: %v", err)
+	}
+	if revived.State != session.LifecycleRunning || revived.FailedReason != "" || revived.NeedsInput != nil {
+		t.Fatalf("terminal follow-up retained terminal state: %+v", revived)
+	}
+}
+
+func TestStopRevive_OrderUnderLock(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		store := session.NewLifecycleStore(t.TempDir())
+		rec := testSteerLifecycleRecord("child", "root", session.LifecycleRunning, 1)
+		rec.Stop = &session.Stop{Generation: 1}
+		persistSteerLifecycle(t, store, rec)
+		canceller := NewSteerCanceller(store)
+
+		start := make(chan struct{})
+		errs := make(chan error, 2)
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, err := canceller.stampStop("child", time.Now().UTC(), steer.Principal{Kind: steer.PrincipalKindHuman, ID: "stop"})
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := canceller.Revive(context.Background(), "child", steer.Principal{Kind: steer.PrincipalKindHuman, ID: "revive"})
+			errs <- err
+		}()
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatalf("iteration %d concurrent operation: %v", i, err)
+			}
+		}
+
+		got, err := store.Load("child")
+		if err != nil {
+			t.Fatalf("iteration %d load: %v", i, err)
+		}
+		if got.Generation != 2 {
+			t.Fatalf("iteration %d generation = %d, want 2", i, got.Generation)
+		}
+		if got.State != session.LifecycleRunning || got.Stop == nil || (got.Stop.Generation != 1 && got.Stop.Generation != 2) {
+			t.Fatalf("iteration %d has torn Stop/Revive state: %+v", i, got)
+		}
 	}
 }

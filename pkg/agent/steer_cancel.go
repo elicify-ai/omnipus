@@ -21,14 +21,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// SteerCanceller is the CP-0 compiled stub for steer.Canceller, owned by
-// WP-D from CP-0 onward. CancelSubtree reaches nothing; Revive returns the
-// current generation unchanged — placeholders until WP-D's I-6 cascade
-// lands at CP-3.
+// SteerCanceller implements ADR-091's durable Stop cascade and revival.
 type SteerCanceller struct {
-	Lifecycle  *session.LifecycleStore
-	cancelTurn GenerationCancelFunc
-	locks      sync.Map
+	Lifecycle          *session.LifecycleStore
+	cancelTurn         GenerationCancelFunc
+	revivalStateWriter RevivalStateWriter
+	locks              sync.Map
 }
 
 var _ steer.Canceller = (*SteerCanceller)(nil)
@@ -46,6 +44,11 @@ type GenerationCancelResult struct {
 // the indirection keeps the durable cascade independently testable.
 type GenerationCancelFunc func(ctx context.Context, sessionID string, generation int) (GenerationCancelResult, error)
 
+// RevivalStateWriter persists the parent's subagent_state(running) lifecycle
+// event after Revive has durably published the new generation. WP-B supplies
+// the transcript/frame implementation at the composition root.
+type RevivalStateWriter func(ctx context.Context, sessionID string, generation int) error
+
 // NewSteerCanceller builds the I-6 Canceller. cancelTurn is optional only so
 // CP-0 wiring continues to compile until WP-A's generation-aware turn registry
 // lands; production wiring must supply it before ADR-091 is reachable.
@@ -53,6 +56,16 @@ func NewSteerCanceller(lifecycle *session.LifecycleStore, cancelTurn ...Generati
 	c := &SteerCanceller{Lifecycle: lifecycle}
 	if len(cancelTurn) > 0 {
 		c.cancelTurn = cancelTurn[0]
+	}
+	return c
+}
+
+// SetRevivalStateWriter installs the I-4 lifecycle-event writer. It is a
+// construction-time option and must not be changed after the canceller is
+// published to concurrent callers.
+func (c *SteerCanceller) SetRevivalStateWriter(writer RevivalStateWriter) *SteerCanceller {
+	if c != nil {
+		c.revivalStateWriter = writer
 	}
 	return c
 }
@@ -117,17 +130,45 @@ func (c *SteerCanceller) CancelSubtree(ctx context.Context, sessionID string, by
 	return report, nil
 }
 
-// Revive implements steer.Canceller. CP-0 stub: returns the record's
-// current generation unchanged (no revival takes place).
-func (c *SteerCanceller) Revive(_ context.Context, sessionID string, _ steer.Principal) (int, error) {
-	if c.Lifecycle == nil {
-		return 0, nil
+// Revive mints a generation for a stopped session or terminal follow-up.
+// LifecycleStore.Mutate holds the record's write lock across the read,
+// decision, and append, so a concurrent Stop is applied in arrival order.
+// The old Stop marker is retained as inert history: reserveDispatch compares
+// its generation with the newly incremented record generation.
+func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.Principal) (int, error) {
+	if c == nil || c.Lifecycle == nil {
+		return 0, session.ErrLifecycleNotFound
 	}
-	rec, err := c.Lifecycle.Load(sessionID)
+	var generation int
+	var revived bool
+	err := c.Lifecycle.Mutate(sessionID, func(rec *session.LifecycleRecord) error {
+		if rec == nil {
+			return session.ErrLifecycleNotFound
+		}
+		generation = rec.Generation
+		stopped := rec.Stop != nil && rec.Stop.Generation == rec.Generation
+		if !stopped && !rec.Terminal() {
+			return nil
+		}
+
+		rec.Generation++
+		rec.ResumedFrom = rec.SessionID
+		rec.State = session.LifecycleRunning
+		rec.FailedReason = ""
+		rec.NeedsInput = nil
+		generation = rec.Generation
+		revived = true
+		return nil
+	})
 	if err != nil {
 		return 0, err
 	}
-	return rec.Generation, nil
+	if revived && c.revivalStateWriter != nil {
+		if err := c.revivalStateWriter(ctx, sessionID, generation); err != nil {
+			return generation, fmt.Errorf("steer: write revival state for %q generation %d: %w", sessionID, generation, err)
+		}
+	}
+	return generation, nil
 }
 
 // reserveDispatch is I-6's package-internal reservation primitive
