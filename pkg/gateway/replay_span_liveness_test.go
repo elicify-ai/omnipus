@@ -81,13 +81,16 @@ func TestStreamReplay_ActiveSpawnSpan_WithholdsFabricatedDoneSnapshot(t *testing
 	frames, _ := runReplayWithSpanActive(t, entries, func(id string) bool { return id == "c1" })
 
 	types := frameTypes(frames)
+	// ADR-091 D7: emitNestedToolCalls is deleted — a delegated child's own
+	// tool calls (nestedTC, "t2" above) are no longer nested-replayed under
+	// the outer span at all (a delegated/task child owns its own transcript
+	// now, D1); nestedTC's presence in this fixture only proves it does NOT
+	// resurrect the deleted nested-emission path.
 	require.Equal(t,
 		[]string{
 			"replay_message",
-			"tool_call_start",  // spawn call start
-			"subagent_start",   // span bracket open
-			"tool_call_start",  // nested t2 (real, completed — still replays)
-			"tool_call_result", // nested t2 (real, completed — still replays)
+			"tool_call_start", // spawn call start
+			"subagent_start",  // span bracket open
 			// NO subagent_end, NO tool_call_result for c1: the real
 			// sub-turn is still active, so its terminal frames are
 			// withheld rather than fabricating "done" from the placeholder.
@@ -137,13 +140,16 @@ func TestStreamReplay_ActiveSpawnSpan_LegacySpawnToolName_WithholdsFabricatedDon
 	frames, _ := runReplayWithSpanActive(t, entries, func(id string) bool { return id == "c1" })
 
 	types := frameTypes(frames)
+	// ADR-091 D7: emitNestedToolCalls is deleted — a delegated child's own
+	// tool calls (nestedTC, "t2" above) are no longer nested-replayed under
+	// the outer span at all (a delegated/task child owns its own transcript
+	// now, D1); nestedTC's presence in this fixture only proves it does NOT
+	// resurrect the deleted nested-emission path.
 	require.Equal(t,
 		[]string{
 			"replay_message",
-			"tool_call_start",  // spawn call start
-			"subagent_start",   // span bracket open
-			"tool_call_start",  // nested t2 (real, completed — still replays)
-			"tool_call_result", // nested t2 (real, completed — still replays)
+			"tool_call_start", // spawn call start
+			"subagent_start",  // span bracket open
 			// NO subagent_end, NO tool_call_result for c1: the real
 			// sub-turn is still active, so its terminal frames are
 			// withheld rather than fabricating "done" from the placeholder.
@@ -233,19 +239,21 @@ func TestStreamReplay_InactiveSpawnCall_EmitsNormally(t *testing.T) {
 	frames, _ := runReplayWithSpanActive(t, entries, func(string) bool { return false })
 
 	types := frameTypes(frames)
+	// ADR-091 D7: emitNestedToolCalls is deleted — nestedTC ("t2") is no
+	// longer nested-replayed under the outer span; only the outer span's
+	// own start/end bracket and its own tool_call_start/result remain.
 	require.Equal(t,
 		[]string{
 			"replay_message",
 			"tool_call_start",
 			"subagent_start",
-			"tool_call_start",
-			"tool_call_result",
 			"subagent_end",
 			"tool_call_result",
 			"done",
 		},
 		types,
-		"a genuinely finished spawn call must replay its full terminal frame set as before",
+		"a genuinely finished spawn call must replay its own terminal frame set as before "+
+			"(nested child tool calls are no longer replayed under it, ADR-091 D7)",
 	)
 	subEnd := findFrame(frames, "subagent_end")
 	require.NotNil(t, subEnd)

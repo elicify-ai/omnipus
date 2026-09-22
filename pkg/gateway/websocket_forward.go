@@ -298,6 +298,10 @@ func (h *WSHandler) eventForwarder(wc *wsConn, chatID string, sub agent.EventSub
 			f.onTaskRunStatus(evt)
 		case agent.EventKindToolResultProjection:
 			f.onToolResultProjection(evt)
+		case agent.EventKindSubagentMessage:
+			f.onSubagentMessage(evt)
+		case agent.EventKindSubagentState:
+			f.onSubagentState(evt)
 		case agent.EventKindLLMRequest, agent.EventKindLLMDelta, agent.EventKindLLMResponse,
 			agent.EventKindLLMRetry, agent.EventKindContextCompress,
 			agent.EventKindToolExecSkipped, agent.EventKindSteeringInjected, agent.EventKindFollowUpQueued,
@@ -695,6 +699,31 @@ func (f *eventForwardState) onSubTurnEnd(evt agent.Event) {
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentEnd), endFrameEnd)
 	// Signal the watchdog that the span closed normally.
 	f.closeSpan(string(p.ParentSpawnCallID))
+}
+
+// onSubagentMessage forwards agent.EventKindSubagentMessage to this
+// connection — ADR-091 D7/I-4's persisted side-panel status line. The
+// payload's own MessageId (stamped by steer_frames.go's
+// deliverSubagentMessage, the SAME id the persisted transcript entry
+// carries) travels onto the frame unchanged, so a live push, a replay and
+// a cold load always agree.
+func (f *eventForwardState) onSubagentMessage(evt agent.Event) {
+	p, ok := evt.Payload.(agent.SubagentMessagePayload)
+	if !ok || !f.matchesEvent("", p.SessionID) {
+		return
+	}
+	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentMessage), p.Frame)
+}
+
+// onSubagentState forwards agent.EventKindSubagentState to this connection —
+// ADR-091 D7/I-4's persisted side-panel status. See onSubagentMessage's own
+// doc comment for the id-agreement contract, which applies identically here.
+func (f *eventForwardState) onSubagentState(evt agent.Event) {
+	p, ok := evt.Payload.(agent.SubagentStatePayload)
+	if !ok || !f.matchesEvent("", p.SessionID) {
+		return
+	}
+	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentState), p.Frame)
 }
 
 // onTurnEnd forwards agent.EventKindTurnEnd to this connection.
