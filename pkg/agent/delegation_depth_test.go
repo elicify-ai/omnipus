@@ -91,7 +91,7 @@ func TestBuildDelegationDepthResolver_TargetedEdgeReturnsResolvedCap(t *testing.
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, intPtr(10)),
 	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
+	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
 
 	got := resolver(ctxWS(testWS, 4), "ray")
 	if got == nil {
@@ -109,9 +109,8 @@ func TestBuildDelegationDepthResolver_GlobalTightensEdge(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, intPtr(10)),
 	})
-	defaults := config.AgentDefaults{}
-	defaults.SubTurn.MaxDepth = 2
-	resolver := buildDelegationDepthResolver("mia", defaults)
+	perf := config.PerformanceConfig{MaxDelegationDepth: 2}
+	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, perf)
 
 	got := resolver(ctxWS(testWS, 0), "ray")
 	if got == nil || *got != 2 {
@@ -127,7 +126,7 @@ func TestBuildDelegationDepthResolver_UntargetedReturnsNilOverride(t *testing.T)
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, intPtr(10)),
 	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
+	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
 
 	if got := resolver(ctxWS(testWS, 0), ""); got != nil {
 		t.Fatalf("untargeted delegation must return nil (no override), got %d", *got)
@@ -141,7 +140,7 @@ func TestBuildDelegationDepthResolver_SelfAssignmentReturnsNilOverride(t *testin
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, intPtr(10)),
 	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
+	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
 
 	if got := resolver(ctxWS(testWS, 0), "mia"); got != nil {
 		t.Fatalf("self-assignment must return nil (no override), got %d", *got)
@@ -156,7 +155,7 @@ func TestBuildDelegationDepthResolver_NoEdgeReturnsNilOverride(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, intPtr(10)),
 	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
+	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
 
 	// No mia→ava edge in the seeded graph.
 	if got := resolver(ctxWS(testWS, 0), "ava"); got != nil {

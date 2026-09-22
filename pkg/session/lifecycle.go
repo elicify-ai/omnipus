@@ -593,6 +593,86 @@ func (s *LifecycleStore) Mutate(sessionID string, fn func(*LifecycleRecord) erro
 	return s.persistLocked(next)
 }
 
+// PublishChildUnderParentLock is ADR-091 landing order I-1's launch
+// primitive: "the launcher reads the parent's record (for depth,
+// authorization and a current-generation Stop marker) and publishes the
+// child's record under the parent's record lock, so a cascade cannot
+// enumerate the parent's children between the check and the publication."
+//
+// fn receives a pointer to a COPY of parentID's current tail record
+// (existed=true) or a fresh record with only SessionID set (existed=false
+// — "no record yet", which fn must populate, e.g. to mint an ordinary_root
+// record for a steering session delegating for the first time). fn mutates
+// the parent record in place and returns the child record to publish (or
+// nil for a parent-only write — e.g. nothing to launch this call). Both
+// writes happen while parentID's lock is held; a non-nil error aborts
+// both.
+//
+// Deadlock analysis (why the child is NEVER separately locked, not even
+// when its shard differs from the parent's): an earlier version of this
+// function acquired childMu (falling back to the already-held parentMu
+// only on a same-shard collision). That is unsafe for a DIFFERENT reason
+// than reentrancy: with many concurrent callers publishing under DIFFERENT
+// parents, goroutine A can hold parent-shard-1 while waiting for
+// child-shard-2, at the exact moment goroutine B holds parent-shard-2 and
+// waits for child-shard-1 — a classic AB-BA circular wait across the
+// 64-shard pool (proved by this file's own concurrency test, which hung
+// past a 75s bound with that version and passes immediately without it).
+// A consistent lock-acquisition ORDER is the usual fix, but is not
+// available here: which id is "child" is decided by fn's return value,
+// AFTER parentMu is already held, so the pair can never be pre-sorted.
+//
+// The actual fix needs no second lock at all: childRec.SessionID is
+// always FRESHLY MINTED (session.NewSessionID's ULID) immediately before
+// this call, by the same launch that is the sole writer of that id for
+// its entire lifetime up to this point — no concurrent goroutine can be
+// racing a write to a session_id that did not exist a moment ago and
+// that only this call knows about. persistLocked's own work (tail-read
+// for the terminal guard, the JSONL append, the parentIndex update — the
+// index has its own independent RWMutex, see lifecycle_index.go) is
+// therefore safe to run against the child's file with no additional
+// mutex: there is nothing to serialize against.
+func (s *LifecycleStore) PublishChildUnderParentLock(
+	parentID string,
+	fn func(parentRec *LifecycleRecord, existed bool) (childRec *LifecycleRecord, err error),
+) error {
+	if err := validateLifecycleSessionID(parentID); err != nil {
+		return err
+	}
+	parentMu := s.Lock(parentID)
+	parentMu.Lock()
+	defer parentMu.Unlock()
+
+	cur, found, err := s.tail(parentID)
+	if err != nil {
+		return err
+	}
+	var parentRec *LifecycleRecord
+	if found {
+		c := *cur
+		parentRec = &c
+	} else {
+		parentRec = &LifecycleRecord{SessionID: parentID}
+	}
+
+	childRec, fnErr := fn(parentRec, found)
+	if fnErr != nil {
+		return fnErr
+	}
+	if err := s.persistLocked(parentRec); err != nil {
+		return err
+	}
+	if childRec == nil {
+		return nil
+	}
+	if err := validateLifecycleSessionID(childRec.SessionID); err != nil {
+		return err
+	}
+	// No childMu acquisition — see the doc comment above for why this is
+	// safe rather than a shortcut.
+	return s.persistLocked(childRec)
+}
+
 // LifecycleFilter narrows the result of List. All fields are optional
 // (zero value = skip that filter).
 type LifecycleFilter struct {

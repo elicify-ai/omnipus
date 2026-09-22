@@ -102,7 +102,7 @@ func TestSpawnSubTurn_HonorsExplicitPerEdgeDepthOverDefaultBackstop(t *testing.T
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, intPtr(10)),
 	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
+	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
 
 	al := ddiNewTestAgentLoop(t)
 

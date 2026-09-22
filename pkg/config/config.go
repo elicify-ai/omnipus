@@ -352,6 +352,56 @@ type PerformanceConfig struct {
 	// a DEFAULT OVERRIDE: it always wins outright and is honored as
 	// configured — see clampParallelExplicit.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
+
+	// MaxDelegationDepth is ADR-091 D9's config fold: the single source of
+	// truth for the onward-delegation depth ceiling, replacing
+	// agents.defaults.subturn.max_depth (the SubTurnConfig field stays
+	// declared — see its own doc comment — because subturn.go's ring/
+	// spawnSubTurn mechanism it also fed is still live for the delegate
+	// follow-up/resume path; this key is what every reader of the GLOBAL
+	// ceiling now resolves through instead, so there is exactly one
+	// number, never two disagreeing ones). 0 means unset — the same
+	// defaultMaxSubTurnDepth backstop resolveEffectiveDelegationDepth
+	// already falls back to applies unchanged. A negative value is a
+	// configuration error (EffectiveMaxDelegationDepth returns it,
+	// never silently reinterpreted).
+	MaxDelegationDepth int `json:"max_delegation_depth,omitempty" env:"OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH"`
+
+	// DelegationTimeoutMinutes is D9's fold for
+	// agents.defaults.subturn.default_timeout_minutes — same rationale as
+	// MaxDelegationDepth above. 0 means unset (the existing
+	// defaultSubTurnTimeout backstop applies); negative is a
+	// configuration error.
+	DelegationTimeoutMinutes int `json:"delegation_timeout_minutes,omitempty" env:"OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES"`
+}
+
+// ErrPerformanceLimitMisconfigured is returned by
+// PerformanceConfig.EffectiveMaxDelegationDepth /
+// EffectiveDelegationTimeoutMinutes for a negative configured value — a
+// genuine configuration error, never silently coerced into "unset"
+// (mirrors admission.go::ErrRootDelegationCapMisconfigured's identical
+// rule for max_parallel_agents' sibling knob).
+var ErrPerformanceLimitMisconfigured = errors.New(
+	"performance: max_delegation_depth and delegation_timeout_minutes must each be >= 0")
+
+// EffectiveMaxDelegationDepth returns MaxDelegationDepth, or an error when
+// it is negative. 0 (unset) is not an error — callers apply their own
+// backstop default in that case (resolveEffectiveDelegationDepth already
+// does, via its hasGlobal check).
+func (p PerformanceConfig) EffectiveMaxDelegationDepth() (int, error) {
+	if p.MaxDelegationDepth < 0 {
+		return 0, fmt.Errorf("%w: max_delegation_depth=%d", ErrPerformanceLimitMisconfigured, p.MaxDelegationDepth)
+	}
+	return p.MaxDelegationDepth, nil
+}
+
+// EffectiveDelegationTimeoutMinutes returns DelegationTimeoutMinutes, or an
+// error when it is negative. 0 (unset) is not an error.
+func (p PerformanceConfig) EffectiveDelegationTimeoutMinutes() (int, error) {
+	if p.DelegationTimeoutMinutes < 0 {
+		return 0, fmt.Errorf("%w: delegation_timeout_minutes=%d", ErrPerformanceLimitMisconfigured, p.DelegationTimeoutMinutes)
+	}
+	return p.DelegationTimeoutMinutes, nil
 }
 
 type HooksConfig struct {

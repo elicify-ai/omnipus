@@ -19,12 +19,14 @@ import (
 )
 
 // delegationDepthCeilingFallback mirrors agent.defaultMaxSubTurnDepth (the
-// subturn depth cap, default 3) for the case where the live config does not set
-// agents.defaults.subturn.max_depth. The agent package's constant is unexported
-// and pkg/gateway must not import pkg/agent's internals, so the ceiling is taken
-// from the configured SubTurn.MaxDepth (see delegationDepthCeiling) and only
-// falls back to this literal when that knob is unset (<= 0) — the exact same
-// fallback the agent loop applies in getSubTurnConfig.
+// subturn depth cap, default 3) for the case where the live config does not
+// set performance.max_delegation_depth (ADR-091 D9's config fold moved
+// this off agents.defaults.subturn.max_depth — see delegationDepthCeiling).
+// The agent package's constant is unexported and pkg/gateway must not
+// import pkg/agent's internals, so the ceiling is taken from the
+// configured key directly and only falls back to this literal when that
+// knob is unset (<= 0) — the exact same fallback
+// pkg/agent/subturn.go::getSubTurnConfig applies.
 //
 // Relocated from the now-deleted rest_agent_delegation.go (ADR-037, Wave 2) —
 // this helper is not delegation-*policy*-specific, it is a shared depth-ceiling
@@ -40,10 +42,12 @@ var workspaceSaveDelegationFn = workspace.SaveDelegation
 // delegationDepthCeiling returns the effective maximum delegation chain depth a
 // caller may request, reusing the global subturn depth cap rather than inventing
 // a new constant. It tracks getSubTurnConfig: the configured
-// agents.defaults.subturn.max_depth when set (> 0), else the default of 3.
+// performance.max_delegation_depth when set (> 0), else the default of 3.
 func delegationDepthCeiling(cfg *config.Config) int {
-	if cfg != nil && cfg.Agents.Defaults.SubTurn.MaxDepth > 0 {
-		return cfg.Agents.Defaults.SubTurn.MaxDepth
+	if cfg != nil {
+		if depth, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil && depth > 0 {
+			return depth
+		}
 	}
 	return delegationDepthCeilingFallback
 }
