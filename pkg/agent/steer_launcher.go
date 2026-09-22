@@ -110,140 +110,181 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: session stores not wired", steer.ErrStoreWrite)
 	}
 
-	var (
-		workspaceID string
-		owner       string
-		steeredBy   *session.SteeredBy
-		stopStamp   *session.Stop
-	)
-
-	if req.SteeringSessionID != "" {
-		if req.WorkspaceID != "" || req.Owner != "" {
-			return steer.LaunchResult{}, fmt.Errorf(
-				"steer: launch: %w: WorkspaceID/Owner must be empty for a steered launch (inherited from the steering session)",
-				steer.ErrInvalidEdge)
-		}
-
-		// Deviation from I-1's literal text (stated in the phase-2 report):
-		// "publishes the child under the parent's record lock" is NOT
-		// implemented as one held lock spanning this read and the child's
-		// write below. LifecycleStore.Lock(id) returns the exact
-		// *sync.Mutex Load/Persist themselves acquire internally
-		// (sync.Mutex is not reentrant, per that method's own doc comment)
-		// — holding it here and then calling Load/Persist for the SAME
-		// steering session id deadlocks every caller against itself. The
-		// store's only externally-safe RMW primitive, Mutate, cannot
-		// create a record where none exists (its callback receives a
-		// plain *LifecycleRecord, nil when absent, with no way to hand a
-		// new one back). Reads and writes below are therefore sequential,
-		// each individually safe (Load/Persist/CreateSessionWithID/SetMeta
-		// all take and release their own per-id lock), but NOT atomic as
-		// one cross-call critical section — a concurrent Stop cascade
-		// landing between this read and the child's Persist could in
-		// principle race this launch. Unreachable today (WP-D's Canceller
-		// is still the CP-0 "reaches nothing" stub), but a real gap once
-		// I-6 lands; closing it needs a new store-level primitive (e.g.
-		// LifecycleStore.MutateOrInsert), not a workaround here.
-		steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
-		if metaErr != nil {
-			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: resolve steering session %q: %v",
-				steer.ErrInvalidEdge, req.SteeringSessionID, metaErr)
-		}
-		workspaceID = steererMeta.WorkspaceID
-		owner = steererMeta.Owner
-
-		steererRec, loadErr := lifecycle.Load(req.SteeringSessionID)
-		if loadErr != nil {
-			if !errors.Is(loadErr, session.ErrLifecycleNotFound) {
-				return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: load steering session record: %v",
-					steer.ErrStoreWrite, loadErr)
-			}
-			// I-1 round 9: this is the steering session's first delegation
-			// — mint its own ordinary_root record now, under the same lock,
-			// before publishing the child.
-			steererRec = &session.LifecycleRecord{
-				SessionID:      req.SteeringSessionID,
-				Generation:     1,
-				State:          session.LifecycleRunning,
-				OwnerScopeKind: session.OwnerScopeHuman,
-				WorkspaceID:    workspaceID,
-				AgentID:        steererMeta.ActiveAgentID,
-				Origin:         &session.Origin{Kind: session.OriginKind(steererMeta.Type)},
-			}
-			if persistErr := lifecycle.Persist(steererRec); persistErr != nil {
-				return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: mint root record for steering session %q: %v",
-					steer.ErrStoreWrite, req.SteeringSessionID, persistErr)
-			}
-		}
-
-		rootID, walkErr := l.walkVerifiedRoot(req.SteeringSessionID, steererRec)
-		if walkErr != nil {
-			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: %v", steer.ErrInvalidEdge, walkErr)
-		}
-
-		remainingDepth := l.startingRemainingDepth(steererRec)
-		if remainingDepth <= 0 {
-			return steer.LaunchResult{}, steer.ErrDepthExceeded
-		}
-
-		steeredBy = &session.SteeredBy{
-			SteeringSessionID: req.SteeringSessionID,
-			RootSessionID:     rootID,
-			ReportingTarget: session.ReportingTarget{
-				SessionID: req.SteeringSessionID,
-				Channel:   steererMeta.Channel,
-			},
-			Authorization: session.Authorization{
-				Mode:           session.AuthorizationModeDirect,
-				RemainingDepth: remainingDepth - 1,
-			},
-			Limits:         req.Limits,
-			ToolExclusions: req.ToolExclusions,
-		}
-
-		// I-1 US-4/AS-6: a launch under a parent carrying a Stop marker for
-		// its CURRENT generation is stamped at launch and never starts.
-		if steererRec.Stop != nil && steererRec.Stop.Generation == steererRec.Generation {
-			stopStamp = &session.Stop{At: steererRec.Stop.At, Generation: 1, By: steererRec.Stop.By}
-		}
-	} else {
-		// Ordinary-root launch (no steering session): inherit nothing,
-		// invent nothing — the caller's own WorkspaceID/Owner apply
-		// verbatim, including empty (US-1/AS-3: "a creator without a
-		// workspace yields a child without one").
-		workspaceID = req.WorkspaceID
-		owner = req.Owner
-	}
-
 	title := req.Label
 	if title == "" {
 		title = req.Task
+	}
+	sessionType := launchSessionType(req.Origin.Kind)
+
+	if req.SteeringSessionID == "" {
+		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType)
+	}
+	return l.launchSteered(sessions, lifecycle, req, title, sessionType)
+}
+
+// launchOrdinaryRoot is Launch's no-steering-session path (US-1/AS-3: a
+// creator with no workspace yields a child with none — never invented).
+// No parent record to publish under, so this is a plain sequential mint —
+// each store call individually lock-safe, no cross-record atomicity to
+// provide.
+func (l *SteerLauncher) launchOrdinaryRoot(
+	sessions *session.UnifiedStore,
+	lifecycle *session.LifecycleStore,
+	req steer.LaunchRequest,
+	title string,
+	sessionType session.UnifiedSessionType,
+) (steer.LaunchResult, error) {
+	meta, identityErr := sessions.NewSession(sessionType, "", req.TargetAgentID)
+	if identityErr != nil {
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: identity: %v", steer.ErrStoreWrite, identityErr)
+	}
+	childID := meta.ID
+	rollback := func() { _ = sessions.DeleteSession(childID) }
+
+	if err := l.writeChildMetaAndHistory(sessions, childID, title, req.WorkspaceID, req.Owner, "", req); err != nil {
+		rollback()
+		return steer.LaunchResult{}, err
+	}
+
+	origin := req.Origin
+	rec := &session.LifecycleRecord{
+		SessionID:      childID,
+		Generation:     1,
+		State:          session.LifecycleQueued,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		WorkspaceID:    req.WorkspaceID,
+		AgentID:        req.TargetAgentID,
+		Origin:         &origin,
+	}
+	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		rollback()
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %v", steer.ErrStoreWrite, persistErr)
+	}
+	return steer.LaunchResult{SessionID: childID, Generation: 1}, nil
+}
+
+// launchSteered is Launch's steered path (I-1): the child's record is
+// published under the steering session's own record lock via
+// PublishChildUnderParentLock (pkg/session/lifecycle.go) — the primitive
+// that closes the atomicity gap the CP-0 report flagged. Everything that
+// decides the edge (root walk, depth, the Stop-marker stamp) AND every
+// mandatory child write (session identity, meta, history, transcript) runs
+// inside that one callback, so a concurrent Stop cascade against the SAME
+// steering session cannot land between "read the parent's Stop status" and
+// "the child exists" — see PublishChildUnderParentLock's own doc comment
+// for why this is deadlock-safe across arbitrarily many concurrent
+// launches under different parents.
+func (l *SteerLauncher) launchSteered(
+	sessions *session.UnifiedStore,
+	lifecycle *session.LifecycleStore,
+	req steer.LaunchRequest,
+	title string,
+	sessionType session.UnifiedSessionType,
+) (steer.LaunchResult, error) {
+	if req.WorkspaceID != "" || req.Owner != "" {
+		return steer.LaunchResult{}, fmt.Errorf(
+			"steer: launch: %w: WorkspaceID/Owner must be empty for a steered launch (inherited from the steering session)",
+			steer.ErrInvalidEdge)
 	}
 
 	childID, idErr := session.NewSessionID()
 	if idErr != nil {
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: mint session id: %v", steer.ErrStoreWrite, idErr)
 	}
-	sessionType := launchSessionType(req.Origin.Kind)
 
-	var (
-		meta        *session.UnifiedMeta
-		identityErr error
+	var resultGen int
+	pubErr := lifecycle.PublishChildUnderParentLock(req.SteeringSessionID,
+		func(parentRec *session.LifecycleRecord, existed bool) (*session.LifecycleRecord, error) {
+			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
+			if metaErr != nil {
+				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %v",
+					steer.ErrInvalidEdge, req.SteeringSessionID, metaErr)
+			}
+			workspaceID := steererMeta.WorkspaceID
+
+			if !existed {
+				// I-1 round 9: this is the steering session's first
+				// delegation — mint its own ordinary_root record now, in
+				// the SAME critical section as the child's publication.
+				parentRec.Generation = 1
+				parentRec.State = session.LifecycleRunning
+				parentRec.OwnerScopeKind = session.OwnerScopeHuman
+				parentRec.WorkspaceID = workspaceID
+				parentRec.AgentID = steererMeta.ActiveAgentID
+				parentRec.Origin = &session.Origin{Kind: session.OriginKind(steererMeta.Type)}
+			}
+
+			rootID, walkErr := l.walkVerifiedRoot(req.SteeringSessionID, parentRec)
+			if walkErr != nil {
+				return nil, fmt.Errorf("steer: launch: %w: %v", steer.ErrInvalidEdge, walkErr)
+			}
+			remainingDepth := l.startingRemainingDepth(parentRec)
+			if remainingDepth <= 0 {
+				return nil, steer.ErrDepthExceeded
+			}
+
+			steeredBy := &session.SteeredBy{
+				SteeringSessionID: req.SteeringSessionID,
+				RootSessionID:     rootID,
+				ReportingTarget: session.ReportingTarget{
+					SessionID: req.SteeringSessionID,
+					Channel:   steererMeta.Channel,
+				},
+				Authorization: session.Authorization{
+					Mode:           session.AuthorizationModeDirect,
+					RemainingDepth: remainingDepth - 1,
+				},
+				Limits:         req.Limits,
+				ToolExclusions: req.ToolExclusions,
+			}
+			// I-1 US-4/AS-6: a launch under a parent carrying a Stop
+			// marker for its CURRENT generation is stamped at launch and
+			// never starts.
+			var stopStamp *session.Stop
+			if parentRec.Stop != nil && parentRec.Stop.Generation == parentRec.Generation {
+				stopStamp = &session.Stop{At: parentRec.Stop.At, Generation: 1, By: parentRec.Stop.By}
+			}
+
+			if _, err := sessions.CreateSessionWithID(childID, req.SteeringSessionID, sessionType, "", req.TargetAgentID); err != nil {
+				return nil, fmt.Errorf("steer: launch: %w: identity: %v", steer.ErrStoreWrite, err)
+			}
+			if err := l.writeChildMetaAndHistory(sessions, childID, title, workspaceID, "", req.SteeringSessionID, req); err != nil {
+				_ = sessions.DeleteSession(childID)
+				return nil, err
+			}
+
+			origin := req.Origin
+			resultGen = 1
+			return &session.LifecycleRecord{
+				SessionID:      childID,
+				Generation:     1,
+				State:          session.LifecycleQueued,
+				OwnerScopeKind: session.OwnerScopeParentSession,
+				OwnerScopeID:   req.SteeringSessionID,
+				WorkspaceID:    workspaceID,
+				AgentID:        req.TargetAgentID,
+				Origin:         &origin,
+				SteeredBy:      steeredBy,
+				Stop:           stopStamp,
+			}, nil
+		},
 	)
-	if req.SteeringSessionID != "" {
-		meta, identityErr = sessions.CreateSessionWithID(childID, req.SteeringSessionID, sessionType, "", req.TargetAgentID)
-	} else {
-		meta, identityErr = sessions.NewSession(sessionType, "", req.TargetAgentID)
-		if meta != nil {
-			childID = meta.ID
-		}
+	if pubErr != nil {
+		return steer.LaunchResult{}, pubErr
 	}
-	if identityErr != nil {
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: identity: %v", steer.ErrStoreWrite, identityErr)
-	}
+	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+}
 
-	rollback := func() { _ = sessions.DeleteSession(childID) }
-
+// writeChildMetaAndHistory applies the child's meta patch (title,
+// workspace, owner, parent edge) and seeds its first message into both the
+// model-visible history and the durable transcript (US-2: "one memory" —
+// reconstruction, I-3, builds the child's first turn from real, persisted
+// history, not a special first-run field).
+func (l *SteerLauncher) writeChildMetaAndHistory(
+	sessions *session.UnifiedStore,
+	childID, title, workspaceID, owner, steeringSessionID string,
+	req steer.LaunchRequest,
+) error {
 	patch := session.MetaPatch{Title: &title}
 	if workspaceID != "" {
 		patch.WorkspaceID = &workspaceID
@@ -251,22 +292,13 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if owner != "" {
 		patch.Owner = &owner
 	}
-	if req.SteeringSessionID != "" {
-		steeringID := req.SteeringSessionID
-		patch.ParentSessionID = &steeringID
+	if steeringSessionID != "" {
+		patch.ParentSessionID = &steeringSessionID
 	}
 	if setErr := sessions.SetMeta(childID, patch); setErr != nil {
-		rollback()
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: owner/workspace/title: %v", steer.ErrStoreWrite, setErr)
+		return fmt.Errorf("steer: launch: %w: owner/workspace/title: %v", steer.ErrStoreWrite, setErr)
 	}
 
-	// Record the task as the child's own first message — TWO writes, to
-	// the two distinct logs a session keeps (unified.go's own doc comment:
-	// "context.jsonl (agent loop), transcript.jsonl (UI)"). US-2 ("one
-	// memory", the ring is gone) means reconstruction (I-3) builds the
-	// child's first turn from its REAL history, not a special first-run
-	// field, so both the model-visible history AND the UI transcript must
-	// already be on disk before Dispatch ever reads them.
 	if req.Task != "" {
 		sessions.AddMessage(childID, "user", req.Task)
 		taskEntry := session.TranscriptEntry{
@@ -277,37 +309,10 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 			Timestamp: time.Now().UTC(),
 		}
 		if appendErr := sessions.AppendTranscriptStrict(childID, taskEntry); appendErr != nil {
-			rollback()
-			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: task transcript: %v", steer.ErrStoreWrite, appendErr)
+			return fmt.Errorf("steer: launch: %w: task transcript: %v", steer.ErrStoreWrite, appendErr)
 		}
 	}
-
-	ownerScopeKind := session.OwnerScopeHuman
-	ownerScopeID := ""
-	if req.SteeringSessionID != "" {
-		ownerScopeKind = session.OwnerScopeParentSession
-		ownerScopeID = req.SteeringSessionID
-	}
-
-	origin := req.Origin
-	rec := &session.LifecycleRecord{
-		SessionID:      childID,
-		Generation:     1,
-		State:          session.LifecycleQueued,
-		OwnerScopeKind: ownerScopeKind,
-		OwnerScopeID:   ownerScopeID,
-		WorkspaceID:    workspaceID,
-		AgentID:        req.TargetAgentID,
-		Origin:         &origin,
-		SteeredBy:      steeredBy,
-		Stop:           stopStamp,
-	}
-	if persistErr := lifecycle.Persist(rec); persistErr != nil {
-		rollback()
-		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %v", steer.ErrStoreWrite, persistErr)
-	}
-
-	return steer.LaunchResult{SessionID: childID, Generation: 1}, nil
+	return nil
 }
 
 // walkVerifiedRoot resolves the cascade root for a new child steered by
