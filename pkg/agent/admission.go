@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -643,4 +644,148 @@ func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg t
 		}
 	}()
 	return s.inner.SpawnSubTurn(ctx, cfg)
+}
+
+// ====================== ADR-091 I-3/D9: the steered-turn admission loop ======================
+//
+// A SEPARATE gate from AdmissionController/RootDelegationAdmission above: those
+// two govern the delegate() tool's SPAWN attempt (refuse immediately, no
+// queue). steerAdmission governs steer.SessionLauncher.Dispatch's admission
+// decision (I-2/I-3): the counter tracks TURNS EXECUTING right now — not
+// sessions in a "running" lifecycle state (D9) — and a session that cannot
+// be admitted is QUEUED, never refused, started in launch order (FIFO) as
+// slots free (turn end -> steerAdmission.release -> drainSteerQueue).
+
+// steerQueueEntry is one FIFO-queued dispatch awaiting a free admission
+// slot.
+type steerQueueEntry struct {
+	sessionID  string
+	generation int
+}
+
+// steerAdmission is the turn-counting admission gate (I-3 "Admission"). cap
+// is resolved LIVE on every tryAdmit via resolveCap (mirrors
+// AdmissionController.resolveCap's live-resolution rationale — an operator's
+// PUT /api/v1/performance write must reach this gate without a restart).
+type steerAdmission struct {
+	mu         sync.Mutex
+	active     map[string]int // sessionKey -> generation, only while THIS gate admitted the turn
+	queue      []steerQueueEntry
+	resolveCap func() int
+}
+
+func newSteerAdmission(resolveCap func() int) *steerAdmission {
+	return &steerAdmission{active: make(map[string]int), resolveCap: resolveCap}
+}
+
+// tryAdmit atomically decides running vs queued for sessionID/gen (I-2
+// "Dispatch — not Launch — decides atomically under the admission lock").
+// Returns (true, 0) when admitted; (false, 1-based position) when queued —
+// never blocks.
+func (g *steerAdmission) tryAdmit(sessionID string, gen int) (admitted bool, queuePosition int) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	effectiveCap := 1
+	if g.resolveCap != nil {
+		if c := g.resolveCap(); c > 0 {
+			effectiveCap = c
+		}
+	}
+	if len(g.active) >= effectiveCap {
+		g.queue = append(g.queue, steerQueueEntry{sessionID: sessionID, generation: gen})
+		return false, len(g.queue)
+	}
+	g.active[sessionID] = gen
+	return true, 0
+}
+
+// release frees sessionID's admission slot (a turn ended — D9: "a session
+// whose turn has ended holds no slot") and pops the oldest queued entry, if
+// any, for the caller to dispatch next (FIFO). A release for a sessionID
+// this gate never admitted (e.g. a non-steered turn's ordinary Finish, or a
+// session that was queued rather than admitted) is a harmless no-op.
+func (g *steerAdmission) release(sessionID string) (next steerQueueEntry, hasNext bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, ok := g.active[sessionID]; !ok {
+		return steerQueueEntry{}, false
+	}
+	delete(g.active, sessionID)
+	if len(g.queue) == 0 {
+		return steerQueueEntry{}, false
+	}
+	next = g.queue[0]
+	g.queue = g.queue[1:]
+	g.active[next.sessionID] = next.generation
+	return next, true
+}
+
+// activeCount reports the number of turns this gate currently holds a slot
+// for — test/observability seam.
+func (g *steerAdmission) activeCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.active)
+}
+
+// queueLen reports the number of sessions currently queued — test/
+// observability seam.
+func (g *steerAdmission) queueLen() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.queue)
+}
+
+// steerAdmissionRegistry maps *AgentLoop -> its one steerAdmission gate.
+// A package-level registry, not an AgentLoop struct field, because loop.go
+// is line-count-pinned (scripts/budgets/files.txt) and cannot grow by even
+// one field declaration; every other ADR-091 per-AgentLoop steering state
+// (this gate) is threaded through this side table instead. Entries are
+// never removed — AgentLoop instances are process-lifetime singletons in
+// production, and the handful a test suite constructs and discards is a
+// bounded, acceptable leak (mirrors how Go program-lifetime caches are
+// commonly implemented; there is no AgentLoop.Close hook this could
+// unregister from today).
+var (
+	steerAdmissionRegistry   = map[*AgentLoop]*steerAdmission{}
+	steerAdmissionRegistryMu sync.Mutex
+)
+
+// steerAdmission returns al's steered-turn admission gate, constructing it
+// on first use with a resolver reading the SAME central authority
+// (Performance.EffectiveMaxParallelAgents) AdmissionController and
+// RootDelegationAdmission already read, so all three concurrency gates
+// stay aligned to one operator-configured number.
+func (al *AgentLoop) steerAdmission() *steerAdmission {
+	steerAdmissionRegistryMu.Lock()
+	defer steerAdmissionRegistryMu.Unlock()
+	if g, ok := steerAdmissionRegistry[al]; ok {
+		return g
+	}
+	g := newSteerAdmission(func() int {
+		n, _ := al.GetConfig().Performance.EffectiveMaxParallelAgents()
+		return n
+	})
+	steerAdmissionRegistry[al] = g
+	return g
+}
+
+// drainSteerQueue is called when a turn ends (turn_exit.go::Finish) —
+// releases sessionID's slot and, if a session was waiting, dispatches it
+// through the SAME admission path Dispatch itself uses
+// (dispatchSteeredSession), started in a goroutine so Finish (which may be
+// running inside another turn's own goroutine, e.g. a hard-abort cascade)
+// never blocks on the next session's turn.
+func (al *AgentLoop) drainSteerQueue(sessionID string) {
+	next, hasNext := al.steerAdmission().release(sessionID)
+	if !hasNext {
+		return
+	}
+	go func() {
+		if _, err := al.dispatchSteeredSession(context.Background(), next.sessionID, next.generation); err != nil {
+			logger.WarnCF("agent", "steer: drain queue: dispatch of the next queued session failed",
+				map[string]any{"session_id": next.sessionID, "generation": next.generation, "error": err.Error()})
+		}
+	}()
 }

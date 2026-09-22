@@ -256,6 +256,16 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		ts.cancelFunc()
 	}
 
+	// ADR-091 I-3/D9: this session's turn has ended — it holds no admission
+	// slot any more (a waiting parent holding no slot is round 9's whole
+	// point). A no-op for a non-steered turn (drainSteerQueue's release is a
+	// no-op when this sessionKey was never admitted through the steered-turn
+	// gate). al may be nil for an ad-hoc test turnState that skipped
+	// newTurnState.
+	if ts.al != nil {
+		ts.al.drainSteerQueue(ts.sessionKey)
+	}
+
 	// Hard abort cascades to all child turns
 	if isHardAbort && ts.al != nil {
 		ts.mu.RLock()
