@@ -23,10 +23,11 @@ import (
 
 // TestHandleProviders_CorruptedCredential_IsErrorStatus pins Task 3: when a
 // provider's api_key_ref is present in config but the credential store
-// cannot decrypt it (corrupted entry / wrong master key — worse than "not
+// cannot authenticate it (corrupted entry / wrong master key — worse than "not
 // configured"), GET /api/v1/providers must report status=error with a
-// remediation message distinguishing it from a provider that was simply
-// never configured (which remains status=disconnected — see
+// remediation message naming that credential and distinguishing it from a
+// provider that was simply never configured (which remains
+// status=disconnected — see
 // TestHandleProviders_CredStoreRef_EmptyRef_IsDisconnected in
 // s1_befixes_test.go).
 func TestHandleProviders_CorruptedCredential_IsErrorStatus(t *testing.T) {
@@ -104,7 +105,13 @@ func TestHandleProviders_CorruptedCredential_IsErrorStatus(t *testing.T) {
 			assert.Equal(t, "error", p["status"],
 				"a locked/undecryptable vault must report status=error, distinguishable from never-configured (Task 3)")
 			errMsg, _ := p["error"].(string)
-			assert.Contains(t, errMsg, "vault could not be read")
+			// A present-but-unauthenticating entry now gets the entry-naming
+			// remediation rather than the generic "vault could not be read":
+			// the vault IS readable, the bytes under that name are the problem,
+			// so "unlock and retry" would be the wrong advice.
+			assert.Contains(t, errMsg, "CORRUPT_PROVIDER_KEY",
+				"the remediation must name the credential at fault")
+			assert.Contains(t, errMsg, "re-enter")
 			break
 		}
 	}
