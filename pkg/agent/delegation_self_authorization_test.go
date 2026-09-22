@@ -171,12 +171,12 @@ func TestDelegationDenyChecker_GeneralPurposeSelfEdgesRequireIdentityModeAndDept
 	if denial := workerTask(ctxWS(testWS, 1), "worker"); denial != nil {
 		t.Fatalf("worker explicit task self edge denied: %+v", denial)
 	}
-	workerDirect := buildDelegationDenyCheckerForDelegate("worker", config.AgentDefaults{}, config.DelegationModeAwait)
+	workerDirect := buildDelegationDenyCheckerForDelegate("worker", config.AgentDefaults{}, config.DelegationMode("await"))
 	if denial := workerDirect(ctxWS(testWS, 0), "worker"); denial == nil {
 		t.Fatal("worker self edge allowed an unlisted mode")
 	}
 
-	mia := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait)
+	mia := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationMode("await"))
 	if denial := mia(ctxWS(testWS, 0), "mia"); denial == nil {
 		t.Fatal("non-general identity self-delegation was allowed")
 	}

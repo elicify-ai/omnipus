@@ -484,7 +484,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	}
 
 	// (c) gate: mia→jim await allowed.
-	checkAwait := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait)
+	checkAwait := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationMode("await"))
 	if denial := checkAwait(ctxWS(wsID, 0), "jim"); denial != nil {
 		t.Errorf("parity: gate must allow mia→jim await (advertised); got deny: %+v", denial)
 	}

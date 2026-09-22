@@ -77,7 +77,7 @@ func TestDelegationDenyChecker_SelfTargetDeniedForAwaitDelegate(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"await"}, nil),
 	})
-	check := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait)
+	check := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationMode("await"))
 
 	denial := check(ctxWS(testWS, 0), "mia") // self-target
 	if denial == nil {
