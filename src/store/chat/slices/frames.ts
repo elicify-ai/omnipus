@@ -166,6 +166,7 @@ function recordPendingSpanUpdate(
     delete next[keys[0]]
   }
   return next
+}
 
 // Issue #822: a real done can arrive at the reconnect bind boundary before
 // its catch-up token. That next token is the completed snapshot, not a new
