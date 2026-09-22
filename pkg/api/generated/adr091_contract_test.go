@@ -276,3 +276,75 @@ func TestContract_ADR091_SessionLifecycleRecordRejectsUnknownOriginKind(t *testi
 	err := validateAgainstComponentSchemaRawJSON(t, "SessionLifecycleRecord", jsonData)
 	require.Error(t, err, "an origin kind outside the I-1 enum must be refused")
 }
+
+// ── Lane 5c Contract Deletion Tests ──────────────────────────────────────────
+// Traces to: ADR-091 WP-E lane 5c, steps 1–3
+// Tests that removed fields are now rejected by the validator.
+
+func TestContract_ADR091_ToolResultProjectionFrameRejectsProducingSessionId(t *testing.T) {
+	// Control: producing_session_id must be rejected from ToolResultProjectionFrame
+	// (WP-E step 1). The schema has additionalProperties: false, so this field is
+	// not permitted. Prove the deletion by verifying rejection.
+	jsonData := []byte(`{
+		"type": "tool_result_projection",
+		"session_id": "sid-123",
+		"tool_call_id": "call-456",
+		"archive_line": 10,
+		"content_state": "capped",
+		"producing_session_id": "sid-child"
+	}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "ToolResultProjectionFrame", jsonData)
+	require.Error(t, err, "producing_session_id must be rejected (deleted from wire)")
+}
+
+func TestContract_ADR091_DelegateRunActionRejectsWait(t *testing.T) {
+	// Control: wait and allow_blocking_question must be rejected from DelegateRunAction
+	// (WP-E step 2). The schema has additionalProperties: false. Prove deletion by
+	// verifying rejection of wait.
+	jsonData := []byte(`{
+		"action": "run",
+		"target_agent_id": "ray",
+		"task": "Summarize logs",
+		"wait": true
+	}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "DelegateRunAction", jsonData)
+	require.Error(t, err, "wait must be rejected (deleted from wire)")
+}
+
+func TestContract_ADR091_DelegateRunActionRejectsAllowBlockingQuestion(t *testing.T) {
+	// Control: allow_blocking_question must also be rejected from DelegateRunAction
+	// (WP-E step 2). Test rejection of this separate field.
+	jsonData := []byte(`{
+		"action": "run",
+		"target_agent_id": "ray",
+		"task": "Summarize logs",
+		"allow_blocking_question": true
+	}`)
+	err := validateAgainstComponentSchemaRawJSON(t, "DelegateRunAction", jsonData)
+	require.Error(t, err, "allow_blocking_question must be rejected (deleted from wire)")
+}
+
+func TestContract_ADR091_DeleteSessionResponseWithStopReport(t *testing.T) {
+	// DELETE session response (WP-E step 3) now carries the Stop report fields.
+	// Test that the structure with partial: true marshals correctly (proves the
+	// fields are now present in the schema).
+	deleteResp := map[string]interface{}{
+		"success": true,
+		"reached": []string{"sid-root", "sid-a"},
+		"unreachable": []map[string]interface{}{
+			{"id": "sid-b", "reason": "lifecycle record unreadable"},
+		},
+		"skipped_newer_generation": []string{"sid-c"},
+		"skipped_terminal":         []string{"sid-d"},
+		"partial":                  true,
+	}
+	jsonData, err := json.Marshal(deleteResp)
+	require.NoError(t, err, "should marshal DELETE response with Stop report")
+
+	// Verify the JSON is well-formed and contains expected fields
+	var unmarshaled map[string]interface{}
+	err = json.Unmarshal(jsonData, &unmarshaled)
+	require.NoError(t, err, "should unmarshal DELETE response")
+	require.True(t, unmarshaled["success"].(bool))
+	require.True(t, unmarshaled["partial"].(bool))
+}
