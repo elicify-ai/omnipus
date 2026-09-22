@@ -71,11 +71,19 @@ function StatusActionButton({
   label,
   tooltip,
   onClick,
+  testId,
   children,
 }: {
   label: string
   tooltip: string
   onClick?: () => void
+  /**
+   * Optional stable hook for e2e specs. The failed-send retry keeps the
+   * pre-#823 id `user-message-retry` so `tests/e2e/open-in-chat.spec.ts`'s
+   * §253(c) resend path keeps testing the same affordance across the
+   * banner-to-message-level redesign.
+   */
+  testId?: string
   children: React.ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -86,6 +94,7 @@ function StatusActionButton({
         variant="ghost"
         size="sm"
         onClick={onClick}
+        data-testid={testId}
         aria-label={label}
         aria-describedby={open ? tooltipId : undefined}
         onMouseEnter={() => setOpen(true)}
@@ -134,6 +143,7 @@ export function UserMessageDeliveryStatus({
       >
         <StatusActionButton
           onClick={onRetry}
+          testId="user-message-retry"
           label="Couldn't be sent. Try again, button"
           tooltip="This message couldn't be delivered. Your text is kept — click to try again."
         >
