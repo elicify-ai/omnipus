@@ -155,11 +155,11 @@ function BashOutputBlock({
       </div>
 
       {/* Output panel — indented left-accent block; the dark terminal panel
-          keeps its own identity (bg-[#0d1117]) but is no longer wrapped in
-          an outer bordered frame. */}
+          keeps its own identity (bg-[var(--color-code-surface)]) but is no
+          longer wrapped in an outer bordered frame. */}
       {expanded && (
         <div className="ml-[var(--space-1)] border-l-2 border-[var(--color-border)] pl-[var(--space-2-5)] py-[var(--space-1)]">
-          <div className="bg-[#0d1117] rounded-sm">
+          <div className="bg-[var(--color-code-surface)] rounded-sm">
             {isRunning && !output ? (
               <div className="px-[var(--space-2-5)] py-[var(--space-2)] text-[var(--color-muted)] italic flex items-center gap-[var(--space-2)]">
                 <ArrowsClockwise size={11} className="animate-spin" />

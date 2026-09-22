@@ -580,7 +580,7 @@ function LibraryHtmlFrame({
         sandbox="allow-scripts"
         referrerPolicy="no-referrer"
         allow=""
-        className="h-[70vh] min-h-[20rem] w-full shrink-0 rounded-md border border-[var(--color-border)] bg-white"
+        className="h-[70vh] min-h-[20rem] w-full shrink-0 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-paper)]"
       />
     </div>
   )

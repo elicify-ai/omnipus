@@ -376,7 +376,7 @@ function CategorySection({
   const summary = categorySummaryPolicy(tools, policies)
 
   const PILL_CLASS: Record<PolicySummary, string> = {
-    mixed:        'bg-violet-500/20 text-violet-300 border-violet-500/40',
+    mixed:        'bg-[color-mix(in_srgb,var(--color-tertiary)_20%,transparent)] text-[var(--color-text-tertiary)] border-[color-mix(in_srgb,var(--color-tertiary)_40%,transparent)]',
     allow:        'bg-[var(--color-status-done)]/20 text-[var(--color-status-done)] border-[var(--color-status-done)]/40',
     ask:          'bg-[var(--color-warning)]/20 text-[var(--color-warning)] border-[var(--color-warning)]/40',
     deny:         'bg-[var(--color-status-failed)]/20 text-[var(--color-status-failed)] border-[var(--color-status-failed)]/40',
@@ -550,7 +550,7 @@ function McpServerSection({
           <div className="flex items-center gap-[var(--space-1)] mb-[var(--space-2)]">
             <Database size={11} className="text-[var(--color-muted)]" />
             <span
-              className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-violet-500/20 text-violet-300 border border-violet-500/40"
+              className="px-[var(--space-1)] py-[var(--space-0-5)] rounded text-[length:var(--type-caption-size)] font-semibold bg-[color-mix(in_srgb,var(--color-tertiary)_20%,transparent)] text-[var(--color-text-tertiary)] border border-[color-mix(in_srgb,var(--color-tertiary)_40%,transparent)]"
               data-testid={`mcp-source-badge-${server}`}
             >
               MCP

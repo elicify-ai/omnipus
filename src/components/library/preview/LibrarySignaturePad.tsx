@@ -183,7 +183,7 @@ export function LibrarySignaturePad({
             if (node) configureCanvas(node)
           }}
           style={{ width: SIGNATURE_PAD_WIDTH, height: SIGNATURE_PAD_HEIGHT, touchAction: 'none' }}
-          className="mx-auto cursor-crosshair rounded-md border border-[var(--color-border)] bg-white"
+          className="mx-auto cursor-crosshair rounded-md border border-[var(--color-border)] bg-[var(--color-surface-paper)]"
           data-testid="library-pdf-signature-canvas"
           role="img"
           aria-label="Signature drawing area"

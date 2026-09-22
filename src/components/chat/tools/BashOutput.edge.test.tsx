@@ -76,8 +76,9 @@ it('registers the canonical bash tool and all 5 legacy aliases', () => {
 // status-tinted border + bg-surface-1 header) is gone — the row is now a
 // flat text line whose only status color comes from an 8px dot (running
 // keeps the spinning icon in the same slot). The dark terminal output panel
-// keeps its own identity (bg-[#0d1117]) but is no longer wrapped in a
-// bordered outer frame — it now sits behind a border-l-2 left accent line.
+// keeps its own identity (bg-[var(--color-code-surface)]) but is no longer
+// wrapped in a bordered outer frame — it now sits behind a border-l-2 left
+// accent line.
 
 describe('bash — flat text-line status dot', () => {
   /** The toggle button is the first (and only) <button> in the row; its
@@ -184,7 +185,7 @@ describe('bash — flat text-line status dot', () => {
     expect(panel?.className).not.toContain('border-t')
   })
 
-  it('the dark terminal output panel keeps its own identity (bg-[#0d1117]) without an outer border', () => {
+  it('the dark terminal output panel keeps its own identity (bg-[var(--color-code-surface)]) without an outer border', () => {
     if (!captured.bashRender) {
       expect(BashOutputUI).toBeDefined()
       return
@@ -196,7 +197,7 @@ describe('bash — flat text-line status dot', () => {
         status: { type: 'complete' },
       }) as React.ReactElement
     )
-    const terminal = container.querySelector('[class*="0d1117"]') as HTMLElement | null
+    const terminal = container.querySelector('[class*="color-code-surface"]') as HTMLElement | null
     expect(terminal).toBeTruthy()
     expect(terminal?.className).not.toContain('border')
   })

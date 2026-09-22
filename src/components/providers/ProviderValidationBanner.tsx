@@ -60,13 +60,10 @@ export function ProviderValidationBanner({
       aria-live={isBlocking ? 'assertive' : 'polite'}
       data-testid={testId}
       data-outcome={outcome}
-      // The amber branch stays raw Tailwind amber: `--color-warning` resolves
-      // to Tailwind's yellow-500 (#EAB308), not amber-500 (#F59E0B) — mapping
-      // this onto it would shift the hue from amber toward yellow.
       className={
         isBlocking
           ? 'flex items-start gap-[var(--space-2)] rounded-lg border border-[color-mix(in_srgb,var(--color-error)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-error)_10%,transparent)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-text-error)]'
-          : 'flex items-start gap-[var(--space-2)] rounded-lg border border-amber-500/40 bg-amber-500/10 px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-amber-300'
+          : 'flex items-start gap-[var(--space-2)] rounded-lg border border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_10%,transparent)] px-[var(--space-2-5)] py-[var(--space-2)] text-[length:var(--type-body-compact-size)] text-[var(--color-warning)]'
       }
     >
       {icon}

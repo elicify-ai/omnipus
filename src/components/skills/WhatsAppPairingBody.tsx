@@ -75,7 +75,7 @@ export function WhatsAppPairingBody({
     return (
       <>
         {/* QR must sit on a light background to scan reliably in dark mode. */}
-        <div data-testid="whatsapp-qr" className="rounded-md bg-white p-[var(--space-2-5)]">
+        <div data-testid="whatsapp-qr" className="rounded-md bg-[var(--color-surface-paper)] p-[var(--space-2-5)]">
           <QRCodeSVG value={pairing.qr} size={184} level="L" title="WhatsApp pairing QR code" />
         </div>
         <p className="text-[length:var(--type-utility-xs-size)] text-[var(--color-secondary)] text-center">

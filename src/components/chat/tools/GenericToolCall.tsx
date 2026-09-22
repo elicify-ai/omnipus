@@ -134,8 +134,8 @@ function ToolResultRefDisplay({
   return (
     <div data-testid="result-tool-ref">
       {/* Banner — flat: a warning-tinted left accent stands in for the old
-          amber box (ticket "Tool components in chat"); text stays amber. */}
-      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-amber-500/40 pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-amber-400">
+          amber box (ticket "Tool components in chat"); text stays warning-colored. */}
+      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
           Result stored server-side ({humanSize(sentinel.original_size_bytes)}) — preview only
@@ -192,8 +192,8 @@ function ToolResultRefDisplay({
 function ClientTruncatedDisplay({ sentinel }: { sentinel: ClientTruncatedResult }) {
   return (
     <div data-testid="result-client-truncated">
-      {/* Flat: warning-tinted left accent instead of the old amber box; text stays amber. */}
-      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-amber-500/40 pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-amber-400">
+      {/* Flat: warning-tinted left accent instead of the old amber box; text stays warning-colored. */}
+      <div className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]">
         <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
         <span>
           Truncated client-side — showing first 4 KiB of {humanSize(sentinel.original_size_bytes)}.
@@ -550,7 +550,7 @@ export function GenericToolCall({
                 <>
                   <div
                     data-testid="result-truncated-banner"
-                    className="flex items-start gap-[var(--space-2)] border-l-2 border-amber-500/40 pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-amber-400"
+                    className="flex items-start gap-[var(--space-2)] border-l-2 border-[color-mix(in_srgb,var(--color-warning)_40%,transparent)] pl-[var(--space-2)] py-[var(--space-1)] mb-[var(--space-1)] font-body text-[length:var(--type-caption-size)] text-[var(--color-warning)]"
                   >
                     <Warning size={12} weight="fill" className="shrink-0 mt-[var(--space-0-5)]" />
                     <span>

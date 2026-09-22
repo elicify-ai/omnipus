@@ -400,7 +400,7 @@ describe('FileReadBlock — flat text-line status dot', () => {
     expect(panel.className).not.toMatch(/\bborder-b\b/)
     // The <pre> keeps its dark code-block background.
     const pre = panel.querySelector('pre')
-    expect(pre?.className).toContain('bg-[#0d1117]')
+    expect(pre?.className).toContain('bg-[var(--color-code-surface)]')
   })
 })
 

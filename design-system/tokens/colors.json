@@ -1788,6 +1788,62 @@
       "layer": "semantic",
       "kind": "color",
       "ref": "primitive.color.priority-5-background"
+    },
+    {
+      "id": "primitive.color.code-surface",
+      "css": "--primitive-color-code-surface",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#0D1117"
+    },
+    {
+      "id": "color.code.surface",
+      "css": "--color-code-surface",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.code-surface"
+    },
+    {
+      "id": "primitive.color.paper",
+      "css": "--primitive-color-paper",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#FFFFFF"
+    },
+    {
+      "id": "color.surface.paper",
+      "css": "--color-surface-paper",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.paper"
+    },
+    {
+      "id": "primitive.color.violet",
+      "css": "--primitive-color-violet",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#8D56FF"
+    },
+    {
+      "id": "primitive.color.violet-label",
+      "css": "--primitive-color-violet-label",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#C4B4FF"
+    },
+    {
+      "id": "color.tertiary",
+      "css": "--color-tertiary",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.violet"
+    },
+    {
+      "id": "color.text.tertiary",
+      "css": "--color-text-tertiary",
+      "layer": "semantic",
+      "kind": "color",
+      "ref": "primitive.color.violet-label"
     }
   ]
 }

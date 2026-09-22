@@ -60,7 +60,7 @@ export function RateLimitIndicator({
         'flex items-start gap-[var(--space-2)] px-[var(--space-2-5)] py-[var(--space-2)] rounded-lg border text-[length:var(--type-utility-xs-size)]',
         canRetry
           ? 'border-[color-mix(in_srgb,var(--color-success)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-success)_5%,transparent)] text-[var(--color-success)]'
-          : 'border-amber-500/30 bg-amber-500/5 text-amber-400',
+          : 'border-[color-mix(in_srgb,var(--color-warning)_30%,transparent)] bg-[color-mix(in_srgb,var(--color-warning)_5%,transparent)] text-[var(--color-warning)]',
       )}
       role="status"
       aria-live="polite"
@@ -68,7 +68,7 @@ export function RateLimitIndicator({
       {canRetry ? (
         <Clock size={13} className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-success)]" />
       ) : (
-        <Warning size={13} className="mt-[var(--space-0-5)] shrink-0 text-amber-400" weight="fill" />
+        <Warning size={13} className="mt-[var(--space-0-5)] shrink-0 text-[var(--color-warning)]" weight="fill" />
       )}
 
       <div className="flex-1 min-w-0">
