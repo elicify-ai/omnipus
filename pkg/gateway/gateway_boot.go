@@ -55,6 +55,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/voice"
@@ -913,6 +914,7 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 		return nil, true, fmt.Errorf("gateway: failed to derive intent log HMAC chain key: %w", ilKeyErr)
 	}
 	stg.lifecycleStore = session.NewLifecycleStore(filepath.Join(stg.homePath, "session_lifecycle"))
+	stg.wireSteerDeps()
 	var ilDirErr error
 	stg.intentLog, ilDirErr = plan.NewIntentLog(filepath.Join(stg.homePath, "plan_intents"), intentLogChainKey)
 	if ilDirErr != nil {
@@ -951,6 +953,51 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 	}
 	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
 	return nil, false, nil
+}
+
+// ============================================================================
+// ADR-091 — pkg/steer wiring (landing order §3 row A: "pkg/gateway/
+// gateway_boot.go (wiring every pkg/steer implementation; the boot hook
+// body is D's) | A wires, D owns the hook body | one file, two named
+// sections"). This is WP-A's named section; WP-D's boot-hook body lands
+// separately (its own section, landing order §3 "boot_sweep.go ... the
+// boot-hook body in gateway_boot.go").
+// ============================================================================
+
+// wireSteerDeps builds every ADR-091 pkg/steer implementation from the
+// pkg/agent side (I-2 SessionLauncher, I-5 AudienceResolver/
+// UpwardDeliverer, I-6 Canceller, I-8 RecordClassifier) and stores the
+// bundle on stg.runningServices.SteerDeps, where later lanes (WP-B, WP-C,
+// WP-D) read it off the running *services to inject into their own
+// boundaries — they do not re-wire pkg/agent themselves.
+//
+// CP-0 (landing order §4): I-8's Classifier is real (steer_classify.go);
+// every other field is a compiled stub (steer_launcher.go — WP-A's own
+// phase 2; steer_audience.go, steer_cancel.go — owned by WP-B/WP-D from
+// this call site onward). Stubs are replaced by real bodies in the SAME
+// files at CP-2/CP-3 — no alias period, no second path — so this wiring
+// section does not change shape as later checkpoints land, only what each
+// field points at.
+func (stg *setupAndStartServicesState) wireSteerDeps() {
+	sessionStore := stg.agentLoop.GetSessionStore()
+	classifier := agent.NewSteerRecordClassifier(stg.lifecycleStore, sessionStore)
+	stg.runningServices.SteerAudienceResolver = agent.NewSteerAudienceResolver(classifier)
+	stg.runningServices.SteerDeps = steer.Deps{
+		Launcher:       agent.NewSteerLauncher(),
+		Canceller:      agent.NewSteerCanceller(stg.lifecycleStore),
+		Deliverer:      agent.NewSteerUpwardDeliverer(),
+		Classifier:     classifier,
+		LifecycleStore: stg.lifecycleStore,
+		SessionStore:   sessionStore,
+		// BootHook is a CP-0 placeholder (returns nil unconditionally) so
+		// I-7's fixture Reboot() hook — "reopen the stores and run
+		// BootHook, the same function gateway_boot.go runs" — has a real
+		// function to call before WP-D's boot sweep exists. WP-D replaces
+		// this closure's body with the real boot sweep at CP-3; the
+		// closure itself stays here (one wiring section, not a second
+		// path).
+		BootHook: func(context.Context) error { return nil },
+	}
 }
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.

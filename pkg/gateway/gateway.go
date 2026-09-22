@@ -61,6 +61,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
@@ -277,6 +278,23 @@ type services struct {
 	// homePath is the Omnipus home directory. Stored here so omnipusGracefulShutdown
 	// can remove the self-registered PID file without an additional parameter.
 	homePath string
+
+	// SteerDeps bundles every ADR-091 pkg/steer implementation built at
+	// boot from the pkg/agent side (landing order I-2/I-5/I-6/I-8) plus the
+	// two real stores and the boot hook — see
+	// gateway_boot.go::wireSteerDeps for the one section that constructs
+	// it. CP-0: every implementation here is a compiled stub except
+	// Classifier (I-8, real from CP-0). Exported so later lanes (WP-B,
+	// WP-C, WP-D) can read it off the running *services to inject into
+	// their own boundaries without re-wiring pkg/agent themselves.
+	SteerDeps steer.Deps
+	// SteerAudienceResolver is I-5's AudienceResolver — not part of
+	// steer.Deps' fixed shape (that shape is I-7's fixture dependency
+	// list), but every boundary owner (pkg/tools boundary 8, pkg/channels
+	// boundary 7, pkg/gateway boundary 6, pkg/askuser boundary 12) needs
+	// one to inject at CP-2. Built alongside SteerDeps by the same
+	// gateway_boot.go::wireSteerDeps section.
+	SteerAudienceResolver steer.AudienceResolver
 }
 
 // RunOptions carries the inputs for the gateway runtime. Kept as a struct
