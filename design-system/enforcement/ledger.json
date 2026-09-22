@@ -6232,6 +6232,90 @@
       "syntax": "font-size: clamp(var(--font-root-minimum), var(--user-font-size), var(--font-root-maximum))",
       "reason": "Lead read (undefined): line 63: every bound in the clamp() is a registered token; the only non-token leaf is --user-font-size, the runtime user font-size preference written by ProfileSection.tsx -- a founder-approved permanent non-token category. typography.mjs reclassifies this to extension-boundary (not a silent pass) only when every OTHER leaf is a registered token, mirroring the safe-area env() carve-out; a clamp() with a raw pixel bound still reports.",
       "owner": "root font-size clamp() bounded by registered tokens exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomPill#className",
+      "reason": "Lead read (2026-09-22): line 246: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 272 -- no transformation, no conditional replacement.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomPill#className",
+      "reason": "Lead read (2026-09-22): line 246: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 272 -- no transformation, no conditional replacement.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomPill#className",
+      "reason": "Lead read (2026-09-22): line 246: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 272 -- no transformation, no conditional replacement.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomableMediaSurface#className",
+      "reason": "Lead read (2026-09-22): line 630: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 658 -- the other two `cn()` arguments are literal/computed cursor classes, `className` itself is never transformed.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomableMediaSurface#className",
+      "reason": "Lead read (2026-09-22): line 630: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 658 -- the other two `cn()` arguments are literal/computed cursor classes, `className` itself is never transformed.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomableMediaSurface#className",
+      "reason": "Lead read (2026-09-22): line 630: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 658 -- the other two `cn()` arguments are literal/computed cursor classes, `className` itself is never transformed.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/workspaces/PriorityBadge.tsx",
+      "syntax": "PriorityBadge#className",
+      "reason": "Lead read (2026-09-22): line 40: destructured `className` prop, forwarded unmodified to 5 sink(s) -- one `cn(<literal priority classes>, className)` call per `switch` branch (lines 44, 50, 56, 62, 72) -- with no transformation in any branch.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/workspaces/PriorityBadge.tsx",
+      "syntax": "PriorityBadge#className",
+      "reason": "Lead read (2026-09-22): line 40: destructured `className` prop, forwarded unmodified to 5 sink(s) -- one `cn(<literal priority classes>, className)` call per `switch` branch (lines 44, 50, 56, 62, 72) -- with no transformation in any branch.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/workspaces/PriorityBadge.tsx",
+      "syntax": "PriorityBadge#className",
+      "reason": "Lead read (2026-09-22): line 40: destructured `className` prop, forwarded unmodified to 5 sink(s) -- one `cn(<literal priority classes>, className)` call per `switch` branch (lines 44, 50, 56, 62, 72) -- with no transformation in any branch.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/workspaces/StatusBadge.tsx",
+      "syntax": "StatusBadge#className",
+      "reason": "Lead read (2026-09-22): line 61: destructured `className` prop, forwarded unmodified into `cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)` at line 62 -- no transformation.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/workspaces/StatusBadge.tsx",
+      "syntax": "StatusBadge#className",
+      "reason": "Lead read (2026-09-22): line 61: destructured `className` prop, forwarded unmodified into `cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)` at line 62 -- no transformation.",
+      "owner": "caller pass-through exception registry"
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/workspaces/StatusBadge.tsx",
+      "syntax": "StatusBadge#className",
+      "reason": "Lead read (2026-09-22): line 61: destructured `className` prop, forwarded unmodified into `cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)` at line 62 -- no transformation.",
+      "owner": "caller pass-through exception registry"
     }
   ],
   "reviewedBoundaries": [
@@ -9644,6 +9728,31 @@
       "path": "src/test/theme.test.ts",
       "kind": "test",
       "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/chat/image-lightbox.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/library/preview/LibraryMermaidPreview.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/ui/zoomable-view.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/lib/zoomable-view-canvas.test.tsx",
+      "kind": "test",
+      "reason": "Vitest test file (exact .test/.spec js|jsx|ts|tsx suffix). Test-only styling debt never ships; verified not imported by any non-test source file (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
+    },
+    {
+      "path": "src/components/ui/zoomable-view.stories.tsx",
+      "kind": "story",
+      "reason": "Storybook story file (exact .stories.js|jsx|ts|tsx suffix). Consumed only by the .storybook/main.ts glob, never by the production import graph (proof + limits: dist/design-system-baseline/cli-lanes/glm-boundary-registry-evidence.md)."
     }
   ]
 }

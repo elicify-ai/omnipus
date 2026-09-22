@@ -8,7 +8,7 @@ import {
   useZoomableCanvasOpeningFit,
   useZoomableCanvasPill,
   zoomableCanvasFlowProps,
-} from './zoomable-view-canvas'
+} from '@/lib/zoomable-view-canvas'
 
 // Fixture mirrors the shape a Phase-2 consumer will actually wire: a
 // focusable frame owning the `+ − 0 1` shortcuts (D18: "while the view is

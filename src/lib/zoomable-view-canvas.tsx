@@ -6,12 +6,26 @@
 // "app-independent foundations" — no domain state, no app-specific
 // libraries). React Flow (`@xyflow/react`) is exactly that kind of
 // app-specific dependency (a graphing library the workspace task graph and
-// team graph use, not a Sovereign Deep foundation), so this file is
-// catalogued (`design-system/catalog.json`, classification `domain` — same
-// precedent as `model-selector.tsx`/`AutoSaveIndicator.tsx`) but
-// deliberately NOT re-exported from `src/index.ts` and NOT `@source`'d in
-// `src/styles/library.css`. App code (GraphView, WorkspaceTeamGraph) imports
-// it directly from `@/components/ui/zoomable-view-canvas`.
+// team graph use, not a Sovereign Deep foundation), so this file is NOT
+// re-exported from `src/index.ts` and NOT `@source`'d in
+// `src/styles/library.css`.
+//
+// Lives in `src/lib/`, not `src/components/ui/`, precisely BECAUSE of that:
+// a `src/components/ui/*` file is the design-system catalog's own inventory
+// (`design-system/catalog.json` — every file there needs an entry, and
+// `controls/shadcn-low-level-import` treats every entry's `publicExports`/
+// `publicTypes` as the ONLY names app code may import from it). This file
+// has nothing to publish — it is an internal React Flow helper, not a
+// design-system component — so cataloguing it under `ui/` only bought a
+// permanently-empty boundary every app-code import (GraphView,
+// WorkspaceTeamGraph) would trip, with no registrable exception for THAT
+// rule (unlike `*/extension-boundary`, `controls/shadcn-low-level-import`
+// has no ledger escape hatch — see `design-system/enforcement/ledger.json`'s
+// `exceptions`, scoped to the three `extension-boundary` rules only).
+// Moving the file out of `src/components/ui/` is the sanctioned fix:
+// `scripts/design-system-locks/controls.mjs`'s own `UI_PREFIX` gate only
+// scans imports resolving under `src/components/ui/`. App code imports it
+// directly from `@/lib/zoomable-view-canvas`.
 
 import * as React from 'react'
 import type { FitViewOptions, ReactFlowState } from '@xyflow/react'
@@ -22,7 +36,7 @@ import {
   clampZoomScale,
   effectiveMinScale,
   type ZoomableSize,
-} from './zoomable-view'
+} from '@/components/ui/zoomable-view'
 
 /** Spread onto `<ReactFlow>`. Range and gesture behaviour D18 requires for a
  *  full-frame canvas: wheel zooms, pinch (touch or trackpad ctrl-wheel)

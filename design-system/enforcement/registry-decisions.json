@@ -7,28 +7,28 @@
       "syntax": "AvatarColorPicker#className",
       "decision": "approve",
       "category": "caller pass-through",
-      "evidence": "line 271: className ?? 'flex gap-2' \u2014 caller value unmodified, literal fallback scanned separately"
+      "evidence": "line 271: className ?? 'flex gap-2' — caller value unmodified, literal fallback scanned separately"
     },
     {
       "path": "src/components/agents/AgentFormFields.tsx",
       "syntax": "AvatarHeader#className",
       "decision": "approve",
       "category": "caller pass-through",
-      "evidence": "line 355: className ?? '<literal>' \u2014 caller value unmodified, literal fallback scanned separately"
+      "evidence": "line 355: className ?? '<literal>' — caller value unmodified, literal fallback scanned separately"
     },
     {
       "path": "src/components/ui/sheet.tsx",
       "syntax": "SheetContent#widthClass",
       "decision": "approve",
       "category": "caller pass-through",
-      "evidence": "line 116: widthClass ?? (size ? sheetSizeWidth[size] : sideDefaultWidth[side]) \u2014 fallback from scanned const records"
+      "evidence": "line 116: widthClass ?? (size ? sheetSizeWidth[size] : sideDefaultWidth[side]) — fallback from scanned const records"
     },
     {
       "path": "src/components/ui/smart-select.tsx",
       "syntax": "SearchableSelect#item.className",
       "decision": "approve",
       "category": "caller pass-through",
-      "evidence": "line 187: className={item.className} \u2014 item from the caller's items prop, unmodified"
+      "evidence": "line 187: className={item.className} — item from the caller's items prop, unmodified"
     },
     {
       "path": "src/components/ui/calendar.tsx",
@@ -91,7 +91,7 @@
       "syntax": "RetryableState#iconProps.className",
       "decision": "approve",
       "category": "caller pass-through",
-      "evidence": "line 27: iconProps?.className ?? '' \u2014 the component's own prop member, unmodified"
+      "evidence": "line 27: iconProps?.className ?? '' — the component's own prop member, unmodified"
     },
     {
       "path": "src/components/agents/AgentProfile.tsx",
@@ -323,6 +323,34 @@
       "decision": "approve",
       "category": "tree-indent runtime depth multiplied by registered tokens",
       "evidence": "line 110 (anchored on `--search-modal-indent-depth`): the custom property (or template interpolation) holds a UNITLESS nesting depth, and every dimensional term is a registered spacing token. spacing.mjs::combineCalc emits this boundary only when the unregistered value is multiplied directly against a value traced to a registered token (isTrustedTokenPx, set only by the token lookup, never by a literal). A per-row depth count can never itself be a registered token because its value varies per row. Adversarially tested: a raw pixel term, an unregistered dimensional token, chained multiplies and division all still block."
+    },
+    {
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomPill#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 246: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 272 -- no transformation, no conditional replacement."
+    },
+    {
+      "path": "src/components/ui/zoomable-view.tsx",
+      "syntax": "ZoomableMediaSurface#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 630: destructured `className` prop, forwarded unmodified into `cn(..., className)` at line 658 -- the other two `cn()` arguments are literal/computed cursor classes, `className` itself is never transformed."
+    },
+    {
+      "path": "src/components/workspaces/PriorityBadge.tsx",
+      "syntax": "PriorityBadge#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 40: destructured `className` prop, forwarded unmodified to 5 sink(s) -- one `cn(<literal priority classes>, className)` call per `switch` branch (lines 44, 50, 56, 62, 72) -- with no transformation in any branch."
+    },
+    {
+      "path": "src/components/workspaces/StatusBadge.tsx",
+      "syntax": "StatusBadge#className",
+      "decision": "approve",
+      "category": "caller pass-through",
+      "evidence": "line 61: destructured `className` prop, forwarded unmodified into `cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)` at line 62 -- no transformation."
     }
   ]
 }

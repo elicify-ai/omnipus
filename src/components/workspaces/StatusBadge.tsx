@@ -1,15 +1,25 @@
 // StatusBadge — a status-tinted pill built on the catalogued `Badge`.
 //
-// A literal `switch` per branch — the same shape as `PriorityBadge.tsx` —
-// is what the design-system static scanners
-// (`scripts/design-system-locks/{typography,spacing,ts-colors}.mjs`) can
-// verify: they cannot resolve a class list read out of a record via a
-// runtime key. Wrapping the switch in its own component (rather than an
-// exported function returning a class string) also means a caller never
-// needs its own className expression resolved — it just renders
-// `<StatusBadge status=.../>`.
+// The status→colour mapping is a plain object literal, `STATUS_BADGE_CLASSES`
+// below, read by a DYNAMIC key (`STATUS_BADGE_CLASSES[status]`) — the same
+// "governed record" shape `scripts/design-system-locks/status.mjs` already
+// recognises for `taskStatusConfig.ts`'s own `STATUS_BADGE` map (see that
+// file's header comment) and that `typography.mjs`/`spacing.mjs`/
+// `ts-colors.mjs` independently prove by enumerating every value the record
+// can hold. This is NOT the shape the file used to have (a `switch` inlined
+// directly in the component's JSX return, one `<Badge>` per branch): a
+// `switch` whose case value folds to a canonical status makes every `cn()`
+// argument inside that case status-governed paint the STATUS lock must
+// statically prove — including the unrelated pass-through `className` prop,
+// which it cannot prove and so reported `design-system/status-unsupported`
+// (a finding that can never be baselined). A plain record, read once by a
+// runtime key outside any switch, keeps the colour classes fully checked at
+// their own declaration (each property is verified against its key's
+// canonical `--status-<name>-*` token pair) while the component's own
+// `cn(STATUS_BADGE_CLASSES[status], className)` merge is recognised as an
+// ordinary registrable extension boundary instead.
 //
-// Every branch uses the matching `--status-<name>-foreground` /
+// Every entry uses the matching `--status-<name>-foreground` /
 // `--status-<name>-background` token pair (`src/styles/tokens.generated.css`)
 // — the dedicated status-chip token family, all ultimately reading
 // `src/design-system/status.ts`'s `statusContract`.
@@ -35,23 +45,19 @@ export interface StatusBadgeProps extends Omit<HTMLAttributes<HTMLDivElement>, '
   className?: string
 }
 
+/** Token-driven text/background colour classes, one entry per `StatusBadgeKey`
+ * — see this file's header comment for why this is a plain record rather
+ * than a `switch` inlined in the component. */
+const STATUS_BADGE_CLASSES: Record<StatusBadgeKey, string> = {
+  inbox: 'text-[color:var(--status-inbox-foreground)] bg-[var(--status-inbox-background)]',
+  next: 'text-[color:var(--status-next-foreground)] bg-[var(--status-next-background)]',
+  in_progress: 'text-[color:var(--status-in-progress-foreground)] bg-[var(--status-in-progress-background)]',
+  blocked: 'text-[color:var(--status-blocked-foreground)] bg-[var(--status-blocked-background)]',
+  done: 'text-[color:var(--status-done-foreground)] bg-[var(--status-done-background)]',
+  failed: 'text-[color:var(--status-failed-foreground)] bg-[var(--status-failed-background)]',
+  skipped: 'text-[color:var(--status-cancelled-foreground)] bg-[var(--status-cancelled-background)]',
+}
+
 export function StatusBadge({ status, className, ...rest }: StatusBadgeProps) {
-  switch (status) {
-    case 'inbox':
-      return <Badge className={cn('text-[color:var(--status-inbox-foreground)] bg-[var(--status-inbox-background)]', className)} {...rest} />
-    case 'next':
-      return <Badge className={cn('text-[color:var(--status-next-foreground)] bg-[var(--status-next-background)]', className)} {...rest} />
-    case 'in_progress':
-      return <Badge className={cn('text-[color:var(--status-in-progress-foreground)] bg-[var(--status-in-progress-background)]', className)} {...rest} />
-    case 'blocked':
-      return <Badge className={cn('text-[color:var(--status-blocked-foreground)] bg-[var(--status-blocked-background)]', className)} {...rest} />
-    case 'done':
-      return <Badge className={cn('text-[color:var(--status-done-foreground)] bg-[var(--status-done-background)]', className)} {...rest} />
-    case 'failed':
-      return <Badge className={cn('text-[color:var(--status-failed-foreground)] bg-[var(--status-failed-background)]', className)} {...rest} />
-    case 'skipped':
-      return <Badge className={cn('text-[color:var(--status-cancelled-foreground)] bg-[var(--status-cancelled-background)]', className)} {...rest} />
-    default:
-      return <Badge className={cn('text-[color:var(--status-inbox-foreground)] bg-[var(--status-inbox-background)]', className)} {...rest} />
-  }
+  return <Badge className={cn(STATUS_BADGE_CLASSES[status] ?? STATUS_BADGE_CLASSES.inbox, className)} {...rest} />
 }

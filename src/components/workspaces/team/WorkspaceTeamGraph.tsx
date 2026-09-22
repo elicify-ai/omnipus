@@ -38,7 +38,7 @@ import {
   useZoomableCanvasOpeningFit,
   useZoomableCanvasPill,
   zoomableCanvasFlowProps,
-} from '@/components/ui/zoomable-view-canvas'
+} from '@/lib/zoomable-view-canvas'
 import {
   validateConnection,
   rejectionMessageForFailedConnection,

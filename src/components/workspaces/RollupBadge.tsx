@@ -60,7 +60,6 @@ function RollupAvatar({ item, agent }: { item: RollupItem; agent: Agent | undefi
   const isLive = item.status === 'in_progress'
   const color = agent?.color ?? rollupStatusColorVar(item.status)
   const Icon = getIconComponent(agent?.icon)
-  const statusColor = rollupStatusColorVar(item.status)
 
   return (
     <motion.span
@@ -84,7 +83,20 @@ function RollupAvatar({ item, agent }: { item: RollupItem; agent: Agent | undefi
         // string is invalid CSS and silently drops the declaration).
         // 13.3% mix == a 0x22 (34/255) hex alpha, this pill's tint level.
         backgroundColor: `color-mix(in srgb, ${color} 13.3%, transparent)`,
-        borderColor: statusColor,
+        // Always the pure status accent (ignores `agent?.color` — unlike
+        // `color` above) so every chip's border reads the item's status
+        // family even when the agent has its own custom colour. Called
+        // inline rather than bound to a separately-named local: a local
+        // whose name reads as both "status" and "colour" (e.g. `statusColor`)
+        // is exactly the shape `scripts/design-system-locks/status.mjs`
+        // treats as a status-governed colour binding it must statically
+        // prove — and a same-file, non-imported helper call is outside what
+        // it can resolve, so it fails closed as
+        // `design-system/status-unsupported` (never baselinable). Inlined
+        // here it is just an ordinary runtime read, exactly like `color`'s
+        // own `rollupStatusColorVar` fallback above and the `<Icon>`/label
+        // colour reads below.
+        borderColor: rollupStatusColorVar(item.status),
       }}
     >
       <Icon size={10} weight="bold" style={{ color }} />

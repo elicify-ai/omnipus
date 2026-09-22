@@ -6,11 +6,12 @@
 //     below) — a pointer-drag-and-wheel-zoom surface for an image or SVG,
 //     for the chat media viewer, the Library image/diagram/PDF previews.
 //   - The canvas preset for React Flow (`zoomableCanvasFlowProps` +
-//     `useZoomableCanvasPill`, `./zoomable-view-canvas.tsx`) — the workspace
-//     task graph and team graph. It is a SEPARATE, non-published file: this
-//     file is re-exported from the `@omnipus/ui` package entry
-//     (`src/index.ts`), and React Flow is an app-specific dependency, not a
-//     Sovereign Deep foundation (see that file's header comment).
+//     `useZoomableCanvasPill`, `src/lib/zoomable-view-canvas.tsx`) — the
+//     workspace task graph and team graph. It is a SEPARATE, non-published
+//     file living outside `src/components/ui/` entirely: THIS file is
+//     re-exported from the `@omnipus/ui` package entry (`src/index.ts`), and
+//     React Flow is an app-specific dependency, not a Sovereign Deep
+//     foundation (see that file's header comment).
 //
 // Both faces share `ZoomPill` (below): zoom out, the current percentage (a
 // menu with Fit / 100% / Zoom to selection), zoom in. Range is 25%–400%
@@ -341,7 +342,8 @@ ZoomPill.displayName = 'ZoomPill'
 
 // Canvas preset (React Flow face) — `zoomableCanvasFlowProps`,
 // `useZoomableCanvasPill`, `contentExceedsFrame` — lives in
-// `./zoomable-view-canvas.tsx`, deliberately NOT this file: this file is
+// `src/lib/zoomable-view-canvas.tsx`, deliberately NOT this file and
+// deliberately outside `src/components/ui/` entirely: this file is
 // re-exported from the published `@omnipus/ui` package entry
 // (`src/index.ts`), and `@xyflow/react` is an app-specific graphing
 // dependency, not a Sovereign Deep foundation (see that file's header

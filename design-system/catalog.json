@@ -360,19 +360,6 @@
       ]
     },
     {
-      "source": "src/components/ui/zoomable-view-canvas.tsx",
-      "classification": "domain",
-      "exports": [
-        "zoomableCanvasFlowProps",
-        "useZoomableCanvasPill",
-        "useZoomableCanvasOpeningFit",
-        "contentExceedsFrame",
-        "UseZoomableCanvasPillOptions"
-      ],
-      "publicExports": [],
-      "publicTypes": []
-    },
-    {
       "source": "src/components/ui/dropdown-menu.tsx",
       "classification": "primitive",
       "exports": [
