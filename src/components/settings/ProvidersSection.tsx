@@ -213,18 +213,10 @@ interface ProviderConfigSheetProps {
   /**
    * True while the step-up gate (ADR-0010 WP3: ReAuthDialog in local mode,
    * ConfirmDialog in platform mode — Spec-6 FR-12.2 consent gate) is open on
-   * top of this Sheet. Radix's own `hideOthers` cannot mark the Sheet's dialog
-   * role hidden from assistive tech in this case: the Sheet contains
-   * `[aria-live]` status announcers (one per action button), and the
-   * `aria-hidden` package deliberately never hides an ancestor of a live
-   * region, so it recurses into the Sheet's children instead of marking the
-   * Sheet's own `role="dialog"` node — leaving TWO simultaneous dialogs
-   * exposed to a screen reader even though the Sheet is already visually and
-   * pointer-inert (`pointer-events: none`, set by Radix). `inert` covers both
-   * the accessibility-tree exposure and keeps stray Tab focus out of the
-   * background Sheet; `aria-hidden` is set alongside it because some
-   * accessibility-tree consumers (including this repo's own test queries)
-   * check `aria-hidden` and do not read `inert`.
+   * top of this Sheet. The explicit state is defense in depth over Radix's
+   * `hideOthers`: `inert` keeps stray Tab focus out of the background Sheet,
+   * while `aria-hidden` also covers accessibility-tree consumers (including
+   * this repo's test queries) that do not read `inert`.
    */
   obscuredByDialog?: boolean
 }
@@ -356,11 +348,9 @@ function ProviderConfigSheet({
         widthClass="w-[90vw] sm:max-w-lg"
         className="p-0"
         data-testid="provider-config-sheet"
-        // See the ProviderConfigSheetProps.obscuredByDialog doc comment: the
-        // ReAuthDialog opening on top of this Sheet does not get Radix's own
-        // hideOthers to mark this Sheet's role="dialog" node aria-hidden
-        // (the Sheet's own [aria-live] status spans block that), so it is
-        // done explicitly here — the one true top-level modal at a time.
+        // See the ProviderConfigSheetProps.obscuredByDialog doc comment: keep
+        // the background Sheet inert and hidden while the step-up dialog is
+        // the one true top-level modal.
         aria-hidden={obscuredByDialog ? true : undefined}
         inert={obscuredByDialog ? true : undefined}
         // FR-033: preventDefault keeps Radix from unmounting the sheet, so the

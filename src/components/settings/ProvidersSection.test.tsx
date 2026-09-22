@@ -1282,12 +1282,12 @@ describe('ProvidersSection — FR-033 draft-key preservation (US-8)', () => {
     await openSheetWithKey('sk-test-123')
 
     // Radix defers a left-button pointer-down-outside to the following click,
-    // so the gesture is both events on the overlay — the element rendered
-    // immediately before the sheet inside the portal.
-    const overlay = screen.getByTestId('provider-config-sheet').previousElementSibling
-    expect(overlay).not.toBeNull()
-    fireEvent.pointerDown(overlay as Element, { button: 0 })
-    fireEvent.click(overlay as Element, { button: 0 })
+    // so the gesture is both events on the actual overlay. Address the overlay
+    // by its stable hook: Button live-region portals are also body siblings and
+    // make portal-relative sibling position an invalid locator.
+    const overlay = screen.getByTestId('sheet-overlay')
+    fireEvent.pointerDown(overlay, { button: 0 })
+    fireEvent.click(overlay, { button: 0 })
 
     await waitFor(() => {
       expect(screen.getByTestId('discard-key-prompt')).toBeInTheDocument()
