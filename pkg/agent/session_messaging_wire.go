@@ -140,6 +140,7 @@ func (al *AgentLoop) wireSessionMessagingForAgent(agent *AgentInstance) {
 	// re-wires the real stores in place once they exist). ---
 	if tool, ok := agent.Tools.Get("delegate"); ok {
 		if dt, dtOk := tool.(*tools.DelegateTool); dtOk && dt != nil {
+			dt.SetSessionLauncher(al.getSteerSessionLauncher())
 			// ADR-057 FR-021/W7b (fail-closed wiring): propagate BOTH the wire
 			// and the un-wire, not just the wire. The pre-ADR-057 code only
 			// called SetLifecycleStore/SetMessageInbox when the value was

@@ -111,7 +111,7 @@ func (r *SteerBootRecovery) Run(ctx context.Context) error {
 	// The indexed List path is the published I-9 warm-up trigger. The key is
 	// deliberately impossible as a real session id; the result is irrelevant,
 	// while IndexReport below is the durable diagnostic this operation consumes.
-	if _, err := r.Lifecycle.List(session.LifecycleFilter{ParentDurableKey: "__adr091_boot_warm__"}); err != nil {
+	if _, err := r.Lifecycle.List(session.LifecycleFilter{SteeringSessionID: "__adr091_boot_warm__"}); err != nil {
 		return fmt.Errorf("agent: steer boot recovery: warm lifecycle index: %w", err)
 	}
 	for _, unreadable := range r.Lifecycle.IndexReport().Unreadable {

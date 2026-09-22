@@ -32,6 +32,9 @@ type LaunchRequest struct {
 	// steering session and these inputs must be empty.
 	WorkspaceID string
 	Owner       string
+	// PlanID gives an ordinary-root task launch durable plan ownership.
+	// Empty means OwnerScopeHuman.
+	PlanID string
 	// Goal is optional — criteria plus a Definition of Done, in the same
 	// shape create_task validates (pkg/tools/task.go::validateRequest).
 	// Nil means no goal (founder decision, round 3).

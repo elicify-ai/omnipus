@@ -681,7 +681,7 @@ func (a *restAPI) deleteSession(w http.ResponseWriter, r *http.Request, id strin
 	// live or not, has a LifecycleRecord (User Story 4), so this walk is
 	// authoritative independent of turn liveness and survives a restart.
 	// Reuses U11's already-tested u11CollectDescendantSessionIDs (same
-	// package, pkg/gateway/websocket.go), which walks U13's ParentDurableKey
+	// package, pkg/gateway/websocket.go), which walks U13's SteeringSessionID
 	// index (pkg/session/lifecycle.go) exactly as the cancel/approval-cascade
 	// paths do — this handler does not reimplement the walk. A nil lifecycle
 	// store (no delegation store wired — most webchat-only installs never

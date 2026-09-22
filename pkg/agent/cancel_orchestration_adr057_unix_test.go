@@ -5,7 +5,7 @@
 // ADR-057 U15 (W9, FR-027) real-OS-process coverage for BDD-28 ("A chat Stop
 // kills a child's background shell but not a sibling's") at the pkg/agent
 // layer: RequestCancel must resolve the descendant set via the durable
-// ParentDurableKey walk (collectDescendantSessionIDs/resolveBackgroundKillSessionIDs,
+// SteeringSessionID walk (collectDescendantSessionIDs/resolveBackgroundKillSessionIDs,
 // cancel.go) and cascade CancelHooks.KillBackgroundSessions over it — not
 // just the root id alone. pkg/tools/session_adr057_unix_test.go already
 // covers the SAME red/green at the tools.SessionManager layer directly; this
@@ -98,10 +98,10 @@ func u15SpawnRealSleep(t *testing.T, seconds int) int {
 //     real spawned process before RequestCancel ever runs, to prove it is
 //     not merely a stubbed-count assertion.
 //   - GREEN: al.RequestCancel(root) resolves {rootID, childID} via the
-//     durable ParentDurableKey walk (collectDescendantSessionIDs) and loops
+//     durable SteeringSessionID walk (collectDescendantSessionIDs) and loops
 //     CancelHooks.KillBackgroundSessions over that set — the child's real
 //     process is actually killed, while an unrelated sibling session's real
-//     process (a different chat entirely, no ParentDurableKey relation) is
+//     process (a different chat entirely, no SteeringSessionID relation) is
 //     left running.
 func TestU15Cancel_KillsChildShellsNotSiblings_RealPIDs(t *testing.T) {
 	al := newCancelTestAgentLoop(t)

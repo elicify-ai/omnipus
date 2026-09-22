@@ -176,7 +176,7 @@ func TestWireJobRoster_SubagentActionable_FalseForUnknownSession(t *testing.T) {
 	if err := lifecycle.Persist(&session.LifecycleRecord{
 		SessionID: "orphaned-after-restart", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeHuman, ParentAgentID: "mia",
-		ParentDurableKey: "some-parent-transcript", AgentID: "worker",
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "some-parent-transcript"}, AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
 	}

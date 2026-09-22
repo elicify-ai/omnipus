@@ -264,20 +264,20 @@ func TestLifecycleParentIndex_EnsureWarmRetriesAfterFailure(t *testing.T) {
 
 	s := NewLifecycleStore(storeDir)
 
-	_, err := s.List(LifecycleFilter{ParentDurableKey: "parent-x"})
+	_, err := s.List(LifecycleFilter{SteeringSessionID: "parent-x"})
 	require.Error(t, err, "List must surface the scan failure on the first (blocked) attempt")
 
 	// Clear the obstruction and persist a real parent/child pair.
 	require.NoError(t, os.Remove(storeDir))
 	require.NoError(t, s.Persist(&LifecycleRecord{
 		SessionID: "child-x", State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "parent-x",
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x"},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}))
 
 	// The retry must succeed now — a failed warm must never be latched
 	// forever the way sync.Once would have latched it.
-	recs, err := s.List(LifecycleFilter{ParentDurableKey: "parent-x"})
+	recs, err := s.List(LifecycleFilter{SteeringSessionID: "parent-x"})
 	require.NoError(t, err, "ensureWarm must retry after a prior failure, not return the same stale error forever")
 	require.Len(t, recs, 1, "positive lower bound: the retry must actually find the real child, not just avoid erroring")
 	assert.Equal(t, "child-x", recs[0].SessionID)
@@ -289,10 +289,10 @@ func TestLifecycleParentIndex_EnsureWarmRetriesAfterFailure(t *testing.T) {
 	// visible.
 	require.NoError(t, s.Persist(&LifecycleRecord{
 		SessionID: "child-y", State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "parent-x",
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x"},
 		WorkspaceID: "ws-1", AgentID: "ava",
 	}))
-	recs2, err := s.List(LifecycleFilter{ParentDurableKey: "parent-x"})
+	recs2, err := s.List(LifecycleFilter{SteeringSessionID: "parent-x"})
 	require.NoError(t, err)
 	assert.Len(t, recs2, 2, "post-warm Persist-time maintenance must still add new children without a rescan")
 }
@@ -308,7 +308,7 @@ func TestLifecycleParentIndex_EnsureWarmMissingDirectoryIsNotAnError(t *testing.
 
 	s := NewLifecycleStore(storeDir)
 
-	recs, err := s.List(LifecycleFilter{ParentDurableKey: "parent-x"})
+	recs, err := s.List(LifecycleFilter{SteeringSessionID: "parent-x"})
 	require.NoError(t, err, "a missing lifecycle directory must warm successfully with an empty index")
 	assert.Empty(t, recs)
 
@@ -316,10 +316,10 @@ func TestLifecycleParentIndex_EnsureWarmMissingDirectoryIsNotAnError(t *testing.
 	// now empty) index still picks it up via Persist-time maintenance.
 	require.NoError(t, s.Persist(&LifecycleRecord{
 		SessionID: "child-z", State: LifecycleQueued,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: "parent-x",
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: "parent-x"},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}))
-	recs2, err := s.List(LifecycleFilter{ParentDurableKey: "parent-x"})
+	recs2, err := s.List(LifecycleFilter{SteeringSessionID: "parent-x"})
 	require.NoError(t, err)
 	require.Len(t, recs2, 1, "positive control: a session persisted after the empty warm must still be found")
 	assert.Equal(t, "child-z", recs2[0].SessionID)

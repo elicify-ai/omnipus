@@ -1295,7 +1295,7 @@ func requiredStringArg(args map[string]any, key string) (string, error) {
 
 // callerOwnerKey resolves the CALLING agent's own durable inbox key — the
 // same ToolTranscriptSessionID(ctx) value that was captured as the child's
-// ParentDurableKey at `run` time (D16). Every parent-side action
+// SteeringSessionID at `run` time (D16). Every parent-side action
 // (inbox/inbox_ack/steer/respond/cancel/follow_up/peek) uses this exact
 // resolution so a caller can only ever address inboxes/sessions it itself
 // spawned.
@@ -1323,27 +1323,27 @@ func delegateHumanPrincipal(ctx context.Context) (steer.Principal, bool) {
 // verifyCallerOwnsSession (ADR-057 W12/FR-039/FR-040) rejects a gated
 // delegate action whose caller is not an ANCESTOR of rec — a direct parent,
 // grandparent, and so on up to the configured max delegation depth
-// (SetOwnershipWalkMaxDepth) — in the ParentDurableKey chain (defense in
+// (SetOwnershipWalkMaxDepth) — in the SteeringSessionID chain (defense in
 // depth: a session_id alone is guessable/loggable; ownership must also
 // match at the handler).
 //
-// Pre-ADR-057, a plain `caller == rec.ParentDurableKey` equality check was
-// correct because ParentDurableKey was shared across an entire subtree (a
+// Pre-ADR-057, a plain `caller == rec.SteeringSessionID()` equality check was
+// correct because SteeringSessionID was shared across an entire subtree (a
 // parent's key was literally re-inherited down every generation) — which
 // ALSO meant it accidentally permitted sibling/cousin reach (FR-040's
 // "MUST be removed": any two sessions sharing the SAME parent — or the same
-// distant ancestor — carried the identical ParentDurableKey value and thus
+// distant ancestor — carried the identical SteeringSessionID value and thus
 // passed the equality check against EACH OTHER's records, not just their
-// real parent's). U13's ParentDurableKey redefinition (pkg/session/lifecycle.go's
+// real parent's). U13's SteeringSessionID redefinition (pkg/session/lifecycle.go's
 // own doc comment: "names its DIRECT parent only — it is NOT re-inherited
 // down the chain") already closed that leak by construction — a sibling's
 // target now carries the immediate parent's key, never the caller's own —
 // but it also silently broke the LEGITIMATE root-over-subtree case
 // (BDD-42): a chat A that spawned child B, which spawned grandchild D, can
-// no longer reach D via one-hop equality, because D's ParentDurableKey
+// no longer reach D via one-hop equality, because D's SteeringSessionID
 // names B, not A. This walk restores that reach without reopening the
 // sibling/cousin one: it climbs ONE hop per iteration (rec's own
-// ParentDurableKey is depth 1, its parent's ParentDurableKey is depth 2,
+// SteeringSessionID is depth 1, its parent's SteeringSessionID is depth 2,
 // …), matching each hop against the caller, and stops — rejecting — the
 // moment it either exhausts the depth bound (BDD-43) or reaches a link with
 // no further LifecycleRecord to load (the root chat has none of its own,

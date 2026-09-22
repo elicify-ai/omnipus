@@ -546,12 +546,12 @@ func u18SeedUploads(t *testing.T, id string) string {
 func u18PersistLifecycleChild(t *testing.T, ls *session.LifecycleStore, childID, parentID string) {
 	t.Helper()
 	rec := &session.LifecycleRecord{
-		SessionID:        childID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parentID,
-		ParentDurableKey: parentID,
-		ParentAgentID:    "u18-agent",
+		SessionID:      childID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parentID,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentID},
+		ParentAgentID:  "u18-agent",
 	}
 	require.NoError(t, ls.Persist(rec), "fixture: persist lifecycle record %q (parent %q)", childID, parentID)
 }

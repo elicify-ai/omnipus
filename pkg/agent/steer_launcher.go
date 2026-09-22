@@ -119,7 +119,36 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if req.SteeringSessionID == "" {
 		return l.launchOrdinaryRoot(sessions, lifecycle, req, title, sessionType)
 	}
-	return l.launchSteered(sessions, lifecycle, req, title, sessionType)
+	result, err := l.launchSteered(sessions, lifecycle, req, title, sessionType)
+	if err == nil {
+		l.publishSteeredLaunch(req, result, title)
+	}
+	return result, err
+}
+
+// publishSteeredLaunch preserves the subagent span event while the old
+// in-chat child executor is removed. The event is parent-scoped: its routing
+// session is the steering session, while Label identifies the child.
+func (l *SteerLauncher) publishSteeredLaunch(req steer.LaunchRequest, result steer.LaunchResult, title string) {
+	if l == nil || l.al == nil || req.SteeringSessionID == "" || req.Origin.CallID == "" || result.SessionID == "" {
+		return
+	}
+	l.al.emitEvent(EventKindSubTurnSpawn,
+		EventMeta{Source: "steer", TracePath: "steer.launch", SessionKey: req.SteeringSessionID},
+		SubTurnSpawnPayload{
+			AgentID:           req.TargetAgentID,
+			Label:             result.SessionID,
+			SpanID:            subagentSpanID(req.Origin.CallID),
+			ParentSpawnCallID: session.ToolCallID(req.Origin.CallID),
+			TaskLabel:         title,
+			SessionID:         req.SteeringSessionID,
+		},
+	)
+	if lifecycle := l.al.GetSessionLifecycleStore(); lifecycle != nil {
+		if rec, err := lifecycle.Load(result.SessionID); err == nil {
+			l.al.deliverSubagentState(req.SteeringSessionID, rec, string(session.LifecycleQueued))
+		}
+	}
 }
 
 // launchOrdinaryRoot is Launch's no-steering-session path (US-1/AS-3: a
@@ -147,11 +176,18 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 	}
 
 	origin := req.Origin
+	ownerKind := session.OwnerScopeHuman
+	ownerID := ""
+	if req.PlanID != "" {
+		ownerKind = session.OwnerScopePlan
+		ownerID = req.PlanID
+	}
 	rec := &session.LifecycleRecord{
 		SessionID:      childID,
 		Generation:     1,
 		State:          session.LifecycleQueued,
-		OwnerScopeKind: session.OwnerScopeHuman,
+		OwnerScopeKind: ownerKind,
+		OwnerScopeID:   ownerID,
 		WorkspaceID:    req.WorkspaceID,
 		AgentID:        req.TargetAgentID,
 		Origin:         &origin,
@@ -286,6 +322,10 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 	req steer.LaunchRequest,
 ) error {
 	patch := session.MetaPatch{Title: &title}
+	if req.Origin.TaskID != "" {
+		taskID := req.Origin.TaskID
+		patch.TaskID = &taskID
+	}
 	if workspaceID != "" {
 		patch.WorkspaceID = &workspaceID
 	}
@@ -436,6 +476,20 @@ func (al *AgentLoop) dispatchSteeredSession(ctx context.Context, sessionID strin
 			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
 		}
 		return steer.DispatchResult{State: steer.DispatchQueued, QueuePosition: position, Generation: gen}, nil
+	}
+
+	if rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask && al.taskExecutor != nil {
+		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(rec, func() {
+			al.steerAdmission().release(sessionID)
+		}); dispatchErr != nil {
+			al.steerAdmission().release(sessionID)
+			return steer.DispatchResult{}, dispatchErr
+		}
+		rec.State = session.LifecycleRunning
+		if persistErr := lifecycle.Persist(rec); persistErr != nil {
+			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
+		}
+		return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 	}
 
 	ts, buildErr := al.reconstructSteeredTurn(rec, nil)

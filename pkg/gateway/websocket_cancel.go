@@ -14,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -118,6 +119,33 @@ func sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelRe
 	})
 }
 
+func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, sessionID string, report steer.CancelReport) {
+	message := cancelPartialSummary(report)
+	if h == nil || h.agentLoop == nil || h.msgBus == nil || message == "" {
+		return
+	}
+	lifecycle := h.agentLoop.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil || rec.SteeredBy == nil {
+		return
+	}
+	target := rec.SteeredBy.ReportingTarget
+	if target.Channel == "" || target.ChatID == "" || target.Channel == "web" || target.Channel == "webchat" {
+		return
+	}
+	if err := h.msgBus.PublishOutbound(ctx, bus.OutboundMessage{
+		Channel: target.Channel,
+		ChatID:  target.ChatID,
+		Content: message,
+	}); err != nil {
+		slog.Warn("ws: publish partial Stop notice to originating channel failed",
+			"session_id", sessionID, "channel", target.Channel, "chat_id", target.ChatID, "error", err)
+	}
+}
+
 // cancelSteeredSubtree applies ADR-091 Stop only when a durable lifecycle
 // record exists. Ordinary chats with no steering record keep using the legacy
 // live-turn cancel path and must not be falsely reported as partial.
@@ -152,8 +180,8 @@ func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID st
 }
 
 // u11CollectDescendantSessionIDs walks the durable lifecycle store's
-// ParentDurableKey edges (pkg/session/lifecycle.go, FR-019/FR-020;
-// LifecycleStore.List(LifecycleFilter{ParentDurableKey: id}) returns X's
+// SteeringSessionID edges (pkg/session/lifecycle.go, FR-019/FR-020;
+// LifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) returns X's
 // DIRECT children only, index-backed per BDD-19) to collect EVERY descendant
 // of rootID, however many delegation levels deep. Returns only descendants —
 // rootID itself is never included; the caller prepends it.
@@ -188,7 +216,7 @@ func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID st
 // react to a partial-walk failure with a more specific diagnostic than the
 // generic one logged here.
 //
-// Guards against a corrupted or cyclic ParentDurableKey chain with a visited
+// Guards against a corrupted or cyclic SteeringSessionID chain with a visited
 // set rather than trusting the system's own delegation-depth cap
 // (config.SubTurn.MaxDepth) to bound recursion — this walk must terminate
 // even over on-disk state that predates or violates that cap. A nil store
@@ -362,6 +390,7 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	})
 	if cascaded {
 		sendCancelPartialNotice(wc, sessionID, report)
+		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
 	}
 
 	scope := agent.CancelScope{SessionID: sessionID}

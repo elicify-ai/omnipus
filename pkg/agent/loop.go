@@ -419,6 +419,7 @@ type AgentLoop struct {
 	audienceResolver steer.AudienceResolver
 	boundaryObserver steer.BoundaryObserver
 	upwardDeliverer  steer.UpwardDeliverer
+	sessionLauncher  steer.SessionLauncher
 	steerDepsMu      sync.RWMutex
 
 	// sharedSessionStore is the single UnifiedStore at $OMNIPUS_HOME/sessions/

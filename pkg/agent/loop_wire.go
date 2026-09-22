@@ -728,16 +728,6 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agent *AgentInstance, sharedStore *session.UnifiedStore) {
 	{
 		delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
-		// ADR-057 W17 (FR-069/FR-070/FR-095): wrap the real spawner with
-		// the root-delegation admission gate (admission.go) so a
-		// ROOT-level `delegate` fan-out from this agent is actually
-		// capped by al.rootDelegationAdmission — the SAME shared,
-		// process-wide instance every other agent's DelegateTool is
-		// wrapped with, so the cap applies once across the whole running
-		// gateway, not per agent. See rootDelegationAdmittingSpawner's
-		// doc comment (admission.go) for why wrapping SpawnSubTurn here
-		// is the correct choke point for both sync and async delegation.
-		delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(rw.rs.al), rw.rs.al.rootDelegationAdmission, agentID))
 		// Retain it so Close() can drain its background delegations before
 		// the stores they write through are torn down. See delegateTools.
 		rw.rs.al.delegateToolsMu.Lock()

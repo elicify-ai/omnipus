@@ -28,6 +28,21 @@ func TestLifecycleIndex_Report_EmptyBeforeAnyWarm(t *testing.T) {
 	}
 }
 
+func TestLifecycleIndex_Report_AllMalformedJSONL(t *testing.T) {
+	s := newTestLifecycleStore(t)
+	const id = "child-report-all-malformed"
+	if err := os.WriteFile(filepath.Join(s.Dir(), id+".jsonl"), []byte("{not-json}\n[]\n"), 0o600); err != nil {
+		t.Fatalf("write malformed lifecycle file: %v", err)
+	}
+	if _, err := s.List(LifecycleFilter{SteeringSessionID: "trigger-warm"}); err != nil {
+		t.Fatalf("List must continue past one malformed record: %v", err)
+	}
+	report := s.IndexReport()
+	if len(report.Unreadable) != 1 || report.Unreadable[0].ID != id || report.Unreadable[0].Err == nil {
+		t.Fatalf("IndexReport().Unreadable = %+v, want malformed record %q", report.Unreadable, id)
+	}
+}
+
 // TestLifecycleIndex_Report_ListsUnreadableRecordFromCorruptFile is the I-9
 // scenario from the TDD plan (test 25 / FR-A-014): one lifecycle file is
 // corrupt (here: unreadable), the index warms, and Report() lists that
@@ -43,16 +58,16 @@ func TestLifecycleIndex_Report_ListsUnreadableRecordFromCorruptFile(t *testing.T
 
 	if err := s.Persist(&LifecycleRecord{
 		SessionID: good, State: LifecycleRunning,
-		OwnerScopeKind: OwnerScopeHuman, ParentDurableKey: parent,
+		OwnerScopeKind: OwnerScopeHuman, SteeredBy: &SteeredBy{SteeringSessionID: parent},
 		WorkspaceID: "ws-1", AgentID: "ray",
 	}); err != nil {
 		t.Fatalf("seed %q: %v", good, err)
 	}
-	// Deliberately a DIFFERENT ParentDurableKey (or none) — ensureWarm's
+	// Deliberately a DIFFERENT SteeringSessionID (or none) — ensureWarm's
 	// backfill scan (triggered by the List query below) still walks every
 	// persisted session_id regardless of parent, but this way `corrupt`
 	// is never one of `parent`'s indexed children, so the later
-	// List(ParentDurableKey: parent) query never tries to re-Load it
+	// List(SteeringSessionID: parent) query never tries to re-Load it
 	// directly (that path's own stale-entry self-heal only understands
 	// ErrLifecycleNotFound, not an arbitrary permission error — a
 	// pre-existing, out-of-scope-for-I-9 behavior this test does not
@@ -80,15 +95,15 @@ func TestLifecycleIndex_Report_ListsUnreadableRecordFromCorruptFile(t *testing.T
 		t.Fatalf("expected a permission error reading a chmod 0000 file, got: %v", err)
 	}
 
-	// Any ParentDurableKey query triggers ensureWarm's one-time backfill
+	// Any SteeringSessionID query triggers ensureWarm's one-time backfill
 	// scan, which is what walks every persisted session_id including the
 	// corrupt one.
-	list, err := s.List(LifecycleFilter{ParentDurableKey: parent})
+	list, err := s.List(LifecycleFilter{SteeringSessionID: parent})
 	if err != nil {
 		t.Fatalf("List must not fail outright because an UNRELATED record is unreadable: %v", err)
 	}
 	if len(list) != 1 || list[0].SessionID != good {
-		t.Fatalf("List(ParentDurableKey=%q) = %v, want exactly [%q]", parent, list, good)
+		t.Fatalf("List(SteeringSessionID=%q) = %v, want exactly [%q]", parent, list, good)
 	}
 
 	rep := s.IndexReport()

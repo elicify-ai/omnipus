@@ -28,7 +28,7 @@ import (
 // fakeUpwardDeliverer is a test-only steer.UpwardDeliverer (ADR-091 I-5)
 // standing in for pkg/agent's real SteerUpwardDeliverer, close enough to it
 // for this file's own tests: it resolves the owner key from the child's
-// lifecycle record exactly like ownerKeyFor (edge first, ParentDurableKey
+// lifecycle record exactly like ownerKeyFor (edge first, SteeringSessionID
 // fallback) and appends to a REAL *session.MessageInboxStore, so the
 // existing inbox.Drain(...) assertions throughout this file keep proving
 // what they always proved. Every Deliver call is recorded, mirroring the
@@ -86,13 +86,13 @@ func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.Lifec
 	tool.SetSessionMessagingEnabled(func() bool { return true })
 
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID:        "child-1",
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     "parent-delegate-id",
-		ParentDurableKey: "parent-1",
-		WorkspaceID:      "ws-1",
-		AgentID:          "worker",
+		SessionID:      "child-1",
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   "parent-delegate-id",
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: "parent-1"},
+		WorkspaceID:    "ws-1",
+		AgentID:        "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
@@ -254,7 +254,7 @@ func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-3p", State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-x",
-		ParentDurableKey: "parent-1", WorkspaceID: "ws-1", AgentID: "worker-3p",
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"}, WorkspaceID: "ws-1", AgentID: "worker-3p",
 		Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -286,7 +286,7 @@ func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 // what to do instead of the generic "no session context available for this
 // call" text, since a task-dispatch session structurally has no delegating
 // parent to message (task_executor.go's mintTaskLifecycleRecord leaves
-// ParentDurableKey empty on purpose).
+// SteeringSessionID empty on purpose).
 func TestMessageParentTool_TaskRun_NoParentSession_RedirectsToGoalClaim(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())

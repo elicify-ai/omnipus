@@ -239,7 +239,7 @@ func TestMessageParent_RealSpawnSubTurnContext_ChildCanMessageParent(t *testing.
 	delegateSessionID := provider.extractDelegateSessionID()
 	require.NotEmpty(t, delegateSessionID, "could not recover the delegate-minted session_id from the parent's tool-result transcript")
 
-	// The inbox is keyed by rec.ParentDurableKey (the PARENT's own
+	// The inbox is keyed by rec.SteeringSessionID() (the PARENT's own
 	// ToolTranscriptSessionID at `run` time) — NOT the sessionKey passed to
 	// ProcessDirectWithChannel: for a non-webchat channel with no SessionID
 	// yet, processMessage transparently creates a real channel session and
@@ -249,7 +249,7 @@ func TestMessageParent_RealSpawnSubTurnContext_ChildCanMessageParent(t *testing.
 	// than assuming it equals sessionKey.
 	rec, lerr := lifecycleStore.Load(delegateSessionID)
 	require.NoError(t, lerr, "failed to load the delegate-minted LifecycleRecord")
-	require.NotEmpty(t, rec.ParentDurableKey, "LifecycleRecord.ParentDurableKey must be set")
+	require.NotEmpty(t, rec.SteeringSessionID(), "LifecycleRecord.SteeringSessionID() must be set")
 
 	// The core #576 assertion: the child's message_parent(progress) call
 	// must have landed in the PARENT's inbox, keyed by the delegate-minted
@@ -257,7 +257,7 @@ func TestMessageParent_RealSpawnSubTurnContext_ChildCanMessageParent(t *testing.
 	// "no durable session record for this session" because message_parent.go
 	// looked it up under tools.ToolTranscriptSessionID (the shared parent
 	// transcript id) instead.
-	msgs, _, _, err := inboxStore.Drain(rec.ParentDurableKey, delegateSessionID, "", 10)
+	msgs, _, _, err := inboxStore.Drain(rec.SteeringSessionID(), delegateSessionID, "", 10)
 	require.NoError(t, err, "Drain failed")
 	if assert.Len(t, msgs, 1, "expected exactly 1 progress message in the parent's inbox") {
 		kind, kerr := msgs[0].Discriminator()

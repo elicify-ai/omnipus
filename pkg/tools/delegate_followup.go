@@ -5,11 +5,13 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/google/uuid"
 )
 
@@ -101,13 +103,13 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// ADR-057 W12: ownership is verified via a plain Load BEFORE the Mutate
 	// below, deliberately OUTSIDE the atomic closure — unlike the terminal
 	// check (see the TOCTOU comment below), ownership cannot race: a
-	// session's ParentDurableKey is stamped once at mint time and carried
+	// session's SteeringSessionID is stamped once at mint time and carried
 	// forward unchanged even across follow_up generations (see
 	// spawnCorrectiveFollowUp's whole-struct-copy comment), so a Load taken
 	// a moment before Mutate observes the exact same value Mutate itself
 	// would. Verifying it here, rather than inside the closure below, is
 	// not just style: the ownership walk (verifyCallerOwnsSession, FR-039)
-	// climbs the ParentDurableKey chain via t.lifecycle.Load(ancestor) for
+	// climbs the SteeringSessionID chain via t.lifecycle.Load(ancestor) for
 	// every hop beyond the direct parent, and pkg/session/lifecycle_lock.go's
 	// striped lock is only 64-wide — an ancestor whose id happens to hash to
 	// the SAME shard as sessionID would deadlock against Mutate's
@@ -188,8 +190,8 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 }
 
 func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
-	if t.spawner == nil {
-		return ErrorResult("delegate: no sub-turn spawner configured")
+	if t.launcher == nil {
+		return ErrorResult("delegate: no session launcher configured")
 	}
 	if t.lifecycle == nil {
 		return ErrorResult("delegate: no lifecycle store configured")
@@ -225,7 +227,7 @@ func (t *DelegateTool) executeFollowUp(ctx context.Context, args map[string]any,
 	// NOTE: this is a naked Load+Terminal check, NOT the LifecycleStore.Mutate
 	// RMW that executeSteer/executeRespond use to close their check-then-act
 	// TOCTOU window. The polarity is inverted here: follow_up RESUMES a
-	// terminal session (executeAsync re-queues it as a new generation), so
+	// terminal session (spawnCorrectiveFollowUp re-queues it as a new generation), so
 	// the gate is `!rec.Terminal() -> reject`, and the immutable-terminal
 	// invariant (L-3) means a session that is terminal at this Load STAYS
 	// terminal — there is no concurrent transition that can flip it back to
@@ -284,7 +286,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	sessionID string,
 	rec *session.LifecycleRecord,
 	instructions string,
-	cb AsyncCallback,
+	_ AsyncCallback,
 ) *ToolResult {
 	newSessionID := sessionID
 	if rec.Is3P {
@@ -302,7 +304,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	t.mu.Unlock()
 
 	// The whole-struct copy is load-bearing for FR-034: ParentAgentID (and
-	// ParentDurableKey/OriginChannel/OriginChatID with it) MUST be carried
+	// SteeringSessionID/OriginChannel/OriginChatID with it) MUST be carried
 	// forward onto every generation mint. It is deliberately CARRIED FORWARD
 	// from the prior generation rather than re-sourced from ToolAgentID(ctx)
 	// — the follow_up caller is not necessarily the agent that originally
@@ -315,25 +317,85 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	newRec.State = session.LifecycleQueued
 	newRec.FailedReason = ""
 	newRec.NeedsInput = nil
+	if rec.Is3P {
+		if err := t.cloneCorrectiveSessionIdentity(sessionID, newSessionID, rec); err != nil {
+			return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to create corrective session: %v", err)).WithError(err)
+		}
+	}
 	if err := t.lifecycle.Persist(&newRec); err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: follow_up: failed to persist new generation: %v", err)).WithError(err)
 	}
+	t.appendFollowUpInstruction(newSessionID, instructions)
 
-	// timeout: 0 (use the spawner's default) — a follow_up resume does not
-	// carry forward any original timeout_seconds override from the prior
-	// generation; the timeout_seconds thread-through is scoped to the
-	// initial `run` dispatch only.
-	//
-	// isResume: !rec.Is3P — mirrors newSessionID's own native/3P branch
-	// above. Native follow_up reuses sessionID VERBATIM (newSessionID ==
-	// sessionID), so the spawner must treat this as a WARM RESUME of that
-	// already-existing session rather than attempt to create it — routing it
-	// through the ordinary create path would always collide with FR-096's
-	// collision guard (BDD-107), since the directory it would be "creating"
-	// is the very one being resumed. A 3P respawn mints a genuinely NEW
-	// session_id (newSessionID != sessionID), so it is a real create like any
-	// other dispatch and must NOT set IsResume.
-	// requested_skill is action="run" only (ADR-072 D9) — a follow_up resume
-	// never carries one.
-	return t.executeAsync(ctx, instructions, label, rec.AgentID, nil, newSessionID, 0, nil, "", !rec.Is3P, cb)
+	dispatch, err := t.launcher.Dispatch(ctx, newSessionID, newRec.Generation)
+	if err != nil {
+		t.transitionLifecycle(newSessionID, session.LifecycleFailed, err.Error())
+		slog.Error("delegate: follow-up dispatch failed",
+			"session_id", newSessionID,
+			"generation", newRec.Generation,
+			"agent_id", rec.AgentID,
+			"error", err)
+		return ErrorResult(fmt.Sprintf("delegate: follow_up: dispatch failed: %v", err)).WithError(err)
+	}
+
+	message := fmt.Sprintf("Follow-up dispatched for session %s at generation %d (state: %s)",
+		newSessionID, dispatch.Generation, dispatch.State)
+	if dispatch.State == steer.DispatchQueued {
+		message += fmt.Sprintf(", queue position %d", dispatch.QueuePosition)
+	}
+	if label != "" {
+		message = fmt.Sprintf("Follow-up for %q dispatched for session %s at generation %d (state: %s)",
+			label, newSessionID, dispatch.Generation, dispatch.State)
+	}
+	return NewToolResult(message)
+}
+
+// appendFollowUpInstruction adds the new user instruction to the session's
+// durable model history before Dispatch reconstructs the turn. The concrete
+// production store implements this optional write capability; narrow status
+// fakes used by older tests remain read-only.
+func (t *DelegateTool) appendFollowUpInstruction(sessionID, instruction string) {
+	writer, ok := t.sessionStore.(interface {
+		AddMessage(sessionKey, role, content string)
+	})
+	if ok && strings.TrimSpace(instruction) != "" {
+		writer.AddMessage(sessionID, "user", instruction)
+	}
+}
+
+// correctiveSessionStore is the write-capable production UnifiedStore shape
+// needed when an external worker gets a fresh corrective session identity.
+// DelegateSessionStore remains read-only for status-only fakes.
+type correctiveSessionStore interface {
+	DelegateSessionStore
+	AddMessage(sessionKey, role, content string)
+	GetMeta(sessionID string) (*session.UnifiedMeta, error)
+	CreateSessionWithID(childID, parentID string, sessionType session.UnifiedSessionType, channel, creatingAgentID string) (*session.UnifiedMeta, error)
+	SetMeta(sessionID string, patch session.MetaPatch) error
+}
+
+func (t *DelegateTool) cloneCorrectiveSessionIdentity(sourceID, newID string, rec *session.LifecycleRecord) error {
+	if t.sessionStore == nil {
+		return nil
+	}
+	store, ok := t.sessionStore.(correctiveSessionStore)
+	if !ok {
+		return fmt.Errorf("session store cannot create corrective identities")
+	}
+	source, err := store.GetMeta(sourceID)
+	if err != nil {
+		return err
+	}
+	parentID := source.ParentSessionID
+	if rec != nil && rec.SteeredBy != nil && rec.SteeredBy.SteeringSessionID != "" {
+		parentID = rec.SteeredBy.SteeringSessionID
+	}
+	if _, err := store.CreateSessionWithID(newID, parentID, source.Type, source.Channel, source.ActiveAgentID); err != nil {
+		return err
+	}
+	title, owner, workspace, instanceID, taskID := source.Title, source.Owner, source.WorkspaceID, source.InstanceID, source.TaskID
+	return store.SetMeta(newID, session.MetaPatch{
+		Title: &title, Owner: &owner, WorkspaceID: &workspace, InstanceID: &instanceID, TaskID: &taskID,
+		ParentSessionID: &parentID,
+	})
 }

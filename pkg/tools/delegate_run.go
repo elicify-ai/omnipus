@@ -535,7 +535,7 @@ func (t *DelegateTool) killChildBackgroundShells(sessionID string) (killed, fail
 }
 
 // collectCancelDescendantSessionIDs performs a breadth-first walk of the
-// durable ParentDurableKey edge (pkg/session/lifecycle.go) starting at
+// durable SteeringSessionID edge (pkg/session/lifecycle.go) starting at
 // rootSessionID and returns every reachable descendant's own session id
 // (rootSessionID itself is never included).
 //
@@ -571,7 +571,7 @@ func (t *DelegateTool) collectCancelDescendantSessionIDs(rootSessionID string) (
 	for len(queue) > 0 {
 		id := queue[0]
 		queue = queue[1:]
-		children, err := t.lifecycle.List(session.LifecycleFilter{ParentDurableKey: id})
+		children, err := t.lifecycle.List(session.LifecycleFilter{SteeringSessionID: id})
 		if err != nil {
 			// This branch of the tree is now UNREACHABLE for this walk —
 			// recorded (not just logged) so the caller can distinguish this

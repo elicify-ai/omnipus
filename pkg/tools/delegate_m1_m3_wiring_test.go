@@ -44,7 +44,7 @@ func TestDelegateInboxAck_TruthfulCountAndUnknownIDs(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-ack", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -104,7 +104,7 @@ func TestDelegateInboxAck_AllUnknown_ZeroAcknowledged(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-2")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-ack-2", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-2",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-2"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)

@@ -122,7 +122,7 @@ func TestDelegate_RefusedWithoutLifecycleStore(t *testing.T) {
 }
 
 // u14SeedChild persists a minimal, non-terminal LifecycleRecord for
-// sessionID whose ParentDurableKey is parentDurableKey (its DIRECT parent,
+// sessionID whose SteeringSessionID is parentDurableKey (its DIRECT parent,
 // one hop — see pkg/session/lifecycle.go's own doc comment on the field).
 //
 // The ownership-walk assertions here are about WHO may act, unrelated to the
@@ -132,21 +132,21 @@ func TestDelegate_RefusedWithoutLifecycleStore(t *testing.T) {
 func u14SeedChild(t *testing.T, lc *session.LifecycleStore, sessionID, parentDurableKey string) {
 	t.Helper()
 	if err := lc.Persist(&session.LifecycleRecord{
-		SessionID:        sessionID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: parentDurableKey,
-		WorkspaceID:      "ws-1",
-		AgentID:          "worker",
+		SessionID:      sessionID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey},
+		WorkspaceID:    "ws-1",
+		AgentID:        "worker",
 	}); err != nil {
 		t.Fatalf("u14SeedChild(%s, parent=%s): seed failed: %v", sessionID, parentDurableKey, err)
 	}
 }
 
 // TestOwnershipWalk_SiblingRejectedAncestorAllowed is test #50 (BDD-41,
-// BDD-42). Pre-ADR-057, a plain one-hop ParentDurableKey equality check
+// BDD-42). Pre-ADR-057, a plain one-hop SteeringSessionID equality check
 // happened to reject BOTH the illegitimate sibling case AND the legitimate
-// root-over-grandchild case, because ParentDurableKey used to be shared
+// root-over-grandchild case, because SteeringSessionID used to be shared
 // across the whole subtree (so equality passed for cousins too — the leak
 // FR-040 closes) OR named only the immediate parent post-U13 (so equality
 // rejected a root reaching its own grandchild — the regression BDD-42
@@ -307,7 +307,7 @@ func TestOwnershipWalk_AllSixGatedActions(t *testing.T) {
 		const d = "u14-six-followup-D"
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: d, State: session.LifecycleCompleted, OwnerScopeKind: session.OwnerScopeHuman,
-			ParentDurableKey: childB, WorkspaceID: "ws-1", AgentID: "worker",
+			SteeredBy: &session.SteeredBy{SteeringSessionID: childB}, WorkspaceID: "ws-1", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)
 		}
@@ -328,7 +328,7 @@ func TestOwnershipWalk_AllSixGatedActions(t *testing.T) {
 		const d = "u14-six-respond-D"
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: d, State: session.LifecycleNeedsInput, OwnerScopeKind: session.OwnerScopeHuman,
-			ParentDurableKey: childB, WorkspaceID: "ws-1", AgentID: "worker",
+			SteeredBy: &session.SteeredBy{SteeringSessionID: childB}, WorkspaceID: "ws-1", AgentID: "worker",
 			NeedsInput: &session.NeedsInput{CorrelationID: "u14-corr-1"},
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)
