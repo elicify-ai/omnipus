@@ -4,7 +4,7 @@
 // origin/hotfix/v0.1.1 — see the header comment in toolVisibility.ts.
 
 import { describe, it, expect } from 'vitest'
-import { shouldRenderToolCall, shouldRenderSubagentSpan, shouldRenderToolCallInPanel } from './toolVisibility'
+import { shouldRenderToolCall, shouldRenderToolCallInPanel } from './toolVisibility'
 
 describe('shouldRenderToolCall — ToolSearch', () => {
   it.each([
@@ -299,35 +299,12 @@ describe('shouldRenderToolCall — isError=false explicit is a no-op (regression
   })
 })
 
-// ── shouldRenderSubagentSpan — thread visibility for the SubagentBlock
-// delegation card (Fix 2, user-approved 2026-07-16, revised same day):
-// verbose-only, unconditionally. No failed-state exception (an earlier
-// revision had one; removed — same LLM-mediated-failure-presentation
-// rationale as the delegate/background-bash isError carve-outs above). ────
-
-describe('shouldRenderSubagentSpan — verbose-only, no failed-state exception', () => {
-  it.each<import('./toolStatusConfig').SpanLikeStatus>([
-    'running',
-    'success',
-    'cancelled',
-    'error',
-    'timeout',
-    'interrupted',
-  ])('status=%s is hidden by default (verbose off), INCLUDING failure states', (status) => {
-    expect(shouldRenderSubagentSpan({ status }, false)).toBe(false)
-  })
-
-  it.each<import('./toolStatusConfig').SpanLikeStatus>([
-    'running',
-    'success',
-    'cancelled',
-    'error',
-    'timeout',
-    'interrupted',
-  ])('status=%s is visible once verbose chat is enabled', (status) => {
-    expect(shouldRenderSubagentSpan({ status }, true)).toBe(true)
-  })
-})
+// ADR-091 D7/D10: `shouldRenderSubagentSpan` and the SubagentBlock thread
+// card it gated are deleted — a child's own frames never arrive in the
+// parent's bucket any more (I-4), so there is no span-level content left to
+// render in the thread at any verbosity. The delegate tool-call line
+// (shouldRenderToolCall's 'delegate' case, above) is the thread's only
+// remaining delegation surface.
 
 // ── shouldRenderToolCallInPanel — ActivityPanel-only policy (Fix 2,
 // user-approved 2026-07-16): INVERTED from the thread — show everything
@@ -438,65 +415,22 @@ describe('shouldRenderToolCall — all six new browser tools render in their own
     }
   })
 
-  // What this describe block does NOT cover, stated so the next reader does
-  // not mistake its green for the whole of FR-028's chat half. This is the
-  // BADGE-level gate only. Whether the badge is ever REACHED is decided one
-  // level up by shouldRenderSubagentSpan for a delegated call — revision 3 of
-  // the spec let the assertion above stand as the whole claim, which is a
-  // green that could not have seen the failure. The next describe block is
-  // the missing half; the two must be read together (S-43 + S-63).
-  it('documents its own limit: this says nothing about a call inside a delegated span', () => {
-    // Same tool, same default — but a delegated call lives inside a span,
-    // and the span gate answers `false` before the badge gate is consulted.
-    expect(shouldRenderToolCall('browser_snapshot', undefined, false)).toBe(true)
-    expect(shouldRenderSubagentSpan({ status: 'success' }, false)).toBe(false)
-  })
+  // ADR-091 D7/D10: this describe block used to document a gap against a
+  // span-level gate (`shouldRenderSubagentSpan`) that decided whether a
+  // delegated call's badge was ever reached. That gate — and the span-level
+  // thread rendering it gated — is deleted: a child's own frames never
+  // arrive in the parent's bucket any more, so there is no span content in
+  // the thread to reach at any verbosity. The badge-level answer above is
+  // therefore now the whole answer for the parent thread; the panel
+  // (`shouldRenderToolCallInPanel`, below) remains the transparency surface
+  // for a call inside a CHILD's own session, opened separately.
 })
 
-// ── FR-039 / S-63: the delegated population, which FR-028's chat half does
-// NOT cover. Four assertions in four directions on purpose — a single "it is
-// hidden" assertion goes green if the span mechanism is deleted outright, and
-// a single "it is visible in the panel" assertion goes green while the
-// external-CLI case shows nothing anywhere. The panel-side halves (3 and 4)
-// live in src/components/chat/ActivityPanel.test.tsx, where the rendering
-// they describe actually happens. ─────────────────────────────────────────
-
-describe('shouldRenderSubagentSpan — a delegated browser call is verbose-only in the parent thread (FR-039, S-63)', () => {
-  it('direction 1: at the default verboseChatEnabled=false the span does not render, so a delegated browser_snapshot renders nowhere in the parent thread', () => {
-    expect(shouldRenderSubagentSpan({ status: 'success' }, false)).toBe(false)
-  })
-
-  it('direction 2: with verbose chat on the same span renders — the gap is the DEFAULT, not the absence of a path', () => {
-    expect(shouldRenderSubagentSpan({ status: 'success' }, true)).toBe(true)
-  })
-
-  // The span gate is what decides the outcome, and it decides it identically
-  // for every terminal status — including the failure states an operator is
-  // most likely to assume are surfaced. Asserted across the status domain so
-  // a future narrower exception (e.g. "show failed spans") cannot land here
-  // silently while this file still reports green.
-  it.each<import('./toolStatusConfig').SpanLikeStatus>([
-    'running',
-    'success',
-    'cancelled',
-    'error',
-    'timeout',
-    'interrupted',
-  ])(
-    'a span in status=%s hides its delegated browser call at the default, while the badge predicate for that same call says true',
-    (status) => {
-      expect(shouldRenderSubagentSpan({ status }, false)).toBe(false)
-      // The badge-level answer is irrelevant when the span never renders —
-      // this pair is the exact mismatch revision 3 of the spec shipped as a
-      // passing mitigation.
-      expect(shouldRenderToolCall('browser_snapshot', undefined, false)).toBe(true)
-    },
-  )
-
-  // The panel is the only partial fallback, and only for the calls it admits.
-  // Asserted here at the predicate; ActivityPanel.test.tsx asserts the
-  // rendering, and asserts that an external-CLI span carries nothing.
-  it('the panel predicate admits a delegated browser_snapshot — the partial fallback FR-039 names', () => {
+// The panel remains the transparency surface for tool calls the thread
+// hides by default (ToolSearch aside) — including a browser tool a child
+// session ran, when that child's own view is opened (ADR-091 D7).
+describe('shouldRenderToolCallInPanel — admits a browser tool', () => {
+  it('admits a delegated browser_snapshot — the panel is the transparency surface FR-039 names', () => {
     expect(shouldRenderToolCallInPanel('browser_snapshot', false)).toBe(true)
   })
 })

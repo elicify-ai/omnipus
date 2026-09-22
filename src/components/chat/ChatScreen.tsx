@@ -48,7 +48,6 @@ import { AgentPicker } from './composer/AgentPicker'
 import { ModelPicker } from './composer/ModelPicker'
 import { TokenCounter } from './composer/TokenCounter'
 import { MarkdownText } from './markdown-text'
-import { SubagentBlock } from './SubagentBlock'
 import { ModelFooter } from './ModelFooter'
 import { Button } from '@/components/ui/button'
 import {
@@ -62,14 +61,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage, PositionedToolCall, SubagentSpan } from '@/store/chat'
+import type { ChatMessage, PositionedToolCall } from '@/store/chat'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
-import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import { shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
 import { isGoalRecordEmpty } from '@/lib/goalSetupState'
 import { messageSetsGoal } from '@/lib/goalCommandMessage'
 import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
@@ -863,77 +862,14 @@ function wouldToolCallBeVisible(
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
 
-/**
- * Resolves a subagent span's delegate kind for SubagentBlock's W3 "no live
- * progress" notice — '3p' only for a resolved external-CLI (subagent_3p)
- * delegate, undefined otherwise (unresolvable agentId included — an unknown
- * agent must not be guessed as either kind).
- *
- * Unlike useRunningActivity.ts's resolveSpanAgentId, this does NOT apply that
- * hook's originating-delegate-call fallback — and doesn't need to.
- * resolveSpanAgentId exists to fix which agent's AVATAR/NAME displays, where
- * getting the exact agent wrong is visibly wrong; resolveSpanAgentType only
- * needs the delegate's KIND (native vs subagent_3p), which it derives by
- * resolving `span.agentId` against the agents list. Per ADR-032, agent
- * identity flows from the resolved target for BOTH dispatch kinds —
- * `spawnSubTurn` (pkg/agent/subturn.go) sets `agent.ID = execSource.ID`
- * unconditionally, native or external-CLI, with no per-dispatch-kind
- * exception — so `span.agentId` reliably carries the resolved delegate id
- * here regardless of which kind it turns out to be.
- */
-function resolveSpanAgentType(span: SubagentSpan, agents: Agent[]): '3p' | 'native' | undefined {
-  if (!span.agentId) return undefined
-  const agent = agents.find((a) => a.id === span.agentId)
-  if (!agent) return undefined
-  return agent.type === 'subagent_3p' ? '3p' : 'native'
-}
-
-// Renders subagent spans attached to the current message (FR-H-008).
-// useMessage().id corresponds to the store message's id (set in omnipus-runtime convertMessage).
-export function SubagentSpansRenderer() {
-  const message = useMessage()
-  // Perf (chat UI freeze under heavy subagent/delegation
-  // activity): select the ONE message by id from `messagesById` instead of
-  // subscribing to the whole `messages` array + `.find()`ing it every
-  // render. `messages` gets a brand-new array identity on every WS frame
-  // (bucketToForeground rebuilds it every bucket mutation), so the old
-  // `useChatStore((s) => s.messages)` re-rendered this component on every
-  // frame of the ENTIRE turn, not just frames touching this message; the
-  // `.find()` then re-scanned the whole array on top of that. `messagesById`
-  // returns the SAME object reference across renders unless THIS message
-  // was the one touched by the last mutation (Immer structural sharing —
-  // see ChatStore.messagesById's doc comment), so Zustand's default
-  // Object.is equality correctly skips re-rendering otherwise. The `??`
-  // fallback is a defensive O(N) scan — mirrors attachStepToSpan's
-  // established "O(1) lookup first, O(N) fallback" idiom (src/store/chat.ts)
-  // — for the narrow case of a hand-rolled test fixture that sets `messages`
-  // on the store directly without also setting `messagesById`; real app
-  // flows always keep the two in sync (bucketToForeground derives both from
-  // the same bucket, and getMessages() filters `messages` down to exactly
-  // the ids present in `messagesById`), so this fallback is never reached
-  // outside such fixtures.
-  const storeMsg = useChatStore((s) => s.messagesById[message.id] ?? s.messages.find((m) => m.id === message.id))
-  // Fix 2 (user-approved 2026-07-16): delegation cards are hidden from the
-  // thread by default — verbose chat is the only way to bring them back
-  // here (shouldRenderSubagentSpan, src/lib/toolVisibility.ts). Selector
-  // pattern mirrors ToolCallBadge.tsx's use of the same store (a plain hook
-  // call inside a component, not getState()) so this stays reactive to the
-  // preference toggling live.
-  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
-  // W3: reused ['agents'] query (prefetched by AppShell, staleTime 30s
-  // elsewhere) — resolves each span's agentId to native/3p so a running
-  // external-CLI delegate's card can show the "no live progress" notice.
-  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
-  const spans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  if (spans.length === 0) return null
-  return (
-    <>
-      {spans.map((span) => (
-        <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
-      ))}
-    </>
-  )
-}
+// ADR-091 D7/D10: `resolveSpanAgentType` and `SubagentSpansRenderer` (the
+// per-message thread rendering of subagent spans via SubagentBlock) are
+// deleted — a child's own frames never arrive in the parent's bucket any
+// more (I-4), so the thread has no span content left to render at any
+// verbosity. A delegation's status now lives only in the side panel
+// (ActivityPanel.tsx, fed by useRunningActivity.ts reading message.spans
+// directly) and in the child's own session, opened via its
+// `childSessionId`.
 
 // Bug 2 (UAT, ADR-040 browser-panel round): renders the agent the CALLER
 // already resolved per-message (`message.agentId ?? activeAgentId`), passed in
@@ -1302,9 +1238,14 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // dispatch (default thread policy, toolVisibility.ts) must not render an
   // empty bubble with a bare Copy action bar (the D-fix UAT defect
   // resurfacing once the thread started hiding those by default).
-  // visibleToolCalls/visibleSpans are also what's actually rendered below —
-  // hoisted here so both the emptiness check and the render loop share one
-  // computation instead of drifting into two different notions of "visible".
+  // visibleToolCalls is also what's actually rendered below — hoisted here
+  // so both the emptiness check and the render loop share one computation
+  // instead of drifting into two different notions of "visible". Subagent
+  // spans no longer factor in at all (ADR-091 D7/D10): a child's own frames
+  // never arrive in the parent's bucket any more, so the thread has no span
+  // content to render or to judge emptiness against — the side panel
+  // (ActivityPanel.tsx, fed by useRunningActivity.ts reading message.spans
+  // directly) is where a delegation's status lives now.
   const hasContent = !!message.content?.trim().length
   // F4 (second review wave on branch fix/615-617-618-hardening): `tc` here
   // is a baked PositionedToolCall, which — like every other #617-era call
@@ -1325,10 +1266,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   )
   const hasVisibleToolCalls = visibleToolCalls.length > 0
   const hasMedia = mediaItems.length > 0
-  // Fix 2 (user-approved 2026-07-16): the actual render list, filtered
-  // through the thread gate (shouldRenderSubagentSpan).
-  const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const isEmptyContent = !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
+  const isEmptyContent = !hasContent && !hasVisibleToolCalls && !hasMedia
   const showEmptyPlaceholder = !!message.isStreaming && isEmptyContent
   // D-fix, terminal-empty variant (integrate, kept through the 2026-09-15
   // merge next to release's goal-aware label): a message that finished
@@ -1556,13 +1494,6 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
               />
             )
           })}
-
-          {/* Subagent spans — pre-filtered via visibleSpans above (Fix 2).
-              W3: agentType resolved from the `agents` list already fetched
-              above (for the avatar) — see resolveSpanAgentType's doc comment. */}
-          {visibleSpans.map((span) => (
-            <SubagentBlock key={span.spanId} span={span} agentType={resolveSpanAgentType(span, agents)} />
-          ))}
         </div>
 
         {/* Action bar — always visible at reduced opacity, fully opaque on hover.
@@ -1930,8 +1861,10 @@ function AssistantMessage() {
       ),
   )
   const hasMedia = !!storeMsg?.media?.length
-  const visibleSpans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const isEmptyContent = !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
+  // ADR-091 D7/D10: subagent spans no longer factor into thread emptiness —
+  // a child's own frames never arrive in the parent's bucket any more, so
+  // there is no span content in the thread to judge emptiness against.
+  const isEmptyContent = !hasVisibleText && !hasVisibleToolCall && !hasMedia
   // FR-21: show (interrupted) suffix when the store marks this message interrupted.
   const isInterrupted = storeMsg?.status === 'interrupted'
   const showEmptyPlaceholder = isRunning && isEmptyContent
@@ -1991,8 +1924,6 @@ function AssistantMessage() {
                   },
                 }}
               />
-              {/* Subagent spans — rendered per-message, keyed by span_id (FR-H-008) */}
-              <SubagentSpansRenderer />
               {/* Trailing thinking indicator — sits at the bottom of the bubble
                   while the turn is running so the user always sees a "still
                   working" cue at the position where the next text/tool will

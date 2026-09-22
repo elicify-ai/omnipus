@@ -4,23 +4,27 @@
  * by default, with NO failed-state exception — a subagent/background-shell
  * error is returned to the delegating agent's own turn as the tool result,
  * and that agent explains it in its own response text; the raw result stays
- * transparent in the ActivityPanel slide-out (see ActivityPanel.test.tsx's
- * "panel-only step visibility policy" block for that side). Only the
- * Verbose-chat setting (useChatPreferencesStore) reveals these rows/cards in
- * the thread.
+ * transparent in the ActivityPanel slide-out. Only the Verbose-chat setting
+ * (useChatPreferencesStore) reveals the delegate tool-call row in the thread.
+ *
+ * ADR-091 D7/D10: this file's original first describe block asserted
+ * presence/absence of the SubagentBlock span card (a `./SubagentBlock`
+ * detectable stub, distinguishing it from the flat delegate tool-call row
+ * covered below) — that component and the span-level thread rendering it
+ * served are deleted (a child's own frames never arrive in the parent's
+ * bucket any more, I-4), so there is no card left to assert about, in any
+ * verbosity. That block, and the stub, are removed with it. The remaining
+ * two blocks — the flat `delegate` tool-call row (GenericToolCall's own
+ * `shouldRenderToolCall` gate) and the ghost-bubble guard — are untouched
+ * by that deletion and stay.
  *
  * Style mirrors ChatScreen.tool-order.test.tsx: full ChatScreen render,
  * PlainMessageList fallback (ResizeObserver forced undefined) so a finished
  * message renders through VirtualAssistantMessageRow without needing to fake
- * virtualizer geometry. Unlike that file, `./tools/GenericToolCall` is left
- * UNMOCKED here — the assertions in this file are specifically about
- * GenericToolCall's OWN internal shouldRenderToolCall gate (a delegate 'run'
- * call), so stubbing it away would defeat the point. `./SubagentBlock` is
- * mocked down to a detectable stub (not `() => null`, unlike sibling
- * ChatScreen test files) exposing the span's status/id, so this file can
- * assert PRESENCE/ABSENCE of the card without depending on SubagentBlock's
- * own internal markup (that component's own rendering is covered by
- * SubagentBlock.test.tsx).
+ * virtualizer geometry. `./tools/GenericToolCall` is left UNMOCKED here —
+ * the assertions in this file are specifically about GenericToolCall's OWN
+ * internal shouldRenderToolCall gate (a delegate 'run' call), so stubbing it
+ * away would defeat the point.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -151,19 +155,6 @@ vi.mock('./historical-markdown', () => ({
 vi.mock('@/assets/logo/omnipus-avatar.svg?url', () => ({ default: 'omnipus-avatar.svg' }))
 vi.mock('./RateLimitIndicator', () => ({ RateLimitIndicator: () => null }))
 
-// Detectable stub (unlike sibling ChatScreen test files' `() => null`) — this
-// file's whole point is asserting whether ChatScreen chooses to mount a
-// SubagentBlock at all for a given span, so the stub must expose enough to
-// query for it and read the span it was given.
-vi.mock('./SubagentBlock', () => ({
-  SubagentBlock: ({ span }: { span: { spanId: string; status: string; taskLabel: string } }) =>
-    React.createElement(
-      'div',
-      { 'data-testid': 'subagent-block-stub', 'data-span-id': span.spanId, 'data-status': span.status },
-      span.taskLabel,
-    ),
-}))
-
 // `./tools/GenericToolCall` deliberately LEFT UNMOCKED — see file header.
 vi.mock('./tools/BrowserTool', () => ({
   isReplayBrowserToolName: () => false,
@@ -216,103 +207,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals()
-})
-
-describe('ChatScreen — delegation card thread visibility (Fix 2, revised: verbose-only, no failed-state exception)', () => {
-  it('a running delegation span renders NO SubagentBlock card by default', async () => {
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Working on it. ', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_running',
-        parent_call_id: 'delegate_call_running',
-        task_label: 'audit files',
-        agent_id: 'ray',
-        session_id: SID,
-      })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
-
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    expect(container.querySelector('[data-testid="subagent-block-stub"]')).toBeNull()
-  })
-
-  it('a FAILED (error) delegation span ALSO renders NO SubagentBlock card by default — no failed-state exception', async () => {
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Working on it. ', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_failed',
-        parent_call_id: 'delegate_call_failed',
-        task_label: 'audit files',
-        agent_id: 'ray',
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_end',
-        span_id: 'span_failed',
-        status: 'error',
-        duration_ms: 500,
-        session_id: SID,
-      })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
-
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    // The failure is left for the delegating agent's own response text and
-    // the ActivityPanel to surface — NOT a thread card, per the revised
-    // no-failed-state-exception policy.
-    expect(container.querySelector('[data-testid="subagent-block-stub"]')).toBeNull()
-  })
-
-  it('the same FAILED delegation span becomes visible once verbose chat is enabled', async () => {
-    act(() => {
-      useChatPreferencesStore.setState({ verboseChatEnabled: true })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'token', content: 'Working on it. ', session_id: SID }) })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_failed_verbose',
-        parent_call_id: 'delegate_call_failed_verbose',
-        task_label: 'audit files',
-        agent_id: 'ray',
-        session_id: SID,
-      })
-    })
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_end',
-        span_id: 'span_failed_verbose',
-        status: 'error',
-        duration_ms: 500,
-        session_id: SID,
-      })
-    })
-    act(() => { useChatStore.getState().handleFrame({ type: 'done', session_id: SID }) })
-
-    let container!: HTMLElement
-    await act(async () => {
-      const result = render(<ChatScreen />)
-      container = result.container
-    })
-
-    const stub = container.querySelector('[data-testid="subagent-block-stub"]')
-    expect(stub).not.toBeNull()
-    expect(stub).toHaveAttribute('data-status', 'error')
-  })
 })
 
 describe('ChatScreen — synchronous delegate GenericToolCall row thread visibility (Fix 2, revised)', () => {

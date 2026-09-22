@@ -3,8 +3,7 @@
 // Inline thread rendering of a `Message.type === 'judge_verdict'` transcript
 // entry, shown ONLY under verbose chat (`shouldRenderJudgeVerdictInThread`,
 // toolVisibility.ts) — the default is panel-only (ActivityPanel's judge
-// row), mirroring `shouldRenderSubagentSpan`'s hide-by-default/verbose-
-// reveal rule for delegation cards. Deliberately a separate, small
+// row). Deliberately a separate, small
 // presentational component from ActivityPanel's inline judge row (some
 // duplication accepted): the two surfaces render different data shapes
 // (persisted `JudgeVerdict` here vs the live `JudgeVerdictFrame` there) and

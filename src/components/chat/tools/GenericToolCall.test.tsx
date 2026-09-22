@@ -659,11 +659,10 @@ describe('GenericToolCall — verbose chat gate', () => {
 
   // INVERTED 2026-07-16 (was: "... still renders regardless of verbose
   // setting"): Fix 2 hides a 'run' delegation for BOTH sync and async.
-  // Revised same day: the thread has NO default delegation surface at all
-  // anymore — SubagentBlock's span card is ALSO verbose-only now
-  // (shouldRenderSubagentSpan, toolVisibility.ts), so this isn't "redundant
-  // with the card", it's simply hidden, same as the card, until verbose
-  // chat is on.
+  // ADR-091 D7/D10: the thread has no span-level delegation surface at all
+  // any more (SubagentBlock is deleted — a child's own frames never arrive
+  // in the parent's bucket), so this call's own hidden-by-default tool-call
+  // chip is the ONLY thread-side gate left, and it stays verbose-only.
   it('an explicit blocking delegate call (async: false) is ALSO hidden by default — no sync exception', () => {
     render(
       <GenericToolCall
