@@ -913,6 +913,35 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	return candidates, strconv.FormatInt(lastScannedSeq, 10), false, nil
 }
 
+// Latest returns the newest message for childSessionID, including messages
+// that were already acknowledged. Acknowledgement is a delivery cursor, not
+// deletion: durable status still needs the last upward report and its real
+// timestamp after a parent has consumed it.
+func (s *MessageInboxStore) Latest(ownerKey, childSessionID string) (*generated.SessionMessage, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return nil, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	entries, err := s.readEntries(ownerKey)
+	mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		envelope, _, perr := peekEnvelope(*e.Message)
+		if perr == nil && envelope.SessionID == childSessionID {
+			msg := *e.Message
+			return &msg, nil
+		}
+	}
+	return nil, nil
+}
+
 // UnackedCount returns the current open question+blocker count for
 // childSessionID under ownerKey — the value delegate.status surfaces
 // against the D15 per-child ceiling.
