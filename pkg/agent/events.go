@@ -130,6 +130,20 @@ const (
 	// Verbose-chat-gated card in that specific chat thread, not just the
 	// GLOBAL ActivityPanel.
 	EventKindJudgeVerdict
+	// EventKindSubagentMessage is emitted when a steered child reports
+	// progress/checkpoint/blocker/question/goal_status to its steering
+	// session (ADR-091 D7/I-4 — the ADR-053 subagent_message contract,
+	// wired at last: "no emitter in Go and no consumer in the SPA today").
+	// The WS forwarder turns it into a subagent_message frame
+	// (generated.SubagentMessageFrame); the SAME event, persisted first,
+	// is what the since-cursor replay returns after a reload.
+	EventKindSubagentMessage
+	// EventKindSubagentState is emitted on every lifecycle transition of a
+	// steered child (queued -> running -> needs_input -> running ->
+	// completed, etc. — ADR-091 D7/I-4). The WS forwarder turns it into a
+	// subagent_state frame (generated.SubagentStateFrame); persisted first,
+	// exactly like EventKindSubagentMessage.
+	EventKindSubagentState
 
 	eventKindCount
 )
@@ -171,6 +185,8 @@ var eventKindNames = [...]string{
 	"tool_result_projection",
 	"goal_outcome",
 	"judge_verdict",
+	"subagent_message",
+	"subagent_state",
 }
 
 // String returns the stable string form of an EventKind.
@@ -877,4 +893,37 @@ type JudgeVerdictPayload struct {
 	SessionID string
 	// Verdict is the adjudication itself, identical to the persisted entry's.
 	Verdict task.JudgeVerdict
+}
+
+// SubagentMessagePayload is EventKindSubagentMessage's payload: one
+// progress/checkpoint/blocker/question/goal_status report from a steered
+// child, for the parent's side-panel status line (ADR-091 D7/I-4). Emitted
+// by steer_audience.go's SteerUpwardDeliverer.Deliver only after the
+// matching `system_subtype: subagent_message` transcript entry was saved
+// into the PARENT's own transcript (this payload's SessionID) — the same
+// entry the since-cursor replay returns on reload.
+type SubagentMessagePayload struct {
+	// SessionID is the PARENT's own session — where this frame is persisted
+	// and where the WS forwarder delivers it (never the child's).
+	SessionID string
+	// MessageID is the saved transcript entry's own id, stamped verbatim
+	// onto the frame so a live push, a replay and a cold load agree.
+	MessageID string
+	// Frame is the wire shape itself, identical to the persisted entry's.
+	Frame generated.SubagentMessageFrame
+}
+
+// SubagentStatePayload is EventKindSubagentState's payload: one lifecycle
+// transition of a steered child, for the parent's side-panel status
+// (ADR-091 D7/I-4). Emitted only after the matching `system_subtype:
+// subagent_state` transcript entry was saved into the PARENT's own
+// transcript (this payload's SessionID).
+type SubagentStatePayload struct {
+	// SessionID is the PARENT's own session — see SubagentMessagePayload's
+	// doc comment.
+	SessionID string
+	// MessageID is the saved transcript entry's own id.
+	MessageID string
+	// Frame is the wire shape itself, identical to the persisted entry's.
+	Frame generated.SubagentStateFrame
 }

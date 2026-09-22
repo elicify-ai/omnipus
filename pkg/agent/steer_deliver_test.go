@@ -77,6 +77,108 @@ func seedParentAndChild(t *testing.T, lifecycle *session.LifecycleStore, parentI
 	}
 }
 
+// TestDeliver_PersistsSubagentMessage_ProgressReachesParentTranscript covers
+// ADR-091 D7/I-4 (US-3/AS-2): a progress report persists a subagent_message
+// event into the PARENT's own transcript, readable back via the store —
+// the mechanism the existing since-cursor replay (websocket_replay.go)
+// returns after a reload with no new store.
+func TestDeliver_PersistsSubagentMessage_ProgressReachesParentTranscript(t *testing.T) {
+	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	const parentID, childID = "parent-1", "child-1"
+	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
+
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageProgress(generated.SessionMessageProgress{
+		MessageId: "p-1", SessionId: childID, CreatedAt: time.Now(), Depth: 1,
+		SenderIdentity: "worker", Text: "halfway there",
+	}); err != nil {
+		t.Fatalf("FromSessionMessageProgress: %v", err)
+	}
+
+	if _, err := deliverer.Deliver(context.Background(), steer.UpwardEvent{
+		ChildSessionID: childID, Outcome: steer.OutcomeProgress, Message: sm,
+	}); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	entries, err := al.GetSessionStore().ReadTranscript(parentID)
+	if err != nil {
+		t.Fatalf("ReadTranscript(parent): %v", err)
+	}
+	var found *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].SystemSubtype == session.SystemSubtypeSubagentMessage {
+			found = &entries[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a subagent_message entry in the parent's transcript, got %d entries", len(entries))
+	}
+	if found.SubagentMessage == nil {
+		t.Fatal("expected the persisted entry to carry a SubagentMessage frame")
+	}
+	if found.SubagentMessage.Kind != "progress" {
+		t.Fatalf("SubagentMessage.Kind = %q, want progress", found.SubagentMessage.Kind)
+	}
+	if found.SubagentMessage.SessionId != childID {
+		t.Fatalf("SubagentMessage.SessionId = %q, want the CHILD's own id %q", found.SubagentMessage.SessionId, childID)
+	}
+}
+
+// TestDeliver_PersistsSubagentState_TerminalOutcome covers ADR-091 D7/I-4
+// (US-3/AS-2): a terminal outcome (a completed handback) persists a
+// subagent_state(completed) event into the PARENT's own transcript.
+func TestDeliver_PersistsSubagentState_TerminalOutcome(t *testing.T) {
+	al, lifecycle, _, deliverer := newDeliverTestLoop(t)
+	const parentID, childID = "parent-1", "child-1"
+	seedParentAndChild(t, lifecycle, parentID, childID)
+	seedUnifiedSession(t, al, parentID)
+
+	if _, err := deliverer.Deliver(context.Background(), handbackEvent(childID, "whatever")); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	entries, err := al.GetSessionStore().ReadTranscript(parentID)
+	if err != nil {
+		t.Fatalf("ReadTranscript(parent): %v", err)
+	}
+	var found *session.TranscriptEntry
+	for i := range entries {
+		if entries[i].SystemSubtype == session.SystemSubtypeSubagentState {
+			found = &entries[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a subagent_state entry in the parent's transcript, got %d entries", len(entries))
+	}
+	if found.SubagentState == nil || found.SubagentState.State != "completed" {
+		t.Fatalf("expected SubagentState.State = completed, got %+v", found.SubagentState)
+	}
+}
+
+// seedUnifiedSession creates a real *session.UnifiedStore session at the
+// given id — AppendTranscriptStrict (and therefore
+// deliverSubagentMessage/State, steer_frames.go) requires the session to
+// already exist (a real production invariant: the parent, by definition,
+// already has a live chat session by the time it ever delegates).
+func seedUnifiedSession(t *testing.T, al *AgentLoop, id string) {
+	t.Helper()
+	store := al.GetSessionStore()
+	if store == nil {
+		t.Fatal("seedUnifiedSession: no session store configured")
+	}
+	root, err := store.NewSession(session.SessionTypeChat, "webchat", "parent-agent")
+	if err != nil {
+		t.Fatalf("seedUnifiedSession(%q): create root: %v", id, err)
+	}
+	if _, err := store.CreateSessionWithID(id, root.ID, session.SessionTypeChat, "webchat", "parent-agent"); err != nil {
+		t.Fatalf("seedUnifiedSession(%q): %v", id, err)
+	}
+}
+
 func handbackEvent(childID, messageID string) steer.UpwardEvent {
 	var sm generated.SessionMessage
 	_ = sm.FromSessionMessageHandback(generated.SessionMessageHandback{

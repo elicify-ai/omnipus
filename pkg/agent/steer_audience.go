@@ -127,6 +127,55 @@ func wakeEligibleOutcome(o steer.Outcome) bool {
 	}
 }
 
+// subagentMessageKindForOutcome maps an I-5 turn Outcome onto the
+// generated.SubagentMessageFrame.Kind value for ADR-091 D7/I-4's persisted
+// side-panel status line — narration/report content only (progress,
+// checkpoint, blocker, a goal verdict). Lifecycle TRANSITIONS (parked,
+// completed, failed, ...) are subagent_state's job
+// (subagentStateForOutcome), matching the WP-B spec's own AS-2 sequence
+// ("subagent_message(progress)" for a progress report vs.
+// "subagent_state(needs_input)" for a park — never
+// "subagent_message(question)"). Empty return means "no subagent_message
+// for this outcome."
+func subagentMessageKindForOutcome(o steer.Outcome) string {
+	switch o {
+	case steer.OutcomeProgress:
+		return "progress"
+	case steer.OutcomeCheckpoint:
+		return "checkpoint"
+	case steer.OutcomeBlocker:
+		return "blocker"
+	case steer.OutcomeGoalVerdict:
+		return "goal_status"
+	default:
+		return ""
+	}
+}
+
+// subagentStateForOutcome maps an I-5 turn Outcome onto the
+// generated.SubagentStateFrame.State value for ADR-091 D7/I-4's persisted
+// side-panel status — every outcome that represents a LIFECYCLE transition
+// this lane can observe from Deliver alone (a park, or a terminal
+// disposition). Mid-flight transitions this lane cannot observe
+// (queued -> running, a Stop) are not covered here — see this lane's final
+// report. Empty return means "no subagent_state for this outcome."
+func subagentStateForOutcome(o steer.Outcome) string {
+	switch o {
+	case steer.OutcomeParkedQuestion:
+		return string(session.LifecycleNeedsInput)
+	case steer.OutcomeFinalAnswer:
+		return string(session.LifecycleCompleted)
+	case steer.OutcomeEmptyAnswer, steer.OutcomeFailed:
+		return string(session.LifecycleFailed)
+	case steer.OutcomeInterrupted:
+		return string(session.LifecycleCancelled)
+	case steer.OutcomeTimedOut:
+		return string(session.LifecycleTimedOut)
+	default:
+		return ""
+	}
+}
+
 // deliverOwnerKey resolves the durable inbox owner key (D16) — the steering
 // session — from a child's own lifecycle record: the edge (I-1 SteeredBy)
 // first, falling back to the pre-edge ParentDurableKey for a record the
@@ -264,6 +313,17 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	res, appendErr := inbox.Append(ownerKey, msg)
 	if appendErr != nil {
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: append: %w", appendErr)
+	}
+
+	// ADR-091 D7/I-4: the parent's side-panel status line, persisted as an
+	// event in the parent's OWN transcript so it survives a reload
+	// (steer_frames.go). Best-effort — see deliverSubagentMessage/State's
+	// own doc comments for why a failure here never fails Deliver itself.
+	if kind := subagentMessageKindForOutcome(event.Outcome); kind != "" {
+		al.deliverSubagentMessage(ownerKey, childRec, kind, deliverySummary(msg), nil)
+	}
+	if state := subagentStateForOutcome(event.Outcome); state != "" {
+		al.deliverSubagentState(ownerKey, childRec, state)
 	}
 
 	if !wakeEligibleOutcome(event.Outcome) {
