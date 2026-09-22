@@ -485,7 +485,6 @@ describe('chat store — cancel/interrupt (test_cancel_preserves_partial)', () =
       lastUserMessageAt: null,
       cancelStage: null,
       lastReceivedEventTime: null,
-      spanByParentCallId: {},
     }
   }
 
@@ -1086,388 +1085,6 @@ describe('chat store — #253 no-session send failure creates retriable error bu
     expect(userMsg?.status).toBe('done')
     // isStreaming should be true — the agent is about to respond
     expect(state.isStreaming).toBe(true)
-  })
-})
-
-// ── Sprint H: subagent span tests ─────────────────────────────────────────────
-// TDD row 11: ChatStore_GroupsFramesBySpan
-// Traces to: sprint-h-subagent-block-spec.md Scenarios 2, 4, 5, 8
-
-describe('ChatStore_GroupsFramesBySpan', () => {
-  /** Seed an assistant placeholder so spans have a message to attach to. */
-  function seedAssistant() {
-    act(() => {
-      useChatStore.getState().updateLastAssistantMessage('', false)
-    })
-  }
-
-  it('in-order: subagent_start → tool_call_start → tool_call_result → subagent_end populates span', () => {
-    seedAssistant()
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_c1',
-        parent_call_id: 'c1',
-        task_label: 'audit go files',
-        agent_id: 'max',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    let msgs = useChatStore.getState().messages
-    let span = msgs[msgs.length - 1].spans?.[0]
-    expect(span).toBeDefined()
-    expect(span?.spanId).toBe('span_c1')
-    expect(span?.taskLabel).toBe('audit go files')
-    expect(span?.status).toBe('running')
-    expect(span?.steps).toHaveLength(0)
-    // subagent_start's own agent_id must be carried onto the running span.
-    expect(span?.agentId).toBe('max')
-
-    // tool_call_start with matching parent_call_id
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 't1',
-        tool: 'fs.list',
-        params: { path: '/tmp' },
-        parent_call_id: 'c1',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    msgs = useChatStore.getState().messages
-    span = msgs[msgs.length - 1].spans?.[0]
-    expect(span?.steps).toHaveLength(1)
-    const s0 = span?.steps[0]
-    expect(s0?.kind === 'tool' ? s0.tool.tool : undefined).toBe('fs.list')
-    expect(s0?.kind === 'tool' ? s0.tool.status : undefined).toBe('running')
-
-    // tool_call_result
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_result',
-        call_id: 't1',
-        tool: 'fs.list',
-        result: 'file.go',
-        status: 'success',
-        duration_ms: 100,
-        parent_call_id: 'c1',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    msgs = useChatStore.getState().messages
-    span = msgs[msgs.length - 1].spans?.[0]
-    const s0after = span?.steps[0]
-    expect(s0after?.kind === 'tool' ? s0after.tool.status : undefined).toBe('success')
-    expect(s0after?.kind === 'tool' ? s0after.tool.result : undefined).toBe('file.go')
-
-    // subagent_end
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_end',
-        span_id: 'span_c1',
-        status: 'success',
-        duration_ms: 4210,
-        final_result: 'Found 1 Go file',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    msgs = useChatStore.getState().messages
-    span = msgs[msgs.length - 1].spans?.[0]
-    expect(span?.status).toBe('success')
-    // Narrow to terminal span to access durationMs and finalResult.
-    const terminalSpan = span?.status !== 'running' ? span : undefined
-    expect((terminalSpan as import('@/store/chat').SubagentSpanTerminal | undefined)?.durationMs).toBe(4210)
-    expect((terminalSpan as import('@/store/chat').SubagentSpanTerminal | undefined)?.finalResult).toBe('Found 1 Go file')
-    // agentId must survive the running → terminal transition (the subagent_end
-    // frame here carries no agent_id of its own, so this also exercises the
-    // `ef.agent_id ?? existingSpan.agentId` fallback taking the existing-span branch).
-    expect(span?.agentId).toBe('max')
-  })
-
-  it('out-of-order: tool_call_start arrives before subagent_start — buffered then drained', () => {
-    seedAssistant()
-
-    // tool_call_start arrives BEFORE subagent_start
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 't2',
-        tool: 'shell',
-        params: { cmd: 'ls' },
-        parent_call_id: 'c2',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    // No span yet — should not appear in flat toolCalls either yet
-    let msgs = useChatStore.getState().messages
-    expect(msgs[msgs.length - 1].spans ?? []).toHaveLength(0)
-
-    // Now subagent_start arrives — should drain the buffer
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_c2',
-        parent_call_id: 'c2',
-        task_label: 'list files',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    msgs = useChatStore.getState().messages
-    const span = msgs[msgs.length - 1].spans?.[0]
-    expect(span).toBeDefined()
-    expect(span?.spanId).toBe('span_c2')
-    expect(span?.steps).toHaveLength(1)
-    const step0 = span?.steps[0]
-    expect(step0?.kind).toBe('tool')
-    expect(step0?.kind === 'tool' ? step0.tool.tool : undefined).toBe('shell')
-  })
-
-  it('step count increments +1 per tool_call_start, not per result (FR-H-010)', () => {
-    seedAssistant()
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_c3',
-        parent_call_id: 'c3',
-        task_label: 'multi-step task',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    for (let i = 1; i <= 3; i++) {
-      act(() => {
-        useChatStore.getState().handleFrame({
-          type: 'tool_call_start',
-          call_id: `t_${i}`,
-          tool: 'fs.list',
-          params: {},
-          parent_call_id: 'c3',
-          session_id: TEST_SESSION_ID,
-        })
-      })
-      const msgs = useChatStore.getState().messages
-      const span = msgs[msgs.length - 1].spans?.[0]
-      expect(span?.steps).toHaveLength(i)
-    }
-  })
-
-  it('two sibling spans accumulate steps independently', () => {
-    seedAssistant()
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_s1',
-        parent_call_id: 's1',
-        task_label: 'first',
-        session_id: TEST_SESSION_ID,
-      })
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_s2',
-        parent_call_id: 's2',
-        task_label: 'second',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'ts1',
-        tool: 'exec',
-        params: {},
-        parent_call_id: 's1',
-        session_id: TEST_SESSION_ID,
-      })
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'ts2a',
-        tool: 'web_search',
-        params: {},
-        parent_call_id: 's2',
-        session_id: TEST_SESSION_ID,
-      })
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'ts2b',
-        tool: 'file.read',
-        params: {},
-        parent_call_id: 's2',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    const msgs = useChatStore.getState().messages
-    const spans = msgs[msgs.length - 1].spans ?? []
-    expect(spans).toHaveLength(2)
-    expect(spans[0].steps).toHaveLength(1)
-    expect(spans[1].steps).toHaveLength(2)
-  })
-
-  // Bug fix regression (root-caused at chat.ts's tool_call_result span-merge
-  // sites): the result-step object used to hardcode `params: {}`, and
-  // `{ ...existingStep.tool, ...step }` let that empty object clobber the
-  // REAL params recorded at tool_call_start — so a step's params silently
-  // reverted to {} the moment its result arrived. Downstream, ToolCallBadge's
-  // shouldRenderToolCall(tool, params, ...) misclassified e.g. a
-  // `bash {action:'poll'}` step as visible (params={} doesn't match the
-  // poll/read hide rule), leaking noisy background infra into
-  // SubagentBlock/ActivityPanel. Pins that the step's params survive the
-  // result merge unchanged.
-  it('a span step keeps its tool_call_start params after tool_call_result arrives (params must not be clobbered)', () => {
-    seedAssistant()
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_params',
-        parent_call_id: 'c_params',
-        task_label: 'poll a background session',
-        session_id: TEST_SESSION_ID,
-      })
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 't_params',
-        tool: 'bash',
-        params: { action: 'poll' },
-        parent_call_id: 'c_params',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    let msgs = useChatStore.getState().messages
-    let span = msgs[msgs.length - 1].spans?.[0]
-    const stepBefore = span?.steps[0]
-    expect(stepBefore?.kind === 'tool' ? stepBefore.tool.params : undefined).toEqual({ action: 'poll' })
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_result',
-        call_id: 't_params',
-        tool: 'bash',
-        result: 'still running',
-        status: 'success',
-        duration_ms: 50,
-        parent_call_id: 'c_params',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    msgs = useChatStore.getState().messages
-    span = msgs[msgs.length - 1].spans?.[0]
-    const stepAfter = span?.steps[0]
-    // The bug: this used to become {} after the result merge.
-    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.params : undefined).toEqual({ action: 'poll' })
-    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.status : undefined).toBe('success')
-    expect(stepAfter?.kind === 'tool' ? stepAfter.tool.result : undefined).toBe('still running')
-  })
-
-  // (item 8d, 2026-07-16 fix wave): a `tool_call_result` can arrive for a
-  // call_id this span's index has NO existing step for — a genuine race
-  // where the result beat its own `tool_call_start` (as opposed to
-  // ChatStore_OrphanFrame_FallsBackFlat below, which covers the SPAN itself
-  // never having started at all). The span IS already open here
-  // (subagent_start already ran), so this hits the "no existingIdx" push
-  // branch (chat.ts ~2802-2807) rather than the orphan-buffer path. Pins:
-  // no crash, and the pushed step defaults to params:{} (there is no
-  // start-time params to inherit).
-  it('a tool_call_result with no prior tool_call_start, on an already-open span, pushes a step with params:{} and does not crash', () => {
-    seedAssistant()
-
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'subagent_start',
-        span_id: 'span_orphan_step',
-        parent_call_id: 'c_orphan_step',
-        task_label: 'race condition repro',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    expect(() => {
-      act(() => {
-        useChatStore.getState().handleFrame({
-          type: 'tool_call_result',
-          call_id: 't_orphan_step',
-          tool: 'fs.list',
-          result: '["a.txt"]',
-          status: 'success',
-          duration_ms: 12,
-          parent_call_id: 'c_orphan_step',
-          session_id: TEST_SESSION_ID,
-        })
-      })
-    }).not.toThrow()
-
-    const msgs = useChatStore.getState().messages
-    const span = msgs[msgs.length - 1].spans?.[0]
-    expect(span?.steps).toHaveLength(1)
-    const step = span?.steps[0]
-    expect(step?.kind).toBe('tool')
-    if (step?.kind === 'tool') {
-      expect(step.tool.call_id).toBe('t_orphan_step')
-      expect(step.tool.tool).toBe('fs.list')
-      expect(step.tool.params).toEqual({})
-      expect(step.tool.status).toBe('success')
-      expect(step.tool.result).toBe('["a.txt"]')
-    }
-  })
-})
-
-// TDD row 12: ChatStore_OrphanFrame_FallsBackFlat
-// Traces to: sprint-h-subagent-block-spec.md Edge (out-of-order), FR-H-009
-
-describe('ChatStore_OrphanFrame_FallsBackFlat', () => {
-  it('frame with unknown parent_call_id + no subagent_start within 10s → flat + dev warning', async () => {
-    // Use fake timers to simulate the 10s TTL without waiting
-    vi.useFakeTimers()
-    const warnSpy = vi.spyOn(console, 'warn')
-
-    act(() => {
-      useChatStore.getState().updateLastAssistantMessage('', false)
-    })
-
-    // tool_call_start with a parent_call_id that has no matching subagent_start
-    act(() => {
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'orphan_t1',
-        tool: 'fs.list',
-        params: {},
-        parent_call_id: 'orphan_parent',
-        session_id: TEST_SESSION_ID,
-      })
-    })
-
-    // No span yet, not in toolCalls yet (buffered)
-    expect(useChatStore.getState().toolCalls['orphan_t1']).toBeUndefined()
-
-    // Advance time past 10s TTL
-    await act(async () => {
-      vi.advanceTimersByTime(10_001)
-    })
-
-    // Now the buffered frame should be released as a flat tool call
-    const state = useChatStore.getState()
-    expect(state.toolCalls['orphan_t1']).toBeDefined()
-    expect(state.toolCalls['orphan_t1'].tool).toBe('fs.list')
-
-    // A dev console warning must have been emitted with the stable prefix.
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('[chat] orphan frame'),
-    )
-
-    vi.useRealTimers()
-    warnSpy.mockRestore()
   })
 })
 
@@ -2193,91 +1810,170 @@ describe('chat store — done frame for unknown targetSid (B1.3d)', () => {
   })
 })
 
-// W2-10: Sibling-spans cross-wire test.
-// Two spans A (parentCallId "cA") and B (parentCallId "cB") open.
-// Emit 2 tool_call_start frames both with parent_call_id "cA".
-// Assert A.steps.length === 2 AND B.steps.length === 0.
-// Guards against a routing bug that could increment both spans' counters.
-//
-// Traces to: temporal-puzzling-melody.md W2-10
-describe('ChatStore_sibling_spans_crosswire (W2-10)', () => {
-  it('tool_call_start with parent_call_id "cA" routes to span A only, not span B', () => {
-    // BDD: Given two open spans A (parentCallId "cA") and B (parentCallId "cB")
-    // BDD: When 2 tool_call_start frames arrive with parent_call_id "cA"
-    // BDD: Then span A has 2 steps and span B has 0 steps
-    // Traces to: temporal-puzzling-melody.md W2-10
-
+// ADR-091 D7/FR-E-004: sibling-spans cross-wire test, updated for the
+// subagent_message/subagent_state reduction that replaces the deleted
+// step-nesting mechanism (W2-10 above tested `tool_call_start`/
+// `parent_call_id` step routing, which no longer exists — D10). Two spans A
+// and B open under one message; a subagent_message/subagent_state for A's
+// span_id must update ONLY A's statusLine/lifecycleState, never B's.
+describe('ChatStore sibling spans — subagent_message/subagent_state route by span_id only (ADR-091)', () => {
+  it('a subagent_message for spanA updates only spanA\'s statusLine, never spanB\'s', () => {
     act(() => {
-      // Create an assistant message to host the spans
       useChatStore.getState().appendMessage({
-        id: 'asst-sibling-1',
+        id: 'asst-sibling-2',
         role: 'assistant',
         content: 'Working...',
         timestamp: new Date().toISOString(),
         status: 'streaming',
         isStreaming: true,
       })
-
-      // Start span A (parentCallId = "cA")
       useChatStore.getState().handleFrame({
         type: 'subagent_start',
-        span_id: 'spanA',
-        parent_call_id: 'cA',
+        span_id: 'spanA2',
+        parent_call_id: 'cA2',
         task_label: 'Span A task',
         agent_id: 'agent-a',
         session_id: TEST_SESSION_ID,
       })
-
-      // Start span B (parentCallId = "cB")
       useChatStore.getState().handleFrame({
         type: 'subagent_start',
-        span_id: 'spanB',
-        parent_call_id: 'cB',
+        span_id: 'spanB2',
+        parent_call_id: 'cB2',
         task_label: 'Span B task',
         agent_id: 'agent-b',
         session_id: TEST_SESSION_ID,
       })
     })
 
-    // Emit 2 tool_call_start frames, both targeting span A (parent_call_id: "cA")
     act(() => {
       useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'step_a_1',
-        tool: 'web_search',
-        params: { query: 'query 1' },
-        parent_call_id: 'cA',
-        session_id: TEST_SESSION_ID,
-      })
-      useChatStore.getState().handleFrame({
-        type: 'tool_call_start',
-        call_id: 'step_a_2',
-        tool: 'fs.read',
-        params: { path: '/tmp/test' },
-        parent_call_id: 'cA',
+        type: 'subagent_message',
+        span_id: 'spanA2',
+        message_id: 'm1',
+        kind: 'progress',
+        text: 'auditing A',
+        sender_identity: 'agent-a',
+        untrusted_origin: false,
+        created_at: '2026-01-01T00:00:00.000Z',
         session_id: TEST_SESSION_ID,
       })
     })
 
     const state = useChatStore.getState()
-    const asstMsg = state.messages.find((m) => m.id === 'asst-sibling-1')
-    expect(asstMsg).toBeDefined()
-    expect(asstMsg?.spans).toHaveLength(2)
+    const asstMsg = state.messages.find((m) => m.id === 'asst-sibling-2')
+    const spanA = asstMsg!.spans!.find((s) => s.spanId === 'spanA2')
+    const spanB = asstMsg!.spans!.find((s) => s.spanId === 'spanB2')
+    expect(spanA?.statusLine).toBe('auditing A')
+    expect(spanB?.statusLine).toBeUndefined()
+  })
 
-    const spanA = asstMsg!.spans!.find((s) => s.spanId === 'spanA')
-    const spanB = asstMsg!.spans!.find((s) => s.spanId === 'spanB')
-    expect(spanA).toBeDefined()
-    expect(spanB).toBeDefined()
+  it('a subagent_state for spanB updates only spanB\'s lifecycleState, never spanA\'s', () => {
+    act(() => {
+      useChatStore.getState().appendMessage({
+        id: 'asst-sibling-3',
+        role: 'assistant',
+        content: 'Working...',
+        timestamp: new Date().toISOString(),
+        status: 'streaming',
+        isStreaming: true,
+      })
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'spanA3',
+        parent_call_id: 'cA3',
+        task_label: 'Span A task',
+        agent_id: 'agent-a',
+        session_id: TEST_SESSION_ID,
+      })
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'spanB3',
+        parent_call_id: 'cB3',
+        task_label: 'Span B task',
+        agent_id: 'agent-b',
+        session_id: TEST_SESSION_ID,
+      })
+    })
 
-    // Span A must have exactly 2 steps (both tool_call_start frames targeted "cA")
-    expect(spanA!.steps).toHaveLength(2)
-    const stepA0 = spanA!.steps[0]
-    const stepA1 = spanA!.steps[1]
-    expect(stepA0.kind === 'tool' ? stepA0.tool.call_id : undefined).toBe('step_a_1')
-    expect(stepA1.kind === 'tool' ? stepA1.tool.call_id : undefined).toBe('step_a_2')
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_state',
+        span_id: 'spanB3',
+        state: 'needs_input',
+        created_at: '2026-01-01T00:00:00.000Z',
+        session_id: TEST_SESSION_ID,
+      })
+    })
 
-    // Span B must have exactly 0 steps (no frames targeted "cB")
-    expect(spanB!.steps).toHaveLength(0)
+    const state = useChatStore.getState()
+    const asstMsg = state.messages.find((m) => m.id === 'asst-sibling-3')
+    const spanA = asstMsg!.spans!.find((s) => s.spanId === 'spanA3')
+    const spanB = asstMsg!.spans!.find((s) => s.spanId === 'spanB3')
+    expect(spanB?.lifecycleState).toBe('needs_input')
+    expect(spanA?.lifecycleState).toBeUndefined()
+  })
+})
+
+// ADR-091 D7/FR-E-002: subagent_message/subagent_state are session-scoped
+// (SESSION_SCOPED_FRAME_TYPES) — a frame missing session_id is dropped with
+// a diagnostic, never routed to whatever session happens to be active. The
+// WP-E spec's own edge-case table names subagent_message as an example of
+// this rule alongside tool_call_start/tool_approval_required.
+describe('ChatStore — subagent_message/subagent_state missing session_id are dropped (ADR-091 FR-E-002)', () => {
+  it('a subagent_message frame with no session_id is dropped, not routed to the active session', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID })
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span-drop-msg',
+        parent_call_id: 'call-drop-msg',
+        task_label: 'audit',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    const errorSpy = vi.spyOn(console, 'error')
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_message',
+        span_id: 'span-drop-msg',
+        message_id: 'm-drop',
+        kind: 'progress',
+        text: 'should not land anywhere',
+        sender_identity: 'agent-child',
+        untrusted_origin: false,
+        created_at: '2026-01-01T00:00:00.000Z',
+      } as unknown as WsReceiveFrame)
+    })
+    expect(errorSpy.mock.calls.some((args) => typeof args[0] === 'string' && args[0].includes('session_id'))).toBe(true)
+    const msg = useChatStore.getState().messages.find((m) => (m.spans?.length ?? 0) > 0)
+    const span = msg!.spans!.find((s) => s.spanId === 'span-drop-msg')
+    expect(span?.statusLine).toBeUndefined()
+  })
+
+  it('a subagent_state frame with no session_id is dropped, not routed to the active session', () => {
+    act(() => {
+      useSessionStore.setState({ activeSessionId: TEST_SESSION_ID })
+      useChatStore.getState().handleFrame({
+        type: 'subagent_start',
+        span_id: 'span-drop-state',
+        parent_call_id: 'call-drop-state',
+        task_label: 'audit',
+        session_id: TEST_SESSION_ID,
+      })
+    })
+    const errorSpy = vi.spyOn(console, 'error')
+    act(() => {
+      useChatStore.getState().handleFrame({
+        type: 'subagent_state',
+        span_id: 'span-drop-state',
+        state: 'needs_input',
+        created_at: '2026-01-01T00:00:00.000Z',
+      } as unknown as WsReceiveFrame)
+    })
+    expect(errorSpy.mock.calls.some((args) => typeof args[0] === 'string' && args[0].includes('session_id'))).toBe(true)
+    const msg = useChatStore.getState().messages.find((m) => (m.spans?.length ?? 0) > 0)
+    const span = msg!.spans!.find((s) => s.spanId === 'span-drop-state')
+    expect(span?.lifecycleState).toBeUndefined()
   })
 })
 
@@ -2313,7 +2009,6 @@ describe('chat store — H1-FE: unknown-sid done does not corrupt active stream'
             cancelStage: null,
             lastUserMessageAt,
             lastReceivedEventTime: null,
-            spanByParentCallId: {},
           },
         },
         // Sync foreground fields
@@ -2392,7 +2087,6 @@ describe('chat store — cancel_stage frame (B3)', () => {
               lastUserMessageAt: null,
               cancelStage: null,
               lastReceivedEventTime: null,
-              spanByParentCallId: {},
             },
             isStreaming: true,
           },
@@ -2582,9 +2276,13 @@ describe('findLastAssistantMessageId — direct unit coverage (Wave 3 Fix 3)', (
 })
 
 // ── G2: span-index O(1) hit before scan-fallback ──────────────────────────────
+// ADR-091 D10 deleted `spanByParentCallId` along with the child-step-nesting
+// mechanism it served; `spanBySpanId` is now the only span index (written by
+// subagent_start, consulted by subagent_message/subagent_state, cleared by
+// subagent_end) — this block is updated to test that surviving index.
 
-describe('G2: spanByParentCallId O(1) index is written on subagent_start and cleared on subagent_end', () => {
-  it('spanByParentCallId has the parentCallId → {messageId, spanIdx} entry after subagent_start', () => {
+describe('G2: spanBySpanId O(1) index is written on subagent_start and cleared on subagent_end', () => {
+  it('spanBySpanId has the span_id → {messageId, spanIdx} entry after subagent_start', () => {
     // Arrange: an active streaming assistant message (so the span attaches to it).
     act(() => {
       useChatStore.getState().handleFrame({
@@ -2600,7 +2298,7 @@ describe('G2: spanByParentCallId O(1) index is written on subagent_start and cle
       })
     })
 
-    // Inject subagent_start with a known parentCallId.
+    // Inject subagent_start with a known span_id.
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'subagent_start',
@@ -2614,16 +2312,16 @@ describe('G2: spanByParentCallId O(1) index is written on subagent_start and cle
     const bucket = useChatStore.getState().sessionsById[TEST_SESSION_ID]
     expect(bucket).toBeDefined()
 
-    const index = bucket!.spanByParentCallId
+    const index = bucket!.spanBySpanId ?? {}
     expect(
-      'tc-g2-parent' in index,
-      'spanByParentCallId must contain the parentCallId after subagent_start',
+      'span-g2-test' in index,
+      'spanBySpanId must contain the span_id after subagent_start',
     ).toBe(true)
-    expect(index['tc-g2-parent'].messageId).toBeTruthy()
-    expect(typeof index['tc-g2-parent'].spanIdx).toBe('number')
+    expect(index['span-g2-test'].messageId).toBeTruthy()
+    expect(typeof index['span-g2-test'].spanIdx).toBe('number')
   })
 
-  it('spanByParentCallId entry is removed after subagent_end', () => {
+  it('spanBySpanId entry is removed after subagent_end', () => {
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'session_started',
@@ -2649,7 +2347,7 @@ describe('G2: spanByParentCallId O(1) index is written on subagent_start and cle
 
     // Verify the index was written.
     const before = useChatStore.getState().sessionsById[TEST_SESSION_ID]
-    expect('tc-g2-end' in (before?.spanByParentCallId ?? {})).toBe(true)
+    expect('span-g2-end-test' in (before?.spanBySpanId ?? {})).toBe(true)
 
     // subagent_end must clear the index entry.
     act(() => {
@@ -2665,8 +2363,8 @@ describe('G2: spanByParentCallId O(1) index is written on subagent_start and cle
 
     const after = useChatStore.getState().sessionsById[TEST_SESSION_ID]
     expect(
-      'tc-g2-end' in (after?.spanByParentCallId ?? {}),
-      'spanByParentCallId must NOT contain the parentCallId after subagent_end',
+      'span-g2-end-test' in (after?.spanBySpanId ?? {}),
+      'spanBySpanId must NOT contain the span_id after subagent_end',
     ).toBe(false)
   })
 })
@@ -2755,7 +2453,6 @@ describe('evictMessageFromBucket — full sweep of dependent maps', () => {
       toolCalls: {},
       toolCallOrder: [],
       textAtToolCallStart: {},
-      spanByParentCallId: {},
       isStreaming: false,
       isReplaying: false,
       replayCompletedForSession: null,
@@ -2784,7 +2481,6 @@ describe('evictMessageFromBucket — full sweep of dependent maps', () => {
       toolCalls: { tc1: { id: 'tc1', call_id: 'tc1', tool: 'exec', params: {}, status: 'success' } },
       toolCallOrder: ['tc1'],
       textAtToolCallStart: { tc1: 'some text' },
-      spanByParentCallId: {},
       isStreaming: false,
       isReplaying: false,
       replayCompletedForSession: null,
@@ -2801,7 +2497,10 @@ describe('evictMessageFromBucket — full sweep of dependent maps', () => {
     expect(bucket.textAtToolCallStart['tc1']).toBeUndefined()
   })
 
-  it('removes spanByParentCallId entries pointing at the evicted message', () => {
+  // ADR-091 D10: spanByParentCallId is deleted along with the child-step-
+  // nesting mechanism it served; spanBySpanId is now the only span index —
+  // this test is updated to prove the surviving index's eviction.
+  it('removes spanBySpanId entries pointing at the evicted message', () => {
     const bucket: SessionChatState = {
       messagesById: {
         'm1': { id: 'm1', role: 'assistant', content: '', timestamp: '', status: 'done' },
@@ -2811,9 +2510,9 @@ describe('evictMessageFromBucket — full sweep of dependent maps', () => {
       toolCalls: {},
       toolCallOrder: [],
       textAtToolCallStart: {},
-      spanByParentCallId: {
-        'pc1': { messageId: 'm1', spanIdx: 0 },
-        'pc2': { messageId: 'm2', spanIdx: 0 }, // belongs to a different message — must survive
+      spanBySpanId: {
+        'span1': { messageId: 'm1', spanIdx: 0 },
+        'span2': { messageId: 'm2', spanIdx: 0 }, // belongs to a different message — must survive
       },
       isStreaming: false,
       isReplaying: false,
@@ -2826,9 +2525,9 @@ describe('evictMessageFromBucket — full sweep of dependent maps', () => {
       lastReceivedEventTime: null,
     }
     evictMessageFromBucket(bucket, 'm1')
-    expect(bucket.spanByParentCallId['pc1']).toBeUndefined()
-    // pc2 belongs to a different message and must not be touched.
-    expect(bucket.spanByParentCallId['pc2']).toBeDefined()
+    expect(bucket.spanBySpanId?.['span1']).toBeUndefined()
+    // span2 belongs to a different message and must not be touched.
+    expect(bucket.spanBySpanId?.['span2']).toBeDefined()
   })
 })
 
@@ -2837,15 +2536,18 @@ describe('evictMessageFromBucket — full sweep of dependent maps', () => {
 // Trims via appendMessage (applyMessageArray path) and asserts dependent maps
 // evict the correct entries.
 
-describe('eviction-leak regression — applyMessageArray evicts spanByParentCallId, spanBySpanId, and textAtToolCallStart', () => {
-  it('after trimming 100 messages, spanByParentCallId, spanBySpanId, and textAtToolCallStart track the surviving set', () => {
+// ADR-091 D10 deleted spanByParentCallId along with the child-step-nesting
+// mechanism it served — spanBySpanId is now the only span index, so this
+// regression's coverage is updated to that one map.
+describe('eviction-leak regression — applyMessageArray evicts spanBySpanId and textAtToolCallStart', () => {
+  it('after trimming 100 messages, spanBySpanId and textAtToolCallStart track the surviving set', () => {
     act(() => {
       useChatStore.getState().resetSession()
     })
 
     // Seed 600 assistant messages, each with 3 tool calls (in tool_calls array).
-    // Also manually populate spanByParentCallId, spanBySpanId, and textAtToolCallStart
-    // to simulate in-flight spans and tool call snapshots.
+    // Also manually populate spanBySpanId and textAtToolCallStart to simulate
+    // in-flight spans and tool call snapshots.
     const TOTAL = 600
 
     // Build the bucket directly to avoid the test going through 600 handleFrame cycles.
@@ -2853,13 +2555,11 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
     const toolCalls: SessionChatState['toolCalls'] = {}
     const toolCallOrder: string[] = []
     const textAtToolCallStart: SessionChatState['textAtToolCallStart'] = {}
-    const spanByParentCallId: SessionChatState['spanByParentCallId'] = {}
     const spanBySpanId: NonNullable<SessionChatState['spanBySpanId']> = {}
 
     for (let i = 0; i < TOTAL; i++) {
       const msgId = `msg_${i}`
       const tcIds = [`tc_${i}_0`, `tc_${i}_1`, `tc_${i}_2`]
-      const parentCallId = `pc_${i}`
       const spanId = `span_${i}`
 
       msgs.push({
@@ -2877,8 +2577,6 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
         textAtToolCallStart[tcId] = `snapshot for ${tcId}`
       }
 
-      // Each message also has a span entry in BOTH span indexes (lockstep).
-      spanByParentCallId[parentCallId] = { messageId: msgId, spanIdx: 0 }
       spanBySpanId[spanId] = { messageId: msgId, spanIdx: 0 }
     }
 
@@ -2891,7 +2589,6 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
             toolCalls,
             toolCallOrder,
             textAtToolCallStart,
-            spanByParentCallId,
             spanBySpanId,
             isStreaming: false,
             isReplaying: false,
@@ -2924,16 +2621,7 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
     // There should be exactly MAX_MESSAGES_PER_SESSION messages after trim.
     expect(bucket.messageOrder.length).toBe(MAX_MESSAGES_PER_SESSION)
 
-    // All spanByParentCallId entries must point to surviving messages.
-    for (const [parentCallId, entry] of Object.entries(bucket.spanByParentCallId)) {
-      expect(
-        survivingMsgIds.has(entry.messageId),
-        `spanByParentCallId["${parentCallId}"] points to evicted message "${entry.messageId}"`,
-      ).toBe(true)
-    }
-
-    // All spanBySpanId entries must point to surviving messages (mirrors above —
-    // lockstep invariant: the helper-based eviction must filter both maps together).
+    // All spanBySpanId entries must point to surviving messages.
     for (const [spanId, entry] of Object.entries(bucket.spanBySpanId ?? {})) {
       expect(
         survivingMsgIds.has(entry.messageId),
@@ -2945,7 +2633,6 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
     const survivingAssistantMsgIds = new Set(
       bucket.messageOrder.filter((id) => bucket.messagesById[id]?.role === 'assistant')
     )
-    expect(Object.keys(bucket.spanByParentCallId).length).toBe(survivingAssistantMsgIds.size)
     expect(Object.keys(bucket.spanBySpanId ?? {}).length).toBe(survivingAssistantMsgIds.size)
 
     // All textAtToolCallStart entries must have call_ids present in toolCallOrder.
@@ -2961,22 +2648,24 @@ describe('eviction-leak regression — applyMessageArray evicts spanByParentCall
 
 // ── Eviction-leak regression: replay_message path ────────────────────────────
 // Sends 600+ replay_message frames so the inline replay-path eviction fires.
-// Asserts spanByParentCallId and textAtToolCallStart are clean after replay.
+// Asserts spanBySpanId and textAtToolCallStart are clean after replay.
+// ADR-091 D10 deleted spanByParentCallId along with the child-step-nesting
+// mechanism it served — spanBySpanId is now the only span index.
 
 describe('eviction-leak regression — replay_message path evicts dependent maps', () => {
-  it('after replaying 600 messages with spans, spanByParentCallId has no dangling entries', () => {
+  it('after replaying 600 messages with spans, spanBySpanId has no dangling entries', () => {
     act(() => {
       useChatStore.getState().resetSessionForReplay(TEST_SESSION_ID)
     })
 
     const TOTAL = 600
 
-    // Pre-populate spanByParentCallId with entries for messages 0..599,
-    // then send replay_message frames for all 600 messages so the ring buffer
-    // evicts the oldest 100 via the inline replay-path.
-    const spanByParentCallId: SessionChatState['spanByParentCallId'] = {}
+    // Pre-populate spanBySpanId with entries for messages 0..599, then send
+    // replay_message frames for all 600 messages so the ring buffer evicts
+    // the oldest 100 via the inline replay-path.
+    const spanBySpanId: NonNullable<SessionChatState['spanBySpanId']> = {}
     for (let i = 0; i < TOTAL; i++) {
-      spanByParentCallId[`pc_${i}`] = { messageId: `replay_msg_${i}`, spanIdx: 0 }
+      spanBySpanId[`span_${i}`] = { messageId: `replay_msg_${i}`, spanIdx: 0 }
     }
 
     act(() => {
@@ -2985,7 +2674,7 @@ describe('eviction-leak regression — replay_message path evicts dependent maps
           ...s.sessionsById,
           [TEST_SESSION_ID]: {
             ...s.sessionsById[TEST_SESSION_ID]!,
-            spanByParentCallId,
+            spanBySpanId,
           },
         },
       }))
@@ -3010,11 +2699,11 @@ describe('eviction-leak regression — replay_message path evicts dependent maps
 
     expect(bucket.messageOrder.length).toBe(MAX_MESSAGES_PER_SESSION)
 
-    // After replay, all spanByParentCallId entries must point to surviving messages only.
-    for (const [parentCallId, entry] of Object.entries(bucket.spanByParentCallId)) {
+    // After replay, all spanBySpanId entries must point to surviving messages only.
+    for (const [spanId, entry] of Object.entries(bucket.spanBySpanId ?? {})) {
       expect(
         survivingMsgIds.has(entry.messageId),
-        `spanByParentCallId["${parentCallId}"] points to evicted message "${entry.messageId}" after replay eviction`,
+        `spanBySpanId["${spanId}"] points to evicted message "${entry.messageId}" after replay eviction`,
       ).toBe(true)
     }
   })

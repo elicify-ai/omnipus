@@ -6,11 +6,10 @@ import { generateId } from '@/lib/constants'
 import { useSessionStore } from '@/store/session'
 import type { Message } from '@/lib/api'
 import { logDiagnostic } from '@/lib/telemetry'
-import { clampToolResult, findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
+import { findLastAssistantMessageId, findOpenAssistantMessageId, getMessages } from './messages'
 import { EMPTY_BUCKET, FALLBACK_SID, RATE_LIMIT_CLEAR_MS, rateLimitClearTimers, replayingClearTimers, replayingStartedAt, sawReplayMessageThisTurn } from './runtime-state'
 import { applyMessageArray, emptySessionState, omitKeys } from './session'
-import { orphanTimers, pendingByParentCallId } from './types'
-import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState, SubagentSpanRunning, SubagentSpanTerminal } from './types'
+import type { ChatMessage, ChatStore, RateLimitEventData, SessionChatState } from './types'
 import { createOutboundResponseSlice } from './slices/outbound-responses'
 import { createOutboundLifecycleSlice } from './slices/outbound-lifecycle'
 import { createFrameSlice } from './slices/frames'
@@ -49,8 +48,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
    * scan with early-exit, strictly dominated by the getMessages() O(N)
    * build already happening here.
    */
-  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanByParentCallId' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
-    const rest = omitKeys(bucket, ['messageOrder', 'trimmedCount', 'spanByParentCallId', 'spanBySpanId', 'toolCallOwnerMessageId'] as const)
+  function bucketToForeground(bucket: SessionChatState): Omit<SessionChatState, 'messageOrder' | 'trimmedCount' | 'spanBySpanId' | 'toolCallOwnerMessageId'> & { messages: ChatMessage[]; lastAssistantMessageId: string | null } {
+    const rest = omitKeys(bucket, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'toolCallOwnerMessageId'] as const)
     return {
       ...rest,
       messages: getMessages(bucket),
@@ -663,169 +662,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
       })
     },
 
-    startSpan: (frame) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => {
-        const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
-        if (!lastMsgId) return {}
-        const span: SubagentSpanRunning = {
-          spanId: frame.span_id,
-          parentCallId: frame.parent_call_id,
-          taskLabel: frame.task_label,
-          status: 'running',
-          steps: [],
-          agentId: frame.agent_id,
-        }
-        const bufferKey = `${sid}:${frame.parent_call_id}`
-        const buffered = pendingByParentCallId[bufferKey] ?? []
-        delete pendingByParentCallId[bufferKey]
-        if (orphanTimers[bufferKey]) {
-          clearTimeout(orphanTimers[bufferKey])
-          delete orphanTimers[bufferKey]
-        }
-        for (const { frame: bf } of buffered) {
-          if (bf.type === 'tool_call_start') {
-            span.steps.push({
-              kind: 'tool',
-              tool: {
-                id: bf.call_id,
-                call_id: bf.call_id,
-                tool: bf.tool,
-                params: bf.params,
-                status: 'running',
-              },
-            })
-          } else if (bf.type === 'tool_call_result') {
-            const existingIdx = span.steps.findIndex(
-              (s) => s.kind === 'tool' && s.tool.call_id === bf.call_id
-            )
-            if (existingIdx !== -1) {
-              const existing = span.steps[existingIdx]
-              if (existing.kind === 'tool') {
-                span.steps[existingIdx] = {
-                  kind: 'tool',
-                  tool: {
-                    ...existing.tool,
-                    result: clampToolResult(bf.result),
-                    status: bf.status,
-                    duration_ms: bf.duration_ms,
-                    error: bf.error,
-                  },
-                }
-              }
-            }
-          }
-        }
-        const lastMsg = b.messagesById[lastMsgId]
-        const spanIdx = (lastMsg.spans ?? []).length
-        const updatedMsg = {
-          ...lastMsg,
-          spans: [...(lastMsg.spans ?? []), span],
-        }
-        // Record the span index for O(1) tool_call_result lookup.
-        const spanByParentCallId = {
-          ...b.spanByParentCallId,
-          [frame.parent_call_id]: { messageId: lastMsgId, spanIdx },
-        }
-        return {
-          messagesById: { ...b.messagesById, [lastMsgId]: updatedMsg },
-          spanByParentCallId,
-        }
-      })
-    },
-
-    endSpan: (frame) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => {
-        return produce(b, (draft) => {
-          for (let i = draft.messageOrder.length - 1; i >= 0; i--) {
-            const msgId = draft.messageOrder[i]
-            const msg = draft.messagesById[msgId]
-            if (msg.role !== 'assistant' || !msg.spans) continue
-            const spanIdx = msg.spans.findIndex((s) => s.spanId === frame.span_id)
-            if (spanIdx === -1) continue
-            const existingSpan = msg.spans[spanIdx]
-            const terminalSpan: SubagentSpanTerminal = {
-              spanId: existingSpan.spanId,
-              parentCallId: existingSpan.parentCallId,
-              taskLabel: existingSpan.taskLabel,
-              steps: existingSpan.steps,
-              // Defensive fallback: SubagentEndFrame carries its own optional
-              // agent_id; prefer it if the server ever populates it, else
-              // keep the value already stamped by subagent_start.
-              agentId: frame.agent_id ?? existingSpan.agentId,
-              status: frame.status,
-              durationMs: frame.duration_ms ?? 0,
-              finalResult: frame.final_result,
-              reason: frame.reason,
-            }
-            msg.spans[spanIdx] = terminalSpan
-            // Clear the span index entry since the span is now terminal.
-            delete draft.spanByParentCallId[existingSpan.parentCallId]
-            return
-          }
-          console.warn('[chat] subagent_end received for unknown span_id', { spanId: frame.span_id })
-          logDiagnostic('chatSubagentEndUnknownSpanId', { spanId: frame.span_id, sessionId: sid })
-        }) as Partial<SessionChatState>
-      })
-    },
-
-    attachStepToSpan: (parentCallId, step) => {
-      const sid = getActiveSid()
-      if (!sid) return
-      withBucket(sid, (b) => {
-        // O(1) lookup first.
-        const indexEntry = b.spanByParentCallId[parentCallId]
-        if (indexEntry) {
-          return produce(b, (draft) => {
-            const msg = draft.messagesById[indexEntry.messageId]
-            if (!msg?.spans) return
-            const span = msg.spans[indexEntry.spanIdx]
-            if (!span) return
-            const existingIdx = span.steps.findIndex(
-              (s) => s.kind === 'tool' && s.tool.call_id === step.call_id
-            )
-            if (existingIdx !== -1) {
-              const existingStep = span.steps[existingIdx]
-              if (existingStep.kind === 'tool') {
-                span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
-              }
-            } else {
-              span.steps.push({ kind: 'tool', tool: step })
-            }
-          }) as Partial<SessionChatState>
-        }
-        // Fallback: O(N) scan (legacy path, index miss).
-        console.warn('[chat] attachStepToSpan: span index miss, falling back to O(N) scan', { parentCallId })
-        logDiagnostic('chatAttachStepSpanIndexMiss', { parentCallId, sessionId: sid })
-        for (let i = b.messageOrder.length - 1; i >= 0; i--) {
-          const msgId = b.messageOrder[i]
-          const msg = b.messagesById[msgId]
-          if (msg.role !== 'assistant' || !msg.spans) continue
-          const spanIdx = msg.spans.findIndex((s) => s.parentCallId === parentCallId)
-          if (spanIdx === -1) continue
-          return produce(b, (draft) => {
-            const draftMsg = draft.messagesById[msgId]
-            const span = draftMsg.spans![spanIdx]
-            const existingIdx = span.steps.findIndex(
-              (s) => s.kind === 'tool' && s.tool.call_id === step.call_id
-            )
-            if (existingIdx !== -1) {
-              const existingStep = span.steps[existingIdx]
-              if (existingStep.kind === 'tool') {
-                span.steps[existingIdx] = { kind: 'tool', tool: { ...existingStep.tool, ...step } }
-              }
-            } else {
-              span.steps.push({ kind: 'tool', tool: step })
-            }
-          }) as Partial<SessionChatState>
-        }
-        return {}
-      })
-    },
-
     updateSessionStats: (tokens, cost) => {
       const sid = getActiveSid()
       if (!sid) return
@@ -864,19 +700,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
     resetSession: () => {
       const sid = getActiveSid()
       if (!sid) return
-      // Clear orphan buffers for this session only.
-      const prefix = `${sid}:`
-      for (const key of Object.keys(orphanTimers)) {
-        if (key.startsWith(prefix)) {
-          clearTimeout(orphanTimers[key])
-          delete orphanTimers[key]
-        }
-      }
-      for (const key of Object.keys(pendingByParentCallId)) {
-        if (key.startsWith(prefix)) {
-          delete pendingByParentCallId[key]
-        }
-      }
       if (rateLimitClearTimers[sid] != null) {
         clearTimeout(rateLimitClearTimers[sid])
         delete rateLimitClearTimers[sid]
@@ -896,18 +719,6 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // Clear all transient state so the upcoming replay rebuilds from
       // scratch. This is the targeted reset for WS reconnect: without it,
       // replay frames append duplicate bubbles to the existing bucket.
-      const prefix = `${sessionId}:`
-      for (const key of Object.keys(orphanTimers)) {
-        if (key.startsWith(prefix)) {
-          clearTimeout(orphanTimers[key])
-          delete orphanTimers[key]
-        }
-      }
-      for (const key of Object.keys(pendingByParentCallId)) {
-        if (key.startsWith(prefix)) {
-          delete pendingByParentCallId[key]
-        }
-      }
       sawReplayMessageThisTurn[sessionId] = false
       replayingStartedAt[sessionId] = Date.now()
       // Re-attach refreshes the replay window — cancel any stale
@@ -941,7 +752,7 @@ export function syncChatForeground(): void {
     const fg = (activeSid ? state.sessionsById[activeSid] : null) ?? EMPTY_BUCKET
     // Project messageOrder+messagesById → messages for foreground consumers
     // (messagesById itself passes through as-is — see bucketToForeground).
-    const rest = omitKeys(fg, ['messageOrder', 'trimmedCount', 'spanByParentCallId', 'spanBySpanId', 'toolCallOwnerMessageId'] as const)
+    const rest = omitKeys(fg, ['messageOrder', 'trimmedCount', 'spanBySpanId', 'toolCallOwnerMessageId'] as const)
     return { ...rest, messages: getMessages(fg) }
   })
 }

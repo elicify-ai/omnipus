@@ -80,7 +80,6 @@ function seedStreamingBucket(sid: string, overrides: Partial<SessionChatState> =
     lastUserMessageAt: Date.now(),
     cancelStage: 'graceful',
     lastReceivedEventTime: null,
-    spanByParentCallId: {},
     ...overrides,
   }
   act(() => {

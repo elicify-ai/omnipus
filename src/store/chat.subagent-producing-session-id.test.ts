@@ -1,15 +1,22 @@
-// ADR-057 U12 (W5c, FR-012/FR-013) — the chat store's first consumer of the
-// genuinely-new `producing_session_id` field (verified 2026-08-03:
-// `rg -c producing_session_id contracts/ src/ pkg/` was zero everywhere
-// tree-wide before this change). `subagent_start`/`subagent_end` are the
-// live, real-emitter delegation-span frames (distinct from the dead,
-// zero-Go-emitter `subagent_message`/`subagent_state` pair the Explicit
-// Non-Behaviors section forbids relying on) — the natural place to thread
-// the child's own real session id through to a future drill-down link
+// ADR-091 D7/I-4 (formerly ADR-057 U12/W5c, FR-012/FR-013) — the chat
+// store's `childSessionId` field on a subagent span, the open control's
+// navigation target. `subagent_start`/`subagent_end` are the live, real-
+// emitter delegation-span frames — the natural place to thread the child's
+// own real session id through to the side panel's open control
 // (FR-046, `/sessions/{childSessionId}`), since the store's per-session
-// buckets are keyed by the ROUTING session_id (the root of the chat tree,
-// FR-012), never by the id of the child that actually produced a given
-// span.
+// buckets are keyed by the ROUTING session_id (the root of the chat tree),
+// never by the id of the child that actually produced a given span.
+//
+// Superseded (ADR-091 D7/I-4, CP-0 additive): `childSessionId` is now
+// populated from `SubagentStartFrame.child_session_id` — the field this
+// delivery adds, populated by both front doors (`delegate` and
+// `create_task`) — not from the ADR-057 workaround `producing_session_id`,
+// which this file's original name references. `producing_session_id`
+// itself is still present on the wire (not yet deleted — the lead
+// coordinates that once the Go readers are gone) but the SPA no longer
+// reads it for this purpose. `SubagentEndFrame` carries no session id field
+// of its own (only `subagent_start` does) — the terminal span always keeps
+// whatever `subagent_start` already stamped.
 //
 // New file per ownership Rule 5 (every unit's new tests go in new files);
 // mirrors chat.delegate-attribution.test.ts's store-reset and
@@ -51,8 +58,8 @@ function resetStore() {
 
 beforeEach(resetStore)
 
-describe('chat store — subagent span carries the real child session id (ADR-057 FR-013)', () => {
-  it('subagent_start stamps the span with producing_session_id as childSessionId', () => {
+describe('chat store — subagent span carries the real child session id (ADR-091 D7/I-4)', () => {
+  it('subagent_start stamps the span with child_session_id as childSessionId', () => {
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'token', content: 'Delegating the audit...', agent_id: 'jim', session_id: SESSION_ID,
@@ -71,7 +78,7 @@ describe('chat store — subagent span carries the real child session id (ADR-05
         task_label: 'audit the payments module',
         agent_id: 'ava',
         session_id: SESSION_ID,
-        producing_session_id: CHILD_SESSION_ID,
+        child_session_id: CHILD_SESSION_ID,
       })
     })
 
@@ -82,7 +89,7 @@ describe('chat store — subagent span carries the real child session id (ADR-05
     expect(span.childSessionId).toBe(CHILD_SESSION_ID)
   })
 
-  it('a pre-ADR-057 gateway that omits producing_session_id leaves childSessionId undefined, not a crash or a bogus value', () => {
+  it('a pre-delivery transcript that omits child_session_id leaves childSessionId undefined, not a crash or a bogus value', () => {
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_start', call_id: 'delegate_2', tool: 'delegate', params: {}, agent_id: 'jim', session_id: SESSION_ID,
@@ -104,7 +111,7 @@ describe('chat store — subagent span carries the real child session id (ADR-05
     expect(span!.childSessionId).toBeUndefined()
   })
 
-  it('subagent_end carries its own producing_session_id through onto the terminal span', () => {
+  it('subagent_end (which carries no session id field of its own) always keeps the childSessionId subagent_start already stamped', () => {
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_start', call_id: 'delegate_3', tool: 'delegate', params: {}, agent_id: 'jim', session_id: SESSION_ID,
@@ -118,7 +125,7 @@ describe('chat store — subagent span carries the real child session id (ADR-05
         task_label: 'audit the payments module',
         agent_id: 'ava',
         session_id: SESSION_ID,
-        producing_session_id: CHILD_SESSION_ID,
+        child_session_id: CHILD_SESSION_ID,
       })
     })
     act(() => {
@@ -129,7 +136,6 @@ describe('chat store — subagent span carries the real child session id (ADR-05
         duration_ms: 4200,
         final_result: 'Found 2 issues.',
         session_id: SESSION_ID,
-        producing_session_id: CHILD_SESSION_ID,
       })
     })
 
@@ -139,7 +145,7 @@ describe('chat store — subagent span carries the real child session id (ADR-05
     expect(span!.childSessionId).toBe(CHILD_SESSION_ID)
   })
 
-  it('subagent_end omitting producing_session_id keeps the value already stamped by subagent_start (fallback, mirrors the existing agentId fallback)', () => {
+  it('subagent_end on a span that never got a child_session_id stays undefined, not a crash or a bogus value', () => {
     act(() => {
       useChatStore.getState().handleFrame({
         type: 'tool_call_start', call_id: 'delegate_4', tool: 'delegate', params: {}, agent_id: 'jim', session_id: SESSION_ID,
@@ -153,7 +159,7 @@ describe('chat store — subagent span carries the real child session id (ADR-05
         task_label: 'audit the payments module',
         agent_id: 'ava',
         session_id: SESSION_ID,
-        producing_session_id: CHILD_SESSION_ID,
+        // child_session_id deliberately omitted.
       })
     })
     act(() => {
@@ -162,12 +168,11 @@ describe('chat store — subagent span carries the real child session id (ADR-05
         span_id: 'span_4',
         status: 'success',
         session_id: SESSION_ID,
-        // producing_session_id deliberately omitted.
       })
     })
 
     const msg = useChatStore.getState().messages.find((m) => (m.spans?.length ?? 0) > 0)
     const span = msg!.spans!.find((s) => s.spanId === 'span_4')
-    expect(span!.childSessionId).toBe(CHILD_SESSION_ID)
+    expect(span!.childSessionId).toBeUndefined()
   })
 })

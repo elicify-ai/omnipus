@@ -100,7 +100,6 @@ function seedEmptyBucket(opts: { isReplaying?: boolean; isStreaming?: boolean } 
           cancelStage: null,
           lastUserMessageAt: null,
           lastReceivedEventTime: null,
-          spanByParentCallId: {},
         },
       },
       messages: [],
@@ -408,7 +407,6 @@ describe("ADR-051 'replay_error' — typed payload translation + coalesce", () =
         cancelStage: null,
         lastUserMessageAt: null,
         lastReceivedEventTime: null,
-        spanByParentCallId: {},
       }
       useChatStore.setState({
         sessionsById: { [SID]: bucket },
