@@ -345,8 +345,7 @@ type ContextCompressPayload struct {
 // ToolExecStartPayload describes a tool execution request.
 //
 // tool_call_start is class (a) per the ADR-057 W5 audit (FR-089, BDD-16): a
-// child turn genuinely emits it, so the wire frame carries both ids. See
-// SessionID and ProducingSessionID below for which is which.
+// child turn genuinely emits it. See SessionID below.
 type ToolExecStartPayload struct {
 	ToolCallID session.ToolCallID
 	ChatID     string
@@ -359,9 +358,10 @@ type ToolExecStartPayload struct {
 	// (session.RoutingSessionID's contract) — not necessarily this turn's
 	// own store-backed session when the call fires several delegation
 	// levels deep. Emitting code (turn.go, U3/U9) is responsible for
-	// sourcing it from the emitting turnState's routing identity. The
-	// turn's own real session, when it differs, belongs in
-	// ProducingSessionID below.
+	// sourcing it from the emitting turnState's routing identity.
+	// ADR-091 D7/I-4 deleted this payload's former ProducingSessionID
+	// field — see u9ToolExecSessionIDs' own doc comment (loop.go) for the
+	// residual gap this leaves.
 	SessionID string
 	Tool      string
 	Arguments map[string]any
@@ -372,25 +372,18 @@ type ToolExecStartPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_start frames must carry agent_id to match replay frame parity.
 	AgentID string
-	// ProducingSessionID is the real, store-backed session that actually
-	// executed this tool call (ADR-057 FR-013, W5d, owned by U23) — the
-	// child's own session.SessionID when the call fires inside a delegated
-	// sub-turn, distinct from SessionID's routing key above. Left as the
-	// zero value when this turn IS the routing session (producing ==
-	// routing), so the WS forwarder can implement FR-013's "present iff it
-	// differs from session_id" rule with a plain non-empty-and-unequal
-	// check before stamping the wire's optional producing_session_id
-	// (generated.ToolCallStartFrame.ProducingSessionId). Populated by the
-	// emitting turnState (U3/U9) with its own transcriptSessionID — never by
-	// this file, which defines the shape only.
-	ProducingSessionID session.SessionID
+	// ProducingSessionID (ADR-057 FR-013, W5d) is DELETED — ADR-091 D7/I-4:
+	// "every frame carries its own session_id (the producing session) —
+	// producing_session_id — the workaround — is deleted from every schema
+	// that carries it". See u9ToolExecSessionIDs' own doc comment (loop.go)
+	// for the residual gap this leaves (SessionID above is still the
+	// routing id, not yet the true producing session, for this payload).
 }
 
 // ToolExecEndPayload describes the outcome of a tool execution.
 //
 // tool_call_result is class (a) per the ADR-057 W5 audit (FR-089, BDD-16): a
-// child turn genuinely emits it, so the wire frame carries both ids. See
-// SessionID and ProducingSessionID below for which is which.
+// child turn genuinely emits it. See SessionID below.
 type ToolExecEndPayload struct {
 	ToolCallID session.ToolCallID
 	ChatID     string
@@ -418,13 +411,9 @@ type ToolExecEndPayload struct {
 	// AgentID is the agent executing this tool call.
 	// FR-I-008: live tool_call_result frames must carry agent_id to match replay frame parity.
 	AgentID string
-	// ProducingSessionID is the real, store-backed session that actually
-	// executed this tool call (ADR-057 FR-013, W5d, owned by U23) — the
-	// child's own session.SessionID when the call fires inside a delegated
-	// sub-turn, distinct from SessionID's routing key above. See
-	// ToolExecStartPayload.ProducingSessionID's doc comment for the full
-	// "present iff it differs" contract, which applies identically here.
-	ProducingSessionID session.SessionID
+	// ProducingSessionID (ADR-057 FR-013, W5d) is DELETED — see
+	// ToolExecStartPayload's own doc comment for the ADR-091 D7/I-4
+	// rationale, which applies identically here.
 }
 
 // ToolExecSkippedPayload describes a skipped tool call.
@@ -834,14 +823,15 @@ type TaskRunStatusPayload struct {
 }
 
 // ToolResultProjectionPayload is EventKindToolResultProjection's payload
-// (ADR-066 D5 / FR-022). SessionID and ProducingSessionID follow the
-// ToolExecEndPayload contract exactly (routing id on the wire's session_id;
-// the child's own session only when it differs — u9ToolExecSessionIDs).
+// (ADR-066 D5 / FR-022). SessionID is the routing id on the wire's
+// session_id (u9ToolExecSessionIDs). ADR-091 D7/I-4 deleted
+// ProducingSessionID (the workaround field this payload used to also
+// carry) — see u9ToolExecSessionIDs' own doc comment (loop.go) for the
+// residual gap this leaves.
 type ToolResultProjectionPayload struct {
-	ChatID             string
-	SessionID          string
-	ProducingSessionID session.SessionID
-	ToolCallID         session.ToolCallID
+	ChatID     string
+	SessionID  string
+	ToolCallID session.ToolCallID
 	// ArchiveLine is the zero-based archive line of the projected result;
 	// with ToolCallID it is the projection-state key (FR-019).
 	ArchiveLine int

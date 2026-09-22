@@ -1044,23 +1044,24 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			"tool":      ex.toolName,
 			"iteration": ex.rx.rr.rq.ri.rf.rt.iteration,
 		})
-	toolExecSID, toolExecProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+	toolExecSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecStart,
 		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.start"),
 		ToolExecStartPayload{
 			ToolCallID: session.ToolCallID(tc.ID),
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see
-			// u9ToolExecSessionIDs and
-			// ToolExecStartPayload.SessionID/.ProducingSessionID's doc
-			// comments (events.go, U23) for the full rationale.
-			SessionID:          toolExecSID,
-			Tool:               ex.toolName,
-			Arguments:          cloneEventArguments(ex.toolArgs),
-			ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-			AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
-			ProducingSessionID: toolExecProducingSID,
+			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see u9ToolExecSessionIDs
+			// and ToolExecStartPayload.SessionID's doc comments (events.go,
+			// U23) for the full rationale. ADR-091 D7/I-4 deleted
+			// ProducingSessionID (the workaround field) — see
+			// u9ToolExecSessionIDs' own doc comment for the residual gap
+			// this leaves.
+			SessionID:         toolExecSID,
+			Tool:              ex.toolName,
+			Arguments:         cloneEventArguments(ex.toolArgs),
+			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
 	)
 
@@ -1201,24 +1202,23 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 		if userContent != "" && result.IsError && ex.rx.rr.rq.ri.rf.rt.ts.opts.SuppressToolFeedback &&
 			ex.rx.rr.rq.ri.rf.rt.ts.channel == "webchat" {
 			persistAsyncToolErrorNotice(ex.rx.rr.rq.ri.rf.rt.ts, toolCallID, userContent)
-			callbackSID, callbackProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+			callbackSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 			callbackNoticeID := fmt.Sprintf("%s:async-error:%d", toolCallID, time.Now().UnixNano())
 			ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 				EventKindToolExecEnd,
 				ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.async.error"),
 				ToolExecEndPayload{
-					ToolCallID:         session.ToolCallID(callbackNoticeID),
-					ChatID:             ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-					SessionID:          callbackSID,
-					Tool:               toolName,
-					ForLLMLen:          len(result.ContentForLLM()),
-					ForUserLen:         len(result.ForUser),
-					IsError:            true,
-					Async:              true,
-					Result:             userContent,
-					ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-					AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
-					ProducingSessionID: callbackProducingSID,
+					ToolCallID:        session.ToolCallID(callbackNoticeID),
+					ChatID:            ex.rx.rr.rq.ri.rf.rt.ts.chatID,
+					SessionID:         callbackSID,
+					Tool:              toolName,
+					ForLLMLen:         len(result.ContentForLLM()),
+					ForUserLen:        len(result.ForUser),
+					IsError:           true,
+					Async:             true,
+					Result:            userContent,
+					ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+					AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(),
 				},
 			)
 		} else if userContent != "" {
@@ -1739,27 +1739,26 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 		}
 		ex.rx.rr.rq.ri.rf.rt.inspectionImages[ex.toolCallID] = ex.toolResult.InspectionImages
 	}
-	endSID, endProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
+	endSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecEnd,
 		ex.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.tool.end"),
 		ToolExecEndPayload{
 			ToolCallID: session.ToolCallID(ex.toolCallID),
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
-			// ADR-057 FR-011/FR-012/FR-013 (W4/W5d, U9): see the
-			// matching ToolExecStartPayload construction above —
-			// identical contract on the result frame.
-			SessionID:          endSID,
-			Tool:               ex.toolName,
-			Duration:           ex.toolDuration,
-			ForLLMLen:          len(ex.contentForLLM),
-			ForUserLen:         len(ex.toolResult.ForUser),
-			IsError:            ex.toolResult.IsError,
-			Async:              ex.toolResult.Async,
-			Result:             ex.contentForLLM,
-			ParentSpawnCallID:  session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
-			AgentID:            ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
-			ProducingSessionID: endProducingSID,
+			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see the matching
+			// ToolExecStartPayload construction above — identical
+			// contract on the result frame.
+			SessionID:         endSID,
+			Tool:              ex.toolName,
+			Duration:          ex.toolDuration,
+			ForLLMLen:         len(ex.contentForLLM),
+			ForUserLen:        len(ex.toolResult.ForUser),
+			IsError:           ex.toolResult.IsError,
+			Async:             ex.toolResult.Async,
+			Result:            ex.contentForLLM,
+			ParentSpawnCallID: session.ToolCallID(ex.rx.rr.rq.ri.rf.rt.ts.parentSpawnCallID),
+			AgentID:           ex.rx.rr.rq.ri.rf.rt.ts.resolveActiveAgentID(), // Bug 1: runtime-current agent
 		},
 	)
 	tcStatus := "success"

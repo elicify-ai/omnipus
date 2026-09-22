@@ -1540,36 +1540,24 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 	})
 }
 
-// u9ToolExecSessionIDs computes the two identity fields ADR-057's W4 stamping
+// u9ToolExecSessionIDs computes the identity field ADR-057's W4 stamping
 // contract requires on the wire for a session-scoped frame, for the two Go
-// event payloads events.go (U23) gave a ProducingSessionID field —
-// ToolExecStartPayload and ToolExecEndPayload, the only two of the 19
-// SESSION_SCOPED_FRAME_TYPES classified as needing it at the Go-payload
-// level today (class (a) per the W5 audit, FR-089/BDD-16: a child turn
-// genuinely emits tool_call_start/tool_call_result, so the wire frame
-// carries both ids). Factored into one function, called from both
-// construction sites below, so this file has exactly one place that answers
-// "what goes on the wire" rather than two independently-maintained copies of
-// the same two-field contract.
+// event payloads ToolExecStartPayload and ToolExecEndPayload.
 //
-//   - sessionID (FR-011/FR-012): the ROUTING identity — the id inherited
-//     verbatim from the root of the delegation subtree — never this turn's
-//     own transcriptSessionID, which for a delegated child differs from the
-//     root's.
-//   - producingSessionID (FR-013): the zero value when ts IS the routing
-//     session (producing == routing — the common non-delegated case, and
-//     every root turn), so the WS forwarder (pkg/gateway/websocket.go, U11)
-//     can implement the "present iff it differs from session_id" rule with a
-//     plain non-empty-and-unequal check before stamping the wire's optional
-//     producing_session_id. Otherwise this turn's own real, store-backed
-//     session id — see ToolExecStartPayload.ProducingSessionID's doc comment
-//     (events.go) for the full rationale.
-func u9ToolExecSessionIDs(ts *turnState) (sessionID string, producingSessionID session.SessionID) {
-	sessionID = string(ts.routingSessionID)
-	if ts.transcriptSessionID == sessionID {
-		return sessionID, ""
-	}
-	return sessionID, session.SessionID(ts.transcriptSessionID)
+// ADR-091 D7/I-4: ProducingSessionID — the workaround field this function
+// used to ALSO compute, so the WS forwarder could stamp an optional
+// producing_session_id "present iff it differs from session_id" — is
+// deleted (events.go), and this function now returns only sessionID.
+// SessionID here is still the ROUTING identity (FR-011/FR-012 — the id
+// inherited verbatim from the root of the delegation subtree), unchanged by
+// this deletion: fully realizing I-4's "every frame carries its own
+// session_id (the producing session)" for these two payloads requires
+// turnState.routingSessionID's identity contract itself to change, which
+// this lane's brief scopes as "stop reading/setting" the workaround field,
+// not a redesign of routingSessionID — see this lane's final report for the
+// residual gap this leaves.
+func u9ToolExecSessionIDs(ts *turnState) (sessionID string) {
+	return string(ts.routingSessionID)
 }
 
 func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDecision) error {

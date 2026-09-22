@@ -772,21 +772,11 @@ func (f *eventForwardState) onToolExecStart(evt agent.Event) {
 		pc := string(p.ParentSpawnCallID)
 		startF.ParentCallId = &pc
 	}
-	// ADR-057 FR-012/FR-013 (W5b): tool_call_start is class (a) — a
-	// genuinely child-turn-produced frame (BDD-16; generated.
-	// ToolCallStartFrame's own doc comment). startSID above already
-	// carries the routing key per ToolExecStartPayload.SessionID's
-	// contract (events.go, U3/U9); ProducingSessionID is the emitting
-	// turn's own real session, left zero-valued by the emitter when it
-	// equals the routing key. Stamp the wire's optional
-	// producing_session_id only when it is non-empty AND differs from
-	// what was actually placed in SessionId — never "≥ 1" but the
-	// FR-013 "present iff it differs" rule, checked against startSID
-	// rather than raw p.SessionID so the sessionIDForChat fallback
-	// above can never manufacture a false "differs".
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != startSID {
-		startF.ProducingSessionId = &producingSID
-	}
+	// ADR-091 D7/I-4: ProducingSessionID (the Go payload field this reader
+	// used to stamp onto the wire's optional producing_session_id) is
+	// deleted — "every frame carries its own session_id (the producing
+	// session)". This reader no longer reads or sets it; the generated
+	// wire field itself is removed later, by WP-E.
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallStart), startF)
 }
 
@@ -921,16 +911,11 @@ func (f *eventForwardState) onToolExecEnd(evt agent.Event) {
 		liveErr := truncateRunesForFrame(p.Result, maxLiveErrorChars)
 		resultF.Error = &liveErr
 	}
-	// ADR-057 FR-012/FR-013 (W5b): tool_call_result is class (a) —
-	// genuinely child-turn-produced (BDD-16; generated.
-	// ToolCallResultFrame's own doc comment). See the tool_call_start
-	// stamping above for the identical "present iff it differs from
-	// what's actually on the wire" contract.
-	var producingSIDForResult string
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != evtSID {
-		resultF.ProducingSessionId = &producingSID
-		producingSIDForResult = producingSID
-	}
+	// ADR-091 D7/I-4: ProducingSessionID (the Go payload field this reader
+	// used to stamp onto the wire's optional producing_session_id) is
+	// deleted — "every frame carries its own session_id (the producing
+	// session)". This reader no longer reads or sets it; the generated
+	// wire field itself is removed later, by WP-E.
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallResult), resultF)
 	// When switch_agent succeeds, notify the frontend to switch agents.
 	// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
@@ -943,10 +928,7 @@ func (f *eventForwardState) onToolExecEnd(evt agent.Event) {
 	// invoke switch_agent on its OWN session exactly as a root turn
 	// can, so evtSID here is the CHILD's own producing session
 	// whenever switch_agent ran inside a sub-turn, distinct from the
-	// routing key placed in SessionId below. Reuses
-	// producingSIDForResult computed above rather than re-deriving it,
-	// since both frames answer the identical "does this ToolExecEnd's
-	// producer differ from its routing key" question.
+	// routing key placed in SessionId below.
 	//
 	// ADR-071 §5.2.1/§5.2.2: this used to be TWO exact-string
 	// branches (p.Tool == "hand_off" and p.Tool == "return_to_default"),
@@ -1015,10 +997,6 @@ func (f *eventForwardState) onToolExecEnd(evt agent.Event) {
 			if defaultName != "" {
 				switchF.Message = &defaultName
 			}
-		}
-		if producingSIDForResult != "" {
-			pid := producingSIDForResult
-			switchF.ProducingSessionId = &pid
 		}
 		sendConnGenFrame(f.wc, string(generated.WsFrameTypeAgentSwitched), switchF)
 	}
@@ -1485,8 +1463,8 @@ func (f *eventForwardState) onToolResultProjection(evt agent.Event) {
 		mark := p.Mark
 		projF.Mark = &mark
 	}
-	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != projSID {
-		projF.ProducingSessionId = &producingSID
-	}
+	// ADR-091 D7/I-4: ProducingSessionID (the Go payload field this reader
+	// used to stamp onto the wire's optional producing_session_id) is
+	// deleted. The generated wire field itself is removed later, by WP-E.
 	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolResultProjection), projF)
 }
