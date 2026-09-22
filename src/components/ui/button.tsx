@@ -1,4 +1,5 @@
 import * as React from 'react'
+import { createPortal } from 'react-dom'
 import { Slot } from '@radix-ui/react-slot'
 import { CheckCircle, CircleNotch, WarningCircle } from '@phosphor-icons/react'
 import { cva, type VariantProps } from 'class-variance-authority'
@@ -46,10 +47,20 @@ export interface ButtonProps
   actionState?: 'idle' | 'pending' | 'success' | 'error'
 }
 
+// Portalled straight to document.body, never a DOM child of the button.
+// A role-restrictive parent (radiogroup/tablist/toolbar/menu/listbox) then
+// sees the button contribute exactly one child, and the accessible name
+// can never pick up announcement text, because the region isn't a
+// descendant of the button to begin with. Radix's `hideOthers` (used by
+// dialogs/popovers to hide background content) explicitly skips
+// `[aria-live]` nodes, so this stays announced even while a modal is open.
 function ActionAnnouncement({ description }: { description?: string }) {
   const [announcement, setAnnouncement] = React.useState('')
   React.useEffect(() => { setAnnouncement(description ?? '') }, [description])
-  return <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>
+  return createPortal(
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{announcement}</span>,
+    document.body,
+  )
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
@@ -57,11 +68,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     const Comp = asChild ? Slot : 'button'
     const pending = actionState === 'pending'
     const loadingVisible = useLoadingVisibility(pending)
-    // The announcement region nests inside this element instead of beside
-    // it (fixes aria-required-children in a radiogroup/tablist/toolbar
-    // parent). `contentId` labels the visible content only, so the region's
-    // own text never leaks into the accessible name.
-    const contentId = React.useId()
     const presentedState = loadingVisible ? 'pending' : actionState === 'pending' ? 'idle' : actionState
     const announcedState = pending && !loadingVisible ? 'idle' : actionState
     const feedbackDescription = announcedState === 'pending'
@@ -69,18 +75,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       : announcedState === 'success'
         ? 'Action succeeded'
         : announcedState === 'error' ? 'Action failed' : undefined
-    // Only shield the name while there is announcement text that could
-    // otherwise leak into it — an idle Button (the common case, e.g. an
-    // icon-only Button named by `title`, not by its content) must compute
-    // its name exactly as it did before this change, with NO aria-labelledby
-    // of this component's own making.
-    const needsLabelShield = ariaLabelProp === undefined && ariaLabelledByProp === undefined && feedbackDescription !== undefined
-    // An icon-only Button named by `title` has no accessible text of its
-    // own for `contentId` to reference — aria-labelledby pointing at empty
-    // content falls through to the (un-hidden, for live-region purposes)
-    // announcement text instead. Borrow `title` as an explicit aria-label
-    // while shielding, so the name never depends on content being non-empty.
-    const shieldWithTitle = needsLabelShield && props.title !== undefined
     const reservesFeedback = actionState !== 'idle' || loadingVisible
     const feedback = reservesFeedback ? (
       <span data-action-indicator="" className="inline-flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
@@ -130,7 +124,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             childCapture?.(event)
             onAuxClickCapture?.(event)
           },
-        }, <>{feedback}<span id={contentId} className="contents">{(children.props as { children?: React.ReactNode }).children}</span><ActionAnnouncement description={feedbackDescription} /></>)
+        }, <>{feedback}{(children.props as { children?: React.ReactNode }).children}<ActionAnnouncement description={feedbackDescription} /></>)
       : children
     return (
       <Comp
@@ -145,8 +139,8 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-disabled={asChild && (disabled || pending) ? true : ariaDisabled}
         aria-busy={pending ? true : ariaBusy}
         aria-description={feedbackDescription ?? ariaDescription}
-        aria-label={ariaLabelProp ?? (shieldWithTitle ? props.title : undefined)}
-        aria-labelledby={needsLabelShield && !shieldWithTitle ? contentId : ariaLabelledByProp}
+        aria-label={ariaLabelProp}
+        aria-labelledby={ariaLabelledByProp}
         data-action-state={actionState}
         data-ds-action=""
         onClickCapture={asChild ? undefined : preventPendingActivation}
@@ -154,7 +148,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       >{asChild ? guardedChild : (
         <>
           {feedback}
-          <span id={contentId} className="contents">{children}</span>
+          {children}
           <ActionAnnouncement description={feedbackDescription} />
         </>
       )}</Comp>

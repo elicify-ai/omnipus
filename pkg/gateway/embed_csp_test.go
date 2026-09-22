@@ -559,8 +559,13 @@ func TestSpaCsp_PdfWorkerPathIsTheOneVitePublishes(t *testing.T) {
 	assert.Equal(t, pdfJSAssetPathPrefix+string(m[1]), pdfJSWorkerPath,
 		"the policy branch must name the worker file the build actually emits")
 
-	spa, err := os.ReadFile("../../src/components/library/preview/LibraryPdfPreview.tsx")
-	require.NoError(t, err, "the PDF viewer must be readable — it is this test's second oracle")
-	assert.Contains(t, string(spa), "pdf.worker.min.mjs",
+	// The `new Worker(...)` call itself lives in the load effect module, not
+	// in LibraryPdfPreview.tsx — it moved there so the effect could be
+	// unit-tested apart from the component shell. Reading the component file
+	// here would pass even if the worker path drifted, since the file no
+	// longer constructs the worker at all.
+	spa, err := os.ReadFile("../../src/components/library/preview/LibraryPdfPreview.loadEffect.ts")
+	require.NoError(t, err, "the PDF viewer's load effect must be readable — it is this test's second oracle")
+	assert.Contains(t, string(spa), "new Worker(`${ASSET_BASE}pdf.worker.min.mjs`",
 		"the SPA must still construct its worker from the file this policy branch covers")
 }

@@ -390,12 +390,11 @@ describe('FileReadBlock — flat text-line status dot', () => {
     const { container } = renderRead('const x = 1\n', 'complete')
     fireEvent.click(container.querySelector('button')!)
     const root = container.firstElementChild as HTMLElement
-    // DisclosureRow (a catalogued Button) renders as a two-node fragment —
-    // the <button> itself, plus a sibling sr-only live-region span used for
-    // Button's actionState announcements (see button.tsx's ActionAnnouncement)
-    // — so the detail panel is root.children[2], not [1], now that the
-    // header is DisclosureRow instead of a bare <button>.
-    const panel = root.children[2] as HTMLElement
+    // DisclosureRow (a catalogued Button) renders as a single <button> node —
+    // Button's actionState live region (button.tsx's ActionAnnouncement) is
+    // portalled straight to document.body, never a DOM child here — so the
+    // detail panel is root.children[1], right after the header button.
+    const panel = root.children[1] as HTMLElement
     expect(panel.className).toContain('border-l-2')
     expect(panel.className).not.toMatch(/\bborder-b\b/)
     // The <pre> keeps its dark code-block background.

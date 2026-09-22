@@ -127,8 +127,9 @@ describe('Button — action contract', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toHaveAttribute('data-action-state', actionState)
   })
 
-  // Button's live-announcement region is nested INSIDE the <button>, not a
-  // DOM sibling — so a Button placed inside a role that restricts its
+  // Button's live-announcement region is portalled to document.body, never
+  // a DOM child of the <button> (and so never a DOM child of the button's
+  // parent either) — so a Button placed inside a role that restricts its
   // direct children (radiogroup, tablist, toolbar, menu, listbox —
   // RadioGroupItem and SegmentedControlItem are both built on Button) never
   // gets an illegal second child (axe aria-required-children). Asserted
@@ -149,10 +150,10 @@ describe('Button — action contract', () => {
   )
 })
 
-// The name shield (aria-labelledby={contentId}) engages ONLY while an
-// announcement is actually present — engaging it unconditionally overrides
-// a `title`-based accessible name (the content span it references contains
-// no text for an icon-only Button), un-naming every idle icon-only Button.
+// The live-announcement region is portalled to document.body, never a
+// descendant of the button, so it can never contribute to the button's
+// accessible name computation — a title-only icon Button keeps its name
+// from `title` in every action state, with no shielding machinery needed.
 describe('Button — accessible name from a non-content source (e.g. title)', () => {
   it('keeps a title-only icon Button named by its title, idle and after an action completes', () => {
     const { rerender } = render(<Button title="Close panel"><svg aria-hidden="true" /></Button>)
@@ -420,11 +421,17 @@ describe('Button persistent action announcements', () => {
     expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument()
   })
 
-  it('keeps action announcements inside their modal and outside hidden content', () => {
+  // The region is portalled to document.body, outside the dialog's own DOM
+  // subtree — so this asserts it survives Radix's `hideOthers` (which the
+  // Dialog primitive uses to hide background content while open) rather
+  // than asserting DOM containment inside the dialog, which no longer
+  // holds by construction.
+  it('keeps action announcements reachable and unhidden while a modal is open', () => {
     render(<Dialog open><DialogContent><DialogTitle>Edit</DialogTitle><DialogDescription>Save your changes</DialogDescription><Button actionState="success">Save</Button></DialogContent></Dialog>)
     const region = screen.getByRole('status')
-    expect(screen.getByRole('dialog')).toContainElement(region)
+    expect(document.body).toContainElement(region)
     expect(region.closest('[aria-hidden="true"]')).toBeNull()
+    expect(region).not.toHaveAttribute('aria-hidden')
     expect(region).toHaveTextContent('Action succeeded')
     expect(screen.getByRole('button', { name: /^Save$/ })).toBeInTheDocument()
   })
