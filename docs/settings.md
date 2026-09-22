@@ -46,7 +46,7 @@ Each tab and neighbor screen has one job.
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
-| Settings, Performance | How many agents may run at once |
+| Settings, Performance | How many agents may run at once, how deep delegation may go, and how long a delegation may run |
 | Settings, Chat | Chat display, including the verbose view of tool calls |
 | Settings, About | Version and build information |
 | Profile | Your name, timezone, font size, password, and workspace context |
@@ -61,6 +61,35 @@ If the host cannot measure available memory, Omnipus holds agent concurrency at 
 The rate limits live in Settings, Security, under its advanced section. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank for no limit.
 
 Profile holds one setting your agents read every turn: **Workspace Context**. It is a free-text page about you — your role, your preferences, how you like answers — saved automatically and shared with all agents. Your display name, timezone, and font size are personal display choices stored in this browser, so they do not follow you to another machine.
+
+## Delegation limits
+
+Three numbers on the Performance tab govern how much work one agent can hand to another. Each is a separate setting, and each behaves sensibly when left blank.
+
+### How deep delegation may go
+
+`performance.max_delegation_depth` caps how many levels a delegation chain may form. An agent delegates a worker, the worker delegates again, and each further hop is one more level. A chain that asks for one level more than the cap is refused with a named error — the extra work never starts, rather than starting and being cut off part-way.
+
+- A workspace **Team** edge can set a tighter depth for a particular agent pair. When both a global value and an edge value exist, the smaller one wins.
+- With nothing set, the code still caps a chain at **three** levels.
+
+### How many agents run at once
+
+`performance.max_parallel_agents` caps how many delegated sessions execute a turn at the same time. When the cap is reached, a new delegation is not refused — it is **queued**, and the delegating agent's tool result tells it its place in line. Queued sessions start in order as slots free up. A `delegate cancel` drops a queued one before it ever starts.
+
+Leave the field blank and live available memory governs each new turn, reported on the Performance tab as "automatic — bounded by available memory".
+
+### How long a child may run
+
+`performance.delegation_timeout_minutes` caps how long a delegated session may run across its whole life — a follow-up that wakes the child does not restart the clock. The default is **30 minutes**. A delegating agent can override that for one call with `timeout_seconds`; leaving that at zero uses the default.
+
+### Safety stops that are not settings
+
+Three protections are fixed in the code on purpose. They guard against malformed data — a corrupted or looping parent chain, a gap in the live stream — not against any normal amount of use, and there is no setting for them:
+
+- The server walks at most **4096** steps up the chain of parents when it classifies or launches a session, so a sessions file that has somehow formed a loop cannot make it walk forever.
+- When it checks who may steer a session, it climbs at most **64** ancestors — again a guard against a corrupt or looping chain, far beyond any real delegation depth.
+- The side panel holds at most **50** pending status updates for children whose "started" signal has not arrived yet, so a gap in the stream cannot grow memory without bound.
 
 ## Limits and things to watch
 
