@@ -201,7 +201,15 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 	lifecycleStore := session.NewLifecycleStore(filepath.Join(storeDir, "lifecycle"))
 	inboxStore := session.NewMessageInboxStore(filepath.Join(storeDir, "inbox"))
 
-	messageParentTool := tools.NewMessageParentTool(inboxStore, lifecycleStore)
+	// ADR-091 I-5: message_parent.go now depends on a single injected
+	// steer.UpwardDeliverer (Deliver replaces the former inbox+waker pair —
+	// "it replaces that interface", pkg/steer's own doc comment). Wire the
+	// REAL SteerUpwardDeliverer against these same stores, mirroring
+	// production's gateway_boot.go -> SetSessionMessagingStores ->
+	// SetSteerAudienceDeps sequence.
+	al.SetSessionMessagingStores(inboxStore, lifecycleStore)
+	al.SetSteerAudienceDeps(NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycleStore, al.GetSessionStore())), nil, NewSteerUpwardDeliverer())
+	messageParentTool := tools.NewMessageParentTool(al.getUpwardDeliverer(), lifecycleStore)
 	messageParentTool.SetSessionMessagingEnabled(func() bool { return true })
 	al.RegisterTool(messageParentTool)
 

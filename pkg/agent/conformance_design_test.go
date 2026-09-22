@@ -39,9 +39,34 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// conformanceFakeUpwardDeliverer is a minimal steer.UpwardDeliverer for this
+// file's own tests — ADR-091 I-5 replaced message_parent.go's former
+// inbox+waker pair with a single injected deliverer; this fake resolves the
+// owner key from the child's lifecycle record (mirroring
+// pkg/tools::ownerKeyFor) and appends to a REAL *session.MessageInboxStore,
+// so this file's existing inbox.Drain(...) assertions keep proving what they
+// always proved.
+type conformanceFakeUpwardDeliverer struct {
+	lifecycle *session.LifecycleStore
+	inbox     *session.MessageInboxStore
+}
+
+func (f *conformanceFakeUpwardDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	ownerKey := ""
+	if rec, err := f.lifecycle.Load(event.ChildSessionID); err == nil && rec != nil {
+		ownerKey = strings.TrimSpace(rec.ParentDurableKey)
+	}
+	res, err := f.inbox.Append(ownerKey, event.Message)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
+}
 
 // conformanceCriterion is a single populated acceptance criterion so a member's
 // own criteria are unambiguously present (a join/assemble member must be a
@@ -246,7 +271,7 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
 	inbox.ChildSendRatePerMinute = 100000 // isolate the per-type CEILING from the unrelated rate cap
-	tool := tools.NewMessageParentTool(inbox, lc)
+	tool := tools.NewMessageParentTool(&conformanceFakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	tool.SetSessionMessagingEnabled(func() bool { return true })
 
 	// Two sibling children of the same parent, distinct SessionIDs.
@@ -355,6 +380,10 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 		OriginChannel: "tc", OriginChatID: "c1", ParentDurableKey: parentSession,
 	})
 	al.SetSessionMessagingStores(inbox, ls)
+	// ADR-091 I-5: message_parent.go now depends on a single injected
+	// steer.UpwardDeliverer — wire the real one so the auto-registered tool
+	// used below is not fail-closed.
+	al.SetSteerAudienceDeps(NewSteerAudienceResolver(NewSteerRecordClassifier(ls, al.GetSessionStore())), nil, NewSteerUpwardDeliverer())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -420,6 +449,9 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	if publishErr := msgBus.PublishSessionMessage(context.Background(), bus.SessionMessageEvent{
 		TargetSessionID: childSession,
 		Message:         resp,
+		// ADR-091 I-5 "Bus route authority" (R17, FR-B-015): the parent is a
+		// genuine ancestor of the child (seeded ParentDurableKey above).
+		Principal: session.Principal{Kind: session.PrincipalKindAgent, ID: parentSession},
 	}); publishErr != nil {
 		t.Fatalf("(2) PublishSessionMessage: %v", publishErr)
 	}

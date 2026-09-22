@@ -22,33 +22,64 @@ import (
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
-// fakeWaker implements MessageParentWaker for tests, recording every call.
-type fakeWaker struct {
-	calls []struct {
+// fakeUpwardDeliverer is a test-only steer.UpwardDeliverer (ADR-091 I-5)
+// standing in for pkg/agent's real SteerUpwardDeliverer, close enough to it
+// for this file's own tests: it resolves the owner key from the child's
+// lifecycle record exactly like ownerKeyFor (edge first, ParentDurableKey
+// fallback) and appends to a REAL *session.MessageInboxStore, so the
+// existing inbox.Drain(...) assertions throughout this file keep proving
+// what they always proved. Every Deliver call is recorded, mirroring the
+// former fakeWaker's calls shape so this file's existing assertions
+// (`waker.calls[0].kind`) needed no restructuring, only a rename.
+type fakeUpwardDeliverer struct {
+	lifecycle *session.LifecycleStore
+	inbox     *session.MessageInboxStore
+	calls     []struct {
 		kind  string
-		event MessageParentWakeEvent
+		event steer.UpwardEvent
 	}
+	// err simulates a WAKE-TRANSPORT failure (never an Append failure) —
+	// matching the real SteerUpwardDeliverer, which always swallows a wake
+	// failure (logs it, returns success) since the message is already
+	// durably stored by the time the wake is attempted. Recorded, never
+	// returned from Deliver.
 	err error
 }
 
-func (f *fakeWaker) WakeParent(ctx context.Context, kind string, event MessageParentWakeEvent) error {
-	f.calls = append(f.calls, struct {
-		kind  string
-		event MessageParentWakeEvent
-	}{kind, event})
-	return f.err
+func (f *fakeUpwardDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	ownerKey := ""
+	if rec, err := f.lifecycle.Load(event.ChildSessionID); err == nil && rec != nil {
+		ownerKey = ownerKeyFor(rec)
+	}
+	res, err := f.inbox.Append(ownerKey, event.Message)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	kind, _ := event.Message.Discriminator()
+	if kind == "blocker" || kind == "question" || kind == "handback" {
+		f.calls = append(f.calls, struct {
+			kind  string
+			event steer.UpwardEvent
+		}{kind, event})
+		if f.err != nil {
+			// Best-effort, matching the real Deliver: a wake-transport
+			// failure never fails the call — the entry is already stored.
+			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
+		}
+	}
+	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
 }
 
-func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.LifecycleStore, *session.MessageInboxStore, *fakeWaker) {
+func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.LifecycleStore, *session.MessageInboxStore, *fakeUpwardDeliverer) {
 	t.Helper()
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	waker := &fakeWaker{}
+	deliverer := &fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}
 
-	tool := NewMessageParentTool(inbox, lc)
-	tool.SetWaker(waker)
+	tool := NewMessageParentTool(deliverer, lc)
 	// Enable the session-messaging plane by default for tests so the
 	// fail-closed kill switch (fix B.5) does not reject every test call.
 	// Tests that exercise the kill switch itself override this.
@@ -66,7 +97,7 @@ func newMessageParentTestSetup(t *testing.T) (*MessageParentTool, *session.Lifec
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
 
-	return tool, lc, inbox, waker
+	return tool, lc, inbox, deliverer
 }
 
 // withChildContext is a shortcut that stamps the SAME id as both the shared
@@ -217,7 +248,7 @@ func TestMessageParentTool_PerChildCeiling_FailsBackAsToolError(t *testing.T) {
 func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	tool := NewMessageParentTool(inbox, lc)
+	tool := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -238,7 +269,7 @@ func TestMessageParentTool_3PChild_Rejected(t *testing.T) {
 func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	tool := NewMessageParentTool(inbox, lc)
+	tool := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	result := tool.Execute(context.Background(), map[string]any{"kind": "progress", "text": "x"})
@@ -259,7 +290,7 @@ func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 func TestMessageParentTool_TaskRun_NoParentSession_RedirectsToGoalClaim(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
 	inbox := session.NewMessageInboxStore(t.TempDir())
-	tool := NewMessageParentTool(inbox, lc)
+	tool := NewMessageParentTool(&fakeUpwardDeliverer{lifecycle: lc, inbox: inbox}, lc)
 	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
 
 	ctx := WithRunningTaskID(context.Background(), "task-42")
