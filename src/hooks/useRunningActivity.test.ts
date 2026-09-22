@@ -57,8 +57,11 @@ function makeSpan(overrides: Partial<SubagentSpan> & { status: SubagentSpan['sta
     spanId: overrides.spanId ?? 'span_1',
     parentCallId: overrides.parentCallId ?? 'call_1',
     taskLabel: overrides.taskLabel ?? 'audit files',
-    steps: overrides.steps ?? [],
     agentId: overrides.agentId,
+    childSessionId: overrides.childSessionId,
+    statusLine: overrides.statusLine,
+    lifecycleState: overrides.lifecycleState,
+    lastUpdateAt: overrides.lastUpdateAt,
   }
   if (overrides.status === 'running') {
     return { ...base, status: 'running' }
@@ -220,7 +223,6 @@ describe('useRunningActivity — 3rd-party agent span', () => {
       expect(item.kind).toBe('agent')
       if (item.kind === 'agent') {
         expect(item.agentType).toBe('3p')
-        expect(item.steps).toEqual([])
       }
     })
     client.clear()
@@ -940,7 +942,6 @@ describe('mergeAndCapFinished — pure sort/cap contract', () => {
       agentType: 'unknown',
       taskLabel: 'x',
       status: 'success',
-      steps: [],
     }
   }
 
@@ -1155,7 +1156,7 @@ describe('useRunningActivity — elapsed time ticking', () => {
         messages: s.messages.map((m) => ({
           ...m,
           spans: (m.spans ?? []).map((sp) =>
-            sp.spanId === 'span_tick' ? { spanId: sp.spanId, parentCallId: sp.parentCallId, taskLabel: sp.taskLabel, steps: sp.steps, agentId: sp.agentId, status: 'running' as const } : sp,
+            sp.spanId === 'span_tick' ? { spanId: sp.spanId, parentCallId: sp.parentCallId, taskLabel: sp.taskLabel, agentId: sp.agentId, status: 'running' as const } : sp,
           ),
         })),
       }))
