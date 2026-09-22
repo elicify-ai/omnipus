@@ -2,7 +2,7 @@
 //
 // These tests exercise the fail-closed guard in metadata_guard.go that blocks
 // read_file / write_file / edit_file / append_file from accessing
-// agents/<id>/(SOUL|HEARTBEAT|MEMORY|AGENT).md and redirects callers to
+// agents/<id>/(SOUL|HEARTBEAT|AGENT).md and redirects callers to
 // read_agent_metadata (read) / update_agent (write).
 //
 // Regression tests per issue #240:
@@ -57,7 +57,6 @@ func TestFileTools_BlockAgentMetadata(t *testing.T) {
 	blockedFilenames := []string{
 		"SOUL.md", "soul.md",
 		"HEARTBEAT.md", "heartbeat.md",
-		"MEMORY.md", "memory.md",
 		"AGENT.md", "agent.md",
 	}
 
@@ -125,6 +124,51 @@ func TestFileTools_BlockAgentMetadata(t *testing.T) {
 			}
 			assertMetadataGuardError(t, result.ForLLM, "write")
 		})
+	}
+}
+
+// TestLegacyMemoryFile_RemainsGuardedButIsNotAddressable proves the split
+// required by issue #627: MEMORY.md is no longer an addressable metadata kind,
+// while a vestigial file left by an older install remains protected from the
+// generic file tools.
+func TestLegacyMemoryFile_RemainsGuardedButIsNotAddressable(t *testing.T) {
+	if filename, ok := tools.CanonicalMetadataFilename("memory"); ok {
+		t.Fatalf("memory must not be an addressable metadata kind; got %q", filename)
+	}
+
+	ws := setupMetadataTestWorkspace(t)
+	legacyPath := filepath.Join(ws, "MEMORY.md")
+	if err := os.WriteFile(legacyPath, []byte("legacy inert content"), 0o600); err != nil {
+		t.Fatalf("seed leftover MEMORY.md: %v", err)
+	}
+
+	readResult := tools.NewReadFileTool(ws, false, 1024).Execute(
+		context.Background(), map[string]any{"path": legacyPath},
+	)
+	if !readResult.IsError || !strings.Contains(readResult.ForLLM, "USE_MEMORY_TOOL") {
+		t.Fatalf("read_file must block leftover MEMORY.md with a memory-specific error: %s", readResult.ForLLM)
+	}
+	if !strings.Contains(readResult.ForLLM, "recall_memory") {
+		t.Errorf("legacy read refusal must name recall_memory: %s", readResult.ForLLM)
+	}
+
+	writeResult := tools.NewWriteFileTool(ws, false).Execute(
+		context.Background(),
+		map[string]any{"path": legacyPath, "content": "replacement", "overwrite": true},
+	)
+	if !writeResult.IsError || !strings.Contains(writeResult.ForLLM, "USE_MEMORY_TOOL") {
+		t.Fatalf("write_file must block leftover MEMORY.md with a memory-specific error: %s", writeResult.ForLLM)
+	}
+	if !strings.Contains(writeResult.ForLLM, "remember") {
+		t.Errorf("legacy write refusal must name remember: %s", writeResult.ForLLM)
+	}
+
+	got, err := os.ReadFile(legacyPath)
+	if err != nil {
+		t.Fatalf("read leftover MEMORY.md after blocked tools: %v", err)
+	}
+	if string(got) != "legacy inert content" {
+		t.Fatalf("leftover MEMORY.md changed despite guard: %q", got)
 	}
 }
 
