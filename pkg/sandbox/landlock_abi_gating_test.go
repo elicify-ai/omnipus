@@ -207,3 +207,99 @@ func containsFeature(s []string, x string) bool {
 	}
 	return false
 }
+
+// TestLandlockDerivedMasksV1_StayInsideTheV1Table pins the two derived
+// rights groups in landlock_abi_rights.go against the v1 table they are
+// carved out of. Both are plain bit lists restated by hand, and both are
+// consumed only from sandbox_linux.go — so on a non-Linux developer machine
+// nothing reads them at all and a drifted bit reaches CI unexamined.
+//
+// What each one would break if it drifted:
+//
+//   - landlockFSWriteClassV1 is what AccessWrite expands to in
+//     sandbox_linux.go::accessToLandlockRights. A read bit leaking in
+//     over-grants: a write-only path rule would also permit reads.
+//   - landlockFSDirOnlyV1 is STRIPPED from the access mask for every
+//     non-directory file descriptor in addLandlockPathRule, because the
+//     kernel EINVALs a directory-only right on a regular-file fd. A
+//     file-applicable bit leaking in silently removes a right the operator's
+//     policy asked for — the quiet half of the failure, with no errno.
+//
+// Both are checked against landlockRightsForABI(1) rather than against a
+// second hand-written list, so this test cannot drift with them.
+func TestLandlockDerivedMasksV1_StayInsideTheV1Table(t *testing.T) {
+	v1 := landlockRightsForABI(1)
+
+	cases := []struct {
+		name string
+		mask uint64
+		// mustSet are bits the group is defined to carry.
+		mustSet map[string]uint64
+		// mustClear are bits whose presence is the defect described above.
+		mustClear map[string]uint64
+	}{
+		{
+			name: "landlockFSWriteClassV1",
+			mask: landlockFSWriteClassV1,
+			mustSet: map[string]uint64{
+				"WRITE_FILE":  landlockAccessFSWriteFile,
+				"REMOVE_FILE": landlockAccessFSRemoveFile,
+				"REMOVE_DIR":  landlockAccessFSRemoveDir,
+				"MAKE_REG":    landlockAccessFSMakeReg,
+				"MAKE_DIR":    landlockAccessFSMakeDir,
+				"MAKE_SYM":    landlockAccessFSMakeSym,
+			},
+			mustClear: map[string]uint64{
+				"READ_FILE": landlockAccessFSReadFile,
+				"READ_DIR":  landlockAccessFSReadDir,
+				"EXECUTE":   landlockAccessFSExecute,
+				// REFER/TRUNCATE are unioned in at the call site, gated on
+				// the running ABI. Baking them into the v1 group would
+				// request them on a kernel that does not know them.
+				"REFER":    landlockAccessFSRefer,
+				"TRUNCATE": landlockAccessFSTruncate,
+			},
+		},
+		{
+			name: "landlockFSDirOnlyV1",
+			mask: landlockFSDirOnlyV1,
+			mustSet: map[string]uint64{
+				"READ_DIR":    landlockAccessFSReadDir,
+				"REMOVE_DIR":  landlockAccessFSRemoveDir,
+				"REMOVE_FILE": landlockAccessFSRemoveFile,
+				"MAKE_REG":    landlockAccessFSMakeReg,
+				"MAKE_DIR":    landlockAccessFSMakeDir,
+			},
+			mustClear: map[string]uint64{
+				// These three apply to a regular-file fd. Stripping them
+				// from one would silently narrow the policy.
+				"READ_FILE":  landlockAccessFSReadFile,
+				"WRITE_FILE": landlockAccessFSWriteFile,
+				"EXECUTE":    landlockAccessFSExecute,
+				"REFER":      landlockAccessFSRefer,
+				"TRUNCATE":   landlockAccessFSTruncate,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if extra := tc.mask &^ v1; extra != 0 {
+				t.Errorf("%s = %#016x carries %#016x outside landlockRightsForABI(1) = %#016x; "+
+					"a bit no v1 kernel knows would EINVAL create_ruleset on kernels 5.13-5.18",
+					tc.name, tc.mask, extra, v1)
+			}
+			for name, bit := range tc.mustSet {
+				if tc.mask&bit == 0 {
+					t.Errorf("%s is missing %s (%#x)", tc.name, name, bit)
+				}
+			}
+			for name, bit := range tc.mustClear {
+				if tc.mask&bit != 0 {
+					t.Errorf("%s must not carry %s (%#x); see this test's doc comment for what that breaks",
+						tc.name, name, bit)
+				}
+			}
+		})
+	}
+}

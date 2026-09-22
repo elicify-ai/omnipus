@@ -189,7 +189,19 @@ func rulesetAttrWellFormed() bool {
 	if errno != 0 {
 		return false
 	}
-	_ = unix.Close(int(fd)) // #nosec G115 -- fd is a file descriptor from the success path (errno checked above), bounded by RLIMIT_NOFILE.
+	// #nosec G115 -- landlock_create_ruleset(2) returned this fd on the success path (errno is checked directly above). A Linux file descriptor is a small non-negative int the kernel allocates below RLIMIT_NOFILE, so the uintptr the syscall ABI hands back never exceeds what int holds. Hoisted to one conversion so the suppression covers exactly this narrowing and nothing else.
+	probeFdInt := int(fd)
+	// The close error is LOGGED, never acted on, and never swallowed. It
+	// cannot change this probe's answer — that was already decided by the
+	// create_ruleset errno above — and there is no retry to make: Linux
+	// releases the descriptor even when close(2) reports EINTR. But a close
+	// failure on an fd the kernel handed us microseconds earlier means the
+	// descriptor table is not what this security-critical path assumes, so it
+	// stays visible. Same treatment as the two other ruleset-fd close sites
+	// in this file (ApplyWithMode, ApplyToCmd's re-add path).
+	if closeErr := unix.Close(probeFdInt); closeErr != nil {
+		slog.Debug("Landlock: failed to close probe ruleset fd", "error", closeErr)
+	}
 	return true
 }
 

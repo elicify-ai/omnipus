@@ -35,15 +35,6 @@ import (
 func TestHandleSandboxStatus_ReflectsBackendAfterLandlockDegrade(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
-	// Baseline: before any applySandbox/SetSandboxBackend call, the status
-	// endpoint reports whatever backend NewAgentLoop selected at construction
-	// (this test host's real SelectBackend() result — fallback on a non-Linux
-	// dev machine, and never a fabricated ABI claim).
-	preBody := doSandboxStatus(t, api)
-	if _, hasABI := preBody["abi_version"]; hasABI {
-		t.Fatalf("test setup: baseline unexpectedly reports abi_version: %v", preBody)
-	}
-
 	// Simulate boot selecting a kernel-capable Landlock backend that then
 	// rejects the ruleset on Apply — the exact scenario
 	// degradeAfterLandlockFailure exists for.
@@ -52,6 +43,35 @@ func TestHandleSandboxStatus_ReflectsBackendAfterLandlockDegrade(t *testing.T) {
 		abiVersion: 1,
 		applyErr:   fmt.Errorf("%w: invalid argument", sandbox.ErrLandlockRulesetRejected),
 	}
+
+	// Baseline: install that kernel-capable backend as the loop's selection, so
+	// the pre-degrade state is the SAME on every host. The precondition this
+	// test needs is "the endpoint currently reports a kernel backend that is
+	// not the fallback"; without one, the post-degrade assertions below could
+	// be satisfied by an endpoint that never noticed the swap.
+	//
+	// This used to read the host's real SelectBackend() result and assert the
+	// baseline carried NO abi_version — using "no ABI" as a stand-in for "not
+	// a Landlock backend". That stand-in only holds on a host without
+	// Landlock: it is true on a macOS dev machine (Seatbelt is kernel-level
+	// and simply has no versioned ABI) and false on the Linux CI runner, which
+	// reported its genuine landlock-v7 / abi_version:7 and tripped the setup
+	// guard (release run 35778464975, "baseline unexpectedly reports
+	// abi_version"). Nothing was fabricated there — the expectation was wrong,
+	// and it was wrong on exactly the one platform that can run this code for
+	// real. Injecting the backend removes the host from the equation.
+	api.agentLoop.SetSandboxBackend(stub)
+	preBody := doSandboxStatus(t, api)
+	if got := preBody["backend"]; got != "landlock-v1" {
+		t.Fatalf(`test setup: baseline "backend" = %v, want "landlock-v1": %v`, got, preBody)
+	}
+	if got := preBody["kernel_level"]; got != true {
+		t.Fatalf(`test setup: baseline "kernel_level" = %v, want true: %v`, got, preBody)
+	}
+	if got := preBody["abi_version"]; got != float64(1) {
+		t.Fatalf(`test setup: baseline "abi_version" = %v, want 1: %v`, got, preBody)
+	}
+
 	cfg := &config.Config{}
 	cfg.Sandbox.Mode = "enforce"
 
