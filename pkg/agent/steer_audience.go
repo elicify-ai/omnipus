@@ -41,18 +41,28 @@ func NewSteerAudienceResolver(classifier steer.RecordClassifier) *SteerAudienceR
 	return &SteerAudienceResolver{Classifier: classifier}
 }
 
-// Audience implements steer.AudienceResolver. CP-0 stub: always resolves
-// AudienceUser (today's pre-ADR-091 behaviour — nothing is ever routed to
-// a steering session yet), alongside the real I-8 classification.
+// Audience implements steer.AudienceResolver (I-5, real body): a steered
+// session's audience is always its steering session; an ordinary root's is
+// the user; every other class, an unreadable record, or a classifier error
+// answers none — "any doubt" never falls back to the user (D3).
 func (r *SteerAudienceResolver) Audience(ctx context.Context, sessionID string) (steer.Audience, steer.Class, error) {
 	if r.Classifier == nil {
-		return steer.AudienceUser, steer.ClassOrdinaryRoot, nil
+		return steer.AudienceNone, steer.ClassUnreadable, errors.New("steer: audience: no classifier configured")
 	}
 	class, err := r.Classifier.Classify(ctx, sessionID)
 	if err != nil {
-		return steer.AudienceUser, class, err
+		return steer.AudienceNone, class, err
 	}
-	return steer.AudienceUser, class, nil
+	switch class {
+	case steer.ClassOrdinaryRoot:
+		return steer.AudienceUser, class, nil
+	case steer.ClassSteered:
+		return steer.AudienceSteeringSession, class, nil
+	default:
+		// damaged_child, legacy_delegate, unreadable, invalid_edge: no
+		// audience at all (D3's "answers none on any doubt").
+		return steer.AudienceNone, class, nil
+	}
 }
 
 // SteerUpwardDeliverer is the CP-0 compiled stub for steer.UpwardDeliverer,
