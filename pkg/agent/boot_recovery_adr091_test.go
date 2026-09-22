@@ -82,6 +82,21 @@ func (h *bootRecoveryHarness) newSession(t *testing.T, typ session.UnifiedSessio
 	return meta.ID
 }
 
+// rootSession creates a chat session together with its ordinary_root record,
+// as the launcher does for every session that steers a child (landing order
+// I-1, founder decision round 9). A child whose steering session has no record
+// is an invalid edge, so every fixture tree starts from a recorded root.
+func (h *bootRecoveryHarness) rootSession(t *testing.T) string {
+	t.Helper()
+	id := h.newSession(t, session.SessionTypeChat, "")
+	h.persist(t, &session.LifecycleRecord{
+		SessionID: id, Generation: 1, State: session.LifecycleRunning,
+		Origin: &session.Origin{Kind: session.OriginKindChat}, OwnerScopeKind: session.OwnerScopeHuman,
+		WorkspaceID: "ws", AgentID: "agent-1",
+	})
+	return id
+}
+
 func (h *bootRecoveryHarness) persist(t *testing.T, rec *session.LifecycleRecord) {
 	t.Helper()
 	if err := h.lifecycle.Persist(rec); err != nil {
@@ -179,7 +194,7 @@ func bootQuestion(t *testing.T, child, parent, id string) generated.SessionMessa
 
 func TestBoot_FailureDeliveredUpward(t *testing.T) {
 	h := newBootRecoveryHarness(t)
-	parent := h.newSession(t, session.SessionTypeChat, "")
+	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	h.persist(t, h.steeredRecord(child, parent, session.LifecycleRunning))
 
@@ -205,7 +220,7 @@ func TestBoot_FailureDeliveredUpward(t *testing.T) {
 
 func TestBoot_StoppedStaysStoppedUnlessNewerInstruction(t *testing.T) {
 	h := newBootRecoveryHarness(t)
-	parent := h.newSession(t, session.SessionTypeChat, "")
+	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	rec := h.steeredRecord(child, parent, session.LifecycleRunning)
 	rec.Stop = &session.Stop{Generation: 1, At: time.Now(), By: session.Principal{Kind: session.PrincipalKindHuman, ID: "owner"}}
@@ -225,7 +240,7 @@ func TestBoot_StoppedStaysStoppedUnlessNewerInstruction(t *testing.T) {
 
 func TestBoot_RenudgesUnconsumedEntriesOnce_EligibleOnly(t *testing.T) {
 	h := newBootRecoveryHarness(t)
-	parent := h.newSession(t, session.SessionTypeChat, "")
+	parent := h.rootSession(t)
 	child := h.newSession(t, session.SessionTypeDelegate, parent)
 	rec := h.steeredRecord(child, parent, session.LifecycleNeedsInput)
 	rec.NeedsInput = &session.NeedsInput{CorrelationID: "corr", TTLDeadline: time.Now().Add(time.Hour)}
@@ -281,7 +296,7 @@ func TestBoot_RepairsHalfWrittenCompletion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newBootRecoveryHarness(t)
-			parent := h.newSession(t, session.SessionTypeChat, "")
+			parent := h.rootSession(t)
 			child := h.newSession(t, session.SessionTypeDelegate, parent)
 			state := session.LifecycleRunning
 			if tc.terminalFirst {
