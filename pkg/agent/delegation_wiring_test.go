@@ -429,27 +429,22 @@ func TestDelegationWiring_WorkspaceIDThreaded(t *testing.T) {
 // TestDelegationWiring_Parity_AdvertisedMatchesEnforced
 //
 // This is the parity test: seeds a graph (mia→jim "direct" only — the
-// collapsed edge vocabulary's entry that covers BOTH the sync/await and
-// background delegate-tool call patterns, ADR-090 §3: Mia → Jim for heavy
-// work — NO mia→ava), renders the delegation block for mia, and asserts:
-//   (a) 'jim' appears with exactly the await+background tools (both expand
-//       from the single "direct" edge entry — see wireDelegationInjectors),
-//       NO create_task.
+// edge vocabulary's entry for the asynchronous delegate-tool call pattern,
+// ADR-090 §3: Mia → Jim for heavy work — NO mia→ava), renders the delegation
+// block for mia, and asserts:
+//   (a) 'jim' appears with delegate, but not create_task.
 //   (b) 'ava' does NOT appear.
-//   (c) buildDelegationDenyChecker for mia→jim allows await and background
-//       (both collapse to the edge's "direct" category — see
-//       EdgeModeCategory), denies task — matching (a) exactly.
+//   (c) buildDelegationDenyChecker for mia→jim allows background and denies
+//       task — matching (a) exactly.
 //   (d) buildDelegationDenyChecker for mia→ava denies — matching (b) exactly.
 //
-// This proves advertisement == enforcement by construction, INCLUDING across
-// the collapse (EdgeModeCategory) / expand (wireDelegationInjectors) pair —
-// the two must stay inverses of each other or this parity breaks.
+// This proves advertisement == enforcement by construction.
 // ---------------------------------------------------------------------------
 
 func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	const wsID = "01JWWIRINGPARITY000000001"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
-		// mia→jim: direct only (covers both await and background), no task.
+		// mia→jim: direct/background only, no task.
 		edge("mia", "jim", []string{"direct"}, nil),
 		// No mia→ava edge.
 	})
@@ -465,13 +460,10 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	if !strings.Contains(got, "jim") {
 		t.Fatalf("parity: expected 'jim' in delegation block.\ngot: %s", got)
 	}
-	// await and background tools for jim (post-ADR-036: both modes render via
-	// the single delegate tool, differentiated by async=false vs the default).
-	if !strings.Contains(got, `delegate(agent_id="jim", task="…", async=false)`) {
-		t.Errorf("parity: delegate for jim must appear (await/sync); got:\n%s", got)
-	}
+	// The launcher-backed delegate call is asynchronous and has no inline-wait
+	// form.
 	if !strings.Contains(got, `delegate(agent_id="jim", task="…")`) {
-		t.Errorf("parity: delegate for jim must appear (background/async default); got:\n%s", got)
+		t.Errorf("parity: delegate for jim must appear; got:\n%s", got)
 	}
 	// task must NOT appear for jim.
 	if strings.Contains(got, `create_task(agent_id="jim"`) {
@@ -483,11 +475,6 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 		t.Errorf("parity: 'ava' must NOT appear (no mia→ava edge); got:\n%s", got)
 	}
 
-	// (c) gate: mia→jim await allowed.
-	checkAwait := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationMode("await"))
-	if denial := checkAwait(ctxWS(wsID, 0), "jim"); denial != nil {
-		t.Errorf("parity: gate must allow mia→jim await (advertised); got deny: %+v", denial)
-	}
 	// (c) gate: mia→jim background allowed.
 	checkBG := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground)
 	if denial := checkBG(ctxWS(wsID, 0), "jim"); denial != nil {
@@ -500,7 +487,7 @@ func TestDelegationWiring_Parity_AdvertisedMatchesEnforced(t *testing.T) {
 	}
 
 	// (d) gate: mia→ava denied (no edge).
-	if denial := checkAwait(ctxWS(wsID, 0), "ava"); denial == nil {
+	if denial := checkBG(ctxWS(wsID, 0), "ava"); denial == nil {
 		t.Errorf("parity: gate must DENY mia→ava (no edge); got allow")
 	}
 }
