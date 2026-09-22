@@ -1,5 +1,7 @@
 # ADR-057: Unify delegate sub-turns onto the own-session execution path
 
+> **ADR-091 supersession note (2026-09-22):** ADR-091 supersedes ADR-057 **D2(a)** (the `routingSessionID` client-routing frame stamp — WS frames now carry each session's own id, so the "borrow the parent's id to keep the span in one bucket" workaround is gone) and **D4** (the cancel basis — Stop now walks the durable `LifecycleRecord` edge with a generation under the node's record lock; the in-memory `routingSessionID` subtree is no longer the cancel source of truth). Read D2(b), D3, D5 and §2b alongside ADR-091 D2 and D8 for what is retained.
+
 - **Status:** Proposed (v4 — v3 revised to apply seven operator decisions taken after v3 was written; v3 was itself a rewrite after `/grill-spec` returned **BLOCK** on v2: 5 CRITICAL, 14 MAJOR, 5 MINOR)
 - **Date:** 2026-08-03
 - **Related:** [ADR-053](ADR-053-unified-goal-plan-subagent.md) D1/D5/D15/D16 (§8); [ADR-052](ADR-052-autonomous-agent-plan-execution.md) §6.4(a); [ADR-045](ADR-045-orphaned-foreground-turn-timeout.md) (the watchdog interlock, D4); [ADR-056](ADR-056-background-job-visibility.md) (`list_jobs`, the cut `shell` kind); [ADR-036](ADR-036-consolidate-shell-and-subagent-tools.md) (`bash` background sessions); `docs/internal/specs/cancel-cross-channel-spec.md` FR-6a

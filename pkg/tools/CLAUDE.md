@@ -78,10 +78,23 @@ read-only afterwards; duplicate registration is boot-fatal.
   validates, persists the pending set, returns a `ParksTurn` stub; the
   answer arrives server-side (`askuser.Registry.Submit`) and starts the
   resume turn. Web-SPA channel only (`webchat`).
-- `delegate` is ONE merged tool (formerly spawn / run_subagent /
-  check_spawn_status) with one task-status map — the pre-merge bug was
-  spawn writing a map status never read. Assuming separate spawn/status
-  tools is wrong.
+- `delegate` launches **a worker in its own session** through the
+  `pkg/steer.SessionLauncher` interface — there is no special-case delegate
+  class. It is a single tool (formerly the merged spawn / run_subagent /
+  check_spawn_status) and it returns as soon as launch and dispatch have
+  returned; the child may already be running. The delegating agent's chat
+  sees only the one line `delegate` produces; the side panel lists each
+  worker with a one-line status and an Open control. The remaining
+  `delegate` actions — `steer`, `respond`, `peek`, `inbox`, `inbox_ack`,
+  `follow_up`, `cancel`, `status` — operate on any steered session for which
+  the caller holds authority (any ancestor, or the human operator at the
+  keyboard). There is **no wait-inline**: `async:false` and
+  `allow_blocking_question` were deleted in ADR-091 D4; if the concurrency
+  cap is reached the launch is queued and the parent's tool result tells it
+  its place in line. The upward path from a worker to its parent goes
+  through the injected `pkg/steer.UpwardDeliverer`, which replaces the
+  previous `MessageParentWaker`. `create_task` exposes the same surface;
+  one primitive, two front doors.
 - ADR-090 makes `ToolSearch` infrastructure that is always registered,
   discoverable, and non-deniable. Its resolution-time availability is
   intentional and must not be replaced with seeded policy data. This does
