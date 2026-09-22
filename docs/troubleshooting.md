@@ -103,6 +103,15 @@ The encrypted credential store needs a master key. The gateway looks for one in 
 
 A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. See [Security for users](security.md).
 
+## Credentials stop working after an upgrade
+
+Every stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Entries written before that binding existed no longer open, and the gateway reports each one it cannot read. Re-enter them:
+
+1. Open **Settings**, **Security**, **Credential Vault** and enter each value again — or run `omnipus credentials set <name> <value>`.
+2. Restart the gateway.
+
+There is deliberately no fallback that reads an old entry: it would let a value be moved between names again. Note the difference when only one entry fails while the others still work — that entry was edited on disk or copied from another entry, not written by an older release. The gateway names the entry at fault in its log.
+
 ## The web app looks outdated after a source build
 
 The Go binary embeds the web app from `pkg/gateway/spa/` — a copy of the frontend build output, not the output itself, so building without refreshing that copy serves an old interface. `make build` refreshes it and builds in one step. Confirm a change reached the binary by searching the bundled assets for a string only it contains:

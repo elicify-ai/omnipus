@@ -52,6 +52,8 @@ Omnipus stores credential values in an encrypted file. Settings refer to credent
 
 Rotation re-encrypts the whole vault with the new passphrase. Back up the new passphrase because Omnipus needs it to unlock the vault later.
 
+Each stored value is encrypted together with the name it is stored under, so a value cannot be moved from one entry to another and still open. Entries written before that binding existed no longer open: an installation carried over from an earlier release must have its credentials entered again. Omnipus never falls back to reading an old entry, because that fallback would let a value be moved between names again.
+
 ## How to review security activity
 
 1. Open **Settings**, select **Security**, then open **Advanced / technical details**.

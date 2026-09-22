@@ -79,12 +79,12 @@ func TestAES256GCMEncryptDecrypt(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Traces to: wave1-core-foundation-spec.md Dataset: Credential Encryption Inputs rows 8,9,10
-			entry, err := encrypt(key, []byte(tc.plaintext))
+			entry, err := encrypt(key, "TEST_ENTRY", []byte(tc.plaintext))
 			require.NoError(t, err, "encrypt must not fail")
 			assert.NotEmpty(t, entry.Nonce, "nonce must be populated")
 			assert.NotEmpty(t, entry.Ciphertext, "ciphertext must be populated")
 
-			plaintext, err := decrypt(key, entry)
+			plaintext, err := decrypt(key, "TEST_ENTRY", entry)
 			require.NoError(t, err, "decrypt must not fail")
 			assert.Equal(t, tc.plaintext, plaintext, "decrypted value must match original")
 		})
@@ -103,10 +103,10 @@ func TestAES256GCMDecryptWrongKey(t *testing.T) {
 		wrongKey[i] = 0xBB
 	}
 
-	entry, err := encrypt(rightKey, []byte("secret-value"))
+	entry, err := encrypt(rightKey, "TEST_ENTRY", []byte("secret-value"))
 	require.NoError(t, err)
 
-	_, err = decrypt(wrongKey, entry)
+	_, err = decrypt(wrongKey, "TEST_ENTRY", entry)
 	assert.ErrorIs(t, err, ErrWrongKey, "decryption with wrong key must return ErrWrongKey")
 }
 

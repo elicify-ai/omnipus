@@ -52,6 +52,20 @@ permanently.
 - A corrupted credentials.json is a hard stop — the store refuses to
   overwrite it ("manual fix required").
 
+## AAD name binding (issue #85b)
+
+Every entry is sealed and opened with `store.go::aadFor(name)` —
+`"omnipus-credential-v1:" + name` — as AES-GCM additional authenticated data,
+so a ciphertext moved to another name fails authentication instead of
+decrypting under the name it was moved to. Entry failures return
+`store.go::EntryAuthError`, which names the entry and unwraps to
+`ErrWrongKey`, so the boot fatal-vs-degrade classification is unchanged.
+Greenfield, no fallback read: entries written before the binding carry a nil
+AAD and no longer decrypt, so an existing install must re-enter its
+credentials (worded for users in `docs/troubleshooting.md`). Bump
+`credentialAADPrefix` to change the AAD construction — ciphertexts sealed
+under one tag cannot be opened under another.
+
 ## Error classification decides fatal-vs-degrade
 
 `inject.go::InjectFromConfig` returns the bare `ErrStoreLocked` (NOT a

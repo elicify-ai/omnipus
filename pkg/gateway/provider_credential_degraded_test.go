@@ -210,7 +210,8 @@ func TestGatewayBoot_OnlyBrokenProviderStillBoots(t *testing.T) {
 // itself, a safe signal to degrade the referencing provider and keep booting.
 // When the ref IS present in the store but fails to decrypt — a wrong or
 // rotated master key, or a corrupted store entry — credentials.Store.Get
-// returns credentials.ErrWrongKey, not a *credentials.NotFoundError.
+// returns a *credentials.EntryAuthError, not a *credentials.NotFoundError.
+// (It unwraps to credentials.ErrWrongKey; only *NotFoundError degrades.)
 // UnlockWithKey performs no verification against the stored data, so a stale
 // master.key unlocks cleanly (IsLocked() is false) and EVERY credential in
 // the store is equally unreadable — this is store-wide, exactly like the
@@ -232,8 +233,8 @@ func TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal(t *testing.T) {
 	// nonce/ciphertext are random bytes, not a real seal under fixedHexKey —
 	// GCM tag authentication fails regardless of which key decrypts it,
 	// simulating both "wrong master key" and "corrupted store entry" at once
-	// (Store.Get cannot and does not distinguish the two; both are
-	// ErrWrongKey).
+	// (Store.Get cannot and does not distinguish the two — the tag is one bit
+	// for all causes — and reports both as *EntryAuthError).
 	writeCorruptedCredentialsFile(t, credsPath, ref)
 
 	configPath := filepath.Join(tmpDir, "config.json")
@@ -261,11 +262,18 @@ func TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal(t *testing.T) {
 				"to one provider, and must not be degraded like a simple missing ref",
 		)
 	}
-	// The underlying credentials.ErrWrongKey text must survive into the
-	// returned error so the operator sees the real cause, not a generic
-	// "injection failed".
-	if !strings.Contains(err.Error(), "wrong master key") {
-		t.Errorf("error must surface the ErrWrongKey cause (\"wrong master key\"); got: %q", err.Error())
+	// The decrypt failure's own text must survive into the returned error so
+	// the operator sees the real cause, not a generic "injection failed". The
+	// store now carries this as a *credentials.EntryAuthError, which names the
+	// entry and lists the causes (edited, moved from another entry, or a
+	// different master key) rather than asserting the key as the only one —
+	// it still unwraps to ErrWrongKey, so the fatal classification below is
+	// unchanged.
+	if !strings.Contains(err.Error(), "failed authentication") {
+		t.Errorf("error must surface the entry-authentication cause; got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "master key") {
+		t.Errorf("error must name a wrong/different master key among the causes; got: %q", err.Error())
 	}
 	if !strings.Contains(err.Error(), ref) {
 		t.Errorf("error must mention the failing ref %s; got: %q", ref, err.Error())
