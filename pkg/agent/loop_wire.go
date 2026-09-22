@@ -890,12 +890,19 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// Task-mode recursion bound: reject a task_create issued from within a
-		// task run whose delegation generation already sits at the ceiling. The
-		// per-agent depth gate cannot bound task mode on its own because every
-		// task run starts a fresh turn at depth 0 (see processTaskDirect depth
-		// seeding); this hard ceiling closes that gap.
-		taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+		// Task-mode recursion bound (ADR-091 D9): reject a task_create issued
+		// from within a task run whose delegation generation already sits at the
+		// ceiling. The per-agent depth gate cannot bound task mode on its own
+		// because every task run starts a fresh turn at depth 0 (see
+		// processTaskDirect depth seeding). Route the ceiling through the SAME
+		// single limit surface as every other reader — resolveEffectiveDelegationDepth
+		// over performance.max_delegation_depth, with the safety-backstop default
+		// when the key is unset — never a separate hardcoded constant.
+		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
+		if depthErr != nil {
+			configuredDepthCap = 0
+		}
+		taskCreate.SetMaxDelegationDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
 		// Founder decision 2026-09-15: refuse assigning a task to an agent
 		// that cannot finish it (task_assignee_readiness.go).
 		taskCreate.SetAssigneeReadinessChecker(rw.rs.al.TaskAssigneeCannotFinish)

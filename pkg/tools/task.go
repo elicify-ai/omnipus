@@ -513,7 +513,10 @@ func (t *TaskCreateTool) SetHome(home string) {
 
 // SetMaxDelegationDepth installs the hard task-mode recursion bound. A
 // task_create issued from within a task run whose stored DelegationDepth is
-// already >= the bound is rejected. The agent loop passes agent.maxTaskDepth (10).
+// already >= the bound is rejected. The agent loop resolves the bound from
+// performance.max_delegation_depth through resolveEffectiveDelegationDepth
+// (ADR-091 D9's single limit surface), so an unset key yields the backstop
+// default rather than a hardcoded constant.
 func (t *TaskCreateTool) SetMaxDelegationDepth(bound int) {
 	t.maxDelegationDepth = bound
 }

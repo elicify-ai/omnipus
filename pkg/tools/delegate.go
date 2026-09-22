@@ -21,9 +21,9 @@ import (
 // single, unified delegation tool. It replaces the formerly-separate `spawn`,
 // `run_subagent`, and `check_spawn_status` tools with one tool and one schema.
 //
-// FR-D2 (the bug this merge exists to fix): before this merge, `spawn` called
-// SubTurnSpawner.SpawnSubTurn directly in a goroutine, entirely bypassing the
-// legacy SubagentManager.tasks map that `check_spawn_status` read from —
+// FR-D2 (the bug this merge exists to fix): before this merge, `spawn` ran the
+// child turn directly in a goroutine, entirely bypassing the legacy
+// SubagentManager.tasks map that `check_spawn_status` read from —
 // checking on a spawn-created task always reported "no subagents have been
 // spawned yet." DelegateTool's own `tasks` map is now the SINGLE state store
 // both the run path writes to and `action: "status"` reads from — no
@@ -129,11 +129,10 @@ type DelegateTaskState struct {
 type delegateSessionIDCtxKey struct{}
 
 // WithDelegateSessionID returns a child context carrying the durable
-// ADR-053 session_id for the turn currently executing. Set by
-// pkg/agent/subturn.go's spawnSubTurn on the child's own turn context, so a
-// child's OWN tool calls (message_parent, and any future session-aware
-// tool) can resolve their own durable identity without conflating it with
-// the shared transcript session id.
+// ADR-053 session_id for the turn currently executing. Carried on the child's
+// own turn context, so a child's OWN tool calls (message_parent, and any
+// future session-aware tool) can resolve their own durable identity without
+// conflating it with the shared transcript session id.
 func WithDelegateSessionID(ctx context.Context, id string) context.Context {
 	if id == "" {
 		return ctx
@@ -222,7 +221,7 @@ type ToolCallProgressSnapshot struct {
 // Implemented by *agent.AgentLoop (ToolCallProgressForSession, turn.go) and
 // wired via SetProgressReader at DelegateTool construction time (loop.go),
 // mirroring every other tools<->agent seam this tool already has
-// (SubTurnSpawner, DelegateAgentRegistry, DelegateSessionStore) to avoid a
+// (the steer.SessionLauncher seam, DelegateAgentRegistry, DelegateSessionStore) to avoid a
 // tools<->agent import cycle: pkg/agent already imports pkg/tools, so the
 // dependency can only run tools->agent as an interface, never the reverse as
 // a concrete type.

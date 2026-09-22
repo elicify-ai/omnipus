@@ -242,7 +242,7 @@ Rule: a package needing a change in a file it does not own **requests it from th
 
 ## 6. Boundary inventory (the one list every spec references)
 
-Twelve places can publish something a human would see. Each calls the injected `steer.AudienceResolver`, then `steer.BoundaryObserver.Observe`, and nothing else decides; each has one containment test and one control in WP-B; `RecordingOutbound` implements the observer and wraps each sink.
+Eleven places can publish something a human would see. Each calls the injected `steer.AudienceResolver`, then `steer.BoundaryObserver.Observe`, and nothing else decides; each has one containment test and one control in WP-B; `RecordingOutbound` implements the observer and wraps each sink. *(Amendment, round 4: the delegate-lifecycle notice is no longer a user-facing publication — it is delivered upward through the I-5 operation as an `error` (`fatal: false`) inbox entry, so the publication-boundary inventory is eleven, not twelve.)*
 
 | # | Boundary | Site |
 |---|---|---|
@@ -256,8 +256,9 @@ Twelve places can publish something a human would see. Each calls the injected `
 | 8 | Agent-requested messages | `tools/message.go` — a steered session may target only its own session's conversation (founder decision, round 8) |
 | 9 | Task result notification | `task_executor_judge.go::notifySourceChannel` |
 | 10 | Typed error frames | the `LLMError` family (`code: delegated_task_limit`, #805) |
-| 11 | Delegate-lifecycle notices | `subturn_result.go::emitSubTurnIterationLimitNotice` — becomes an `error` (`fatal: false`) inbox entry, never a root-transcript write |
-| 12 | Question cards | `askuser/registry.go` — a steered session's question is relayed to its steering session, never broadcast as the parent's own |
+| 11 | Question cards | `askuser/registry.go` — a steered session's question is relayed to its steering session, never broadcast as the parent's own |
+
+*(Former boundary 11, delegate-lifecycle notices, is delivered upward as an `error` (`fatal: false`) inbox entry through the I-5 operation — see §2 I-5's "max-iterations lifecycle notice" row — and is not a user-facing publication.)*
 
 ## 7. Delivery lanes and model casting (founder decision, 2026-09-22)
 

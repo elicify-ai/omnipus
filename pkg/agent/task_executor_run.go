@@ -125,7 +125,8 @@ func (te *TaskExecutor) runTask(
 	// it back to seed the root turnState depth (so the per-agent depth gate trips
 	// inside the run) and to stamp any nested task_create as generation + 1. This
 	// is what bounds an A→B→A task-mode delegation chain — without it every task
-	// run starts at depth 0 and the gate never trips (see maxTaskDepth).
+	// run starts at depth 0 and the gate never trips (see taskCreate's
+	// SetMaxDelegationDepth bound, resolved from performance.max_delegation_depth).
 	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
 	// review r2 Chunk 1: mark this turn as THIS task's own executor run so
 	// TaskUpdateTool refuses any status write on it and goal_claim accepts

@@ -22,6 +22,16 @@ const fr001RemovedKeysMsg = "config error: agents.defaults.restrict_to_workspace
 	"(under the agents.defaults object) and use cfg.Tools.AllowReadPaths and " +
 	"cfg.Tools.AllowWritePaths regex arrays for path-specific allow-listing"
 
+// subturnRemovedKeysMsg is the ADR-091 D9 fold rejection: the old
+// agents.defaults.subturn block (max_depth / default_timeout_minutes) was
+// MOVED, not silently dropped, to performance.max_delegation_depth /
+// performance.delegation_timeout_minutes. A config that still carries the old
+// block is refused rather than loaded with the operator's customized values
+// discarded (the same treatment the retired `await` mode already gets).
+const subturnRemovedKeysMsg = "config error: agents.defaults.subturn has been removed; " +
+	"replace agents.defaults.subturn.max_depth with performance.max_delegation_depth and " +
+	"agents.defaults.subturn.default_timeout_minutes with performance.delegation_timeout_minutes"
+
 // validateRemovedKeys parses raw JSON bytes and returns an error if the config
 // contains either of the two keys removed by. The check fires for ANY
 // value (true, false, null) — key presence is sufficient. Callers must invoke
@@ -57,6 +67,9 @@ func validateRemovedKeys(data []byte) error {
 			}
 			if delegationPolicyContainsAwait(defaults["delegation_policy"]) {
 				return errors.New(`config error: delegation mode "await" has been removed; delete it from delegation_policy.modes`)
+			}
+			if _, hasSubTurn := defaults["subturn"]; hasSubTurn {
+				return errors.New(subturnRemovedKeysMsg)
 			}
 		}
 	}
