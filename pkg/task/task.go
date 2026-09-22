@@ -448,7 +448,8 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// task executor seeds the run's root turnState depth from this value so the
 	// per-workspace delegation-graph edge's depth gate (and the global subturn
 	// ceiling) bounds onward delegation, and task_create rejects a create that
-	// would exceed maxTaskDepth. This is an internal recursion-bound counter —
+	// would exceed its resolved delegation-depth bound (ADR-091 D9). This is an
+	// internal recursion-bound counter —
 	// it is NOT part of the gen.Task wire contract and never crosses the
 	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`

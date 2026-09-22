@@ -20,10 +20,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-const (
-	maxTaskDepth = 10
-)
-
 // ErrDispatchCapReached is returned by StartTaskNow when the global dispatch
 // semaphore is exhausted. Callers (e.g. the REST handler) use errors.Is to
 // distinguish this retryable condition from hard failures.
