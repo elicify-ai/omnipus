@@ -24,6 +24,66 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func readMessageStatusFrames(t *testing.T, wc *wsConn, count int) []generated.MessageStatusFrame {
+	t.Helper()
+	frames := make([]generated.MessageStatusFrame, 0, count)
+	for len(frames) < count {
+		select {
+		case raw := <-wc.sendCh:
+			var envelope struct {
+				Type string `json:"type"`
+			}
+			require.NoError(t, json.Unmarshal(raw, &envelope))
+			if envelope.Type != string(generated.WsFrameTypeMessageStatus) {
+				continue
+			}
+			var frame generated.MessageStatusFrame
+			require.NoError(t, json.Unmarshal(raw, &frame))
+			frames = append(frames, frame)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for %d message_status frames; got %d", count, len(frames))
+		}
+	}
+	return frames
+}
+
+func TestHandleChatMessage_AcknowledgesPersistenceBeforeTurnStart(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	handler, _ := newTestWSHandlerForModelName(t, msgBus)
+	wc := makeTestConn()
+
+	handler.handleChatMessageWithClientID(
+		context.Background(), "chat-message-status", "", "hello", "", nil,
+		"", "", false, "client-message-1", wc,
+	)
+
+	frames := readMessageStatusFrames(t, wc, 1)
+	require.Equal(t, "received", frames[0].State)
+	_, ok := handler.GetStreamer(context.Background(), "webchat", "chat-message-status", frames[0].SessionId)
+	require.True(t, ok)
+	frames = append(frames, readMessageStatusFrames(t, wc, 1)...)
+	require.Equal(t, []string{"received", "working"}, []string{frames[0].State, frames[1].State})
+	for _, frame := range frames {
+		assert.Equal(t, "client-message-1", frame.ClientMessageId)
+		assert.NotEmpty(t, frame.SessionId)
+	}
+}
+
+func TestHandleChatMessage_PublishFailureMarksClientMessageFailed(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	handler, _ := newTestWSHandlerForModelName(t, msgBus)
+	msgBus.Close()
+	wc := makeTestConn()
+
+	handler.handleChatMessageWithClientID(
+		context.Background(), "chat-message-status-failed", "", "hello", "", nil,
+		"", "", false, "client-message-failed", wc,
+	)
+
+	frames := readMessageStatusFrames(t, wc, 2)
+	require.Equal(t, []string{"received", "failed"}, []string{frames[0].State, frames[1].State})
+}
+
 // --- moved from websocket.go tests 2026-09-15 ---
 
 // TestHandleChatMessage_UnknownWorkspaceID_DropsBinding proves the M4 fix: a

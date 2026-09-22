@@ -134,13 +134,8 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     test.setTimeout(420_000)
     const before = await startLongTurn(page)
 
-    // THE OUTAGE HAS TO ACTUALLY LAST, or the banner correctly never renders.
-    //
-    // ChatScreen gates this banner on useSettledFlag(..., 2000): a disconnect
-    // must PERSIST 2s before anything is drawn, deliberately, so a blip the
-    // user would never have noticed does not flash an alarm at them. Its own
-    // comment says so — "only the rendering waits", reconnect still fires
-    // instantly.
+    // THE OUTAGE HAS TO ACTUALLY LAST: #823 keeps drops under 15 seconds quiet,
+    // then adds a calm continuation line to the interrupted assistant answer.
     //
     // This test used to call context.setOffline(true) and expect the banner
     // within 10s. setOffline emulates network conditions over CDP; it does
@@ -162,20 +157,23 @@ test.describe('reconnect mid-turn (ADR-082)', () => {
     // is untouched — only the redials fail, exactly as a real outage behaves.
     //
     // Nothing is softened. Every assertion still runs the real path: a real
-    // close, real reconnect scheduling with real failures, the real banner on
-    // its real debounce, and real catch-up of a turn that kept running
+    // close, real reconnect scheduling with real failures, the real delayed
+    // answer state, and real catch-up of a turn that kept running
     // server-side the whole time.
     await page.routeWebSocket(/\/api\/v1\/chat\/ws/, (ws) => ws.close())
     await context.setOffline(true)
     await page.evaluate(() => window.dispatchEvent(new Event('offline')))
-    await expect(page.getByTestId('reconnect-banner')).toBeVisible({ timeout: 20_000 })
+    await expect(page.getByTestId('assistant-connection-status')).toContainText(
+      'is still working on this — the rest appears when you\'re connected again.',
+      { timeout: 20_000 },
+    )
 
-    // Hold the outage open past the debounce, then let the network back.
-    await page.waitForTimeout(5_000)
+    // Let the network back after the delayed state is genuinely visible.
     await page.unrouteAll({ behavior: 'ignoreErrors' })
     await context.setOffline(false)
     await page.evaluate(() => window.dispatchEvent(new Event('online')))
-    await expect(page.getByTestId('reconnect-banner')).not.toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('connection-status-line')).toHaveText('Up to date', { timeout: 30_000 })
+    await expect(page.getByTestId('connection-status-line')).not.toBeVisible({ timeout: 5_000 })
 
     await waitTurnDone(page)
     await expect(assistantMessages(page)).toHaveCount(1, { timeout: 30_000 })

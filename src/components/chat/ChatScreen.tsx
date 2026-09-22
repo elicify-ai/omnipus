@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { useSettledFlag } from '@/hooks/useSettledFlag'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -25,9 +24,6 @@ import {
   ListChecks,
   Plus,
   File,
-  WifiSlash,
-  ArrowClockwise,
-  Clock,
   Lightning,
 } from '@phosphor-icons/react'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
@@ -54,7 +50,7 @@ import { Button } from '@/components/ui/button'
 import { IconButton } from '@/components/ui/icon-button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useChatStore } from '@/store/chat'
-import type { ChatMessage, PositionedToolCall, SubagentSpan } from '@/store/chat'
+import type { ChatMessage, PositionedToolCall, QueuedOutboundMessage, SubagentSpan } from '@/store/chat'
 import type { MessagePartStatus } from '@assistant-ui/react'
 import { splitMessageParts } from '@/lib/messageParts'
 import { useConnectionStore } from '@/store/connection'
@@ -78,6 +74,11 @@ import { ChatImage } from './ChatImage'
 import { useSlashMenu, SECTION_CAP } from '@/hooks/useSlashMenu'
 import { useFileUpload } from '@/hooks/useFileUpload'
 import { useCancelState } from '@/hooks/useCancelState'
+import {
+  AssistantMessageConnectionStatus,
+  ChatConnectionNotice,
+  UserMessageDeliveryStatus,
+} from './ConnectionStatus'
 
 // ── Skill-aware message content renderer (R2/F1/F7/F9) ───────────────────────
 
@@ -173,6 +174,8 @@ export function commandLabelsWithAliases(commands: SlashCommand[]): string[] {
 // here: see ChatScreen.goalCommandMarker.live.test.tsx.
 export function UserMessage() {
   const message = useMessage()
+  const storeMessage = useChatStore((state) => state.messagesById[message.id])
+  const activeAgentId = useSessionStore((state) => state.activeAgentId)
   const { data: skills = [] } = useQuery<Skill[]>({
     queryKey: ['skills'],
     queryFn: () => fetchSkills(),
@@ -183,6 +186,8 @@ export function UserMessage() {
     queryFn: () => fetchCommands('web'),
     staleTime: 60_000,
   })
+  const { data: agents = [] } = useQuery({ queryKey: ['agents'], queryFn: fetchAgents })
+  const agentName = agents.find((agent) => agent.id === activeAgentId)?.name ?? 'Omnipus'
 
   const content = (() => {
     const parts = message.content
@@ -223,6 +228,14 @@ export function UserMessage() {
             </MessagePrimitive.Parts>
           </div>
         ))}
+        {storeMessage?.deliveryStatus && storeMessage.deliveryStatus !== 'sending' && (
+          <UserMessageDeliveryStatus
+            state={storeMessage.deliveryStatus}
+            agentName={agentName}
+            latest
+            onRetry={() => useChatStore.getState().sendMessage(storeMessage.content)}
+          />
+        )}
       </div>
     </MessagePrimitive.Root>
   )
@@ -1017,35 +1030,6 @@ function InterruptedMessageMarkers() {
 // Render ChatMessage from props (no AssistantUI context) for use by the virtualizer.
 
 /** Inline retry button for user messages that failed to send (#253b). */
-function UserMessageRetryButton({ message }: { message: ChatMessage }) {
-  const sendMessage = useChatStore((s) => s.sendMessage)
-  const isStreaming = useChatStore((s) => s.isStreaming)
-
-  if (message.status !== 'error' || isStreaming) return null
-
-  function handleRetry() {
-    // #253(c): resend the original user message content.
-    sendMessage(message.content)
-  }
-
-  return (
-    <div className="flex items-center justify-end gap-[var(--space-2)] mt-[var(--space-1)]">
-      <span className="text-[length:var(--type-caption-size)] text-[var(--color-error)]">Send failed</span>
-      <Button
-        variant="ghost"
-        data-testid="user-message-retry"
-        onClick={handleRetry}
-        aria-label="Retry — resend this message"
-        className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded font-[var(--font-weight-regular)] text-[length:var(--type-caption-size)] text-[var(--color-error)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
-        title="Retry — resend this message"
-      >
-        <ArrowCounterClockwise size={11} />
-        <span>Retry</span>
-      </Button>
-    </div>
-  )
-}
-
 /** Standalone user message row for the virtualizer. */
 // useSkillChipData fetches the skills + web commands ONCE per message list (not
 // per row) for the R2 skill-chip detection. Cache hits are free (staleTime 60s).
@@ -1072,12 +1056,15 @@ export function VirtualUserMessageRow({
   message,
   skills,
   commandLabels,
+  agentName = 'Omnipus',
+  latest = false,
 }: {
   message: ChatMessage
   skills: Skill[]
   commandLabels: string[]
+  agentName?: string
+  latest?: boolean
 }) {
-  const isError = message.status === 'error'
   // See UserMessage above — the virtualized row is the other half of the same
   // rendering and must carry the same goal marker, or the trace would appear
   // and disappear depending on which path renders the thread. Both paths are
@@ -1120,19 +1107,20 @@ export function VirtualUserMessageRow({
             skills,
             commandLabels,
             () => (
-              <div className={cn(
-                "rounded-xl px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed rounded-tr-sm",
-                isError
-                  ? "bg-[var(--color-error)]/10 border border-[var(--color-error)]/30 text-[var(--color-secondary)]"
-                  : "bg-[var(--color-surface-2)] text-[var(--color-secondary)]"
-              )}>
+              <div className="rounded-xl rounded-tr-sm bg-[var(--color-surface-2)] px-[var(--space-3)] py-[var(--space-2-5)] text-[length:var(--type-body-compact-size)] leading-relaxed text-[var(--color-secondary)]">
                 <p className="whitespace-pre-wrap break-words">{message.content}</p>
               </div>
             ),
           )
         )}
-        {/* #253(b): show error + Retry when message failed to send */}
-        <UserMessageRetryButton message={message} />
+        {message.deliveryStatus && message.deliveryStatus !== 'sending' && (
+          <UserMessageDeliveryStatus
+            state={message.deliveryStatus}
+            agentName={agentName}
+            latest={latest}
+            onRetry={() => useChatStore.getState().sendMessage(message.content)}
+          />
+        )}
       </div>
     </div>
   )
@@ -1616,17 +1604,19 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
             replay sessions show the same model footer as the live
             AssistantUI render. */}
         {message.role === 'assistant' && <ModelFooter model={message.model} />}
+        <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
       </div>
     </div>
   )
 })
 
 /** Plain (non-virtualized) message list — fallback when ResizeObserver is unavailable. */
-function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; liteMode: boolean }) {
+function PlainMessageList({ messages, liteMode, agentName }: { messages: ChatMessage[]; liteMode: boolean; agentName: string }) {
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default,
   // verbose-only inline) — same store read as every other verbose-gated row.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
   return (
     <div
       data-testid="virtualized-message-list"
@@ -1650,6 +1640,8 @@ function PlainMessageList({ messages, liteMode }: { messages: ChatMessage[]; lit
                 message={msg}
                 skills={skills}
                 commandLabels={commandLabels}
+                agentName={agentName}
+                latest={msg.id === latestUserMessageId}
               />
             )
           if (msg.role === 'system') return <VirtualSystemMessageRow key={msg.id} message={msg} />
@@ -1669,9 +1661,11 @@ let _resizeObserverWarnEmitted = false
 function VirtualizedMessageList({
   messages,
   liteMode,
+  agentName,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
+  agentName: string
 }) {
   // Feature-detect ResizeObserver at render time (not module load) so test
   // environments that stub it in beforeEach are detected correctly.
@@ -1682,9 +1676,9 @@ function VirtualizedMessageList({
       _resizeObserverWarnEmitted = true
       console.warn('[chat] ResizeObserver unavailable — rendering full message list without virtualization')
     }
-    return <PlainMessageList messages={messages} liteMode={liteMode} />
+    return <PlainMessageList messages={messages} liteMode={liteMode} agentName={agentName} />
   }
-  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} />
+  return <VirtualizedMessageListInner messages={messages} liteMode={liteMode} agentName={agentName} />
 }
 
 /**
@@ -1738,9 +1732,11 @@ function VirtualizerAutoFollow({
 function VirtualizedMessageListInner({
   messages,
   liteMode,
+  agentName,
 }: {
   messages: ChatMessage[]
   liteMode: boolean
+  agentName: string
 }) {
   const isStreaming = useChatStore((s) => s.isStreaming)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
@@ -1748,6 +1744,7 @@ function VirtualizedMessageListInner({
   const { skills, commandLabels } = useSkillChipData()
   // ADR-049 SD-C10: judge-verdict thread visibility (panel-only by default, verbose-only inline).
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  const latestUserMessageId = [...messages].reverse().find((message) => message.role === 'user')?.id
 
   // Separate the live streaming message from completed history.
   const hasStreamingMessage = isStreaming && messages.length > 0 && messages[messages.length - 1]?.isStreaming
@@ -1770,7 +1767,7 @@ function VirtualizedMessageListInner({
       return <JudgeVerdictThreadCard verdict={msg.verdict} />
     }
     if (msg.role === 'user')
-      return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} />
+      return <VirtualUserMessageRow message={msg} skills={skills} commandLabels={commandLabels} agentName={agentName} latest={msg.id === latestUserMessageId} />
     if (msg.role === 'system') return <VirtualSystemMessageRow message={msg} />
     return <VirtualAssistantMessageRow message={msg} liteMode={liteMode} />
   }
@@ -2028,6 +2025,7 @@ function AssistantMessage() {
         {statusSuffix && (
           <span className="text-[length:var(--type-caption-size)] text-[var(--color-muted)] italic px-[var(--space-1)]">{statusSuffix}</span>
         )}
+        <AssistantMessageConnectionStatus messageId={message.id} agentName={agentDisplayName ?? 'Omnipus'} />
       </div>
     </MessagePrimitive.Root>
   )
@@ -2087,30 +2085,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
   const isReplaying = useChatStore((s) => s.isReplaying)
   const isConnected = useConnectionStore((s) => s.isConnected)
   const reconnectPhase = useConnectionStore((s) => s.reconnectPhase)
-  const reconnectAttempt = useConnectionStore((s) => s.reconnectAttempt)
-  const reconnect = useConnectionStore((s) => s.reconnect)
-  // Operator report 2026-07-31: a red "Disconnected" banner flashed top-left
-  // for a split second whenever the socket blipped and immediately recovered.
-  // The drop is real (the gateway logs 1006 abnormal closures on the
-  // Batam<->Frankfurt path) but a self-healing sub-second reconnect is not
-  // actionable, and an error-coloured banner for it reads as a fault. Gate
-  // BOTH transient banners — the amber "Reconnecting…" and the red
-  // reconnectPhase===null limbo one — on the disconnect having actually
-  // persisted. Reconnect logic itself is untouched and still fires instantly;
-  // only the rendering waits. A genuine outage still surfaces after 2s, and
-  // the terminal "gave_up" banner below is deliberately NOT gated — that one
-  // is already late by construction and always needs to be seen.
-  const showTransientDisconnect = useSettledFlag(
-    !isConnected || reconnectPhase === 'reconnecting' || reconnectPhase === 'slow',
-    2000,
-  )
-  const outboundQueue = useChatStore((s) => s.outboundQueue)
-  // BUG FIX (2026-07): messages moved out of outboundQueue by drainOutboundQueue
-  // are sent one at a time (see maybeDrainNext in store/chat.ts) rather than all
-  // at once, so a still-draining batch must keep counting here — otherwise this
-  // banner would drop to 0 the instant reconnect fires even though several
-  // messages are still waiting for their turn to go out.
-  const pendingDrainQueue = useChatStore((s) => s.pendingDrainQueue)
   const cancelStream = useChatStore((s) => s.cancelStream)
   const appendMessage = useChatStore((s) => s.appendMessage)
   const activeAgentId = useSessionStore((s) => s.activeAgentId)
@@ -2550,84 +2524,6 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
         </div>
       )}
 
-      {/* Fix 2: multi-phase reconnect banner.
-          gave_up   → error banner with "Reconnect now" CTA (input locked).
-          reconnecting/slow → amber pulsing indicator with attempt counter.
-          null (connected) → nothing shown. */}
-      {reconnectPhase === 'gave_up' && (
-        <div
-          data-testid="reconnect-banner"
-          className="mb-[var(--space-2)] rounded-lg px-[var(--space-2-5)] py-[var(--space-2)] bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 flex items-center gap-[var(--space-2)]"
-        >
-          <WifiSlash size={14} className="text-[var(--color-error)] shrink-0" />
-          <span className="text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex-1">
-            Connection lost after all retry attempts.
-          </span>
-          <Button
-            variant="ghost"
-            onClick={reconnect}
-            className="h-auto gap-[var(--space-1)] px-[var(--space-2)] py-[var(--space-1)] rounded text-[length:var(--type-utility-xs-size)] font-medium bg-[var(--color-error)]/20 text-[var(--color-error)] hover:bg-[var(--color-error)]/30 hover:text-[var(--color-error)] shrink-0"
-            aria-label="Reconnect now"
-          >
-            <ArrowClockwise size={12} weight="bold" />
-            Reconnect now
-          </Button>
-        </div>
-      )}
-      {showTransientDisconnect && (reconnectPhase === 'reconnecting' || reconnectPhase === 'slow') && (
-        <div
-          data-testid="reconnect-banner"
-          className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]"
-        >
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] inline-block animate-pulse" />
-          {reconnectPhase === 'slow'
-            ? `Reconnecting… (attempt ${reconnectAttempt} — slow retry)`
-            : `Reconnecting… (attempt ${reconnectAttempt})`}
-        </div>
-      )}
-      {showTransientDisconnect && !isConnected && reconnectPhase === null && (
-        <div data-testid="reconnect-banner" className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-error)] flex items-center gap-[var(--space-1)]">
-          <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-error)] inline-block" />
-          Disconnected — reconnecting...
-        </div>
-      )}
-      {/* Fix 3: outbound queue indicator — shown while messages are buffered
-          (outboundQueue, while offline) or actively being drained one at a
-          time after reconnect (pendingDrainQueue — see maybeDrainNext in
-          store/chat.ts). Without the pendingDrainQueue branch this banner
-          would disappear the instant reconnect fires even though several
-          messages are still waiting for their turn to go out.
-          Task 4 fix: on a flaky connection both arrays can be simultaneously
-          non-empty (e.g. some messages bounced back to outboundQueue on a
-          mid-drain disconnect while others are still parked in
-          pendingDrainQueue — see the chat.ts store's own doc comments on
-          drainOutboundQueue/maybeDrainNext). The previous if/else only ever
-          showed ONE of the two counts, undercounting the true total still
-          queued. Sum both counts whenever both are non-empty. */}
-      {(outboundQueue.length > 0 || pendingDrainQueue.length > 0) && (
-        <div
-          data-testid="outbound-queue-indicator"
-          className="mb-[var(--space-2)] text-[length:var(--type-utility-xs-size)] text-[var(--color-warning)] flex items-center gap-[var(--space-1)]"
-        >
-          <Clock size={12} className="shrink-0" />
-          {(() => {
-            const total = outboundQueue.length + pendingDrainQueue.length
-            if (outboundQueue.length > 0 && pendingDrainQueue.length > 0) {
-              return total === 1
-                ? '1 message queued — will send on reconnect'
-                : `${total} messages queued — will send on reconnect`
-            }
-            if (outboundQueue.length > 0) {
-              return outboundQueue.length === 1
-                ? '1 message queued — will send on reconnect'
-                : `${outboundQueue.length} messages queued — will send on reconnect`
-            }
-            return pendingDrainQueue.length === 1
-              ? '1 queued message sending…'
-              : `${pendingDrainQueue.length} queued messages sending…`
-          })()}
-        </div>
-      )}
 
       {/* Slash command + skills + "@" agent-mention partitioned dropdown
           (FR-005). One container/list renders three different sections
@@ -3331,6 +3227,24 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   // the status read below) is then looked up via `messagesById[id]` — the same
   // O(1)-lookup idiom AssistantMessage/SubagentSpansRenderer use.
   const messages = useChatStore((s) => s.messages)
+  const outboundQueue = useChatStore((s) => s.outboundQueue)
+  const pendingDrainQueue = useChatStore((s) => s.pendingDrainQueue)
+  const queuedMessages = useMemo(() => {
+    const existingIds = new Set(messages.map((message) => message.id))
+    return [...pendingDrainQueue, ...outboundQueue]
+      .filter((item): item is QueuedOutboundMessage => typeof item !== 'string' && !existingIds.has(item.id))
+      .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+      .map((item): ChatMessage => ({
+        id: item.id,
+        session_id: activeSessionId ?? undefined,
+        role: 'user',
+        content: item.content,
+        timestamp: item.timestamp,
+        status: 'done',
+        deliveryStatus: 'queued',
+      }))
+  }, [activeSessionId, messages, outboundQueue, pendingDrainQueue])
+  const displayMessages = useMemo(() => [...messages, ...queuedMessages], [messages, queuedMessages])
   const lastAssistantMessageId = useChatStore((s) => s.lastAssistantMessageId)
   const lastAssistantMessage = useChatStore((s) =>
     lastAssistantMessageId === null
@@ -3497,12 +3411,12 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           </div>
 
           {/* Virtualized message list — only visible rows (+ 5-message overscan) are mounted as DOM nodes. */}
-          {messages.length === 0 ? (
+          {displayMessages.length === 0 ? (
             <div className="flex-1 overflow-y-auto pt-[var(--space-3)] pb-[var(--space-2)]">
               <WelcomeState hasAgent={!!activeAgentId} />
             </div>
           ) : (
-            <VirtualizedMessageList messages={messages} liteMode={liteMode} />
+            <VirtualizedMessageList messages={displayMessages} liteMode={liteMode} agentName={activeAgentName} />
           )}
 
           {/* FR-21: Interrupted-message status markers — rendered inside
@@ -3511,6 +3425,8 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
               non-scrolling flex layout between the Viewport and the composer.
               Playwright locates these elements via text=(interrupted). */}
           <InterruptedMessageMarkers />
+
+          <ChatConnectionNotice />
 
           {/* Rate-limit indicator — shown above composer. Tool-approval requests
               (including `bash`) are handled by the global ToolApprovalModal

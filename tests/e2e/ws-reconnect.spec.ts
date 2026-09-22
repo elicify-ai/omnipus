@@ -1,11 +1,10 @@
 /**
  * ws-reconnect.spec.ts — T1.12 + T1.13
  *
- * T1.12: visibilitychange_triggers_reconnect_with_persistent_banner
+ * T1.12: visibilitychange_triggers_reconnect_without_short-drop_noise
  *   Kill the WS by evaluating WebSocket close in the browser.
  *   Dispatch document visibilitychange (hidden → visible).
- *   Assert: reconnect banner is visible and persistent (not a transient toast
- *   that auto-dismisses within 5 s).
+ *   Assert: a short drop stays visually quiet while reconnect continues.
  *   Restore the connection (re-enable the route).
  *   Assert: banner clears once connected.
  *
@@ -27,7 +26,7 @@ import { test } from './fixtures/console-errors'
 // ── T1.12: visibilitychange triggers reconnect with persistent banner ─────────
 
 test(
-  'visibilitychange_triggers_reconnect_with_persistent_banner',
+  'visibilitychange_triggers_reconnect_without_short_drop_noise',
   async ({ page }) => {
     // Navigate to the chat screen and wait for initial connection.
     await page.goto('/')
@@ -40,10 +39,10 @@ test(
     // the composer is also enabled while reconnectPhase is 'reconnecting' or
     // 'slow', so it can look ready immediately after page load even during a
     // transient first-connect blip. Confirm genuine connectivity — via the
-    // absence of the SAME reconnect-banner this test asserts on below — so
+    // absence of a connection-status line — so
     // the WebSocket-stubbing steps that follow start from a real, stable
     // connection rather than a mid-reconnect one.
-    await expect(page.getByTestId('reconnect-banner')).toBeHidden({ timeout: 15_000 })
+    await expect(page.getByTestId('connection-status-line')).toBeHidden({ timeout: 15_000 })
 
     // Step 1a: Stub the WebSocket constructor so any reconnect attempt
     // produces a never-opens socket. page.route() does NOT intercept
@@ -114,26 +113,11 @@ test(
       document.dispatchEvent(new Event('visibilitychange'))
     })
 
-    // Step 3: Assert the reconnect banner is visible.
-    // The banner is a persistent UI element (not a transient toast) anchored by
-    // data-testid="reconnect-banner" in ChatScreen.tsx. It stays visible while
-    // the WS is disconnected and clears once the connection is restored.
-    const reconnectBanner = page.getByTestId('reconnect-banner').first()
-
-    // Wait up to 8 s for the banner to appear
-    await expect(
-      reconnectBanner,
-      'reconnect banner must be visible while the WS is disconnected',
-    ).toBeVisible({ timeout: 8_000 })
-
-    // Step 4: Wait 5 s (the typical auto-dismiss window for toasts) and assert
-    // the banner is STILL visible — confirming it is persistent, not transient.
+    // Step 3: #823 deliberately keeps drops shorter than 15 seconds quiet.
+    const connectionStatus = page.getByTestId('connection-status-line')
+    await expect(connectionStatus).toBeHidden()
     await page.waitForTimeout(5_500)
-
-    await expect(
-      reconnectBanner,
-      'reconnect banner must remain visible after 5 s — it must not auto-dismiss',
-    ).toBeVisible()
+    await expect(connectionStatus).toBeHidden()
 
     // Step 5: Restore the real WebSocket constructor and force the in-flight
     // stub socket to close so the visibilitychange handler creates a fresh
@@ -154,10 +138,14 @@ test(
       document.dispatchEvent(new Event('visibilitychange'))
     })
     await expect(chatInput).toBeEnabled({ timeout: 20_000 })
+    await expect.poll(async () => page.evaluate(() =>
+      ((window as unknown as { __ws_instances?: WebSocket[] }).__ws_instances ?? [])
+        .some((ws) => ws.readyState === WebSocket.OPEN),
+    ), { timeout: 20_000 }).toBe(true)
 
     // Step 6: Assert the banner clears once the connection is restored.
     await expect(
-      reconnectBanner,
+      connectionStatus,
     ).not.toBeVisible({ timeout: 10_000 })
   },
 )
@@ -177,17 +165,15 @@ test(
     // drops it below, so the subsequent "banner appears / composer stays
     // enabled" assertions measure a real transition rather than racing an
     // already-in-progress reconnect from page load.
-    await expect(page.getByTestId('reconnect-banner')).toBeHidden({ timeout: 15_000 })
+    await expect(page.getByTestId('connection-status-line')).toBeHidden({ timeout: 15_000 })
 
     // Step 1: Set the browser context offline (network unavailable).
     // This will cause the existing WS to disconnect (TCP reset).
     await page.context().setOffline(true)
 
     // Wait briefly for the WS to detect the disconnect and the UI to update.
-    // The reconnect banner (data-testid="reconnect-banner") is the
-    // ground-truth "disconnected" signal — driven by isConnected/
-    // reconnectPhase in the connection store, independent of the composer's
-    // own enabled/disabled state.
+    // Detect the socket close directly. #823 intentionally draws no status
+    // line for a drop shorter than 15 seconds.
     //
     // NOTE (offline send queue, #105): the chat input intentionally does NOT
     // become disabled here (a previous version of this test asserted
@@ -201,10 +187,11 @@ test(
     // it asserts on the banner instead, and additionally pins that the
     // composer stays enabled throughout (a regression that re-disabled it
     // during reconnect would break the queue feature silently).
-    await expect(
-      page.getByTestId('reconnect-banner'),
-      'reconnect banner must appear once the WS disconnects',
-    ).toBeVisible({ timeout: 10_000 })
+    await expect.poll(async () => page.evaluate(() =>
+      ((window as unknown as { __ws_instances?: WebSocket[] }).__ws_instances ?? [])
+        .every((ws) => ws.readyState !== WebSocket.OPEN),
+    ), { timeout: 10_000 }).toBe(true)
+    await expect(page.getByTestId('connection-status-line')).toBeHidden()
     await expect(chatInput, 'composer must stay usable during the reconnect-retry window (#105 offline queue)').toBeEnabled()
 
     // Step 2: Restore network (setOffline=false) to simulate the device coming
@@ -215,14 +202,11 @@ test(
     // Step 3: Assert the connection was restored.
     // When the 'online' event fires the reconnect, ws.ts re-establishes the WS,
     // isConnected flips to true, and the reconnect banner clears.
-    await expect(
-      page.getByTestId('reconnect-banner'),
-      [
-        'Reconnect banner must clear after network is restored via the `online` event.',
-        'If this fails, ws.ts does not listen to `window.addEventListener("online", ...)`,',
-        'or the reconnect triggered by the online event is not completing.',
-      ].join(' '),
-    ).not.toBeVisible({ timeout: 20_000 })
+    await expect.poll(async () => page.evaluate(() =>
+      ((window as unknown as { __ws_instances?: WebSocket[] }).__ws_instances ?? [])
+        .some((ws) => ws.readyState === WebSocket.OPEN),
+    ), { timeout: 20_000 }).toBe(true)
+    await expect(page.getByTestId('connection-status-line')).toBeHidden()
     await expect(chatInput).toBeEnabled()
   },
 )
