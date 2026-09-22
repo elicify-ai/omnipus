@@ -32,6 +32,8 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // persistSubagentEntry writes one ADR-091 D7/I-4 sub-agent lifecycle frame
@@ -239,5 +241,77 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 			logger.WarnCF("agent", "steer: persist subagent_end failed",
 				map[string]any{"session_id": p.SessionID, "error": err.Error()})
 		}
+	}
+}
+
+// deliverGoalVerdictUpward covers ADR-091 FR-B-017 (I-5, AS-12): when the
+// Judge rules a goal's criteria NOT met, the deciding verdict is delivered
+// upward through steer.UpwardDeliverer as a goal_status SessionMessage —
+// direction session_to_parent, condition not_met, one evidence item per
+// judged criterion — the same one upward-delivery operation every other
+// child outcome already goes through (I-5), not just the transcript/
+// live-event pair every Judge verdict already gets regardless of audience
+// (task_executor_judge.go::writeJudgeVerdictTranscript,
+// goal_loop.go::writeGoalVerdictTranscript — this function is the shared
+// body both call).
+//
+// A MET verdict is a deliberate no-op: the handback/final-answer path
+// already covers "goal succeeded" (FR-B-002); a second "all good" card off
+// this call site would be noise, not signal (mirrors
+// TestDeliver_HandbackOnePerChild_Identity's "exactly one entry" contract).
+// sessionID with no steered parent, or with no active /goal record bound to
+// it (activeGoalForSession, GOAL-FR-013's one session-bound lookup for both
+// owner kinds), both no-op silently and are logged at Warn only for the
+// missing-goal-record case — Deliver()'s own edge lookup already covers
+// "no steering parent to deliver to" the same way every other Deliver call
+// site in this package does (best-effort, never fails the caller).
+func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID string, verdict *task.JudgeVerdict) {
+	if verdict == nil || verdict.Met || sessionID == "" {
+		return
+	}
+	deliverer := al.getUpwardDeliverer()
+	if deliverer == nil {
+		return
+	}
+	rec := activeGoalForSession(sessionID)
+	if rec == nil {
+		logger.WarnCF("agent", "goal-status upward delivery skipped — no active goal record bound to this session",
+			map[string]any{"component": "goal", "session_id": sessionID, "verdict_round": verdict.Round})
+		return
+	}
+	evidence := make([]struct {
+		Criterion *string `json:"criterion,omitempty"`
+		Met       *bool   `json:"met,omitempty"`
+		Note      *string `json:"note,omitempty"`
+	}, len(verdict.PerCriterion))
+	for i := range verdict.PerCriterion {
+		c := verdict.PerCriterion[i]
+		evidence[i].Criterion = &c.CriterionID
+		evidence[i].Met = &c.Met
+		evidence[i].Note = &c.Reason
+	}
+	var sm generated.SessionMessage
+	if err := sm.FromSessionMessageGoalStatus(generated.SessionMessageGoalStatus{
+		Kind:            generated.SessionMessageGoalStatusKindGoalStatus,
+		MessageId:       fmt.Sprintf("%s-verdict-%d", rec.GoalID, verdict.Round),
+		SessionId:       sessionID,
+		SenderIdentity:  verdict.JudgeAgentID,
+		CreatedAt:       time.Now().UTC(),
+		Depth:           1,
+		GoalId:          rec.GoalID,
+		Condition:       generated.SessionMessageGoalStatusConditionNotMet,
+		Direction:       generated.SessionMessageGoalStatusDirectionSessionToParent,
+		Evidence:        &evidence,
+		UntrustedOrigin: false,
+	}); err != nil {
+		logger.WarnCF("agent", "goal-status upward delivery skipped — could not encode SessionMessageGoalStatus",
+			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
+		return
+	}
+	if _, err := deliverer.Deliver(ctx, steer.UpwardEvent{
+		ChildSessionID: sessionID, Outcome: steer.OutcomeGoalVerdict, Message: sm,
+	}); err != nil {
+		logger.WarnCF("agent", "goal-status upward delivery failed",
+			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "error": err.Error()})
 	}
 }

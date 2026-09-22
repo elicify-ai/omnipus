@@ -152,6 +152,11 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 	// just the GLOBAL ActivityPanel.
 	te.agentLoop.emitEvent(EventKindJudgeVerdict, EventMeta{Source: "task_executor", AgentID: t.AgentID},
 		JudgeVerdictPayload{SessionID: taskSessionID, Verdict: *verdict})
+
+	// ADR-091 FR-B-017/I-5 (AS-12): a not-met verdict is ALSO delivered
+	// upward as a goal_status SessionMessage — steer_frames.go's shared body,
+	// a no-op for a MET verdict or an unsteered session.
+	te.agentLoop.deliverGoalVerdictUpward(context.Background(), taskSessionID, verdict)
 }
 
 // completeTaskWithResult marks task t terminal — Done when success is true,
