@@ -43,8 +43,13 @@ run_guard_test() {
   cp -R "$REPO_ROOT/cmd" "$test_dir/" 2>/dev/null || true
   cp -R "$REPO_ROOT/src" "$test_dir/" 2>/dev/null || true
 
-  # Apply test modification
-  $modification_func "$test_dir"
+  # Apply the inline function definition and invoke it with the fixture root.
+  # The mutation is passed as shell source, not as the name of an already
+  # defined function, so a plain variable expansion would try to execute the
+  # first token as a command and silently leave the fixture unchanged.
+  local quoted_test_dir
+  printf -v quoted_test_dir '%q' "$test_dir"
+  eval "$modification_func $quoted_test_dir"
 
   # Run the guard in the test directory
   (
