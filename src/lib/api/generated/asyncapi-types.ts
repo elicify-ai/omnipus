@@ -278,6 +278,7 @@ export interface SubagentStartFrame {
   parent_call_id: string;
   task_label: string;
   agent_id?: string;
+  child_session_id?: string;
   producing_session_id?: string;
 }
 
@@ -300,7 +301,7 @@ export interface SubagentMessageFrame {
   session_id: string;
   span_id: string;
   message_id: string;
-  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond";
+  kind: "progress" | "checkpoint" | "artifact" | "blocker" | "question" | "decision_request" | "error" | "handback" | "steer" | "respond" | "goal_status";
   text?: string;
   pct?: number;
   correlation_id?: string;

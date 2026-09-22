@@ -937,8 +937,11 @@ type SubagentMessageFrame struct {
 
 // SubagentStartFrame — Server → client subagent span opened (FR-H-004). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key, so producing_session_id would equal session_id and is therefore absent (FR-013's "iff it differs").
 type SubagentStartFrame struct {
-	AgentId      *string `json:"agent_id,omitempty"`
-	ParentCallId string  `json:"parent_call_id"`
+	AgentId *string `json:"agent_id,omitempty"`
+	// Optional session id of the opened child session. Present for steered sessions; absent for legacy/optional. Enables the open control on the side panel row (ADR-091 I-4).
+	ChildSessionId *string `json:"child_session_id,omitempty"`
+	// The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
+	ParentCallId string `json:"parent_call_id"`
 	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — producing == routing by construction (FR-017).
 	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	SessionId          string  `json:"session_id"`
