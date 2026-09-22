@@ -140,3 +140,10 @@ func (r *OutboundRecorder) AssertBoundaryInvoked(boundary steer.Boundary) {
 		r.t.Fatalf("boundary %q was not invoked", boundary)
 	}
 }
+
+// BoundaryInvocationCount returns how many real producer decisions reached boundary.
+func (r *OutboundRecorder) BoundaryInvocationCount(boundary steer.Boundary) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.boundaries[boundary])
+}

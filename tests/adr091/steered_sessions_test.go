@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,9 +18,68 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+const e2eProbeToolName = "adr091_boundary_probe"
+
+type e2eBoundaryProvider struct{}
+
+func (*e2eBoundaryProvider) Chat(
+	_ context.Context,
+	messages []providers.Message,
+	_ []providers.ToolDefinition,
+	_ string,
+	_ map[string]any,
+) (*providers.LLMResponse, error) {
+	for _, message := range messages {
+		if message.Role == "tool" {
+			return &providers.LLMResponse{Content: "child turn completed after the boundary probe"}, nil
+		}
+	}
+	return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+		ID: "adr091-probe-call",
+		Function: &providers.FunctionCall{Name: e2eProbeToolName, Arguments: `{}`},
+	}}}, nil
+}
+
+func (*e2eBoundaryProvider) GetDefaultModel() string { return "scripted-model" }
+
+type e2eIdleProvider struct{}
+
+func (*e2eIdleProvider) Chat(
+	context.Context,
+	[]providers.Message,
+	[]providers.ToolDefinition,
+	string,
+	map[string]any,
+) (*providers.LLMResponse, error) {
+	return &providers.LLMResponse{Content: "idle child"}, nil
+}
+
+func (*e2eIdleProvider) GetDefaultModel() string { return "scripted-model" }
+
+type e2eBoundaryProbe struct {
+	tools.BaseTool
+	calls    atomic.Int32
+	recorder *testutil.OutboundRecorder
+}
+
+func (*e2eBoundaryProbe) Name() string { return e2eProbeToolName }
+func (*e2eBoundaryProbe) Description() string { return "exercise a real child tool boundary" }
+func (*e2eBoundaryProbe) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
+}
+func (*e2eBoundaryProbe) Scope() tools.ToolScope { return tools.ScopeCore }
+func (p *e2eBoundaryProbe) Execute(ctx context.Context, _ map[string]any) *tools.ToolResult {
+	p.calls.Add(1)
+	sessionID := tools.ToolTranscriptSessionID(ctx)
+	p.recorder.Record(steer.BoundarySyncToolText, sessionID, sessionID, "tool_error")
+	return tools.ErrorResult("intentional boundary probe failure")
+}
 
 type e2eHarness struct {
 	tree       *testutil.Tree
@@ -28,11 +90,42 @@ type e2eHarness struct {
 	canceller  steer.Canceller
 	classifier steer.RecordClassifier
 	launcher   steer.SessionLauncher
+	recorder   *testutil.OutboundRecorder
+	probe      *e2eBoundaryProbe
+	msgBus     *bus.MessageBus
 }
 
 func newE2EHarness(t *testing.T) *e2eHarness {
 	t.Helper()
+	return newE2EHarnessWithProvider(t, &e2eBoundaryProvider{}, testutil.RecordingOutbound(t), true)
+}
+
+func newE2EHarnessWithProvider(
+	t *testing.T,
+	provider providers.LLMProvider,
+	recorder *testutil.OutboundRecorder,
+	registerProbe bool,
+) *e2eHarness {
+	t.Helper()
 	home := t.TempDir()
+	t.Setenv("OMNIPUS_HOME", home)
+	workspaceDir := filepath.Join(home, "workspaces")
+	if err := os.MkdirAll(workspaceDir, 0o700); err != nil {
+		t.Fatalf("create fixture workspace directory: %v", err)
+	}
+	workspaceRecord, err := json.Marshal(map[string]any{
+		"id": "adr091-fixture-workspace",
+		"core_team": []string{
+			"adr091-fixture-agent-root", "adr091-fixture-agent-a", "adr091-fixture-agent-b",
+			"adr091-fixture-agent-c", "mia", "adr091-fixture-task-agent",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal fixture workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceDir, "adr091-fixture-workspace.json"), workspaceRecord, 0o600); err != nil {
+		t.Fatalf("write fixture workspace: %v", err)
+	}
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(msgBus.Close)
 	cfg := &config.Config{Agents: config.AgentsConfig{
@@ -40,11 +133,15 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 			Home: filepath.Join(home, "agents"), DefaultModel: config.DefaultModel{Model: "scripted-model"}, MaxTokens: 4096,
 		},
 		List: []config.AgentConfig{
+			{ID: "adr091-fixture-agent-root", Name: "ADR-091 fixture root", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "root")},
+			{ID: "adr091-fixture-agent-a", Name: "ADR-091 fixture A", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "a")},
+			{ID: "adr091-fixture-agent-b", Name: "ADR-091 fixture B", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "b")},
+			{ID: "adr091-fixture-agent-c", Name: "ADR-091 fixture C", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "c")},
 			{ID: "mia", Name: "ADR-091 fixture agent", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "mia")},
 			{ID: "adr091-fixture-task-agent", Name: "ADR-091 task fixture agent", Type: config.AgentTypeCustom, Home: filepath.Join(home, "agents", "task")},
 		},
 	}}
-	al, err := agent.NewAgentLoop(cfg, msgBus, testutil.NewScenario())
+	al, err := agent.NewAgentLoop(cfg, msgBus, provider)
 	if err != nil {
 		t.Fatalf("NewAgentLoop: %v", err)
 	}
@@ -59,59 +156,110 @@ func newE2EHarness(t *testing.T) *e2eHarness {
 	classifier := agent.NewSteerRecordClassifier(lifecycle, sessions)
 	audience := agent.NewSteerAudienceResolver(classifier)
 	deliverer := agent.NewSteerUpwardDeliverer()
-	al.SetSteerAudienceDeps(audience, steer.NopBoundaryObserver{}, deliverer)
+	al.SetSteerAudienceDeps(audience, recorder, deliverer)
 	launcher := agent.NewSteerLauncher(al)
+	var probe *e2eBoundaryProbe
+	if registerProbe {
+		probe = &e2eBoundaryProbe{recorder: recorder}
+		al.RegisterTool(probe)
+		for _, agentID := range al.GetRegistry().ListAgentIDs() {
+			if instance, ok := al.GetRegistry().GetAgent(agentID); ok {
+				instance.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{e2eProbeToolName: "allow"}})
+			}
+		}
+	}
 	canceller := agent.NewSteerCanceller(lifecycle, al.SteerGenerationCancel)
 	cancelPersister := al.StartSubagentSpawnPersister(context.Background())
 	t.Cleanup(cancelPersister)
 	deps := steer.Deps{
 		Canceller: canceller, Deliverer: deliverer, Classifier: classifier,
 		LifecycleStore: lifecycle, SessionStore: sessions,
+		Launcher: launcher,
 		BootHook: func(context.Context) error { return nil },
 	}
 	return &e2eHarness{
 		tree: testutil.DelegationTree(t, deps, 3), sessions: sessions,
 		lifecycle: lifecycle, audience: audience, deliverer: deliverer,
 		canceller: canceller, classifier: classifier, launcher: launcher,
+		recorder: recorder, probe: probe, msgBus: msgBus,
 	}
 }
 
 func TestE2E_ThreeLevelDelegation_NoLeak(t *testing.T) {
 	h := newE2EHarness(t)
-	recorder := testutil.RecordingOutbound(t)
-	children := []testutil.TreeNode{h.tree.A, h.tree.B, h.tree.C}
 
-	if err := h.sessions.AppendTranscriptStrict(h.tree.C.SessionID, session.TranscriptEntry{
-		ID: "child-control", Type: session.EntryTypeToolCall, Role: "tool",
-		Content: "intentional tool failure", Status: "error", AgentID: h.tree.C.AgentID,
-		Timestamp: time.Now().UTC(),
-	}); err != nil {
-		t.Fatalf("write child transcript control: %v", err)
+	deadline := time.Now().Add(10 * time.Second)
+	for h.probe.calls.Load() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
-	recorder.Record(steer.BoundarySyncToolText, h.tree.C.SessionID, h.tree.C.SessionID, "tool_error")
+	if got := h.probe.calls.Load(); got != 3 {
+		t.Fatalf("real child tool calls = %d, want 3", got)
+	}
 
-	for phase := 0; phase < 2; phase++ { // first entry, then reconstructed re-entry
-		for _, child := range children {
-			for _, boundary := range steer.Boundaries {
-				audience, class, err := h.audience.Audience(context.Background(), child.SessionID)
-				if err != nil {
-					t.Fatalf("phase %d audience(%s, %s): %v", phase, child.Name, boundary, err)
-				}
-				if class != steer.ClassSteered {
-					t.Fatalf("phase %d class(%s) = %q, want steered", phase, child.Name, class)
-				}
-				recorder.Observe(boundary, child.SessionID, audience)
-				if audience == steer.AudienceUser {
-					recorder.Record(boundary, child.SessionID, h.tree.Root.SessionID, "leak")
-				}
+	for time.Now().Before(deadline) {
+		allTerminal := true
+		for _, child := range []testutil.TreeNode{h.tree.A, h.tree.B, h.tree.C} {
+			record, err := h.lifecycle.Load(child.SessionID)
+			if err != nil || !record.Terminal() {
+				allTerminal = false
+				break
 			}
 		}
+		if allTerminal {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	for _, boundary := range steer.Boundaries {
-		recorder.AssertBoundaryInvoked(boundary)
+	for h.recorder.BoundaryInvocationCount(steer.BoundaryFinalReply) < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
 	}
-	recorder.AssertReceived(h.tree.C.SessionID, "tool_error")
-	recorder.AssertNothingTo(h.tree.Root.SessionID)
+
+	for {
+		select {
+		case outbound := <-h.msgBus.OutboundChan():
+			h.recorder.Record(steer.BoundaryFinalReply, outbound.SessionID, "human", "leak")
+		default:
+			goto drained
+		}
+	}
+	drained:
+	h.recorder.AssertBoundaryInvoked(steer.BoundarySyncToolText)
+	h.recorder.AssertBoundaryInvoked(steer.BoundaryFinalReply)
+	h.recorder.AssertReceived(h.tree.C.SessionID, "tool_error")
+	h.recorder.AssertNothingTo("human")
+}
+
+type recordingFailureT struct {
+	mu       sync.Mutex
+	failures []string
+}
+
+func (*recordingFailureT) Helper() {}
+func (t *recordingFailureT) Fatalf(format string, args ...any) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.failures = append(t.failures, fmt.Sprintf(format, args...))
+}
+
+func TestE2E_ThreeLevelDelegation_ZeroToolControlFails(t *testing.T) {
+	failureT := &recordingFailureT{}
+	recorder := testutil.RecordingOutbound(failureT)
+	h := newE2EHarnessWithProvider(t, &e2eIdleProvider{}, recorder, false)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		record, err := h.lifecycle.Load(h.tree.A.SessionID)
+		if err == nil && record.Terminal() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	recorder.AssertReceived(h.tree.A.SessionID, "tool_error")
+	failureT.mu.Lock()
+	defer failureT.mu.Unlock()
+	if len(failureT.failures) != 1 || !strings.Contains(failureT.failures[0], "no outbound control received") {
+		t.Fatalf("zero-tool control failures = %v, want the connected recorder assertion to fail", failureT.failures)
+	}
 }
 
 func TestE2E_StopReachesReenteredChild(t *testing.T) {
