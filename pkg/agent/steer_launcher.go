@@ -342,6 +342,10 @@ func (l *SteerLauncher) launchSteered(
 		},
 	)
 	if pubErr != nil {
+		// The lifecycle transaction compensates its own parent/child JSONL
+		// writes. The unified session was staged inside the callback, so it has
+		// a separate compensating delete on every publication failure.
+		_ = sessions.DeleteSession(childID)
 		return steer.LaunchResult{}, pubErr
 	}
 	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
