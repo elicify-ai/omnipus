@@ -324,6 +324,105 @@ func TestGoalDelegation_Judged(t *testing.T) {
 	}
 }
 
+// TestFinishSteeredGoalTurn_BareClaimFollowUpRoutesThroughAsyncNotifier proves
+// the goal-loop follow-up finishSteeredGoalTurn dispatches for a steered
+// child (checkGoalLoopAfterTurn's bare-claim teaching steer, G-4) is
+// delivered through the SAME async-notifier re-inject primitive
+// dispatchGoalAsyncFollowUp already uses for the idle-tick and deferred-
+// claim paths (goal_triggers.go), rather than a second direct
+// bus.MessageBus.PublishInbound call site — the guard's exactly-six census
+// (scripts/check-operator-prompt-sites.sh, FR-029a) pins PublishInbound's
+// call sites to the async-notifier's own site plus the five others; a
+// steered turn runs through steer_launcher.go's own dispatch goroutine
+// (never runAgentLoop's inline post-turn block, loop.go), so it needs its
+// own re-inject seam — but that seam must reuse the existing primitive, not
+// open a fresh, unclassified PublishInbound call.
+func TestFinishSteeredGoalTurn_BareClaimFollowUpRoutesThroughAsyncNotifier(t *testing.T) {
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	wireSteerCompletionDeps(t, al)
+
+	parentMeta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "native-agent")
+	if err != nil {
+		t.Fatalf("NewSession(parent): %v", err)
+	}
+	res, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: parentMeta.ID,
+		TargetAgentID:     "native-agent",
+		Task:              "prove the goal",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-bare-claim"},
+		Goal: &steer.GoalSpec{
+			Criteria: []steer.Criterion{{Text: "the work is complete"}},
+			DoD:      []steer.Criterion{{Text: "the evidence is sufficient"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	rec, err := lifecycle.Load(res.SessionID)
+	if err != nil {
+		t.Fatalf("Load(child): %v", err)
+	}
+	rec.State = session.LifecycleRunning
+	if err := lifecycle.Persist(rec); err != nil {
+		t.Fatalf("Persist(running): %v", err)
+	}
+
+	ts, err := al.reconstructSteeredTurn(rec, nil)
+	if err != nil {
+		t.Fatalf("reconstructSteeredTurn: %v", err)
+	}
+	if !ts.opts.UserInitiated {
+		t.Fatal("first steered turn is not marked user-initiated; the bare-claim gate would ignore it")
+	}
+
+	var mu sync.Mutex
+	var captured []AsyncNotifyEvent
+	al.asyncNotifier.registerObserver(func(event AsyncNotifyEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		captured = append(captured, event)
+	})
+
+	// GOAL_STATUS: met with no [goal:evidence] line is a bare claim (G-4):
+	// checkGoalLoopAfterTurn's handleBareGoalClaim appends a teaching-steer
+	// follow-up to result.followUps on the first offense.
+	result := turnResult{finalContent: "GOAL_STATUS: met"}
+	al.finishSteeredGoalTurn(ts, &result, nil)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captured) != 1 {
+		t.Fatalf("async notifier observed %d events, want exactly 1 (the bare-claim follow-up)", len(captured))
+	}
+	got := captured[0]
+	if got.SenderCanonicalID != goalLoopFollowUpSenderID {
+		t.Fatalf("SenderCanonicalID = %q, want %q (checkGoalLoopAfterTurn's origin gate requires the sentinel)",
+			got.SenderCanonicalID, goalLoopFollowUpSenderID)
+	}
+	if got.AgentID != ts.agentID {
+		t.Fatalf("AgentID = %q, want %q (the steered child's own agent, never guessed)", got.AgentID, ts.agentID)
+	}
+	if got.TranscriptSessionID != rec.SessionID {
+		t.Fatalf("TranscriptSessionID = %q, want %q", got.TranscriptSessionID, rec.SessionID)
+	}
+	// A bare delegate launch (steer_launcher.go::Launch) seeds the child
+	// session's own meta.Channel/PeerID empty — ts.channel/ts.chatID are ""
+	// here, so finishSteeredGoalTurn falls back to the same channel-less
+	// "system"/synthetic-chat-id destination TaskExecutor.
+	// wakeOwnerAttemptsExhausted (task_executor_judge.go) already uses.
+	wantChatID := "steer:" + rec.SessionID
+	if got.Channel != "system" || got.ChatID != wantChatID {
+		t.Fatalf("Channel/ChatID = %q/%q, want %q/%q (the channel-less fallback destination)",
+			got.Channel, got.ChatID, "system", wantChatID)
+	}
+	if got.Content == "" {
+		t.Fatal("Content is empty; expected the bare-claim teaching steer text")
+	}
+}
+
 func TestGoalDelegation_ParentGoalAbsentFromChildInput(t *testing.T) {
 	provider := &steeredInputCaptureProvider{done: make(chan struct{})}
 	al, _ := newGoalLoopTestLoop(t, provider, nil)

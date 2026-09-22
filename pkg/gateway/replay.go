@@ -154,174 +154,11 @@ func streamReplay(
 	sr.lastSeenAgentID = ""
 
 	for ei, entry := range sr.entries {
-		// FR-I-006: skip compaction entries.
-		if entry.Type == session.EntryTypeCompaction {
+		switch flow, err2 := sr.dispatchSpecialEntry(entry, emitFrame); flow {
+		case streamReplayStateContinue:
 			continue
-		}
-
-		// Wave 3 fix 5c: emit a role:"turn_canceled" ReplayMessageFrame for
-		// EntryTypeTurnCancelled entries (pkg/agent/cancel.go's onCancelFinish
-		// callback, ~line 224). Before this fix, replay had no code path that
-		// read these persisted entries at all — a canceled turn simply
-		// vanished on reload instead of showing the same cancellation marker
-		// the live WS stream showed. entry.TurnID (stamped by the same
-		// callback) travels onto the frame's turn_id field so the client can
-		// match this cancellation to the specific preceding assistant message
-		// it interrupted without relying on stream-adjacency — async
-		// delegation can interleave other agents'/turns' frames in between.
-		// This entry type carries no Content (cancel.go's literal never sets
-		// it), so it needs its own unconditional branch rather than falling
-		// through the `entry.Content != ""` gate below.
-		if entry.Type == session.EntryTypeTurnCancelled {
-			cancelFrame := generated.ReplayMessageFrame{
-				Type:      string(generated.WsFrameTypeReplayMessage),
-				SessionId: sr.sessionID,
-				Role:      "turn_canceled",
-				Content:   turnCancelledContent(entry),
-			}
-			if entry.TurnID != "" {
-				turnIDCopy := entry.TurnID
-				cancelFrame.TurnId = &turnIDCopy
-			}
-			if err2 := emitFrame(cancelFrame); err2 != nil {
-				return framesEmitted, err2
-			}
-			continue
-		}
-
-		// review r2 RV1: EntryTypeJudgeVerdict entries (ADR-049 D2/D4, written
-		// by TaskExecutor.writeJudgeVerdictTranscript / goal_loop.go's
-		// writeGoalVerdictTranscript) carry Role="system" and raw
-		// json.Marshal(task.JudgeVerdict) Content. Before this fix there was no
-		// dedicated case for this entry type, so it fell through to the generic
-		// entry.Content != "" branch below and rendered as a garbled raw-JSON
-		// system chat bubble on WS reconnect — defeating SD-C10 (a verdict is
-		// panel-only by default, never a raw thread bubble). Emit a typed
-		// generated.JudgeVerdictFrame instead — the SAME frame shape/type the
-		// SPA's WS frame switch already routes to useJudgeActivityStore (NOT
-		// the thread; src/store/chat.ts's `case 'judge_verdict'`), so replay
-		// parity with a live push is exact regardless of which code path a
-		// verdict frame arrived through.
-		if entry.Type == session.EntryTypeJudgeVerdict {
-			var verdict task.JudgeVerdict
-			if uerr := json.Unmarshal([]byte(entry.Content), &verdict); uerr != nil {
-				slog.Warn("replay: could not parse judge_verdict transcript entry — skipping",
-					"session_id", sr.sessionID, "entry_id", entry.ID, "error", uerr)
-				continue
-			}
-			if err2 := emitFrame(toJudgeVerdictFrame(sr.sessionID, verdict)); err2 != nil {
-				return framesEmitted, err2
-			}
-			continue
-		}
-
-		// ADR-085 BROWSER-FR-043a: a persisted browser-handover waiting-line
-		// entry replays as the SAME frame type FR-042 delivers live
-		// (BrowserHandoverNoticeFrame), never the generic ReplayMessageFrame
-		// the fallthrough below would otherwise produce. Discriminates on
-		// the STAMPED entry.SystemSubtype field alone — never by
-		// prefix-matching entry.Content, which is exactly the anti-pattern
-		// the existing "Handoff:" branch elsewhere in this function is
-		// documented as being (see the FR-043a spec citation). The message
-		// id is the entry's own ID, per FR-044: "the deterministic notice id
-		// rides the existing TranscriptEntry.ID".
-		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == "browser_handover_notice" {
-			if err2 := emitFrame(generated.BrowserHandoverNoticeFrame{
-				Type:      string(generated.WsFrameTypeBrowserHandoverNotice),
-				SessionId: sr.sessionID,
-				MessageId: entry.ID,
-				Text:      entry.Content,
-			}); err2 != nil {
-				return framesEmitted, err2
-			}
-			continue
-		}
-
-		// Goal outcome line (founder decision 2026-09-14): a persisted goal
-		// ending replays as the SAME goal_outcome frame the ending sent live
-		// (goalOutcomeFrame, shared with websocket.go), discriminated on the
-		// stamped entry.SystemSubtype — never on Content — with the entry's own
-		// ID as message_id so the SPA keeps exactly one line per ending. An
-		// entry stamped goal_outcome but carrying no outcome is malformed: it
-		// is logged and falls through to the ordinary rendering below so its
-		// text is not lost.
-		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeGoalOutcome {
-			if entry.GoalOutcome != nil {
-				if err2 := emitFrame(goalOutcomeFrame(sr.sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {
-					return framesEmitted, err2
-				}
-				continue
-			}
-			slog.Warn("replay: goal_outcome transcript entry carries no outcome — replaying it as a plain entry",
-				"session_id", sr.sessionID, "entry_id", entry.ID)
-		}
-
-		// ADR-091 D7/I-4: a persisted subagent_message/subagent_state entry
-		// (steer_frames.go's deliverSubagentMessage/deliverSubagentState,
-		// written into the PARENT's own transcript) replays as the SAME
-		// frame type the live push sent, discriminated on the stamped
-		// entry.SystemSubtype — never Content — with the entry's own ID as
-		// message_id, mirroring goal_outcome's identical contract two
-		// blocks above. subagent_start/subagent_end are NOT handled here —
-		// they keep the existing tool-call-structure reconstruction
-		// (buildSubagentStart below), per D7's "stay exactly what they
-		// are"; see this lane's final report for why persisted
-		// start/end entries are written but not yet read back here.
-		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
-			if entry.SubagentMessage != nil {
-				if err2 := emitFrame(*entry.SubagentMessage); err2 != nil {
-					return framesEmitted, err2
-				}
-				continue
-			}
-			slog.Warn("replay: subagent_message transcript entry carries no frame — replaying it as a plain entry",
-				"session_id", sr.sessionID, "entry_id", entry.ID)
-		}
-		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
-			if entry.SubagentState != nil {
-				if err2 := emitFrame(*entry.SubagentState); err2 != nil {
-					return framesEmitted, err2
-				}
-				continue
-			}
-			slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
-				"session_id", sr.sessionID, "entry_id", entry.ID)
-		}
-
-		// Update the running fallback agent ID.
-		if entry.AgentID != "" {
-			sr.lastSeenAgentID = entry.AgentID
-		}
-
-		// AskUserQuestion resume messages (spec v3 §0.2) — the persisted
-		// user-role `Answers to your questions (card_id=<id>): {...}` turn
-		// opener — are NEVER replayed as a raw replay_message: the §0.2
-		// presentation rule says the SPA renders the resume message AS the
-		// collapsed answer record, never as raw JSON, and the collapsed
-		// record itself is reconstructed here from the terminal registry/
-		// session-meta record (§0.6), which makes simple suppression of the
-		// raw bubble correct — the card frame emitted in its place IS the
-		// render of this message. When the resume message's card id matches
-		// the terminal record, the reconstructed card frame is emitted at
-		// this exact position, so the collapsed record lands where the
-		// resume happened in the thread. A resume message with NO matching
-		// terminal record (an older set — PendingAskJSON holds only the
-		// latest, so an earlier set's record is overwritten by the next
-		// CreatePending) is still suppressed: raw JSON must never render,
-		// and its park-time tool_call/tool_result stub remains in the
-		// stream as the historical trace. Resume entries are plain inbound
-		// user messages (dispatched via PublishInbound) and carry no tool
-		// calls, so skipping the whole entry loses nothing else.
-		if entry.Role == "user" {
-			if cardID, isResume := askuser.ParseResumeCardID(entry.Content); isResume {
-				if sr.terminalAsk != nil && !sr.terminalAskEmitted && sr.terminalAsk.CardID == cardID {
-					sr.terminalAskEmitted = true
-					if err2 := emitFrame(buildAskUserQuestionFrame(sr.terminalAsk)); err2 != nil {
-						return framesEmitted, err2
-					}
-				}
-				continue
-			}
+		case streamReplayStateReturn:
+			return framesEmitted, err2
 		}
 
 		// ADR-087 D2/Codex C8: a truncated assistant entry can have EMPTY
@@ -554,6 +391,192 @@ func streamReplay(
 		return framesEmitted, err2
 	}
 	return framesEmitted, nil
+}
+
+// dispatchSpecialEntry handles every entry-type/subtype special case that
+// either fully replays an entry as its own typed frame (returning
+// streamReplayStateContinue so streamReplay's loop moves on to the next
+// entry) or falls through to streamReplay's own generic content-emission +
+// tool-call replay for this SAME entry (returning streamReplayStateNext).
+// Extracted verbatim from streamReplay's per-entry loop — same branches,
+// same order, same fall-through cases (a malformed goal_outcome/
+// subagent_message/subagent_state entry still falls through to the generic
+// rendering below rather than being dropped) — to keep both functions under
+// the founder's function-size and cyclomatic-complexity budgets
+// (scripts/budgets/functions.txt, scripts/budgets/gocyclo.txt) with no
+// behavior change.
+func (sr *streamReplayState) dispatchSpecialEntry(entry session.TranscriptEntry, emitFrame func(any) error) (streamReplayStateFlow, error) {
+	// FR-I-006: skip compaction entries.
+	if entry.Type == session.EntryTypeCompaction {
+		return streamReplayStateContinue, nil
+	}
+
+	// Wave 3 fix 5c: emit a role:"turn_canceled" ReplayMessageFrame for
+	// EntryTypeTurnCancelled entries (pkg/agent/cancel.go's onCancelFinish
+	// callback, ~line 224). Before this fix, replay had no code path that
+	// read these persisted entries at all — a canceled turn simply
+	// vanished on reload instead of showing the same cancellation marker
+	// the live WS stream showed. entry.TurnID (stamped by the same
+	// callback) travels onto the frame's turn_id field so the client can
+	// match this cancellation to the specific preceding assistant message
+	// it interrupted without relying on stream-adjacency — async
+	// delegation can interleave other agents'/turns' frames in between.
+	// This entry type carries no Content (cancel.go's literal never sets
+	// it), so it needs its own unconditional branch rather than falling
+	// through the `entry.Content != ""` gate below.
+	if entry.Type == session.EntryTypeTurnCancelled {
+		cancelFrame := generated.ReplayMessageFrame{
+			Type:      string(generated.WsFrameTypeReplayMessage),
+			SessionId: sr.sessionID,
+			Role:      "turn_canceled",
+			Content:   turnCancelledContent(entry),
+		}
+		if entry.TurnID != "" {
+			turnIDCopy := entry.TurnID
+			cancelFrame.TurnId = &turnIDCopy
+		}
+		if err2 := emitFrame(cancelFrame); err2 != nil {
+			return streamReplayStateReturn, err2
+		}
+		return streamReplayStateContinue, nil
+	}
+
+	// review r2 RV1: EntryTypeJudgeVerdict entries (ADR-049 D2/D4, written
+	// by TaskExecutor.writeJudgeVerdictTranscript / goal_loop.go's
+	// writeGoalVerdictTranscript) carry Role="system" and raw
+	// json.Marshal(task.JudgeVerdict) Content. Before this fix there was no
+	// dedicated case for this entry type, so it fell through to the generic
+	// entry.Content != "" branch below and rendered as a garbled raw-JSON
+	// system chat bubble on WS reconnect — defeating SD-C10 (a verdict is
+	// panel-only by default, never a raw thread bubble). Emit a typed
+	// generated.JudgeVerdictFrame instead — the SAME frame shape/type the
+	// SPA's WS frame switch already routes to useJudgeActivityStore (NOT
+	// the thread; src/store/chat.ts's `case 'judge_verdict'`), so replay
+	// parity with a live push is exact regardless of which code path a
+	// verdict frame arrived through.
+	if entry.Type == session.EntryTypeJudgeVerdict {
+		var verdict task.JudgeVerdict
+		if uerr := json.Unmarshal([]byte(entry.Content), &verdict); uerr != nil {
+			slog.Warn("replay: could not parse judge_verdict transcript entry — skipping",
+				"session_id", sr.sessionID, "entry_id", entry.ID, "error", uerr)
+			return streamReplayStateContinue, nil
+		}
+		if err2 := emitFrame(toJudgeVerdictFrame(sr.sessionID, verdict)); err2 != nil {
+			return streamReplayStateReturn, err2
+		}
+		return streamReplayStateContinue, nil
+	}
+
+	// ADR-085 BROWSER-FR-043a: a persisted browser-handover waiting-line
+	// entry replays as the SAME frame type FR-042 delivers live
+	// (BrowserHandoverNoticeFrame), never the generic ReplayMessageFrame
+	// the fallthrough below would otherwise produce. Discriminates on
+	// the STAMPED entry.SystemSubtype field alone — never by
+	// prefix-matching entry.Content, which is exactly the anti-pattern
+	// the existing "Handoff:" branch elsewhere in this function is
+	// documented as being (see the FR-043a spec citation). The message
+	// id is the entry's own ID, per FR-044: "the deterministic notice id
+	// rides the existing TranscriptEntry.ID".
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == "browser_handover_notice" {
+		if err2 := emitFrame(generated.BrowserHandoverNoticeFrame{
+			Type:      string(generated.WsFrameTypeBrowserHandoverNotice),
+			SessionId: sr.sessionID,
+			MessageId: entry.ID,
+			Text:      entry.Content,
+		}); err2 != nil {
+			return streamReplayStateReturn, err2
+		}
+		return streamReplayStateContinue, nil
+	}
+
+	// Goal outcome line (founder decision 2026-09-14): a persisted goal
+	// ending replays as the SAME goal_outcome frame the ending sent live
+	// (goalOutcomeFrame, shared with websocket.go), discriminated on the
+	// stamped entry.SystemSubtype — never on Content — with the entry's own
+	// ID as message_id so the SPA keeps exactly one line per ending. An
+	// entry stamped goal_outcome but carrying no outcome is malformed: it
+	// is logged and falls through to the ordinary rendering below so its
+	// text is not lost.
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeGoalOutcome {
+		if entry.GoalOutcome != nil {
+			if err2 := emitFrame(goalOutcomeFrame(sr.sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {
+				return streamReplayStateReturn, err2
+			}
+			return streamReplayStateContinue, nil
+		}
+		slog.Warn("replay: goal_outcome transcript entry carries no outcome — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+
+	// ADR-091 D7/I-4: a persisted subagent_message/subagent_state entry
+	// (steer_frames.go's deliverSubagentMessage/deliverSubagentState,
+	// written into the PARENT's own transcript) replays as the SAME
+	// frame type the live push sent, discriminated on the stamped
+	// entry.SystemSubtype — never Content — with the entry's own ID as
+	// message_id, mirroring goal_outcome's identical contract two
+	// blocks above. subagent_start/subagent_end are NOT handled here —
+	// they keep the existing tool-call-structure reconstruction
+	// (buildSubagentStart below), per D7's "stay exactly what they
+	// are"; see this lane's final report for why persisted
+	// start/end entries are written but not yet read back here.
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentMessage {
+		if entry.SubagentMessage != nil {
+			if err2 := emitFrame(*entry.SubagentMessage); err2 != nil {
+				return streamReplayStateReturn, err2
+			}
+			return streamReplayStateContinue, nil
+		}
+		slog.Warn("replay: subagent_message transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+	if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeSubagentState {
+		if entry.SubagentState != nil {
+			if err2 := emitFrame(*entry.SubagentState); err2 != nil {
+				return streamReplayStateReturn, err2
+			}
+			return streamReplayStateContinue, nil
+		}
+		slog.Warn("replay: subagent_state transcript entry carries no frame — replaying it as a plain entry",
+			"session_id", sr.sessionID, "entry_id", entry.ID)
+	}
+
+	// Update the running fallback agent ID.
+	if entry.AgentID != "" {
+		sr.lastSeenAgentID = entry.AgentID
+	}
+
+	// AskUserQuestion resume messages (spec v3 §0.2) — the persisted
+	// user-role `Answers to your questions (card_id=<id>): {...}` turn
+	// opener — are NEVER replayed as a raw replay_message: the §0.2
+	// presentation rule says the SPA renders the resume message AS the
+	// collapsed answer record, never as raw JSON, and the collapsed
+	// record itself is reconstructed here from the terminal registry/
+	// session-meta record (§0.6), which makes simple suppression of the
+	// raw bubble correct — the card frame emitted in its place IS the
+	// render of this message. When the resume message's card id matches
+	// the terminal record, the reconstructed card frame is emitted at
+	// this exact position, so the collapsed record lands where the
+	// resume happened in the thread. A resume message with NO matching
+	// terminal record (an older set — PendingAskJSON holds only the
+	// latest, so an earlier set's record is overwritten by the next
+	// CreatePending) is still suppressed: raw JSON must never render,
+	// and its park-time tool_call/tool_result stub remains in the
+	// stream as the historical trace. Resume entries are plain inbound
+	// user messages (dispatched via PublishInbound) and carry no tool
+	// calls, so skipping the whole entry loses nothing else.
+	if entry.Role == "user" {
+		if cardID, isResume := askuser.ParseResumeCardID(entry.Content); isResume {
+			if sr.terminalAsk != nil && !sr.terminalAskEmitted && sr.terminalAsk.CardID == cardID {
+				sr.terminalAskEmitted = true
+				if err2 := emitFrame(buildAskUserQuestionFrame(sr.terminalAsk)); err2 != nil {
+					return streamReplayStateReturn, err2
+				}
+			}
+			return streamReplayStateContinue, nil
+		}
+	}
+
+	return streamReplayStateNext, nil
 }
 
 // prepareReplay normalizes replay inputs and builds the ancillary indexes.
