@@ -42,7 +42,7 @@ pkg/audit/logger_test.go	TestAuditLogger_WriteAndRotate	270
 pkg/audit/rotation_test.go	TestRotationBySizeAndDaily	309
 pkg/config/config_refs_test.go	TestChannelConfig_AllRefsRoundTrip	377
 pkg/gateway/browser_webrtc_e2e_test.go	TestWebRTCEndToEndInProcess	290
-pkg/gateway/replay.go	streamReplay	427
+pkg/gateway/replay.go	streamReplay	283
 pkg/gateway/rest_onboarding_probe_test.go	TestProbeProvider_SignIn	283
 pkg/gateway/rest_onboarding_probe_test.go	TestProbeProviderID_Validation	268
 pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
