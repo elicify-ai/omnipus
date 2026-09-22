@@ -1145,6 +1145,8 @@ func (tc *taskCreateToolExecute) buildTask() (*ToolResult, bool) {
 	tc.entity = &task.Task{
 		Title:           tc.title,
 		Prompt:          tc.prompt,
+		OriginSessionID: strings.TrimSpace(ToolTranscriptSessionID(tc.ctx)),
+		OriginCallID:    strings.TrimSpace(ToolCallID(tc.ctx)),
 		Action:          task.ActionLLM,
 		AgentID:         tc.agentID,
 		CreatedBy:       tc.callerID,
