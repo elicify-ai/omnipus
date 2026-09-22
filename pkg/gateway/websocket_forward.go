@@ -574,7 +574,7 @@ func (f *eventForwardState) synthesizeOrphanEnd(fire orphanFire) {
 		pc := entry.parentCallID
 		endFrame.ParentCallId = &pc
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentEnd), endFrame)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeSubagentEnd), endFrame)
 	// The span is resolved: a later real end still sends its own frame
 	// (the EventKindSubTurnEnd case never needs the entry), and a
 	// resolved span is never re-armed or synthesized twice.
@@ -627,7 +627,7 @@ func (f *eventForwardState) onSubTurnSpawn(evt agent.Event) {
 		aid := p.AgentID
 		spawnFrame.AgentId = &aid
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentStart), spawnFrame)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeSubagentStart), spawnFrame)
 	// Register the span in openSpans for orphan watchdog tracking.
 	entry := &openSpanEntry{
 		spanID:       p.SpanID,
@@ -692,7 +692,7 @@ func (f *eventForwardState) onSubTurnEnd(evt agent.Event) {
 		reason := p.Reason
 		endFrameEnd.Reason = &reason
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeSubagentEnd), endFrameEnd)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeSubagentEnd), endFrameEnd)
 	// Signal the watchdog that the span closed normally.
 	f.closeSpan(string(p.ParentSpawnCallID))
 }
@@ -787,7 +787,7 @@ func (f *eventForwardState) onToolExecStart(evt agent.Event) {
 	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != startSID {
 		startF.ProducingSessionId = &producingSID
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallStart), startF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeToolCallStart), startF)
 }
 
 // onToolExecEnd forwards agent.EventKindToolExecEnd to this connection.
@@ -931,7 +931,7 @@ func (f *eventForwardState) onToolExecEnd(evt agent.Event) {
 		resultF.ProducingSessionId = &producingSID
 		producingSIDForResult = producingSID
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolCallResult), resultF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeToolCallResult), resultF)
 	// When switch_agent succeeds, notify the frontend to switch agents.
 	// Use evtSID (the session ID from the payload) to key the lookup, not chatID.
 	//
@@ -1020,7 +1020,7 @@ func (f *eventForwardState) onToolExecEnd(evt agent.Event) {
 			pid := producingSIDForResult
 			switchF.ProducingSessionId = &pid
 		}
-		sendConnGenFrame(f.wc, string(generated.WsFrameTypeAgentSwitched), switchF)
+		f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeAgentSwitched), switchF)
 	}
 }
 
@@ -1062,7 +1062,7 @@ func (f *eventForwardState) onRateLimit(evt agent.Event) {
 		tool := p.Tool
 		rateF.Tool = &tool
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeRateLimit), rateF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeRateLimit), rateF)
 }
 
 // onError forwards agent.EventKindError to this connection.
@@ -1177,7 +1177,7 @@ func (f *eventForwardState) onError(evt agent.Event) {
 			Detail:    &detail,
 		},
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeError), errF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeError), errF)
 }
 
 // onWhatsAppPairing forwards agent.EventKindWhatsAppPairing to this connection.
@@ -1231,7 +1231,7 @@ func (f *eventForwardState) onWhatsAppPairing(evt agent.Event) {
 	if !f.wc.wantsPairing(p.ChannelID) {
 		return
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeWhatsappPairing), pairF)
 }
 
 // onNotification forwards agent.EventKindNotification to this connection.
@@ -1275,7 +1275,7 @@ func (f *eventForwardState) onNotification(evt agent.Event) {
 		aid := p.AgentID
 		notifF.AgentId = &aid
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeNotification), notifF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeNotification), notifF)
 }
 
 // onTaskStatusChanged forwards agent.EventKindTaskStatusChanged to this connection.
@@ -1298,7 +1298,7 @@ func (f *eventForwardState) onTaskStatusChanged(evt agent.Event) {
 		aid := p.AgentID
 		taskF.AgentId = &aid
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeTaskStatusChanged), taskF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeTaskStatusChanged), taskF)
 }
 
 // onPlanStatusChanged forwards agent.EventKindPlanStatusChanged to this connection.
@@ -1323,7 +1323,7 @@ func (f *eventForwardState) onPlanStatusChanged(evt agent.Event) {
 		pr := p.PausedReason
 		planF.PausedReason = &pr
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypePlanStatus), planF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypePlanStatus), planF)
 }
 
 // onGoalStatusChanged forwards agent.EventKindGoalStatusChanged to this connection.
@@ -1371,7 +1371,7 @@ func (f *eventForwardState) onGoalStatusChanged(evt agent.Event) {
 		goalF.Definition = &def
 	}
 	setGoalStatusDoD(&goalF, p.DoD)
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeGoalStatus), goalF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeGoalStatus), goalF)
 }
 
 // onGoalOutcome forwards agent.EventKindGoalOutcome to this connection.
@@ -1387,7 +1387,7 @@ func (f *eventForwardState) onGoalOutcome(evt agent.Event) {
 	if !ok {
 		return
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeGoalOutcome),
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeGoalOutcome),
 		goalOutcomeFrame(p.SessionID, p.MessageID, p.Outcome))
 }
 
@@ -1407,7 +1407,7 @@ func (f *eventForwardState) onJudgeVerdict(evt agent.Event) {
 	if !ok {
 		return
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeJudgeVerdict),
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeJudgeVerdict),
 		toJudgeVerdictFrame(p.SessionID, p.Verdict))
 }
 
@@ -1432,7 +1432,7 @@ func (f *eventForwardState) onLoopStatusChanged(evt agent.Event) {
 		nd := int64(*p.NextDelay)
 		loopF.NextDelay = &nd
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeLoopStatus), loopF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeLoopStatus), loopF)
 }
 
 // onTaskRunStatus forwards agent.EventKindTaskRunStatus to this connection.
@@ -1454,7 +1454,7 @@ func (f *eventForwardState) onTaskRunStatus(evt agent.Event) {
 		ms := *p.OccurrenceMs
 		runF.OccurrenceMs = &ms
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeTaskRunStatus), runF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeTaskRunStatus), runF)
 }
 
 // onToolResultProjection forwards agent.EventKindToolResultProjection to this connection.
@@ -1488,5 +1488,5 @@ func (f *eventForwardState) onToolResultProjection(evt agent.Event) {
 	if producingSID := string(p.ProducingSessionID); producingSID != "" && producingSID != projSID {
 		projF.ProducingSessionId = &producingSID
 	}
-	sendConnGenFrame(f.wc, string(generated.WsFrameTypeToolResultProjection), projF)
+	f.h.emitSessionFrame(f.wc, string(generated.WsFrameTypeToolResultProjection), projF)
 }

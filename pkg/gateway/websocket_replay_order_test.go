@@ -116,7 +116,7 @@ func TestReplay_DivertedLiveFramesArriveBeforePostReplayFrames(t *testing.T) {
 
 	chatID := "test-chat-ordering"
 	ctx := context.Background()
-	handler.handleAttachSession(ctx, chatID, meta.ID, nil, wc)
+	handler.handleAttachSession(ctx, chatID, meta.ID, nil, nil, wc)
 
 	close(stopRacing)
 	raceWg.Wait()
@@ -222,7 +222,7 @@ func TestReplay_DivertFlagClearedAfterDrain_FlagState(t *testing.T) {
 		doneCh: make(chan struct{}),
 	}
 
-	handler.handleAttachSession(context.Background(), "chat-flag-test", meta.ID, nil, wc)
+	handler.handleAttachSession(context.Background(), "chat-flag-test", meta.ID, nil, nil, wc)
 
 	assert.False(t, wc.isReplayingLive.Load(),
 		"isReplayingLive must be false after handleAttachSession returns")
@@ -293,7 +293,7 @@ func TestReplay_DivertDrainedBeforeFlag_OrderWithRealConcurrency(t *testing.T) {
 	//
 	// Note: handleAttachSession sets isReplayingLive=true internally. Because we
 	// pre-loaded replayDivertCh, those frames are already there for the drain.
-	handler.handleAttachSession(context.Background(), "chat-concurrent-test", meta.ID, nil, wc)
+	handler.handleAttachSession(context.Background(), "chat-concurrent-test", meta.ID, nil, nil, wc)
 
 	// isReplayingLive must be false after return.
 	assert.False(t, wc.isReplayingLive.Load(),
@@ -563,7 +563,7 @@ func TestReplayOrdering_ConcurrentUpdateDuringDrain(t *testing.T) {
 		}
 	}()
 
-	handler.handleAttachSession(context.Background(), "chat-concurrent-update", meta.ID, nil, wc)
+	handler.handleAttachSession(context.Background(), "chat-concurrent-update", meta.ID, nil, nil, wc)
 
 	close(stopUpdater)
 	updaterWg.Wait()
@@ -652,7 +652,7 @@ func TestReplayDrain_SlowClientDeadline(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handler.handleAttachSession(context.Background(), "chat-slow-client", meta.ID, nil, wc)
+		handler.handleAttachSession(context.Background(), "chat-slow-client", meta.ID, nil, nil, wc)
 	}()
 
 	select {

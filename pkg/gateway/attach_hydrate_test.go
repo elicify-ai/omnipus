@@ -94,7 +94,7 @@ func TestAttach_TwiceArchiveByteIdentical(t *testing.T) {
 			doneCh:         make(chan struct{}),
 			replayDivertCh: make(chan []byte, replayLiveBufferCap),
 		}
-		handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, wc)
+		handler.handleAttachSession(context.Background(), chatID, meta.ID, nil, nil, wc)
 		close(wc.sendCh)
 		for raw := range wc.sendCh {
 			var f replayFrameDecoder
