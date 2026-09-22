@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -209,7 +210,10 @@ func (idx *LifecycleIndex) ensureWarm(s *LifecycleStore) error {
 		rec, loadErr := s.Load(id)
 		if loadErr != nil {
 			if errors.Is(loadErr, ErrLifecycleNotFound) {
-				continue
+				if info, statErr := os.Stat(s.path(id)); statErr != nil || info.Size() == 0 {
+					continue
+				}
+				loadErr = fmt.Errorf("session: lifecycle: %q contains no valid JSONL record", id)
 			}
 			// A single corrupt/unreadable record must not fail warm-up for
 			// every OTHER session — log AND record it (I-9: no longer

@@ -28,6 +28,21 @@ func TestLifecycleIndex_Report_EmptyBeforeAnyWarm(t *testing.T) {
 	}
 }
 
+func TestLifecycleIndex_Report_AllMalformedJSONL(t *testing.T) {
+	s := newTestLifecycleStore(t)
+	const id = "child-report-all-malformed"
+	if err := os.WriteFile(filepath.Join(s.Dir(), id+".jsonl"), []byte("{not-json}\n[]\n"), 0o600); err != nil {
+		t.Fatalf("write malformed lifecycle file: %v", err)
+	}
+	if _, err := s.List(LifecycleFilter{ParentDurableKey: "trigger-warm"}); err != nil {
+		t.Fatalf("List must continue past one malformed record: %v", err)
+	}
+	report := s.IndexReport()
+	if len(report.Unreadable) != 1 || report.Unreadable[0].ID != id || report.Unreadable[0].Err == nil {
+		t.Fatalf("IndexReport().Unreadable = %+v, want malformed record %q", report.Unreadable, id)
+	}
+}
+
 // TestLifecycleIndex_Report_ListsUnreadableRecordFromCorruptFile is the I-9
 // scenario from the TDD plan (test 25 / FR-A-014): one lifecycle file is
 // corrupt (here: unreadable), the index warms, and Report() lists that

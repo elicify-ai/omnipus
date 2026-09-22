@@ -14,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -116,6 +117,33 @@ func sendCancelPartialNotice(wc *wsConn, sessionID string, report steer.CancelRe
 		SessionId: &sid,
 		Message:   message,
 	})
+}
+
+func (h *WSHandler) sendExternalCancelPartialNotice(ctx context.Context, sessionID string, report steer.CancelReport) {
+	message := cancelPartialSummary(report)
+	if h == nil || h.agentLoop == nil || h.msgBus == nil || message == "" {
+		return
+	}
+	lifecycle := h.agentLoop.GetSessionLifecycleStore()
+	if lifecycle == nil {
+		return
+	}
+	rec, err := lifecycle.Load(sessionID)
+	if err != nil || rec.SteeredBy == nil {
+		return
+	}
+	target := rec.SteeredBy.ReportingTarget
+	if target.Channel == "" || target.ChatID == "" || target.Channel == "web" || target.Channel == "webchat" {
+		return
+	}
+	if err := h.msgBus.PublishOutbound(ctx, bus.OutboundMessage{
+		Channel: target.Channel,
+		ChatID:  target.ChatID,
+		Content: message,
+	}); err != nil {
+		slog.Warn("ws: publish partial Stop notice to originating channel failed",
+			"session_id", sessionID, "channel", target.Channel, "chat_id", target.ChatID, "error", err)
+	}
 }
 
 // cancelSteeredSubtree applies ADR-091 Stop only when a durable lifecycle
@@ -362,6 +390,7 @@ func (h *WSHandler) handleCancel(wc *wsConn, sessionID string) {
 	})
 	if cascaded {
 		sendCancelPartialNotice(wc, sessionID, report)
+		h.sendExternalCancelPartialNotice(context.Background(), sessionID, report)
 	}
 
 	scope := agent.CancelScope{SessionID: sessionID}
