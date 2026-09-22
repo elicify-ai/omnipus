@@ -15,6 +15,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -47,13 +48,24 @@ func parseSteeringMode(s string) SteeringMode {
 // into a running agent loop to interrupt it between tool calls.
 type steeringQueue struct {
 	mu     sync.Mutex
-	queues map[string][]providers.Message
+	queues map[string][]steeringQueueItem
 	mode   SteeringMode
+}
+
+type steeringQueueItem struct {
+	message providers.Message
+	wake    *steeringWake
+}
+
+type steeringWake struct {
+	messageID           string
+	transcriptSessionID string
+	agentID             string
 }
 
 func newSteeringQueue(mode SteeringMode) *steeringQueue {
 	return &steeringQueue{
-		queues: make(map[string][]providers.Message),
+		queues: make(map[string][]steeringQueueItem),
 		mode:   mode,
 	}
 }
@@ -73,6 +85,14 @@ func (sq *steeringQueue) push(msg providers.Message) error {
 
 // pushScope enqueues a steering message for the provided scope.
 func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
+	return sq.pushItemScope(scope, steeringQueueItem{message: msg})
+}
+
+func (sq *steeringQueue) pushWakeScope(scope string, msg providers.Message, wake steeringWake) error {
+	return sq.pushItemScope(scope, steeringQueueItem{message: msg, wake: &wake})
+}
+
+func (sq *steeringQueue) pushItemScope(scope string, item steeringQueueItem) error {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 
@@ -81,7 +101,7 @@ func (sq *steeringQueue) pushScope(scope string, msg providers.Message) error {
 	if len(queue) >= MaxQueueSize {
 		return fmt.Errorf("steering queue is full")
 	}
-	sq.queues[scope] = append(queue, msg)
+	sq.queues[scope] = append(queue, item)
 	return nil
 }
 
@@ -97,7 +117,7 @@ func (sq *steeringQueue) dequeueScope(scope string) []providers.Message {
 	sq.mu.Lock()
 	defer sq.mu.Unlock()
 
-	return sq.dequeueLocked(normalizeSteeringScope(scope))
+	return steeringMessages(sq.dequeueItemsLocked(normalizeSteeringScope(scope)))
 }
 
 // dequeueScopeWithFallback drains the scoped queue first and falls back to the
@@ -108,15 +128,15 @@ func (sq *steeringQueue) dequeueScopeWithFallback(scope string) []providers.Mess
 
 	scope = strings.TrimSpace(scope)
 	if scope != "" {
-		if msgs := sq.dequeueLocked(scope); len(msgs) > 0 {
-			return msgs
+		if items := sq.dequeueItemsLocked(scope); len(items) > 0 {
+			return steeringMessages(items)
 		}
 	}
 
-	return sq.dequeueLocked(manualSteeringScope)
+	return steeringMessages(sq.dequeueItemsLocked(manualSteeringScope))
 }
 
-func (sq *steeringQueue) dequeueLocked(scope string) []providers.Message {
+func (sq *steeringQueue) dequeueItemsLocked(scope string) []steeringQueueItem {
 	queue := sq.queues[scope]
 	if len(queue) == 0 {
 		return nil
@@ -124,20 +144,65 @@ func (sq *steeringQueue) dequeueLocked(scope string) []providers.Message {
 
 	switch sq.mode {
 	case SteeringAll:
-		msgs := append([]providers.Message(nil), queue...)
+		items := append([]steeringQueueItem(nil), queue...)
 		delete(sq.queues, scope)
-		return msgs
+		return items
 	default:
-		msg := queue[0]
-		queue[0] = providers.Message{} // Clear reference for GC
+		item := queue[0]
+		queue[0] = steeringQueueItem{} // Clear reference for GC
 		queue = queue[1:]
 		if len(queue) == 0 {
 			delete(sq.queues, scope)
 		} else {
 			sq.queues[scope] = queue
 		}
-		return []providers.Message{msg}
+		return []steeringQueueItem{item}
 	}
+}
+
+func (sq *steeringQueue) dequeueItemsScope(scope string) (string, []steeringQueueItem) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	return scope, sq.dequeueItemsLocked(scope)
+}
+
+func (sq *steeringQueue) dequeueItemsScopeWithFallback(scope string) (string, []steeringQueueItem) {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	scope = strings.TrimSpace(scope)
+	if scope != "" {
+		if items := sq.dequeueItemsLocked(scope); len(items) > 0 {
+			return scope, items
+		}
+	}
+	return manualSteeringScope, sq.dequeueItemsLocked(manualSteeringScope)
+}
+
+func (sq *steeringQueue) prependItemsScope(scope string, items []steeringQueueItem) {
+	if len(items) == 0 {
+		return
+	}
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+	scope = normalizeSteeringScope(scope)
+	queue := sq.queues[scope]
+	restored := make([]steeringQueueItem, 0, len(items)+len(queue))
+	restored = append(restored, items...)
+	restored = append(restored, queue...)
+	sq.queues[scope] = restored
+}
+
+func steeringMessages(items []steeringQueueItem) []providers.Message {
+	if len(items) == 0 {
+		return nil
+	}
+	msgs := make([]providers.Message, 0, len(items))
+	for _, item := range items {
+		msgs = append(msgs, item.message)
+	}
+	return msgs
 }
 
 // len returns the number of queued messages across all scopes.
@@ -220,14 +285,40 @@ func (al *AgentLoop) EnqueueSteeringMessage(scope, agentID string, msg providers
 }
 
 func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
+	return al.enqueueSteeringItem(scope, agentID, steeringQueueItem{message: msg})
+}
+
+// EnqueueSteeringWake queues an upward wake into an already-live turn while
+// retaining the inbox message identity needed by I-3's consumed marker.
+func (al *AgentLoop) EnqueueSteeringWake(scope, agentID, transcriptSessionID, messageID string, msg providers.Message) error {
+	if strings.TrimSpace(transcriptSessionID) == "" || strings.TrimSpace(messageID) == "" {
+		return fmt.Errorf("steering wake requires transcript session id and message id")
+	}
+	return al.enqueueSteeringItem(scope, agentID, steeringQueueItem{
+		message: msg,
+		wake: &steeringWake{
+			messageID:           messageID,
+			transcriptSessionID: transcriptSessionID,
+			agentID:             agentID,
+		},
+	})
+}
+
+func (al *AgentLoop) enqueueSteeringItem(scope, agentID string, item steeringQueueItem) error {
 	if al.steering == nil {
 		return fmt.Errorf("steering queue is not initialized")
 	}
 
-	if err := al.steering.pushScope(scope, msg); err != nil {
+	var err error
+	if item.wake == nil {
+		err = al.steering.pushScope(scope, item.message)
+	} else {
+		err = al.steering.pushWakeScope(scope, item.message, *item.wake)
+	}
+	if err != nil {
 		logger.WarnCF("agent", "Failed to enqueue steering message", map[string]any{
 			"error": err.Error(),
-			"role":  msg.Role,
+			"role":  item.message.Role,
 			"scope": normalizeSteeringScope(scope),
 		})
 		return err
@@ -235,9 +326,9 @@ func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers
 
 	queueDepth := al.steering.lenScope(scope)
 	logger.DebugCF("agent", "Steering message enqueued", map[string]any{
-		"role":        msg.Role,
-		"content_len": len(msg.Content),
-		"media_count": len(msg.Media),
+		"role":        item.message.Role,
+		"content_len": len(item.message.Content),
+		"media_count": len(item.message.Media),
 		"queue_len":   queueDepth,
 		"scope":       normalizeSteeringScope(scope),
 	})
@@ -270,8 +361,8 @@ func (al *AgentLoop) enqueueSteeringMessage(scope, agentID string, msg providers
 		meta,
 		InterruptReceivedPayload{
 			Kind:       InterruptKindSteering,
-			Role:       msg.Role,
-			ContentLen: len(msg.Content),
+			Role:       item.message.Role,
+			ContentLen: len(item.message.Content),
 			QueueDepth: queueDepth,
 		},
 	)
@@ -301,21 +392,57 @@ func (al *AgentLoop) dequeueSteeringMessages() []providers.Message {
 	if al.steering == nil {
 		return nil
 	}
-	return al.steering.dequeue()
+	scope, items := al.steering.dequeueItemsScope(manualSteeringScope)
+	return al.consumeDequeuedSteering(scope, items)
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScope(scope string) []providers.Message {
 	if al.steering == nil {
 		return nil
 	}
-	return al.steering.dequeueScope(scope)
+	actualScope, items := al.steering.dequeueItemsScope(scope)
+	return al.consumeDequeuedSteering(actualScope, items)
 }
 
 func (al *AgentLoop) dequeueSteeringMessagesForScopeWithFallback(scope string) []providers.Message {
 	if al.steering == nil {
 		return nil
 	}
-	return al.steering.dequeueScopeWithFallback(scope)
+	actualScope, items := al.steering.dequeueItemsScopeWithFallback(scope)
+	return al.consumeDequeuedSteering(actualScope, items)
+}
+
+func (al *AgentLoop) consumeDequeuedSteering(scope string, items []steeringQueueItem) []providers.Message {
+	if len(items) == 0 {
+		return nil
+	}
+	msgs := make([]providers.Message, 0, len(items))
+	for i, item := range items {
+		if item.wake != nil {
+			if err := al.writeSteeringConsumedMarker(*item.wake); err != nil {
+				al.steering.prependItemsScope(scope, items[i:])
+				slog.Error("agent: steering wake not consumed; restored to queue",
+					"scope", scope, "message_id", item.wake.messageID, "error", err)
+				return msgs
+			}
+		}
+		msgs = append(msgs, item.message)
+	}
+	return msgs
+}
+
+func (al *AgentLoop) writeSteeringConsumedMarker(wake steeringWake) error {
+	store := al.ResolveSessionStore(wake.transcriptSessionID)
+	if store == nil {
+		return fmt.Errorf("no transcript store for session %q", wake.transcriptSessionID)
+	}
+	return store.AppendTranscriptStrict(wake.transcriptSessionID, session.TranscriptEntry{
+		ID:      "consumed-" + wake.messageID,
+		Type:    session.EntryTypeSystem,
+		Role:    "system",
+		Content: "consumed " + wake.messageID,
+		AgentID: wake.agentID,
+	})
 }
 
 func (al *AgentLoop) pendingSteeringCountForScope(scope string) int {
