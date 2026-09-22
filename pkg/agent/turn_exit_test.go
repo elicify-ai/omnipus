@@ -51,9 +51,6 @@ func TestFinishedChannelClosedState(t *testing.T) {
 	// Verify Finish() is idempotent
 	ts.Finish(false) // Should not panic
 
-	// Verify deliverSubTurnResult correctly uses Finished() channel and treats as orphan
-	result := &tools.ToolResult{ForLLM: "late result"}
-	deliverSubTurnResult(nil, ts, "child-1", result) // Will emit orphan due to <-ts.Finished() case
 }
 
 // TestFinish_ConcurrentCalls verifies that calling Finish() concurrently from multiple
@@ -65,7 +62,7 @@ func TestFinish_ConcurrentCalls(t *testing.T) {
 		turnID:         "parent-concurrent-finish",
 		depth:          0,
 		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
+		concurrencySem: make(chan struct{}, 5),
 	}
 	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
 

@@ -7,27 +7,26 @@
 // shape of task_executor.go::createTaskSessionSync +
 // mintTaskLifecycleRecord, generalised with the steered-by edge (I-1).
 //
-// Scope note (stated once here, restated in the phase-2 report): Dispatch
-// admits a session and starts its first turn by constructing a turnState
-// directly (newTurnState + registerTurnIfAbsent + al.runTurn in a
-// goroutine) rather than by rewiring subturn.go::spawnSubTurn's live
-// synchronous execution path. Landing order CP-5 assigns "WP-C's delegate
-// uses the launcher" to WP-C, not WP-A — the actual `delegate` tool
-// call-site rewiring (and the accompanying deletion of
-// subturn.go::createChildSession, the ephemeralSessionStore ring, and
-// SubTurnConfig.Async) is deferred to that checkpoint, coupled to WP-G's
-// still-incomplete 49-file test classification (only 3/49 rows were filled
-// in as of this session — see the phase-2 report).
+// Dispatch admits a session and starts its first turn by constructing a
+// turnState directly (newTurnState + registerTurnIfAbsent + al.runTurn in a
+// goroutine). All delegate and task call sites use this launcher; the former
+// in-chat subturn execution path has been deleted.
 package agent
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/elicify-ai/omnipus/pkg/goal"
+	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
+	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // maxLaunchAncestorWalk bounds Launch's root-verification walk — mirrors
@@ -37,6 +36,8 @@ import (
 // call shapes; both use a visited-id set as the real cycle detector and
 // this only as a defensive backstop.
 const maxLaunchAncestorWalk = 4096
+
+const defaultSteeredSessionTimeout = 5 * time.Minute
 
 // SteerLauncher implements steer.SessionLauncher (I-2), owned by WP-A.
 type SteerLauncher struct {
@@ -101,6 +102,20 @@ func (l *SteerLauncher) Launch(_ context.Context, req steer.LaunchRequest) (stee
 	if l.al == nil {
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: no AgentLoop wired", steer.ErrStoreWrite)
 	}
+	if req.Limits.TimeoutSeconds < 0 {
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: timeout_seconds must be >= 0")
+	}
+	if req.Limits.TimeoutSeconds == 0 {
+		minutes, timeoutErr := l.al.GetConfig().Performance.EffectiveDelegationTimeoutMinutes()
+		if timeoutErr != nil {
+			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w", timeoutErr)
+		}
+		timeout := time.Duration(minutes) * time.Minute
+		if timeout <= 0 {
+			timeout = defaultSteeredSessionTimeout
+		}
+		req.Limits.TimeoutSeconds = int(timeout.Seconds())
+	}
 	if _, ok := l.al.GetRegistry().GetAgent(req.TargetAgentID); !ok {
 		return steer.LaunchResult{}, steer.ErrAgentUnknown
 	}
@@ -133,19 +148,9 @@ func (l *SteerLauncher) publishSteeredLaunch(req steer.LaunchRequest, result ste
 	if l == nil || l.al == nil || req.SteeringSessionID == "" || req.Origin.CallID == "" || result.SessionID == "" {
 		return
 	}
-	l.al.emitEvent(EventKindSubTurnSpawn,
-		EventMeta{Source: "steer", TracePath: "steer.launch", SessionKey: req.SteeringSessionID},
-		SubTurnSpawnPayload{
-			AgentID:           req.TargetAgentID,
-			Label:             result.SessionID,
-			SpanID:            subagentSpanID(req.Origin.CallID),
-			ParentSpawnCallID: session.ToolCallID(req.Origin.CallID),
-			TaskLabel:         title,
-			SessionID:         req.SteeringSessionID,
-		},
-	)
 	if lifecycle := l.al.GetSessionLifecycleStore(); lifecycle != nil {
 		if rec, err := lifecycle.Load(result.SessionID); err == nil {
+			l.al.deliverSubagentStart(req.SteeringSessionID, rec, title)
 			l.al.deliverSubagentState(req.SteeringSessionID, rec, string(session.LifecycleQueued))
 		}
 	}
@@ -174,6 +179,16 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		rollback()
 		return steer.LaunchResult{}, err
 	}
+	goalID, goalErr := l.createLaunchGoal(req, childID, title, req.TargetAgentID)
+	if goalErr != nil {
+		rollback()
+		return steer.LaunchResult{}, goalErr
+	}
+	rollbackGoal := func() {
+		if goalID != "" {
+			_ = resolveGoalRecordStore().Delete(goalID)
+		}
+	}
 
 	origin := req.Origin
 	ownerKind := session.OwnerScopeHuman
@@ -188,11 +203,14 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 		State:          session.LifecycleQueued,
 		OwnerScopeKind: ownerKind,
 		OwnerScopeID:   ownerID,
+		Title:          title,
+		GoalRef:        goalID,
 		WorkspaceID:    req.WorkspaceID,
 		AgentID:        req.TargetAgentID,
 		Origin:         &origin,
 	}
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		rollbackGoal()
 		rollback()
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: edge: %v", steer.ErrStoreWrite, persistErr)
 	}
@@ -228,13 +246,46 @@ func (l *SteerLauncher) launchSteered(
 		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: mint session id: %v", steer.ErrStoreWrite, idErr)
 	}
 
+	// Resolve the ancestor chain before taking the direct parent's shard
+	// lock. LifecycleStore uses striped, non-reentrant mutexes, so loading an
+	// ancestor from inside PublishChildUnderParentLock can self-deadlock when
+	// two distinct IDs share a shard. The callback below revalidates the
+	// direct edge before publishing, closing the race between this snapshot
+	// and lock acquisition without taking another shard lock.
+	preParent, preParentErr := lifecycle.Load(req.SteeringSessionID)
+	preParentExisted := preParentErr == nil
+	if preParentErr != nil && !errors.Is(preParentErr, session.ErrLifecycleNotFound) {
+		return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: resolve steering lifecycle: %v",
+			steer.ErrInvalidEdge, preParentErr)
+	}
+	rootID := req.SteeringSessionID
+	if preParentExisted {
+		var walkErr error
+		rootID, walkErr = l.walkVerifiedRoot(req.SteeringSessionID, preParent)
+		if walkErr != nil {
+			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: %v", steer.ErrInvalidEdge, walkErr)
+		}
+	}
+
 	var resultGen int
+	var goalID string
 	pubErr := lifecycle.PublishChildUnderParentLock(req.SteeringSessionID,
 		func(parentRec *session.LifecycleRecord, existed bool) (*session.LifecycleRecord, error) {
+			if existed != preParentExisted || (existed && !sameSteeringEdge(parentRec, preParent)) {
+				return nil, fmt.Errorf("steering edge changed while launch was acquiring the parent lock")
+			}
 			steererMeta, metaErr := sessions.GetMeta(req.SteeringSessionID)
 			if metaErr != nil {
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %v",
 					steer.ErrInvalidEdge, req.SteeringSessionID, metaErr)
+			}
+			parentAgentID := strings.TrimSpace(steererMeta.ActiveAgentID)
+			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
+				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
+			}
+			if parentAgentID == "" {
+				logger.WarnCF("agent", "steer: launch: accepting empty parent agent identity by operator configuration",
+					map[string]any{"session_id": req.SteeringSessionID, "config": "tools.delegate.require_parent_agent_id"})
 			}
 			workspaceID := steererMeta.WorkspaceID
 
@@ -250,10 +301,6 @@ func (l *SteerLauncher) launchSteered(
 				parentRec.Origin = &session.Origin{Kind: session.OriginKind(steererMeta.Type)}
 			}
 
-			rootID, walkErr := l.walkVerifiedRoot(req.SteeringSessionID, parentRec)
-			if walkErr != nil {
-				return nil, fmt.Errorf("steer: launch: %w: %v", steer.ErrInvalidEdge, walkErr)
-			}
 			remainingDepth := l.startingRemainingDepth(parentRec)
 			if remainingDepth <= 0 {
 				return nil, steer.ErrDepthExceeded
@@ -265,9 +312,10 @@ func (l *SteerLauncher) launchSteered(
 				ReportingTarget: session.ReportingTarget{
 					SessionID: req.SteeringSessionID,
 					Channel:   steererMeta.Channel,
+					ChatID:    steererMeta.PeerID,
 				},
 				Authorization: session.Authorization{
-					Mode:           session.AuthorizationModeDirect,
+					Mode:           launchAuthorizationMode(req.Origin.Kind),
 					RemainingDepth: remainingDepth - 1,
 				},
 				Limits:         req.Limits,
@@ -288,6 +336,12 @@ func (l *SteerLauncher) launchSteered(
 				_ = sessions.DeleteSession(childID)
 				return nil, err
 			}
+			var goalErr error
+			goalID, goalErr = l.createLaunchGoal(req, childID, title, steererMeta.ActiveAgentID)
+			if goalErr != nil {
+				_ = sessions.DeleteSession(childID)
+				return nil, goalErr
+			}
 
 			origin := req.Origin
 			resultGen = 1
@@ -297,8 +351,11 @@ func (l *SteerLauncher) launchSteered(
 				State:          session.LifecycleQueued,
 				OwnerScopeKind: session.OwnerScopeParentSession,
 				OwnerScopeID:   req.SteeringSessionID,
+				Title:          title,
+				GoalRef:        goalID,
 				WorkspaceID:    workspaceID,
 				AgentID:        req.TargetAgentID,
+				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
 				Stop:           stopStamp,
@@ -306,9 +363,106 @@ func (l *SteerLauncher) launchSteered(
 		},
 	)
 	if pubErr != nil {
+		// The lifecycle transaction compensates its own parent/child JSONL
+		// writes. The unified session was staged inside the callback, so it has
+		// a separate compensating delete on every publication failure.
+		_ = sessions.DeleteSession(childID)
+		if goalID != "" {
+			_ = resolveGoalRecordStore().Delete(goalID)
+		}
 		return steer.LaunchResult{}, pubErr
 	}
 	return steer.LaunchResult{SessionID: childID, Generation: resultGen}, nil
+}
+
+func launchAuthorizationMode(kind steer.OriginKind) session.AuthorizationMode {
+	if kind == steer.OriginKindTask {
+		return session.AuthorizationModeTask
+	}
+	return session.AuthorizationModeDirect
+}
+
+func (l *SteerLauncher) createLaunchGoal(
+	req steer.LaunchRequest,
+	childID string,
+	title string,
+	authorAgentID string,
+) (string, error) {
+	if req.Goal == nil {
+		return "", nil
+	}
+	if authorAgentID == "" {
+		return "", fmt.Errorf("steer: launch: %w: goal author agent is empty", steer.ErrStoreWrite)
+	}
+	criteria := launchGoalCriteria(req.Goal.Criteria, authorAgentID)
+	dod := launchGoalCriteria(req.Goal.DoD, authorAgentID)
+	source := generated.GoalSourceChatCompiled
+	if req.Origin.Kind == steer.OriginKindTask {
+		source = generated.GoalSourceTaskExplicit
+	}
+	now := time.Now().UTC()
+	g, err := goal.New(
+		generated.GoalOwnerKindSession,
+		childID,
+		source,
+		title,
+		"",
+		criteria,
+		dod,
+		goalTryLimit(l.al),
+		now,
+	)
+	if err != nil {
+		return "", fmt.Errorf("steer: launch: %w: goal: %v", steer.ErrStoreWrite, err)
+	}
+	store := resolveGoalRecordStore()
+	if err := store.Create(g); err != nil {
+		return "", fmt.Errorf("steer: launch: %w: create goal: %v", steer.ErrStoreWrite, err)
+	}
+	if _, err := store.Update(g.GoalID, func(current *goal.Goal) error {
+		return current.Activate(childID, now)
+	}); err != nil {
+		_ = store.Delete(g.GoalID)
+		return "", fmt.Errorf("steer: launch: %w: activate goal: %v", steer.ErrStoreWrite, err)
+	}
+	return g.GoalID, nil
+}
+
+func launchGoalCriteria(in []steer.Criterion, authorAgentID string) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(in))
+	for _, criterion := range in {
+		mapped := task.AcceptanceCriterion{
+			Kind:     task.CriterionKind(criterion.Kind),
+			Judgment: task.JudgmentKind(criterion.Judgment),
+			Text:     criterion.Text,
+			Author: task.CriterionAuthor{
+				Kind: task.AuthorKindAgent,
+				ID:   authorAgentID,
+			},
+		}
+		if criterion.Check != nil {
+			mapped.Check = &task.CriterionCheck{
+				Command:          criterion.Check.Command,
+				ExpectedExitCode: criterion.Check.ExpectedExitCode,
+			}
+		}
+		out = append(out, mapped)
+	}
+	return out
+}
+
+// sameSteeringEdge compares only the immutable hierarchy identity that was
+// resolved before the parent lock. Mutable lifecycle fields (state, Stop,
+// generation) are intentionally read fresh inside the locked callback.
+func sameSteeringEdge(current, snapshot *session.LifecycleRecord) bool {
+	if current == nil || snapshot == nil {
+		return current == nil && snapshot == nil
+	}
+	if current.SteeredBy == nil || snapshot.SteeredBy == nil {
+		return current.SteeredBy == nil && snapshot.SteeredBy == nil
+	}
+	return current.SteeredBy.SteeringSessionID == snapshot.SteeredBy.SteeringSessionID &&
+		current.SteeredBy.RootSessionID == snapshot.SteeredBy.RootSessionID
 }
 
 // writeChildMetaAndHistory applies the child's meta patch (title,
@@ -390,19 +544,18 @@ func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *s
 // ITS launch) when it is itself steered, else the effective global
 // delegation-depth ceiling for a first hop off a root.
 //
-// Reads the SAME config key (Agents.Defaults.SubTurn.MaxDepth) subturn.go's
-// getSubTurnConfig still reads today — the D9 config-fold ("MaxDepth" moves
-// to performance.max_delegation_depth) is deferred to land together with
-// that file's own ring/spawnSubTurn deletion (see this file's package
-// doc), so as not to split the single source of truth
-// resolveEffectiveDelegationDepth's own doc comment requires.
+// The global budget comes from performance.max_delegation_depth, the sole
+// source of truth after the retired subturn-specific depth setting was folded
+// into the shared performance configuration.
 func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord) int {
 	if steererRec.SteeredBy != nil {
 		return steererRec.SteeredBy.Authorization.RemainingDepth
 	}
 	globalMaxDepth := 0
 	if cfg := l.al.GetConfig(); cfg != nil {
-		globalMaxDepth = cfg.Agents.Defaults.SubTurn.MaxDepth
+		if configured, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil {
+			globalMaxDepth = configured
+		}
 	}
 	return resolveEffectiveDelegationDepth(nil, globalMaxDepth)
 }
@@ -418,8 +571,20 @@ func (l *SteerLauncher) Dispatch(ctx context.Context, sessionID string, gen int)
 	return l.al.dispatchSteeredSession(ctx, sessionID, gen)
 }
 
+func (al *AgentLoop) dispatchSteeredSession(ctx context.Context, sessionID string, gen int) (steer.DispatchResult, error) {
+	return al.dispatchSteeredSessionWithReservation(ctx, sessionID, gen, false)
+}
+
+// dispatchSteeredSessionReserved resumes the FIFO head whose slot was already
+// reserved by steerAdmission.release. It deliberately skips tryAdmit; running
+// the promoted entry through ordinary admission would see its own reservation
+// at the cap and requeue forever.
+func (al *AgentLoop) dispatchSteeredSessionReserved(ctx context.Context, sessionID string, gen int) (steer.DispatchResult, error) {
+	return al.dispatchSteeredSessionWithReservation(ctx, sessionID, gen, true)
+}
+
 // dispatchSteeredSession is I-2/I-3's authoritative admission decision.
-// Reserves via I-6's reserveDispatch (WP-D's, admits everything until CP-3),
+// Reserves via I-6's live reserveDispatch guard,
 // then decides running/queued atomically against the turn-counting
 // admission gate (steerAdmission), then registers the turn via
 // registerTurnIfAbsent — in that order — so two concurrent dispatches for
@@ -440,80 +605,122 @@ func (l *SteerLauncher) Dispatch(ctx context.Context, sessionID string, gen int)
 // both independently atomic. The record read/write below is sequential
 // (Load, decide, Persist — each individually lock-safe) and is a state
 // MIRROR for observability, not the concurrency gate itself.
-func (al *AgentLoop) dispatchSteeredSession(ctx context.Context, sessionID string, gen int) (steer.DispatchResult, error) {
+func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, sessionID string, gen int, reserved bool) (steer.DispatchResult, error) {
 	lifecycle := al.GetSessionLifecycleStore()
 	if lifecycle == nil {
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: no lifecycle store wired", steer.ErrStoreWrite)
 	}
+	gate := al.steerAdmission()
+	if reserved && !gate.hasReservation(sessionID, gen) {
+		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: promoted reservation is stale", steer.ErrStaleGeneration)
+	}
+	rollbackReservation := func() {
+		if reserved {
+			al.drainSteerQueue(sessionID, gen)
+		}
+	}
 
 	rec, err := lifecycle.Load(sessionID)
 	if err != nil {
+		rollbackReservation()
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, err)
 	}
-	if rec.Terminal() {
-		return steer.DispatchResult{}, steer.ErrTerminal
-	}
-	// Checked directly, NOT gated behind reserveDispatch's return value:
-	// reserveDispatch (steer_cancel.go) is still WP-D's CP-0 stub, which
-	// admits everything unconditionally until CP-3. The Stop marker and
-	// Generation fields are I-1 (this lane's own row); "no dispatch starts
-	// a turn on a stamped session" is the ADR's one-paragraph model, not a
-	// property that may wait for another lane's checkpoint to hold.
-	if rec.Stop != nil && rec.Stop.Generation == rec.Generation {
-		return steer.DispatchResult{}, steer.ErrDispatchCancelled
-	}
-	if gen < rec.Generation {
-		return steer.DispatchResult{}, steer.ErrStaleGeneration
-	}
 	if ok, reason := reserveDispatch(rec, gen); !ok {
+		rollbackReservation()
+		switch reason {
+		case steer.ErrDispatchCancelled.Error():
+			return steer.DispatchResult{}, steer.ErrDispatchCancelled
+		case steer.ErrStaleGeneration.Error():
+			return steer.DispatchResult{}, steer.ErrStaleGeneration
+		case steer.ErrTerminal.Error():
+			return steer.DispatchResult{}, steer.ErrTerminal
+		}
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: refused: %s", reason)
 	}
 
-	admitted, position := al.steerAdmission().tryAdmit(sessionID, gen)
-	if !admitted {
-		rec.State = session.LifecycleQueued
-		if persistErr := lifecycle.Persist(rec); persistErr != nil {
-			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
+	if !reserved {
+		admitted, position, concurrencyLimit := gate.tryAdmit(sessionID, gen)
+		if !admitted {
+			rec.State = session.LifecycleQueued
+			if persistErr := lifecycle.Persist(rec); persistErr != nil {
+				gate.removeQueued(sessionID, gen)
+				return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
+			}
+			return steer.DispatchResult{State: steer.DispatchQueued, ConcurrencyLimit: concurrencyLimit, QueuePosition: position, Generation: gen}, nil
 		}
-		return steer.DispatchResult{State: steer.DispatchQueued, QueuePosition: position, Generation: gen}, nil
 	}
 
 	if rec.Origin != nil && rec.Origin.Kind == session.OriginKindTask && al.taskExecutor != nil {
 		if dispatchErr := al.taskExecutor.dispatchLaunchedTask(rec, func() {
-			al.steerAdmission().release(sessionID)
+			al.drainSteerQueue(sessionID, gen)
 		}); dispatchErr != nil {
-			al.steerAdmission().release(sessionID)
+			al.drainSteerQueue(sessionID, gen)
 			return steer.DispatchResult{}, dispatchErr
 		}
 		rec.State = session.LifecycleRunning
 		if persistErr := lifecycle.Persist(rec); persistErr != nil {
+			al.drainSteerQueue(sessionID, gen)
 			return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
+		}
+		if rec.SteeredBy != nil {
+			al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning))
 		}
 		return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 	}
 
 	ts, buildErr := al.reconstructSteeredTurn(rec, nil)
 	if buildErr != nil {
-		al.steerAdmission().release(sessionID)
+		al.drainSteerQueue(sessionID, gen)
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: reconstruct: %v", steer.ErrStoreWrite, buildErr)
 	}
 	if !al.registerTurnIfAbsent(ts) {
 		// Another dispatch already won the race for this sessionKey; ours
 		// takes no turn and releases the admission slot it just claimed.
-		al.steerAdmission().release(sessionID)
+		al.drainSteerQueue(sessionID, gen)
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: concurrent dispatch already registered a turn", steer.ErrStaleGeneration)
 	}
 
 	rec.State = session.LifecycleRunning
 	if persistErr := lifecycle.Persist(rec); persistErr != nil {
+		al.activeTurnStates.CompareAndDelete(sessionID, ts)
+		al.drainSteerQueue(sessionID, gen)
 		return steer.DispatchResult{}, fmt.Errorf("steer: dispatch: %w: %v", steer.ErrStoreWrite, persistErr)
+	}
+	if rec.SteeredBy != nil {
+		al.deliverSubagentState(rec.SteeringSessionID(), rec, string(session.LifecycleRunning))
 	}
 
 	// Fire-and-forget (I-2 "Return timing", founder decision round 9): the
 	// delegate tool returns as soon as Launch+Dispatch have returned; there
 	// is no ordering hook between the parent's tool result and the child's
 	// start.
-	go func() { _, _ = al.runTurn(ctx, ts) }()
+	go func() {
+		runCtx := context.Background()
+		cancel := func() {}
+		if rec.SteeredBy != nil && rec.SteeredBy.Limits.TimeoutSeconds > 0 && !rec.CreatedAt.IsZero() {
+			runCtx, cancel = context.WithDeadline(runCtx,
+				rec.CreatedAt.Add(time.Duration(rec.SteeredBy.Limits.TimeoutSeconds)*time.Second))
+		}
+		defer cancel()
+		result, runErr := al.runTurn(runCtx, ts)
+		finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
+		if runErr == nil && result.finalContent != "" && finalAudience == steer.AudienceUser {
+			if publishErr := al.bus.PublishOutbound(runCtx, bus.OutboundMessage{
+				Channel: ts.channel, ChatID: ts.chatID, Content: result.finalContent, SessionID: sessionID,
+			}); publishErr != nil {
+				logger.WarnCF("agent", "steer: publish dispatched final reply failed",
+					map[string]any{"session_id": sessionID, "generation": gen, "error": publishErr.Error()})
+			}
+		}
+		if rec.GoalRef != "" {
+			al.finishSteeredGoalTurn(ts, &result, runErr)
+			return
+		}
+		if finishErr := al.completeSteeredTurn(context.Background(), rec, result, runErr); finishErr != nil {
+			logger.WarnCF("agent", "steer: complete dispatched turn failed",
+				map[string]any{"session_id": sessionID, "generation": gen, "error": finishErr.Error()})
+		}
+	}()
 
 	return steer.DispatchResult{State: steer.DispatchRunning, Generation: gen}, nil
 }

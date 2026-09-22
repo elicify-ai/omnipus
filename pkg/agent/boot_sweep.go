@@ -335,7 +335,12 @@ func (r *SteerBootRecovery) deliverIfUnconsumed(ctx context.Context, rec *sessio
 		}
 		return
 	}
-	if !wakeEligibleBootMessage(envelope) {
+	class, classErr := session.ClassifySessionMessage(message)
+	if classErr != nil {
+		notice("message:"+rec.SessionID, fmt.Sprintf("session %s has unreadable inbox message: %v", rec.SessionID, classErr))
+		return
+	}
+	if !class.WakeEligible {
 		return
 	}
 	r.deliver(ctx, rec, bootOutcome(envelope), message, notice)
@@ -486,17 +491,6 @@ func findBootMessage(messages []generated.SessionMessage, id string) (generated.
 		}
 	}
 	return generated.SessionMessage{}, false
-}
-
-func wakeEligibleBootMessage(envelope bootSessionMessageEnvelope) bool {
-	switch envelope.Kind {
-	case "handback", "question", "blocker", "goal_status":
-		return true
-	case "error":
-		return envelope.Fatal
-	default:
-		return false
-	}
 }
 
 func bootOutcome(envelope bootSessionMessageEnvelope) steer.Outcome {

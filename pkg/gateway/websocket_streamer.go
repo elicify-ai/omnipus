@@ -50,7 +50,11 @@ func SetGatewaySteerAudienceDeps(resolver steer.AudienceResolver, observer steer
 // steeredAudienceNotUser resolves sessionID's audience ONCE (called only
 // from each streamer's own one-time shadow-resolution block, mirroring
 // claimStreamOwnership's lazy-once pattern — never per token) and reports
-// whether it is anything other than steer.AudienceUser. Calls
+// whether delivery must be suppressed because the audience cannot be
+// established. AudienceSteeringSession is allowed here because targets are
+// already selected by the producer's own session ID; this lets a viewer who
+// deliberately opens that child see its output without leaking it to the
+// parent's connection. Calls
 // steer.BoundaryObserver.Observe before returning (FR-B-014). A never-wired
 // resolver (nil) answers false — today's unrestricted behaviour.
 func steeredAudienceNotUser(ctx context.Context, sessionID string) bool {
@@ -68,7 +72,7 @@ func steeredAudienceNotUser(ctx context.Context, sessionID string) bool {
 		audience = steer.AudienceNone
 	}
 	observer.Observe(steer.BoundaryWebchatStreaming, sessionID, audience)
-	return audience != steer.AudienceUser
+	return audience == steer.AudienceNone
 }
 
 // GetStreamer implements bus.StreamDelegate.

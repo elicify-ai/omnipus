@@ -149,7 +149,7 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	jimCheck := buildDelegationDenyCheckerForDelegate(
 		string(coreagent.IDJim),
 		cfg.Agents.Defaults,
-		config.DelegationModeAwait,
+		config.DelegationMode("await"),
 	)
 	if denial := jimCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial != nil {
 		t.Fatalf("Jim → worker (await) must be allowed, got deny: %+v", denial)
@@ -159,7 +159,7 @@ func TestSeededGraph_JimAwaitModeAllowed(t *testing.T) {
 	miaCheck := buildDelegationDenyCheckerForDelegate(
 		string(coreagent.IDMia),
 		cfg.Agents.Defaults,
-		config.DelegationModeAwait,
+		config.DelegationMode("await"),
 	)
 	if denial := miaCheck(ctxWS(testWS, 0), string(coreagent.IDWorker)); denial == nil || denial.Policy != "trust_set" {
 		t.Fatalf("Mia → worker must be denied by the trust graph, got: %+v", denial)

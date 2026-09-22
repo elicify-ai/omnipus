@@ -1067,23 +1067,6 @@ func defaultAgentsConfig(workspacePath string) AgentsConfig {
 			Temperature:       nil, // nil means use provider default
 			MaxToolIterations: 200,
 			SteeringMode:      "one-at-a-time",
-			// Concurrency-gate consolidation (2026-08-04, commit
-			// 536b7340's follow-up fix): SubTurn.MaxConcurrent is
-			// deliberately left UNSET (Go zero value) rather than seeded.
-			// A fresh install previously seeded this to a fixed 16
-			// (ADR-057 FR-095 / grill #2 M2-1) so getSubTurnConfig's and
-			// ResolveRootDelegationCap's `if maxConcurrent <= 0` fallback
-			// branch (pkg/agent/subturn.go, pkg/agent/admission.go) would
-			// never fire — that reasoning depended on
-			// Performance.EffectiveMaxParallelAgents() ALSO being
-			// hard-clamped to 16 at the time. 536b7340 removed that
-			// ceiling, so a fixed 16 seed here would become a SECOND,
-			// independent concurrency cap silently disagreeing with the
-			// operator's own max_parallel_agents setting — leaving this
-			// field at zero makes Performance.EffectiveMaxParallelAgents()
-			// the single, central authority both fallback branches
-			// resolve to, with no seeded value to drift out of sync. See
-			// SubTurnConfig.MaxConcurrent's doc comment (config.go).
 			ToolFeedback: ToolFeedbackConfig{
 				Enabled:       false,
 				MaxArgsLength: 300,

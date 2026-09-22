@@ -110,21 +110,32 @@ func isTerminalOutcome(o steer.Outcome) bool {
 	}
 }
 
-// wakeEligibleOutcome reports whether o wakes the recipient (I-5's
-// wake-eligibility table: handback, question, blocker, a fatal error,
-// goal_status — today's wakeableSessionMessageKinds plus goal_status, minus
-// non-fatal errors). progress/checkpoint/a non-fatal lifecycle notice never
-// wake, not at first delivery and not at boot.
-func wakeEligibleOutcome(o steer.Outcome) bool {
-	switch o {
-	case steer.OutcomeFinalAnswer, steer.OutcomeEmptyAnswer, steer.OutcomeParkedQuestion,
-		steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed,
-		steer.OutcomeBlocker, steer.OutcomeGoalVerdict:
-		return true
+func validateOutcomeMessage(outcome steer.Outcome, class session.SessionMessageDeliveryClass) error {
+	wantKind, wantFatal := "", false
+	switch outcome {
+	case steer.OutcomeFinalAnswer:
+		wantKind = "handback"
+	case steer.OutcomeEmptyAnswer, steer.OutcomeInterrupted, steer.OutcomeTimedOut, steer.OutcomeFailed:
+		wantKind, wantFatal = "error", true
+	case steer.OutcomeParkedQuestion:
+		wantKind = "question"
+	case steer.OutcomeBlocker:
+		wantKind = "blocker"
+	case steer.OutcomeGoalVerdict:
+		wantKind = "goal_status"
+	case steer.OutcomeProgress:
+		wantKind = "progress"
+	case steer.OutcomeCheckpoint:
+		wantKind = "checkpoint"
+	case steer.OutcomeLifecycleNotice:
+		wantKind = "error"
 	default:
-		// progress, checkpoint, lifecycle_notice, waiting_for_children.
-		return false
+		return fmt.Errorf("outcome %q has no deliverable message variant", outcome)
 	}
+	if class.Kind != wantKind || (wantKind == "error" && class.Fatal != wantFatal) {
+		return fmt.Errorf("outcome %q does not match message kind %q (fatal=%v)", outcome, class.Kind, class.Fatal)
+	}
+	return nil
 }
 
 // subagentMessageKindForOutcome maps an I-5 turn Outcome onto the
@@ -183,16 +194,6 @@ func deliverOwnerKey(rec *session.LifecycleRecord) string {
 		return ""
 	}
 	return strings.TrimSpace(rec.SteeringSessionID())
-}
-
-// steeringSessionKey mirrors steering.go::enqueueSteeringFromMessage's own
-// key composition ("agent:<id>:<sid>") — the same key runTurn registers the
-// active turn under in activeTurnStates.
-func steeringSessionKey(agentID, sessionID string) string {
-	if agentID == "" {
-		return sessionID
-	}
-	return "agent:" + agentID + ":" + sessionID
 }
 
 // withDeterministicMessageID returns msg with its MessageId field
@@ -295,6 +296,13 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	}
 
 	msg := event.Message
+	class, classErr := session.ClassifySessionMessage(msg)
+	if classErr != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: classify message: %w", classErr)
+	}
+	if matchErr := validateOutcomeMessage(event.Outcome, class); matchErr != nil {
+		return steer.Delivery{}, fmt.Errorf("steer: deliver: %w", matchErr)
+	}
 	if isTerminalOutcome(event.Outcome) {
 		id := fmt.Sprintf("%s:%d:final", event.ChildSessionID, childRec.Generation)
 		msg, err = withDeterministicMessageID(msg, id)
@@ -308,6 +316,13 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		return steer.Delivery{}, fmt.Errorf("steer: deliver: append: %w", appendErr)
 	}
 
+	// A deterministic duplicate means a previous delivery already performed
+	// every externally visible effect. Repeating frames or a wake would turn
+	// inbox deduplication into at-least-once behavior at the actual sinks.
+	if res.Deduped {
+		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
+	}
+
 	// ADR-091 D7/I-4: the parent's side-panel status line, persisted as an
 	// event in the parent's OWN transcript so it survives a reload
 	// (steer_frames.go). Best-effort — see deliverSubagentMessage/State's
@@ -318,8 +333,11 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 	if state := subagentStateForOutcome(event.Outcome); state != "" {
 		al.deliverSubagentState(ownerKey, childRec, state)
 	}
+	if isTerminalOutcome(event.Outcome) {
+		al.deliverSubagentEnd(ownerKey, childRec, event.Outcome)
+	}
 
-	if !wakeEligibleOutcome(event.Outcome) {
+	if !class.WakeEligible {
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
 
@@ -341,10 +359,10 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 	}
 
-	sessionKey := steeringSessionKey(ownerRec.AgentID, ownerKey)
+	sessionKey := ownerKey
 	if ts := al.getActiveTurnState(sessionKey); ts != nil && ts.IsAlive() {
 		pm := providers.Message{Role: "user", Content: deliverySummary(msg)}
-		if enqErr := al.EnqueueSteeringMessage(sessionKey, ownerRec.AgentID, pm); enqErr != nil {
+		if enqErr := al.EnqueueSteeringWake(sessionKey, ownerRec.AgentID, ownerKey, res.MessageID, pm); enqErr != nil {
 			return steer.Delivery{}, fmt.Errorf("steer: deliver: enqueue steering message: %w", enqErr)
 		}
 		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryQueuedIntoLiveTurn}, nil
@@ -352,9 +370,10 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 
 	kindStr, _ := msg.Discriminator()
 	if al.asyncNotifier != nil {
+		target := childRec.SteeredBy.ReportingTarget
 		wakeEvent := tools.MessageParentWakeEvent{
-			Channel:             ownerRec.OriginChannel,
-			ChatID:              ownerRec.OriginChatID,
+			Channel:             target.Channel,
+			ChatID:              target.ChatID,
 			AgentID:             ownerRec.AgentID,
 			TranscriptSessionID: ownerKey,
 			Content:             deliverySummary(msg),
@@ -367,7 +386,9 @@ func (d *SteerUpwardDeliverer) Deliver(ctx context.Context, event steer.UpwardEv
 			// fatal to Deliver — the boot re-nudge (WP-D) covers it.
 			logger.WarnCF("agent", "steer: deliver: wake failed (message is durable)",
 				map[string]any{"kind": kindStr, "error": werr.Error()})
+			return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 		}
+		return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
 	}
-	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryWoke}, nil
+	return steer.Delivery{MessageID: res.MessageID, Outcome: steer.DeliveryStoredNotWoken}, nil
 }

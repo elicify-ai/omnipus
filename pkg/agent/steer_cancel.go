@@ -207,11 +207,10 @@ func (c *SteerCanceller) Revive(ctx context.Context, sessionID string, _ steer.P
 
 // reserveDispatch is I-6's package-internal reservation primitive
 // (landing order I-6: "internal to pkg/agent, called by Dispatch"). The
-// CP-0 stub admits everything — WP-D's phase-3 body refuses a Stop marker
-// for the record's current generation (ErrDispatchCancelled), a stale
-// generation (ErrStaleGeneration), or a terminal record with no follow-up
-// (ErrTerminal). Nothing calls this yet: SteerLauncher.Dispatch is itself a
-// CP-0 stub (steer_launcher.go).
+// live guard refuses a Stop marker for the record's current generation
+// (ErrDispatchCancelled), a stale generation (ErrStaleGeneration), or a
+// terminal record with no follow-up (ErrTerminal). SteerLauncher.Dispatch
+// calls it before admitting or queueing a turn.
 func reserveDispatch(rec *session.LifecycleRecord, gen int) (ok bool, reason string) {
 	if rec == nil {
 		return false, steer.ErrInvalidEdge.Error()

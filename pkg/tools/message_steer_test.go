@@ -10,6 +10,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -22,11 +23,15 @@ import (
 // instance in the tests below rather than an unset (nil) t.ownership.
 type fakeSteerAudience struct {
 	audience map[string]steer.Audience
+	err      error
 }
 
 var _ steer.AudienceResolver = (*fakeSteerAudience)(nil)
 
 func (f *fakeSteerAudience) Audience(_ context.Context, sessionID string) (steer.Audience, steer.Class, error) {
+	if f.err != nil {
+		return steer.AudienceNone, steer.ClassUnreadable, f.err
+	}
 	a, ok := f.audience[sessionID]
 	if !ok {
 		return steer.AudienceUser, steer.ClassOrdinaryRoot, nil
@@ -35,6 +40,18 @@ func (f *fakeSteerAudience) Audience(_ context.Context, sessionID string) (steer
 		return a, steer.ClassSteered, nil
 	}
 	return a, steer.ClassOrdinaryRoot, nil
+}
+
+type boundaryObservation struct {
+	boundary  steer.Boundary
+	sessionID string
+	audience  steer.Audience
+}
+
+type recordingBoundaryObserver struct{ observations []boundaryObservation }
+
+func (o *recordingBoundaryObserver) Observe(boundary steer.Boundary, sessionID string, audience steer.Audience) {
+	o.observations = append(o.observations, boundaryObservation{boundary, sessionID, audience})
 }
 
 func TestMessageTool_SteeredSessionOwnChatOnly(t *testing.T) {
@@ -112,6 +129,27 @@ func TestMessageTool_SteeredSessionOwnChatOnly(t *testing.T) {
 		result := tool.Execute(ctx, map[string]any{"content": "x"})
 		if result.IsError {
 			t.Fatalf("expected an ordinary root session to be unaffected by the steered own-chat-only rule, got: %s", result.ForLLM)
+		}
+	})
+
+	t.Run("resolver_error_fails_closed_and_is_observed", func(t *testing.T) {
+		tool := NewMessageTool()
+		observer := &recordingBoundaryObserver{}
+		tool.SetSteerAudienceResolver(&fakeSteerAudience{err: errors.New("damaged lifecycle")}, observer)
+		tool.SetSendCallback(func(string, string, string, SendOrigin) error {
+			t.Fatal("send callback reached after an unreadable audience")
+			return nil
+		})
+		ctx := WithToolContext(context.Background(), "webchat", "child-1")
+		ctx = WithTranscriptSessionID(ctx, childSession)
+		result := tool.Execute(ctx, map[string]any{"content": "must not escape"})
+		assertSteeredSessionOwnChatOnlyRefusal(t, result)
+		if len(observer.observations) != 1 {
+			t.Fatalf("boundary observations = %d, want 1", len(observer.observations))
+		}
+		got := observer.observations[0]
+		if got.boundary != steer.BoundaryAgentRequestedMessage || got.sessionID != childSession || got.audience != steer.AudienceNone {
+			t.Fatalf("observation = %+v, want boundary 8 / child / none", got)
 		}
 	})
 }

@@ -109,7 +109,7 @@ func TestBuildDelegationContext_SingleTargetAllModes(t *testing.T) {
 
 func TestBuildDelegationContext_ModesAwaitOnly(t *testing.T) {
 	targets := []delegationTarget{
-		makeTarget("ava", []config.DelegationMode{config.DelegationModeAwait}, nil),
+		makeTarget("ava", []config.DelegationMode{config.DelegationMode("await")}, nil),
 	}
 	got := buildDelegationContext(targets, 0)
 
@@ -354,7 +354,7 @@ func TestBuildDelegationContext_PerTargetOnwardForbidden(t *testing.T) {
 func TestBuildDelegationContext_PerTargetModeSubset(t *testing.T) {
 	targets := []delegationTarget{
 		// ava: await only
-		makeTarget("ava", []config.DelegationMode{config.DelegationModeAwait}, nil),
+		makeTarget("ava", []config.DelegationMode{config.DelegationMode("await")}, nil),
 		// ray: all modes
 		makeTarget("ray", nil, nil),
 	}

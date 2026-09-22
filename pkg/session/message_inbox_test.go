@@ -110,11 +110,10 @@ func TestMessageInboxStore_DedupeByMessageID(t *testing.T) {
 	}
 }
 
-// TestMessageInboxStore_PerChildCeiling_FailsBackNeverDrops proves D15: a
-// child hitting the 20-open-question+blocker ceiling gets a CLEAR ERROR
-// (never a silent drop), and a SIBLING child under the same owner key is
-// unaffected.
-func TestMessageInboxStore_PerChildCeiling_FailsBackNeverDrops(t *testing.T) {
+// TestMessageInboxStore_WakeEligibleQuestionBypassesCeiling proves a question
+// cannot be dropped by the per-child ceiling: wake-eligible entries always
+// reach the steering session.
+func TestMessageInboxStore_WakeEligibleQuestionBypassesCeiling(t *testing.T) {
 	s := newTestInboxStore(t)
 	s.InboxPerTypeCeiling = 20      // explicit, matches D15 default
 	s.ChildSendRatePerMinute = 1000 // disable the UNRELATED rate cap for this test
@@ -126,15 +125,10 @@ func TestMessageInboxStore_PerChildCeiling_FailsBackNeverDrops(t *testing.T) {
 		}
 	}
 
-	// The 21st open question must be REJECTED with a clear, typed error —
-	// never silently dropped.
+	// The 21st open question remains admitted because it is wake-eligible.
 	overCeiling := questionMsg(t, "child-noisy", "q-overflow")
-	_, err := s.Append("owner-1", overCeiling)
-	if err == nil {
-		t.Fatal("expected the 21st open question to be rejected, got nil error")
-	}
-	if !errors.Is(err, ErrInboxPerChildCeiling) {
-		t.Errorf("expected ErrInboxPerChildCeiling, got: %v", err)
+	if _, err := s.Append("owner-1", overCeiling); err != nil {
+		t.Fatalf("wake-eligible question was rejected at the per-child ceiling: %v", err)
 	}
 
 	// A SIBLING child under the SAME owner key must be entirely unaffected.

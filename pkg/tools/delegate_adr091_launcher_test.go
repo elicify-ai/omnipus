@@ -1,13 +1,42 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
+
+func captureLogs(t *testing.T) func() string {
+	t.Helper()
+	var mu sync.Mutex
+	buf := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedLogWriter{mu: &mu, buf: buf}, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
+	}
+}
+
+type lockedLogWriter struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+}
+
+func (w *lockedLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
 
 func TestDelegate_RejectsRemovedArgs(t *testing.T) {
 	for _, arg := range []string{"async", "allow_blocking_question"} {
@@ -37,9 +66,13 @@ type recordingSessionLauncher struct {
 	dispatchGeneration int
 }
 
-// Kept only so the pre-ADR-091 tests still compile until WP-G applies its
-// retain/update/delete classification. Production has no await gate.
-func (t *DelegateTool) SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial) {
+func u14PermissiveTool(t *testing.T) (*DelegateTool, *recordingSessionLauncher) {
+	t.Helper()
+	launcher := &recordingSessionLauncher{}
+	tool := NewDelegateTool("test-model", 0, 0)
+	tool.SetSessionLauncher(launcher)
+	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	return tool, launcher
 }
 
 func (f *recordingSessionLauncher) Launch(_ context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
@@ -66,9 +99,10 @@ func TestDelegateRun_UsesLauncherAndReportsQueuedDispatch(t *testing.T) {
 	launcher := &recordingSessionLauncher{
 		launchRes: steer.LaunchResult{SessionID: "child-1", Generation: 1},
 		dispatch: steer.DispatchResult{
-			State:         steer.DispatchQueued,
-			QueuePosition: 3,
-			Generation:    1,
+			State:            steer.DispatchQueued,
+			ConcurrencyLimit: 2,
+			QueuePosition:    3,
+			Generation:       1,
 		},
 	}
 	tool := NewDelegateTool("", 0, 0)
@@ -103,8 +137,13 @@ func TestDelegateRun_UsesLauncherAndReportsQueuedDispatch(t *testing.T) {
 		t.Fatalf("delegate(run) returned error: %s", result.ForLLM)
 	}
 
+	parts := strings.SplitN(result.ForLLM, "\n", 2)
+	if len(parts) != 2 || !strings.Contains(parts[1], "concurrency limit 2") ||
+		!strings.Contains(parts[1], "queue position 3") || !strings.Contains(parts[1], `delegate(action="cancel")`) {
+		t.Fatalf("queued result lacks actionable cap notice: %q", result.ForLLM)
+	}
 	var response generated.DelegateSessionResponse
-	if err := json.Unmarshal([]byte(result.ForLLM), &response); err != nil {
+	if err := json.Unmarshal([]byte(parts[0]), &response); err != nil {
 		t.Fatalf("decode delegate response: %v\npayload: %s", err, result.ForLLM)
 	}
 	if response.SessionId != "child-1" || response.Generation != 1 {

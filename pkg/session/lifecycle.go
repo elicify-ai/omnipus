@@ -209,6 +209,10 @@ type LifecycleRecord struct {
 	// correction on the named plan.
 	OwnsPlanID string `json:"owns_plan_id,omitempty"`
 
+	// Title is the launch-time lifecycle label. It is kept on the durable
+	// record so status/listing paths do not have to reopen mutable session
+	// metadata merely to name a child.
+	Title       string `json:"title,omitempty"`
 	GoalRef     string `json:"goal_ref,omitempty"`
 	WorkspaceID string `json:"workspace_id"`
 	AgentID     string `json:"agent_id"`
@@ -634,18 +638,56 @@ func (s *LifecycleStore) PublishChildUnderParentLock(
 	if fnErr != nil {
 		return fnErr
 	}
+	if childRec != nil {
+		if err := validateLifecycleSessionID(childRec.SessionID); err != nil {
+			return err
+		}
+	}
+
+	parentPath := s.path(parentID)
+	parentSize := int64(0)
+	parentExistedOnDisk := false
+	if info, statErr := os.Stat(parentPath); statErr == nil {
+		parentSize = info.Size()
+		parentExistedOnDisk = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("session: lifecycle: stat parent %q before child publication: %w", parentID, statErr)
+	}
 	if err := s.persistLocked(parentRec); err != nil {
 		return err
 	}
 	if childRec == nil {
 		return nil
 	}
-	if err := validateLifecycleSessionID(childRec.SessionID); err != nil {
-		return err
-	}
 	// No childMu acquisition — see the doc comment above for why this is
 	// safe rather than a shortcut.
-	return s.persistLocked(childRec)
+	if err := s.persistLocked(childRec); err != nil {
+		// The session id is freshly minted and private to this publication, so
+		// removing its file cannot erase another writer. Restore the parent's
+		// byte length while its shard remains locked; this makes the two-record
+		// publication atomic to every reader even though the records live in
+		// separate append-only JSONL files.
+		_ = os.Remove(s.path(childRec.SessionID))
+		s.parentIndex.remove(childRec.SteeringSessionID(), childRec.SessionID)
+
+		var rollbackErr error
+		if parentExistedOnDisk {
+			rollbackErr = os.Truncate(parentPath, parentSize)
+		} else {
+			rollbackErr = os.Remove(parentPath)
+			if errors.Is(rollbackErr, os.ErrNotExist) {
+				rollbackErr = nil
+			}
+		}
+		if !found {
+			s.parentIndex.remove(parentRec.SteeringSessionID(), parentRec.SessionID)
+		}
+		if rollbackErr != nil {
+			return errors.Join(err, fmt.Errorf("session: lifecycle: rollback parent %q: %w", parentID, rollbackErr))
+		}
+		return err
+	}
+	return nil
 }
 
 // LifecycleFilter narrows the result of List. All fields are optional

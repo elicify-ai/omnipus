@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
@@ -56,9 +57,21 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 	if !ok {
 		return nil, fmt.Errorf("steer: reconstruct %q: %w: agent %q", rec.SessionID, steer.ErrAgentUnknown, rec.AgentID)
 	}
+	store := al.GetSessionStore()
+	if store == nil {
+		return nil, fmt.Errorf("steer: reconstruct %q: session store is not wired", rec.SessionID)
+	}
+	meta, err := store.GetMeta(rec.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("steer: reconstruct %q: load child address: %w", rec.SessionID, err)
+	}
 
 	opts := processOptions{
-		SessionKey: rec.SessionID,
+		SessionKey:          rec.SessionID,
+		Channel:             meta.Channel,
+		ChatID:              meta.PeerID,
+		TranscriptSessionID: rec.SessionID,
+		TranscriptStore:     store,
 		// I-5: a steered session has no user audience — reconstruction
 		// never sets SendResponse true for one. An ordinary_root record
 		// (rec.SteeredBy == nil) reaching this path is a revival/re-entry
@@ -67,12 +80,23 @@ func (al *AgentLoop) reconstructSteeredTurn(rec *session.LifecycleRecord, wake *
 		// function) decides whether to surface anything to a human.
 		SendResponse: false,
 		WorkspaceID:  rec.WorkspaceID,
+		// The first turn is the explicit instruction that launched this
+		// session. Mark it as user-originated for the session-owned goal loop;
+		// wakes/re-entries carry their own origin and are not initial claims.
+		UserInitiated: wake == nil,
 	}
-	if rec.SteeredBy != nil {
-		opts.Channel = rec.SteeredBy.ReportingTarget.Channel
-		opts.ChatID = rec.SteeredBy.ReportingTarget.ChatID
+	if wake == nil {
+		entries, readErr := store.ReadTranscript(rec.SessionID)
+		if readErr != nil {
+			return nil, fmt.Errorf("steer: reconstruct %q: read launch instruction: %w", rec.SessionID, readErr)
+		}
+		for i := len(entries) - 1; i >= 0; i-- {
+			if entries[i].Role == "user" && strings.TrimSpace(entries[i].Content) != "" {
+				opts.UserMessage = entries[i].Content
+				break
+			}
+		}
 	}
-
 	ts := newTurnState(agentInst, opts, al.newTurnEventScope(agentInst.ID, opts.SessionKey))
 	ts.generation = rec.Generation
 	if rec.SteeredBy != nil {

@@ -85,3 +85,22 @@ func TestSteer_DeliversInArrivalOrder(t *testing.T) {
 		t.Fatalf("delivery order = %#v", sink.delivered)
 	}
 }
+
+func TestSteer_PublishesVerifiedPrincipal(t *testing.T) {
+	tool, store, _, sink := newADR053TestTool(t)
+	if err := store.Persist(adr091SteeredRecord("child", "parent-session")); err != nil {
+		t.Fatal(err)
+	}
+	ctx := WithAgentID(WithTranscriptSessionID(context.Background(), "parent-session"), "shared-agent-profile")
+	result := tool.Execute(ctx, map[string]any{"action": "steer", "session_id": "child", "text": "continue"})
+	if result.IsError {
+		t.Fatalf("steer: %s", result.ForLLM)
+	}
+	if len(sink.principals) != 1 {
+		t.Fatalf("published principals = %#v, want one", sink.principals)
+	}
+	want := steer.Principal{Kind: steer.PrincipalKindAgent, ID: "parent-session"}
+	if sink.principals[0] != want {
+		t.Fatalf("published principal = %+v, want verified caller-session authority %+v", sink.principals[0], want)
+	}
+}

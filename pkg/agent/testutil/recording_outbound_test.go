@@ -1,7 +1,6 @@
 package testutil
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -74,16 +73,7 @@ func TestRecordingOutbound_CapturesAllSinks(t *testing.T) {
 	}
 }
 
-func TestRecordingOutbound_ControlFailsWhenChildIdle(t *testing.T) {
-	provider := NewScenario().WithText("verdict without a tool call")
-	response, err := provider.Chat(context.Background(), nil, nil, "", nil)
-	if err != nil {
-		t.Fatalf("scripted provider verdict: %v", err)
-	}
-	if got := len(response.ToolCalls); got != 0 {
-		t.Fatalf("scripted provider made %d tool calls, want none for the vacuity guard", got)
-	}
-
+func TestRecordingOutbound_AssertReceivedFailsWithoutDelivery(t *testing.T) {
 	fakeT := &recordingTestT{TB: t}
 	recorder := RecordingOutbound(fakeT)
 	message := requireAssertionFailure(t, func() {

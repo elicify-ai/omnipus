@@ -243,6 +243,12 @@ func (ts *turnState) Finish(isHardAbort bool) {
 		if ch != nil {
 			close(ch)
 		}
+		// Release the exact generation's steered-turn reservation once. A
+		// repeated late Finish from an older generation must never free a
+		// revived generation's slot or promote the queue twice.
+		if ts.al != nil {
+			ts.al.drainSteerQueue(ts.sessionKey, ts.generation)
+		}
 	})
 
 	// If this is a graceful finish (not hard abort), signal to children
@@ -254,16 +260,6 @@ func (ts *turnState) Finish(isHardAbort bool) {
 	// Cancel the turn context
 	if ts.cancelFunc != nil {
 		ts.cancelFunc()
-	}
-
-	// ADR-091 I-3/D9: this session's turn has ended — it holds no admission
-	// slot any more (a waiting parent holding no slot is round 9's whole
-	// point). A no-op for a non-steered turn (drainSteerQueue's release is a
-	// no-op when this sessionKey was never admitted through the steered-turn
-	// gate). al may be nil for an ad-hoc test turnState that skipped
-	// newTurnState.
-	if ts.al != nil {
-		ts.al.drainSteerQueue(ts.sessionKey)
 	}
 
 	// Hard abort cascades to all child turns

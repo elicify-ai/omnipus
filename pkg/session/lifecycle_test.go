@@ -35,6 +35,117 @@ func countJSONL(t *testing.T, s *LifecycleStore, sessionID string) int {
 	return n
 }
 
+func TestPublishChildUnderParentLock_ChildWriteFailureRollsBackNewParent(t *testing.T) {
+	store := NewLifecycleStore(t.TempDir())
+	childID := "child-write-fails"
+	if err := os.MkdirAll(store.path(childID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	err := store.PublishChildUnderParentLock("new-parent", func(parent *LifecycleRecord, existed bool) (*LifecycleRecord, error) {
+		if existed {
+			t.Fatal("new parent unexpectedly existed")
+		}
+		parent.Generation = 1
+		parent.State = LifecycleRunning
+		parent.OwnerScopeKind = OwnerScopeHuman
+		return &LifecycleRecord{
+			SessionID: childID, Generation: 1, State: LifecycleQueued,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: "new-parent"},
+		}, nil
+	})
+	if err == nil {
+		t.Fatal("child write failure unexpectedly succeeded")
+	}
+	_, err = store.Load("new-parent")
+	if !errors.Is(err, ErrLifecycleNotFound) {
+		t.Fatalf("a failed child append left the newly-created parent root: %v", err)
+	}
+	if got := store.parentIndex.children("new-parent"); len(got) != 0 {
+		t.Fatalf("a failed child append left indexed children: %v", got)
+	}
+}
+
+func TestPublishChildUnderParentLock_ParentWriteFailurePublishesNoChild(t *testing.T) {
+	store := NewLifecycleStore(t.TempDir())
+	parentID := "parent-write-fails"
+	childID := "child-never-published"
+	if err := os.MkdirAll(store.path(parentID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := store.PublishChildUnderParentLock(parentID, func(parent *LifecycleRecord, _ bool) (*LifecycleRecord, error) {
+		parent.Generation = 1
+		parent.State = LifecycleRunning
+		parent.OwnerScopeKind = OwnerScopeHuman
+		return &LifecycleRecord{
+			SessionID: childID, Generation: 1, State: LifecycleQueued,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: parentID},
+		}, nil
+	})
+	if err == nil {
+		t.Fatal("parent write failure unexpectedly succeeded")
+	}
+	if _, statErr := os.Stat(store.path(childID)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("parent write failure created child storage: %v", statErr)
+	}
+	if got := store.parentIndex.children(parentID); len(got) != 0 {
+		t.Fatalf("parent write failure indexed children: %v", got)
+	}
+}
+
+func TestPublishChildUnderParentLock_ChildWriteFailureRestoresExistingParent(t *testing.T) {
+	store := NewLifecycleStore(t.TempDir())
+	parent := &LifecycleRecord{
+		SessionID: "existing-parent", Generation: 1, State: LifecycleRunning,
+		OwnerScopeKind: OwnerScopeHuman,
+	}
+	if err := store.Persist(parent); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.path(parent.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	childID := "child-write-fails-existing"
+	if err := os.MkdirAll(store.path(childID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err = store.PublishChildUnderParentLock(parent.SessionID, func(current *LifecycleRecord, existed bool) (*LifecycleRecord, error) {
+		if !existed {
+			t.Fatal("existing parent was not loaded")
+		}
+		current.State = LifecyclePaused
+		return &LifecycleRecord{
+			SessionID: childID, Generation: 1, State: LifecycleQueued,
+			OwnerScopeKind: OwnerScopeParentSession,
+			SteeredBy:      &SteeredBy{SteeringSessionID: parent.SessionID},
+		}, nil
+	})
+	if err == nil {
+		t.Fatal("child write failure unexpectedly succeeded")
+	}
+	after, readErr := os.ReadFile(store.path(parent.SessionID))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("rollback did not restore the parent's JSONL byte-for-byte\nbefore: %q\nafter: %q", before, after)
+	}
+	loaded, loadErr := store.Load(parent.SessionID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if loaded.State != LifecycleRunning {
+		t.Fatalf("parent state = %q, want %q", loaded.State, LifecycleRunning)
+	}
+	if got := store.parentIndex.children(parent.SessionID); len(got) != 0 {
+		t.Fatalf("failed child remained indexed: %v", got)
+	}
+}
+
 func newTestLifecycleStore(t *testing.T) *LifecycleStore {
 	t.Helper()
 	return NewLifecycleStore(t.TempDir())

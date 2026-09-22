@@ -355,12 +355,9 @@ type PerformanceConfig struct {
 
 	// MaxDelegationDepth is ADR-091 D9's config fold: the single source of
 	// truth for the onward-delegation depth ceiling, replacing
-	// agents.defaults.subturn.max_depth (the SubTurnConfig field stays
-	// declared — see its own doc comment — because subturn.go's ring/
-	// spawnSubTurn mechanism it also fed is still live for the delegate
-	// follow-up/resume path; this key is what every reader of the GLOBAL
-	// ceiling now resolves through instead, so there is exactly one
-	// number, never two disagreeing ones). 0 means unset — the same
+	// agents.defaults.subturn.max_depth. Every reader of the global ceiling
+	// resolves through this key, so there is exactly one number. 0 means
+	// unset — the same
 	// defaultMaxSubTurnDepth backstop resolveEffectiveDelegationDepth
 	// already falls back to applies unchanged. A negative value is a
 	// configuration error (EffectiveMaxDelegationDepth returns it,
@@ -751,13 +748,11 @@ type AgentMCPServerBinding struct {
 }
 
 // DelegationMode is the mode in which delegation is allowed.
-// "await" = synchronous subagent (blocks caller).
 // "background" = async spawn (caller continues).
 // "task" = task_create delegation.
 type DelegationMode string
 
 const (
-	DelegationModeAwait      DelegationMode = "await"
 	DelegationModeBackground DelegationMode = "background"
 	DelegationModeTask       DelegationMode = "task"
 )
@@ -893,42 +888,8 @@ type RoutingConfig struct {
 
 // SubTurnConfig configures the SubTurn execution system.
 type SubTurnConfig struct {
-	MaxDepth int `json:"max_depth"      env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
-	// MaxConcurrent is an OPTIONAL per-delegation override of the concurrent
-	// fan-out cap. Both consumers below apply the SAME rule (concurrency-gate
-	// consolidation, 2026-08-04): Performance.EffectiveMaxParallelAgents() —
-	// the single, UI-configurable authority for agent concurrency
-	// (PerformanceSettings.max_parallel_agents) — is resolved LIVE whenever
-	// this field is <= 0 (unset, the shipped default: see DefaultConfig,
-	// defaults.go). A positive value here is an explicit, deliberate
-	// per-delegation override, honored exactly as configured — it may differ
-	// from the central value in either direction, an operator's own choice,
-	// never silently overridden. A negative value is a configuration error.
-	//   - getSubTurnConfig (pkg/agent/subturn.go) uses it, when > 0, as the
-	//     per-parent-turn in-turn fan-out semaphore, falling back to
-	//     Performance.EffectiveMaxParallelAgents() when <= 0.
-	//   - The W17 root-delegation admission gate (pkg/agent/admission.go,
-	//     ResolveRootDelegationCap) reads this field DIRECTLY and applies the
-	//     identical fallback, so the two consumers can never disagree about
-	//     what "unset" means.
-	//
-	// HISTORY (superseded 2026-08-04, commit 536b7340's follow-up fix): this
-	// field used to be seeded to a fixed 16 (the retired
-	// DefaultSubTurnMaxConcurrent constant) specifically so the root gate
-	// would never take the EffectiveMaxParallelAgents() fallback branch —
-	// reasoning that depended entirely on that function ALSO being
-	// hard-clamped to 16 by clampParallelExplicit at the time, making the two
-	// numbers coincidentally equal. Commit 536b7340 removed that ceiling
-	// (clampParallelExplicit now only floors at 1), which invalidated the
-	// premise: the fixed seed became a SECOND, independently-sized cap that
-	// silently disagreed with an operator's own max_parallel_agents setting
-	// once the two diverged — the exact ADR-037 "control that moves,
-	// persists and governs nothing" anti-pattern this project bans. The seed
-	// is removed; a fresh install now leaves this field at its Go zero value
-	// (0) so both consumers take the central-authority branch by design.
-	MaxConcurrent         int `json:"max_concurrent"          env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT"`
+	MaxDepth              int `json:"max_depth"      env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
 	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
-	ConcurrencyTimeoutSec int `json:"concurrency_timeout_sec" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_CONCURRENCY_TIMEOUT_SEC"`
 }
 
 type ToolFeedbackConfig struct {

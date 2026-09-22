@@ -198,6 +198,10 @@ func (te *TaskExecutor) completeTaskWithResult(
 	if !success {
 		status = task.StatusFailed
 	}
+	if success && strings.TrimSpace(result) == "" {
+		status = task.StatusFailed
+		result = "empty_answer: the task produced no result"
+	}
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 	now := time.Now().UTC().Format(time.RFC3339)
 	final, uerr := te.store.UpdateIfStatus(t.ID, expected, task.Patch{
@@ -243,6 +247,12 @@ func (te *TaskExecutor) completeTaskWithResult(
 				map[string]any{"task_id": t.ID, "error": setErr.Error()})
 		}
 	}
+	// I-5 terminal ordering: append and wake the deterministic upward entry
+	// before making the lifecycle record terminal. Boot recovery can repair a
+	// crash after this point; the reverse order can strand a terminal child
+	// whose result never reached its steering session.
+	te.deliverTaskCompletionUpward(context.Background(), final)
+
 	// FR-118/G-13: this is completeTaskWithResult's own terminal write —
 	// mirror it onto the durable lifecycle record (see finalizeTaskLifecycle's
 	// doc comment). Placed AFTER the CAS write above lands (never on the
@@ -258,7 +268,7 @@ func (te *TaskExecutor) completeTaskWithResult(
 	terminateTaskGoalRecord(t.ID, final.Status, final.CancelReason, result)
 	te.closeRun(t.ID, run, status, result)
 	te.recordEvidenceBoundary(final)
-	te.onTaskComplete(final)
+	te.onTaskCompleteAfterUpwardDelivery(final)
 	te.notifySourceChannel(final)
 	return true
 }
@@ -373,9 +383,12 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 // batched behind siblings) + the blocked_by auto-advance (dispatch tasks
 // whose deps are now all done).
 func (te *TaskExecutor) onTaskComplete(t *task.Task) {
-	te.emitStatusChanged(t, t.Status)
-
 	te.deliverTaskCompletionUpward(context.Background(), t)
+	te.onTaskCompleteAfterUpwardDelivery(t)
+}
+
+func (te *TaskExecutor) onTaskCompleteAfterUpwardDelivery(t *task.Task) {
+	te.emitStatusChanged(t, t.Status)
 
 	// Only a `done` task unblocks downstream tasks (a `failed` dep does not).
 	if t.Status != task.StatusDone {
@@ -436,10 +449,15 @@ func (te *TaskExecutor) deliverTaskCompletionUpward(ctx context.Context, t *task
 			}
 		}
 	case task.StatusFailed:
+		text := "failed: " + t.Result
 		outcome = steer.OutcomeFailed
+		if strings.HasPrefix(t.Result, "empty_answer:") {
+			outcome = steer.OutcomeEmptyAnswer
+			text = t.Result
+		}
 		if err := sm.FromSessionMessageError(generated.SessionMessageError{
 			MessageId: t.ID, SessionId: t.SessionID, CreatedAt: now, Depth: 1,
-			SenderIdentity: t.AgentID, Fatal: true, Text: "failed: " + t.Result,
+			SenderIdentity: t.AgentID, Fatal: true, Text: text,
 		}); err != nil {
 			logger.WarnCF("task_executor", "deliverTaskCompletionUpward: encode failed-error failed",
 				map[string]any{"task_id": t.ID, "error": err.Error()})

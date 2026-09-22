@@ -118,20 +118,10 @@ func TestU9ToolExecSessionIDs_RootTurn(t *testing.T) {
 	assert.Equal(t, rootSessionID, sid, "root turn: wire session_id must be the turn's own session")
 }
 
-// TestU9ToolExecSessionIDs_ChildTurn pins the surviving half of this unit's
-// FR-011/FR-012 WS-payload stamping contract: a child turn with its OWN
-// real, distinct transcriptSessionID, but with routingSessionID inherited
-// verbatim from the root (turn.go's routingSessionID field doc comment:
-// "childTS.routingSessionID = parentTS.routingSessionID"), still stamps the
-// wire session_id with the ROUTING (root) id, never the child's own.
-//
-// ADR-091 D7/I-4 deleted the producing_session_id half of this contract —
-// "every frame carries its own session_id (the producing session) ...
-// producing_session_id — the workaround — is deleted from every schema
-// that carries it". u9ToolExecSessionIDs no longer computes it (see that
-// function's own doc comment, loop.go, for the residual gap this leaves:
-// SessionID here is still the routing id, not yet the true producing
-// session).
+// TestU9ToolExecSessionIDs_ChildTurn pins ADR-091 I-4: every session-scoped
+// frame is stamped with the producing child's own session id. The cascade
+// routing root remains available on turnState for cancellation only; it is
+// never a frame destination.
 func TestU9ToolExecSessionIDs_ChildTurn(t *testing.T) {
 	al, cleanup := newAL(t)
 	defer cleanup()
@@ -154,8 +144,8 @@ func TestU9ToolExecSessionIDs_ChildTurn(t *testing.T) {
 	t.Cleanup(func() { al.clearActiveTurnStateEntry(child.sessionKey, child) })
 
 	sid := u9ToolExecSessionIDs(child)
-	assert.Equal(t, rootSessionID, sid,
-		"delegated child: wire session_id must be the ROUTING (root) id, never the child's own")
+	assert.Equal(t, childSessionID, sid,
+		"delegated child: wire session_id must be the producing child's own id")
 }
 
 // u9StubTool is a minimal test-only tool implementing tools.Tool, mirroring

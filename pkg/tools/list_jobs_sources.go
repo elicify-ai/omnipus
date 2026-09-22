@@ -405,7 +405,6 @@ func collectSubagentRows(
 	ceiling int,
 	namer JobAgentNamer,
 	resolver JobSessionResolver,
-	labelResolver JobLabelResolver,
 	activityReader JobSessionActivityReader,
 ) collectResult {
 	filter := session.LifecycleFilter{WorkspaceID: workspaceID, ParentAgentID: principal}
@@ -509,7 +508,6 @@ func collectSubagentRows(
 	}
 
 	_ = resolver
-	_ = labelResolver
 	_ = ids
 	for i := range rows {
 		// The lifecycle record is the durable authority after restart. Whether
@@ -588,9 +586,12 @@ func newestGenerations(records []session.LifecycleRecord, principal string) []*s
 	return out
 }
 
-// subagentLabel resolves the delegated agent's display name, falling back to
-// the raw agent id when the agent no longer resolves.
+// subagentLabel reads the durable launch title. Old records written before
+// lifecycle titles were added fall back to the delegated agent's name/id.
 func subagentLabel(rec *session.LifecycleRecord, namer JobAgentNamer) string {
+	if title := strings.TrimSpace(rec.Title); title != "" {
+		return title
+	}
 	if namer != nil {
 		if name, ok := namer.AgentDisplayName(rec.AgentID); ok && strings.TrimSpace(name) != "" {
 			return name

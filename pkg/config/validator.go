@@ -47,24 +47,48 @@ func validateRemovedKeys(data []byte) error {
 		return nil
 	}
 
-	defaultsRaw, ok := agents["defaults"]
-	if !ok {
-		return nil
+	if defaultsRaw, ok := agents["defaults"]; ok {
+		defaults := unmarshalMapSilent(defaultsRaw)
+		if defaults != nil {
+			_, hasRestrict := defaults["restrict_to_workspace"]
+			_, hasAllowRead := defaults["allow_read_outside_workspace"]
+			if hasRestrict || hasAllowRead {
+				return errors.New(fr001RemovedKeysMsg)
+			}
+			if delegationPolicyContainsAwait(defaults["delegation_policy"]) {
+				return errors.New(`config error: delegation mode "await" has been removed; delete it from delegation_policy.modes`)
+			}
+		}
 	}
 
-	defaults := unmarshalMapSilent(defaultsRaw)
-	if defaults == nil {
-		return nil
-	}
-
-	_, hasRestrict := defaults["restrict_to_workspace"]
-	_, hasAllowRead := defaults["allow_read_outside_workspace"]
-
-	if hasRestrict || hasAllowRead {
-		return errors.New(fr001RemovedKeysMsg)
+	var agentRows []json.RawMessage
+	if err := json.Unmarshal(agents["list"], &agentRows); err == nil {
+		for _, rowRaw := range agentRows {
+			row := unmarshalMapSilent(rowRaw)
+			if delegationPolicyContainsAwait(row["delegation_policy"]) {
+				return errors.New(`config error: delegation mode "await" has been removed; delete it from delegation_policy.modes`)
+			}
+		}
 	}
 
 	return nil
+}
+
+func delegationPolicyContainsAwait(raw json.RawMessage) bool {
+	policy := unmarshalMapSilent(raw)
+	if policy == nil {
+		return false
+	}
+	var modes []string
+	if err := json.Unmarshal(policy["modes"], &modes); err != nil {
+		return false
+	}
+	for _, mode := range modes {
+		if mode == "await" {
+			return true
+		}
+	}
+	return false
 }
 
 // unmarshalMapSilent attempts to unmarshal JSON bytes into a

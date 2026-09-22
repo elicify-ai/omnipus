@@ -119,7 +119,8 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	if lerr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", lerr))
 	}
-	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
+	principal, verr := t.verifyCallerPrincipal(ctx, rec)
+	if verr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", verr))
 	}
 	// Not available to external-CLI (3P) sessions: every steering-queue drain
@@ -181,7 +182,7 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", cerr)).WithError(cerr)
 	}
 
-	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
+	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, principal, providers.Message{Role: "user", Content: text}); serr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: steer: %v", serr)).WithError(serr)
 	}
 	return NewToolResult(fmt.Sprintf(

@@ -88,7 +88,7 @@ func (t *AskUserQuestionTool) Name() string { return AskUserQuestionToolName }
 
 // Description implements Tool.
 func (t *AskUserQuestionTool) Description() string {
-	return "Ask the human user up to 10 structured clarification questions on a single card, each with 2-6 options (plus an always-available free-text answer), and pause until they answer. Only usable on a web (SPA) session you own: on channel sessions ask conversationally in plain language instead, and as a delegated session use message_parent(kind=question, wait=true) toward your parent. To highlight one option, set the QUESTION's `recommended` field (a property of the question, NOT of an option) to that option's exact `label` string — it renders first with a badge, never pre-selected. Options carry only `label` and `description`; a `recommended` mistakenly placed inside an option is auto-corrected onto the question (first truthy one wins) rather than failing the call. Add `default_safe: true` on a question (requires that question's `recommended`) to auto-resolve it to the recommended option after 30 minutes without an answer. Ask only about a real unknown in the user's request whose answer changes what you will do next — never a placeholder, a test question, or a request for permission to proceed. If you already know what to do, do it instead of asking; on a goal's first move that means calling set_goal, never set_goal and a question together."
+	return "Ask the human user up to 10 structured clarification questions on a single card, each with 2-6 options (plus an always-available free-text answer), and pause until they answer. Only usable on a web (SPA) session you own: on channel sessions ask conversationally in plain language instead; a delegated session's validated question is automatically relayed to its parent without emitting a human card. To highlight one option, set the QUESTION's `recommended` field (a property of the question, NOT of an option) to that option's exact `label` string — it renders first with a badge, never pre-selected. Options carry only `label` and `description`; a `recommended` mistakenly placed inside an option is auto-corrected onto the question (first truthy one wins) rather than failing the call. Add `default_safe: true` on a question (requires that question's `recommended`) to auto-resolve it to the recommendation after 30 minutes without an answer. Ask only about a real unknown in the user's request whose answer changes what you will do next — never a placeholder, a test question, or a request for permission to proceed. If you already know what to do, do it instead of asking; on a goal's first move that means calling set_goal, never set_goal and a question together."
 }
 
 // Scope implements Tool.
@@ -179,9 +179,6 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, args map[string]any) 
 	}
 
 	// --- liveness / caller-scope gates (US-5, US-6 S4, EC-6/EC-9/EC-10) ---
-	if ToolDelegationDepth(ctx) > 0 {
-		return ErrorResult("AskUserQuestion is owner-session-only: a delegated session asks its PARENT, not the human — use message_parent(kind=\"question\", wait=true) instead (EC-9).")
-	}
 	if ToolAutoDenyAsk(ctx) {
 		return ErrorResult("no_human_surface: this turn runs unattended (scheduled/headless) — nobody is there to answer. Proceed on your best judgment or record the open question in your result.")
 	}
@@ -227,7 +224,7 @@ func (t *AskUserQuestionTool) Execute(ctx context.Context, args map[string]any) 
 		case errors.Is(err, askuser.ErrSaturated):
 			return ErrorResult("AskUserQuestion: the pending-question registry is at capacity — try again later or ask conversationally.")
 		case errors.Is(err, askuser.ErrDelegatedChild):
-			return ErrorResult("AskUserQuestion is owner-session-only: a delegated session asks its PARENT, not the human — use message_parent(kind=\"question\", wait=true) instead (EC-9).")
+			return ErrorResult("AskUserQuestion is owner-session-only: the validated question was relayed to this delegated session's parent; no human-facing card was emitted (EC-9).")
 		default:
 			return ErrorResult(fmt.Sprintf("AskUserQuestion: %v", err)).WithError(err)
 		}

@@ -1006,7 +1006,6 @@ type Patch struct {
 	SessionID     *string
 	StartedAt     *string
 	CompletedAt   *string
-	FollowedUp    *bool
 	SourceChannel *string
 	SourceChatID  *string
 
@@ -1444,9 +1443,6 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 	if su.patch.CompletedAt != nil {
 		su.t.CompletedAt = *su.patch.CompletedAt
 	}
-	if su.patch.FollowedUp != nil {
-		su.t.FollowedUp = *su.patch.FollowedUp
-	}
 	if su.patch.SourceChannel != nil {
 		su.t.SourceChannel = *su.patch.SourceChannel
 	}
@@ -1596,7 +1592,6 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.ResumeFromCommit = ""
 	t.StartedAt = ""
 	t.CompletedAt = ""
-	t.FollowedUp = false
 	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {
@@ -1842,7 +1837,6 @@ func (s *Store) SpawnReset(id string) (*Task, error) {
 	t.SessionID = ""
 	t.StartedAt = ""
 	t.CompletedAt = ""
-	t.FollowedUp = false
 	// Regression fix (code review on bc66345f): SpawnReset was the one
 	// status-writing path the S2 UAT finding A fix missed — Create,
 	// updateLocked, RestartReset, and AddDependency all derive the `blocked`

@@ -771,7 +771,7 @@ func parseWorkspaceDelegationArg(args map[string]any, teamIDs []string, ceiling 
 }
 
 // edgeModeCategory collapses a coreagent seed's 3-value delegate-tool call
-// vocabulary (config.DelegationMode: task/background/await) down to the
+// vocabulary (config.DelegationMode: task/background) down to the
 // workspace trust-edge's 2-value vocabulary (workspace.DelegationMode:
 // direct/task).
 //
@@ -794,7 +794,7 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 	switch mode {
 	case config.DelegationModeTask:
 		return workspacepkg.ModeTask
-	case config.DelegationModeAwait, config.DelegationModeBackground:
+	case config.DelegationModeBackground:
 		return workspacepkg.ModeDirect
 	default:
 		slog.Warn(

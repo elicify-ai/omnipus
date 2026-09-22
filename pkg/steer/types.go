@@ -70,6 +70,10 @@ const (
 // authoritative admission decision (R06).
 type DispatchResult struct {
 	State DispatchState
+	// ConcurrencyLimit is the effective running-turn cap used for this
+	// decision. It is populated when State == DispatchQueued so the caller can
+	// explain why it queued.
+	ConcurrencyLimit int
 	// QueuePosition is 1-based when State == DispatchQueued, else 0.
 	QueuePosition int
 	// Generation is the generation the turn was (or will be) registered in.

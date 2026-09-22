@@ -258,13 +258,12 @@ func TestBrowserToolConfig_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 func TestAgentDefaultsSubTurn_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := tmpDir + "/config.json"
-	configJSON := `{"version":1,"agents":{"defaults":{"subturn":{"max_depth":3,"max_concurrent":5}}}}`
+	configJSON := `{"version":1,"agents":{"defaults":{"subturn":{"max_depth":3}}}}`
 	if err := writeTestConfigFile(t, configPath, configJSON); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	t.Setenv("OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH", "9")
-	t.Setenv("OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT", "11")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
@@ -275,12 +274,6 @@ func TestAgentDefaultsSubTurn_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 		t.Errorf(
 			"SubTurn.MaxDepth=%d: env var OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH=9 did not override JSON 3 (B2b regression)",
 			cfg.Agents.Defaults.SubTurn.MaxDepth,
-		)
-	}
-	if cfg.Agents.Defaults.SubTurn.MaxConcurrent != 11 {
-		t.Errorf(
-			"SubTurn.MaxConcurrent=%d: env var OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_CONCURRENT=11 did not override JSON 5 (B2b regression)",
-			cfg.Agents.Defaults.SubTurn.MaxConcurrent,
 		)
 	}
 }

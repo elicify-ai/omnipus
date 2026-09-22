@@ -442,10 +442,6 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	UpdatedAt   string `json:"updated_at"`
 	StartedAt   string `json:"started_at,omitempty"`
 	CompletedAt string `json:"completed_at,omitempty"`
-	// FollowedUp is set true once the parent follow-up notification has been
-	// launched for this (parent) task — makes the "all children done → resume
-	// parent" follow-up fire exactly once under concurrent sibling completion.
-	FollowedUp bool `json:"followed_up,omitempty"`
 	// DelegationDepth is the task-mode delegation generation counter. A task
 	// created from a normal (root) chat/agent turn has depth 0; a task created
 	// from *within* a running task carries its spawning run's depth + 1. The

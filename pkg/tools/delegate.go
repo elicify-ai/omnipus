@@ -29,108 +29,9 @@ import (
 // both the run path writes to and `action: "status"` reads from — no
 // second, disconnected data structure exists.
 
-// SubTurnSpawner is an interface for spawning sub-turns.
-// This avoids circular dependency between tools and agent packages.
-type SubTurnSpawner interface {
-	SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error)
-}
-
-// SubTurnConfig holds configuration for spawning a sub-turn. This is the
-// legacy underlying primitive retained while session launching moves behind
-// steer.SessionLauncher. pkg/agent/subturn.go converts it field-by-field into
-// its own agent.SubTurnConfig.
-type SubTurnConfig struct {
-	Model              string
-	Tools              []Tool
-	SystemPrompt       string
-	MaxTokens          int
-	Temperature        float64
-	Async              bool          // true for background delegation, false for await (blocking) delegation
-	Critical           bool          // continue running after parent finishes gracefully
-	Timeout            time.Duration // 0 = use default (5 minutes)
-	MaxContextRunes    int           // 0 = auto, -1 = no limit, >0 = explicit limit
-	ActualSystemPrompt string
-	// TargetAgentID, when non-empty, is the configured agent the sub-turn is
-	// delegating TO (e.g., a worker). When set, subturn.go resolves the
-	// delegate's soul (AgentConfig.Soul or, for seeded base agents, the
-	// compiled coreagent.GetPrompt) and uses it as the ActualSystemPrompt so
-	// the child turn runs with system=soul + user=task, uniformly across the
-	// native and external-cli executors. Empty means "delegate the parent's
-	// own agent" — the parent's own soul applies.
-	TargetAgentID   string
-	InitialMessages []providers.Message
-	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
-	// Populated from delegate's "label" argument. Used in the subagent_start WS frame.
-	TaskLabel string
-	// TaskID is DelegateTool's operator-visible handle for this run (for
-	// example, "delegate-12"). It is internal correlation metadata, not child
-	// prompt content, and lets terminal notices name the exact task that ended.
-	TaskID string
-	// ResolvedMaxDepth, when non-nil, is the effective onward-delegation depth
-	// cap the delegation-policy gate already authorized this specific call
-	// against (the tighter of a matched delegation-graph edge's own Depth and
-	// the global SubTurn.MaxDepth ceiling). When set, the spawn-time depth
-	// check uses this value instead of independently re-deriving a possibly
-	// different default, so an explicit per-edge Depth is never silently
-	// overridden (#477). nil means "no override — use the spawner's own
-	// default depth resolution."
-	ResolvedMaxDepth *int
-
-	// ContextSnapshot carries the DISCRETIONARY portion of the ADR-053 D1
-	// curated context snapshot (R§8.5) — see ContextSnapshot's own doc
-	// comment. nil means no discretionary snapshot. Mirrors (and is
-	// converted 1:1 into) agent.SubTurnConfig.ContextSnapshot by
-	// AgentLoopSpawner.SpawnSubTurn — the same tools<->agent type-doubling
-	// this whole struct already exists to work around (see this type's own
-	// doc comment above).
-	ContextSnapshot *ContextSnapshot
-
-	// RequestedSkill is the ADR-072 D9 "request" mechanism (spec FR-050..056):
-	// action="run" only, an optional skill slug the parent names on the same
-	// discretionary, parent-authored channel ContextSnapshot already rides —
-	// a NAME only, never content (Alternative F in the ADR was rejected for
-	// exactly the shape of sending a skill's body across this boundary).
-	// spawnSubTurn (pkg/agent/subturn.go) resolves this against the CHILD's
-	// (execSource's) own ContextBuilder/grant — never the caller's, D9's
-	// "the gate is the receiver's, structurally, not by convention" — and:
-	//   - if granted, appends the canonical slug to the child's
-	//     processOptions.ForcedSkills so the child's first turn begins with
-	//     it loaded (the same one-shot field the human "/<skill>" command
-	//     already drives);
-	//   - if the receiver is not granted it, the delegation fails at
-	//     dispatch (before the child's first model call) with a structured
-	//     error reusing DelegationDeniedCode (FR-053) — see
-	//     ErrRequestedSkillDenied;
-	//   - if the slug resolves to nothing on any shelf visible to the
-	//     receiver, the delegation fails at dispatch with the SkillNotFoundCode
-	//     discriminator (FR-054) — see ErrRequestedSkillNotFound, distinct
-	//     from the denial above, never conflated.
-	// Empty means "no requested skill" — mechanism 1 (naming the skill in
-	// plain language inside `task`) is unaffected either way and guarantees
-	// nothing on its own (FR-055).
-	RequestedSkill string
-
-	// DelegateSessionID, when non-empty, is the ADR-053 durable session_id
-	// (S2) DelegateTool minted and persisted a `queued` LifecycleRecord
-	// under BEFORE calling Spawn — see agent.SubTurnConfig.DelegateSessionID
-	// (the sibling field this converts into) for why reusing this exact
-	// value as the child's turn/steering-queue identity matters.
-	DelegateSessionID string
-
-	// IsResume marks this dispatch as a WARM RESUME of an existing session
-	// (native `delegate follow_up` on a terminal session) rather than a
-	// brand-new mint — see agent.SubTurnConfig.IsResume (the sibling field
-	// this converts into) for the full rationale. false for every other
-	// caller (delegate.run, team, evaluator-optimizer, ...), unchanged.
-	IsResume bool
-}
-
-// ContextSnapshot is the tools-side mirror of agent.ContextSnapshot (ADR-053
-// D1/R§8.5's curated context snapshot, discretionary portion only — parent-
-// named artifact references, not contents, plus optional notes). Kept as a
-// separate type from agent.ContextSnapshot for the identical reason
-// SubTurnConfig itself is duplicated across the two packages: avoiding a
-// tools<->agent import cycle (agent already imports tools).
+// ContextSnapshot is the discretionary portion of the ADR-053 curated
+// context snapshot: parent-named artifact references, not contents, plus
+// optional notes.
 type ContextSnapshot struct {
 	References []string
 	Notes      string
@@ -342,27 +243,9 @@ type DelegateTool struct {
 	BaseTool
 
 	launcher     steer.SessionLauncher
-	spawner      SubTurnSpawner
 	defaultModel string
 	maxTokens    int
 	temperature  float64
-
-	// spawnMarker, when non-nil, is the DelegateSpawnMarker seam executeAsync
-	// calls (synchronously, before dispatching the async spawn goroutine) to
-	// record that a delegate spawn is genuinely imminent for the delegating
-	// parent's own identity. Wired automatically by SetSpawner via a type
-	// assertion against the concrete spawner passed in — see SetSpawner's
-	// doc comment. nil is a silent no-op (no marker recorded), matching
-	// every other optional capability on this tool.
-	spawnMarker DelegateSpawnMarker
-
-	// asyncWG tracks the detached goroutines executeAsync launches. Background
-	// delegation is deliberately fire-and-forget for the CALLER (the parent
-	// turn moves on immediately — see executeAsync's Critical:true comment),
-	// but the goroutine keeps writing to the lifecycle store after the caller
-	// returns. Anything that tears down the stores those writes target must be
-	// able to wait for them first; WaitForAsyncTasks is that seam.
-	asyncWG sync.WaitGroup
 
 	// getAgentRegistry, when set, resolves the live agent registry used to
 	// classify a delegation target as native or external-CLI at
@@ -743,91 +626,16 @@ func (t *DelegateTool) SetSteerCaps(ratePerMinute, bodyBytes int) {
 // DelegateSteeringSink lands a parent->child steer/respond message in the
 // child's steering-queue scope at its next tool boundary. Satisfied by
 // *agent.AgentLoop (via its EnqueueSteeringMessage wrapper — see
-// pkg/agent/steering.go); defined as an interface here (mirroring
-// SubTurnSpawner above) to avoid a tools<->agent import cycle.
+// pkg/agent/steering.go); defined as an interface here to avoid a
+// tools<->agent import cycle.
 type DelegateSteeringSink interface {
-	EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error
-}
-
-// DelegateSpawnMarker lets DelegateTool record — synchronously, on the
-// dispatching goroutine, BEFORE the goroutine that will actually spawn the
-// child sub-turn is even launched — that a delegate spawn is genuinely about
-// to happen for a given identity (sessionID, or the (channel, chatID) Tier B
-// fallback form). This exists to close a real gap: a Stop click's
-// RequestCancel decides whether to arm a pre-registration cancel latch via
-// turnImminentForIdentity (pkg/agent/cancel_prearm.go), whose ONLY
-// production evidence source is al.sessionWorkers — populated exclusively
-// by the top-level inbound-message dispatch loop. A delegate sub-turn NEVER
-// goes through that loop (executeAsync below dispatches straight to
-// SpawnSubTurn on a bare goroutine), so without this marker, a Stop landing
-// between "the delegating parent's own turn finished" and "the child has
-// registered" finds no active turn AND no dispatcher evidence, and the
-// cancel is silently lost — precisely the bug this closes.
-//
-// Satisfied by *agent.AgentLoopSpawner (pkg/agent/subturn.go), the SAME
-// concrete type already passed to SetSpawner as a SubTurnSpawner — see
-// SetSpawner's own doc comment for how the two interfaces are wired
-// together from that one call. Defined as a SEPARATE interface (not folded
-// into SubTurnSpawner itself) so a test-only SubTurnSpawner mock (this
-// package's own tests construct several) is never forced to implement a
-// marker method it has no use for; DelegateTool treats an unwired marker
-// (nil) as a silent no-op, matching every other optional capability this
-// tool already accepts via a setter (cancelSoft/cancelHard,
-// sessionMessagingEnabled, etc.).
-//
-// Deliberately has NO Clear method: clearing the marker is entirely
-// pkg/agent's own responsibility (spawnSubTurn clears it the instant the
-// child registers, or on any early return that never reaches registration —
-// see subturn.go's pendingSpawnKeysForThisCall/registeredForCancel), which
-// never needs to cross the tools<->agent boundary at all.
-type DelegateSpawnMarker interface {
-	MarkPendingDelegateSpawn(sessionID, channel, chatID string)
+	EnqueueSteeringMessage(scope, agentID string, principal steer.Principal, msg providers.Message) error
 }
 
 // defaultCancelGrace is the cooperative-stop grace window before the hard
 // RequestCancel backstop fires when SetCancelGrace is never called
 // (session_messaging.cancel_grace default, FR-195).
 const defaultCancelGrace = 5 * time.Second
-
-// WaitForAsyncTasks blocks until every in-flight background (async=true)
-// delegation goroutine has finished writing its terminal lifecycle state.
-//
-// Background delegation is fire-and-forget for the CALLER by design, so the
-// goroutine outlives the Execute call that started it and keeps writing to the
-// lifecycle store afterwards. Any caller that is about to tear down the
-// storage those writes target MUST wait here first, or the writes race the
-// teardown. Tests rooted at t.TempDir() are the primary case (the temp dir is
-// removed the moment the test body returns); a graceful-shutdown path that
-// swaps stores would be another.
-//
-// This does NOT cancel anything — it only waits. Cancellation is the caller's
-// ctx, which the goroutine already honors.
-func (t *DelegateTool) WaitForAsyncTasks() {
-	t.asyncWG.Wait()
-}
-
-// SetSpawner sets the SubTurnSpawner used for both async and sync delegation.
-//
-// If spawner ALSO implements DelegateSpawnMarker (as *agent.AgentLoopSpawner
-// does, in the real production wiring — pkg/agent/subturn.go), it is
-// automatically installed as this tool's pending-spawn marker too, via a
-// plain interface type assertion. This is a deliberate "one setter wires
-// both capabilities" choice, not an oversight: production has exactly one
-// real SubTurnSpawner implementation and it always supports marking, so a
-// second SetSpawnMarker call at every wiring site would be pure
-// boilerplate; a test-only SubTurnSpawner mock that does NOT implement
-// DelegateSpawnMarker simply leaves t.spawnMarker nil (the type assertion's
-// ok is false), which is the correct, harmless "no marker configured"
-// behavior for a test that never exercises this path. Calling SetSpawner
-// again with a spawner that does NOT implement the marker interface clears
-// any previously-wired marker rather than leaving a stale one from an
-// earlier call — this setter is the single source of truth for both
-// fields, never a partial update.
-func (t *DelegateTool) SetSpawner(spawner SubTurnSpawner) {
-	t.spawner = spawner
-	marker, _ := spawner.(DelegateSpawnMarker)
-	t.spawnMarker = marker
-}
 
 // SetAgentRegistry installs the live agent-registry lookup (W2) DelegateTool
 // uses at task-creation time to classify a delegation target as native or
@@ -1376,11 +1184,7 @@ func (t *DelegateTool) verifyCallerPrincipal(ctx context.Context, rec *session.L
 			break
 		}
 		if ancestor == caller {
-			principalID := strings.TrimSpace(ToolAgentID(ctx))
-			if principalID == "" {
-				principalID = caller
-			}
-			return steer.Principal{Kind: steer.PrincipalKindAgent, ID: principalID}, nil
+			return steer.Principal{Kind: steer.PrincipalKindAgent, ID: caller}, nil
 		}
 		if t.lifecycle == nil {
 			break

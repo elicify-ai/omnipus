@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -39,15 +40,19 @@ import (
 // TestDelegationDenyChecker_SelfAssignmentSkipsGraph (delegation_enforce_test.go),
 // which must stay green.
 
-// spyDelegateSpawner records whether SpawnSubTurn was invoked. A DENIED delegation
-// must never reach the spawner.
-type spyDelegateSpawner struct {
+// spySessionLauncher records whether Launch was invoked. A denied delegation
+// must never reach the session launcher.
+type spySessionLauncher struct {
 	called bool
 }
 
-func (s *spyDelegateSpawner) SpawnSubTurn(ctx context.Context, cfg tools.SubTurnConfig) (*tools.ToolResult, error) {
+func (s *spySessionLauncher) Launch(context.Context, steer.LaunchRequest) (steer.LaunchResult, error) {
 	s.called = true
-	return tools.NewToolResult("spawned (should not happen for a denied delegation)"), nil
+	return steer.LaunchResult{}, nil
+}
+
+func (*spySessionLauncher) Dispatch(context.Context, string, int) (steer.DispatchResult, error) {
+	return steer.DispatchResult{}, nil
 }
 
 // TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate checks the gate
@@ -71,31 +76,13 @@ func TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate(t *testing.
 	}
 }
 
-// TestDelegationDenyChecker_SelfTargetDeniedForAwaitDelegate is the await
-// (async=false) counterpart of the background test above.
-func TestDelegationDenyChecker_SelfTargetDeniedForAwaitDelegate(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"await"}, nil),
-	})
-	check := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait)
-
-	denial := check(ctxWS(testWS, 0), "mia") // self-target
-	if denial == nil {
-		t.Fatal("self-targeted await delegate() must be DENIED, got allow (self-delegation bypass)")
-	}
-	if denial.Policy != tools.DenyTrustSet {
-		t.Fatalf("expected trust_set denial for self-delegation, got: %q (%s)",
-			denial.Policy, denial.Reason)
-	}
-}
-
 // newSelfTargetDelegateTool builds a DelegateTool wired EXACTLY as
 // registerSharedTools wires it (background + await deny checkers with
 // selfAssignmentExempt=false, plus the depth resolver), for caller "mia".
-func newSelfTargetDelegateTool() (*tools.DelegateTool, *spyDelegateSpawner) {
+func newSelfTargetDelegateTool() (*tools.DelegateTool, *spySessionLauncher) {
 	dt := tools.NewDelegateTool("model", 1000, 0.7)
-	spy := &spyDelegateSpawner{}
-	dt.SetSpawner(spy)
+	spy := &spySessionLauncher{}
+	dt.SetSessionLauncher(spy)
 	dt.SetDelegationDenyCheckerBackground(
 		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
 	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{}))
@@ -111,24 +98,21 @@ func TestDelegateTool_SelfTargetDeniedAtExecute(t *testing.T) {
 		edge("mia", "ray", []string{"background", "await"}, nil),
 	})
 
-	for _, async := range []bool{true, false} {
-		dt, spy := newSelfTargetDelegateTool()
-		res := dt.Execute(ctxWS(testWS, 0), map[string]any{
-			"task":     "attempt self-delegation",
-			"agent_id": "mia", // caller's OWN configured id
-			"async":    async,
-		})
-		if res == nil || !res.IsError {
-			t.Fatalf("async=%v: self-target delegate() must return an error result, got: %+v", async, res)
-		}
-		// The structured DelegationFailure payload must carry the trust_set policy.
-		if !strings.Contains(res.ForLLM, `"error":"delegation_denied"`) ||
-			!strings.Contains(res.ForLLM, `"policy":"trust_set"`) {
-			t.Fatalf("async=%v: expected a trust_set delegation_denied payload, got ForLLM: %q", async, res.ForLLM)
-		}
-		if spy.called {
-			t.Fatalf("async=%v: spawner MUST NOT run for a denied self-target delegation", async)
-		}
+	dt, spy := newSelfTargetDelegateTool()
+	res := dt.Execute(ctxWS(testWS, 0), map[string]any{
+		"task":     "attempt self-delegation",
+		"agent_id": "mia", // caller's OWN configured id
+	})
+	if res == nil || !res.IsError {
+		t.Fatalf("self-target delegate() must return an error result, got: %+v", res)
+	}
+	// The structured DelegationFailure payload must carry the trust_set policy.
+	if !strings.Contains(res.ForLLM, `"error":"delegation_denied"`) ||
+		!strings.Contains(res.ForLLM, `"policy":"trust_set"`) {
+		t.Fatalf("expected a trust_set delegation_denied payload, got ForLLM: %q", res.ForLLM)
+	}
+	if spy.called {
+		t.Fatal("launcher MUST NOT run for a denied self-target delegation")
 	}
 }
 
@@ -146,8 +130,8 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 	})
 
 	dt := tools.NewDelegateTool("model", 1000, 0.7)
-	spy := &spyDelegateSpawner{}
-	dt.SetSpawner(spy)
+	spy := &spySessionLauncher{}
+	dt.SetSessionLauncher(spy)
 	dt.SetDelegationDenyCheckerBackground(
 		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
 
@@ -161,7 +145,6 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 	res := dt.Execute(ctxWS(testWS, 0), map[string]any{
 		"task":     "attempt self-delegation",
 		"agent_id": "mia",
-		"async":    true,
 	})
 	if res == nil || !res.IsError {
 		t.Fatalf("self-target delegate() must be denied, got: %+v", res)
@@ -171,7 +154,7 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 			"(check-ordering regression); the resolver's self-branch must stay unreachable dead code")
 	}
 	if spy.called {
-		t.Fatal("spawner must not run for a denied self-target delegation")
+		t.Fatal("launcher must not run for a denied self-target delegation")
 	}
 }
 

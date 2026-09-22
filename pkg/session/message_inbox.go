@@ -183,24 +183,33 @@ func questionOrBlockerKind(kind string) bool {
 	return kind == "question" || kind == "blocker"
 }
 
-// wakeEligibleForAdmission mirrors ADR-091 landing order I-5's
-// wake-eligibility table (handback, question, blocker, fatal error,
-// goal_status) for ADMISSION purposes only (FR-B-010: "wake-eligible kinds
-// are always admitted ... and bypass allowWake"): these kinds bypass the
-// unacked-cap and per-minute rate checks in Append below, so a terminal or
-// otherwise wake-eligible outcome can never be silently dropped under load.
-// The D15 per-type (question/blocker) ceiling is a SEPARATE, narrower abuse
-// guard against a misbehaving child and is deliberately NOT bypassed here —
-// it still applies to every kind, wake-eligible or not.
-func wakeEligibleForAdmission(peek envelopePeek) bool {
+// SessionMessageDeliveryClass is the single delivery classifier used by
+// initial upward delivery, inbox admission, and boot recovery.
+type SessionMessageDeliveryClass struct {
+	Kind         string
+	Fatal        bool
+	WakeEligible bool
+}
+
+// ClassifySessionMessage derives delivery behavior from the actual generated
+// envelope, never from a parallel caller-supplied outcome label.
+func ClassifySessionMessage(msg generated.SessionMessage) (SessionMessageDeliveryClass, error) {
+	peek, _, err := peekEnvelope(msg)
+	if err != nil {
+		return SessionMessageDeliveryClass{}, err
+	}
+	return classifyEnvelope(peek), nil
+}
+
+func classifyEnvelope(peek envelopePeek) SessionMessageDeliveryClass {
+	class := SessionMessageDeliveryClass{Kind: peek.Kind, Fatal: peek.Fatal}
 	switch peek.Kind {
 	case "handback", "question", "blocker", "goal_status":
-		return true
+		class.WakeEligible = true
 	case "error":
-		return peek.Fatal
-	default:
-		return false
+		class.WakeEligible = peek.Fatal
 	}
+	return class
 }
 
 // AppendResult reports the outcome of a successful (non-error) Append.
@@ -547,21 +556,20 @@ func (s *MessageInboxStore) Append(ownerKey string, msg generated.SessionMessage
 		return &AppendResult{Accepted: true, Deduped: true, MessageID: peek.MessageID}, nil
 	}
 
-	if questionOrBlockerKind(peek.Kind) {
-		ceiling := s.InboxPerTypeCeiling
-		if ceiling <= 0 {
-			ceiling = DefaultInboxPerTypeCeiling
-		}
-		if openTypeCount >= ceiling {
-			return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxPerChildCeiling, openTypeCount, ceiling, peek.SessionID)
-		}
-	}
-
 	// FR-B-010 (I-5): a wake-eligible kind bypasses the unacked-cap and rate
-	// checks below entirely — it never even consults them, so it also never
+	// checks, including the question/blocker ceiling, entirely — it never even consults them, so it also never
 	// consumes a rate-window slot that would otherwise count against an
 	// unrelated later message. The D15 per-type ceiling above is untouched.
-	if !wakeEligibleForAdmission(peek) {
+	if !classifyEnvelope(peek).WakeEligible {
+		if questionOrBlockerKind(peek.Kind) {
+			ceiling := s.InboxPerTypeCeiling
+			if ceiling <= 0 {
+				ceiling = DefaultInboxPerTypeCeiling
+			}
+			if openTypeCount >= ceiling {
+				return nil, fmt.Errorf("%w (%d/%d for session %s)", ErrInboxPerChildCeiling, openTypeCount, ceiling, peek.SessionID)
+			}
+		}
 		unackedMax := s.InboxUnackedMax
 		if unackedMax <= 0 {
 			unackedMax = DefaultInboxUnackedMax
@@ -903,6 +911,35 @@ func (s *MessageInboxStore) Drain(ownerKey, childSessionID, sinceCursor string, 
 	// the loop scans nothing new (an empty/fully-behind-cursor file), so the
 	// cursor does not move backwards.
 	return candidates, strconv.FormatInt(lastScannedSeq, 10), false, nil
+}
+
+// Latest returns the newest message for childSessionID, including messages
+// that were already acknowledged. Acknowledgement is a delivery cursor, not
+// deletion: durable status still needs the last upward report and its real
+// timestamp after a parent has consumed it.
+func (s *MessageInboxStore) Latest(ownerKey, childSessionID string) (*generated.SessionMessage, error) {
+	if strings.TrimSpace(ownerKey) == "" {
+		return nil, ErrInboxEmptyOwnerKey
+	}
+	mu := s.lock.Get(ownerKey)
+	mu.Lock()
+	entries, err := s.readEntries(ownerKey)
+	mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
+		if e.Kind != InboxEntryMessage || e.Message == nil {
+			continue
+		}
+		envelope, _, perr := peekEnvelope(*e.Message)
+		if perr == nil && envelope.SessionID == childSessionID {
+			msg := *e.Message
+			return &msg, nil
+		}
+	}
+	return nil, nil
 }
 
 // UnackedCount returns the current open question+blocker count for

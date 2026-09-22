@@ -627,6 +627,10 @@ func (f *eventForwardState) onSubTurnSpawn(evt agent.Event) {
 		ParentCallId: string(p.ParentSpawnCallID),
 		TaskLabel:    p.TaskLabel,
 	}
+	if p.Label != "" {
+		childSessionID := p.Label
+		spawnFrame.ChildSessionId = &childSessionID
+	}
 	if p.AgentID != "" {
 		aid := p.AgentID
 		spawnFrame.AgentId = &aid

@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,6 +15,57 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
+
+type lifecycleOrderingDeliverer struct {
+	lifecycle       *session.LifecycleStore
+	stateAtDelivery session.LifecycleState
+	outcome         steer.Outcome
+}
+
+func (d *lifecycleOrderingDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
+	rec, err := d.lifecycle.Load(event.ChildSessionID)
+	if err != nil {
+		return steer.Delivery{}, err
+	}
+	d.stateAtDelivery = rec.State
+	d.outcome = event.Outcome
+	return steer.Delivery{MessageID: "observed", Outcome: steer.DeliveryWoke}, nil
+}
+
+func TestCompleteTask_EmptyAnswerFailsAndDeliversBeforeLifecycleTerminal(t *testing.T) {
+	al := newNativeTaskCompletionTestLoop(t, &mockProvider{})
+	lifecycle := session.NewLifecycleStore(t.TempDir())
+	al.SetSessionMessagingStores(session.NewMessageInboxStore(t.TempDir()), lifecycle)
+	al.taskExecutor.SetLifecycleStore(lifecycle)
+	const taskSessionID = "task-empty-session"
+	seedParentAndChild(t, lifecycle, "parent-1", taskSessionID)
+	deliverer := &lifecycleOrderingDeliverer{lifecycle: lifecycle}
+	al.SetSteerAudienceDeps(nil, nil, deliverer)
+	tk := &task.Task{Title: "empty", Prompt: "x", Action: task.ActionLLM, AgentID: "native-agent", WorkspaceID: "default", Priority: 3, Status: task.StatusInProgress, SessionID: taskSessionID}
+	if err := al.taskStore.Create(tk); err != nil {
+		t.Fatal(err)
+	}
+	if !al.taskExecutor.completeTaskWithResult(tk, taskSessionID, task.StatusInProgress, true, "  ", nil) {
+		t.Fatal("completion was not applied")
+	}
+	final, err := al.taskStore.Get(tk.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Status != task.StatusFailed || deliverer.outcome != steer.OutcomeEmptyAnswer {
+		t.Fatalf("task status/outcome = %q/%q, want failed/empty_answer", final.Status, deliverer.outcome)
+	}
+	if deliverer.stateAtDelivery != session.LifecycleRunning {
+		t.Fatalf("lifecycle state at upward delivery = %q, want running (inbox before terminal write)", deliverer.stateAtDelivery)
+	}
+	rec, err := lifecycle.Load(taskSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != session.LifecycleFailed {
+		t.Fatalf("final lifecycle state = %q, want failed", rec.State)
+	}
+}
 
 // --- moved from task_executor.go tests 2026-09-15 ---
 
@@ -170,11 +222,10 @@ func TestWriteJudgeVerdictTranscript_NotMet_DeliversGoalStatusUpward(t *testing.
 	}
 }
 
-// TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery covers the negative
-// half of FR-B-017: a MET verdict must never produce a goal_status upward
-// delivery — that is what the handback/final-answer path already covers
-// (FR-B-002), and a duplicate "everything is fine" card would be noise.
-func TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery(t *testing.T) {
+// TestWriteJudgeVerdictTranscript_Met_DeliversGoalStatus covers FR-C-009's
+// positive verdict half: the parent receives the Judge's actual decision,
+// not an inferred handback-only success.
+func TestWriteJudgeVerdictTranscript_Met_DeliversGoalStatus(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	store := al.GetAgentStore("native-agent")
 	if store == nil {
@@ -201,7 +252,7 @@ func TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery(t *testing.T) {
 	}
 
 	tk := &task.Task{
-		Title: "met judge verdict, no upward delivery", Prompt: "x", Action: task.ActionLLM,
+		Title: "met judge verdict upward delivery", Prompt: "x", Action: task.ActionLLM,
 		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
 	}
 	if err := al.taskStore.Create(tk); err != nil {
@@ -219,8 +270,15 @@ func TestWriteJudgeVerdictTranscript_Met_NoUpwardDelivery(t *testing.T) {
 	if derr != nil {
 		t.Fatalf("Drain: %v", derr)
 	}
-	if len(msgs) != 0 {
-		t.Fatalf("expected NO goal_status entry for a MET verdict, got %d", len(msgs))
+	if len(msgs) != 1 {
+		t.Fatalf("expected one goal_status entry for a MET verdict, got %d", len(msgs))
+	}
+	gs, gerr := msgs[0].AsSessionMessageGoalStatus()
+	if gerr != nil {
+		t.Fatalf("AsSessionMessageGoalStatus: %v", gerr)
+	}
+	if gs.Condition != generated.SessionMessageGoalStatusConditionMet {
+		t.Fatalf("condition = %q, want met", gs.Condition)
 	}
 }
 

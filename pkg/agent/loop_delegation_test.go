@@ -214,7 +214,7 @@ func TestEdgeModeCategory_ExhaustiveOverConfigModes(t *testing.T) {
 		mode config.DelegationMode
 		want workspace.DelegationMode
 	}{
-		{config.DelegationModeAwait, workspace.ModeDirect},
+		{config.DelegationMode("await"), workspace.ModeDirect},
 		{config.DelegationModeBackground, workspace.ModeDirect},
 		{config.DelegationModeTask, workspace.ModeTask},
 	}

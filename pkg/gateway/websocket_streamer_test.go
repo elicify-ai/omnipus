@@ -41,12 +41,10 @@ func (r *recordingGatewayObserver) Observe(b steer.Boundary, _ string, _ steer.A
 	r.calls = append(r.calls, b)
 }
 
-// TestWsStreamer_SteeredSession_ShadowedByAudience proves ADR-091 boundary 6
-// (landing order §6, FR-B-001/FR-B-014): a steered session's live token
-// stream is contained by the injected steer.AudienceResolver alone (no
-// parentSpawnCallID stamp) — resolved once, lazily, on the streamer's first
-// Update() call, and the boundary is proven exercised via Observe.
-func TestWsStreamer_SteeredSession_ShadowedByAudience(t *testing.T) {
+// TestWsStreamer_SteeredSession_VisibleToOwnViewer proves ADR-091 boundary 6
+// contains by destination rather than hiding the child from a connection
+// explicitly bound to that child's own session.
+func TestWsStreamer_SteeredSession_VisibleToOwnViewer(t *testing.T) {
 	handler, _, al := newTestWSHandler(t)
 	t.Cleanup(handler.Wait)
 	t.Cleanup(func() { SetGatewaySteerAudienceDeps(nil, nil) })
@@ -68,7 +66,7 @@ func TestWsStreamer_SteeredSession_ShadowedByAudience(t *testing.T) {
 
 	require.NoError(t, streamer.Update(context.Background(), "child narration"))
 
-	assert.True(t, streamer.isShadowStream, "a steered session's stream must be shadowed by audience alone")
+	assert.False(t, streamer.isShadowStream, "a steered session must remain visible to its own session-bound viewer")
 	if len(obs.calls) != 1 || obs.calls[0] != steer.BoundaryWebchatStreaming {
 		t.Fatalf("expected exactly one Observe(webchat_streaming, ...) call, got %+v", obs.calls)
 	}

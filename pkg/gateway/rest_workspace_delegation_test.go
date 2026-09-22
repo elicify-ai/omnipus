@@ -479,7 +479,7 @@ func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 		mode config.DelegationMode
 		want workspace.DelegationMode
 	}{
-		{config.DelegationModeAwait, workspace.ModeDirect},
+		{config.DelegationMode("await"), workspace.ModeDirect},
 		{config.DelegationModeBackground, workspace.ModeDirect},
 		{config.DelegationModeTask, workspace.ModeTask},
 	}
@@ -515,7 +515,7 @@ func TestDelegationEdgeValidate_ModesMatchConfig(t *testing.T) {
 	// Negative control 2: the RETIRED literal 3-value strings, cast directly
 	// (not through agent.EdgeModeCategory), are no longer valid edge modes —
 	// the old 1:1 lock-step this test used to pin is gone.
-	for _, retired := range []config.DelegationMode{config.DelegationModeAwait, config.DelegationModeBackground} {
+	for _, retired := range []config.DelegationMode{config.DelegationMode("await"), config.DelegationModeBackground} {
 		raw := workspace.DelegationEdge{
 			FromAgent: "jim",
 			ToAgent:   "ava",

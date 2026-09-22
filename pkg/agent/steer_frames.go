@@ -14,14 +14,9 @@
 // "persist first, then emit with the same id" pattern (GoalOutcomePayload's
 // own doc comment).
 //
-// subagent_start/subagent_end are NOT re-emitted here — they already have a
-// live emitter (pkg/agent/subturn.go's EventKindSubTurnSpawn/SubTurnEnd,
-// forwarded by pkg/gateway/websocket_forward.go's onSubTurnSpawn/
-// onSubTurnEnd, both files this lane does not own the production logic
-// of beyond the WS forwarder). This file adds ONLY the persistence half
-// for those two, via a dedicated, connection-INDEPENDENT subscriber
-// (StartSubagentSpawnPersister) — never inside the per-connection WS
-// forwarder, which would persist once per connected viewer.
+// The launcher emits and persists start/end directly. The legacy event
+// subscriber remains only until the retired in-chat executor is physically
+// deleted; it ignores launcher-authored events to avoid duplicate entries.
 package agent
 
 import (
@@ -62,6 +57,91 @@ func (al *AgentLoop) persistSubagentEntry(parentSessionID, id, subtype string, p
 // push, a replay and a cold load all key the same span the same way.
 func subagentSpanID(originCallID string) string {
 	return "span_" + originCallID
+}
+
+func (al *AgentLoop) deliverSubagentStart(parentSessionID string, childRec *session.LifecycleRecord, title string) {
+	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
+		return
+	}
+	callID := childRec.Origin.CallID
+	id := callID + ":start"
+	childID := childRec.SessionID
+	frame := generated.SubagentStartFrame{
+		Type:           string(generated.WsFrameTypeSubagentStart),
+		SessionId:      parentSessionID,
+		ChildSessionId: &childID,
+		SpanId:         subagentSpanID(callID),
+		ParentCallId:   callID,
+		TaskLabel:      title,
+	}
+	if childRec.AgentID != "" {
+		agentID := childRec.AgentID
+		frame.AgentId = &agentID
+	}
+	if err := al.persistSubagentEntry(parentSessionID, id, session.SystemSubtypeSubagentStart, func(e *session.TranscriptEntry) {
+		e.SubagentStart = &frame
+	}); err != nil {
+		logger.WarnCF("agent", "steer: persist subagent_start failed",
+			map[string]any{"parent_session_id": parentSessionID, "child_session_id": childRec.SessionID, "error": err.Error()})
+		return
+	}
+	al.emitEvent(EventKindSubTurnSpawn,
+		EventMeta{Source: "steer", TracePath: "steer.launch", SessionKey: parentSessionID},
+		SubTurnSpawnPayload{
+			AgentID:           childRec.AgentID,
+			Label:             childRec.SessionID,
+			SpanID:            subagentSpanID(callID),
+			ParentSpawnCallID: session.ToolCallID(callID),
+			TaskLabel:         title,
+			SessionID:         parentSessionID,
+		})
+}
+
+func (al *AgentLoop) deliverSubagentEnd(parentSessionID string, childRec *session.LifecycleRecord, outcome steer.Outcome) {
+	if al == nil || parentSessionID == "" || childRec == nil || childRec.Origin == nil || childRec.Origin.CallID == "" {
+		return
+	}
+	status := SubTurnStatusError
+	switch outcome {
+	case steer.OutcomeFinalAnswer:
+		status = SubTurnStatusSuccess
+	case steer.OutcomeInterrupted:
+		status = SubTurnStatusInterrupted
+	case steer.OutcomeTimedOut:
+		status = SubTurnStatusTimeout
+	case steer.OutcomeParkedQuestion:
+		status = SubTurnStatusParked
+	}
+	callID := childRec.Origin.CallID
+	id := callID + ":end"
+	frame := generated.SubagentEndFrame{
+		Type:      string(generated.WsFrameTypeSubagentEnd),
+		SessionId: parentSessionID,
+		SpanId:    subagentSpanID(callID),
+		Status:    string(status),
+	}
+	parentCallID := callID
+	frame.ParentCallId = &parentCallID
+	if childRec.AgentID != "" {
+		agentID := childRec.AgentID
+		frame.AgentId = &agentID
+	}
+	if err := al.persistSubagentEntry(parentSessionID, id, session.SystemSubtypeSubagentEnd, func(e *session.TranscriptEntry) {
+		e.SubagentEnd = &frame
+	}); err != nil {
+		logger.WarnCF("agent", "steer: persist subagent_end failed",
+			map[string]any{"parent_session_id": parentSessionID, "child_session_id": childRec.SessionID, "error": err.Error()})
+		return
+	}
+	al.emitEvent(EventKindSubTurnEnd,
+		EventMeta{Source: "steer", TracePath: "steer.complete", SessionKey: parentSessionID},
+		SubTurnEndPayload{
+			AgentID:           childRec.AgentID,
+			Status:            status,
+			SpanID:            subagentSpanID(callID),
+			ParentSpawnCallID: session.ToolCallID(callID),
+			SessionID:         parentSessionID,
+		})
 }
 
 // deliverSubagentMessage persists then emits ONE subagent_message frame
@@ -125,7 +205,7 @@ func (al *AgentLoop) deliverSubagentState(parentSessionID string, childRec *sess
 		return
 	}
 	originCallID := childRec.Origin.CallID
-	id := fmt.Sprintf("%s:state:%s:%d", originCallID, state, time.Now().UnixNano())
+	id := fmt.Sprintf("%s:%d:state:%s", originCallID, childRec.Generation, state)
 	frame := generated.SubagentStateFrame{
 		Type:      string(generated.WsFrameTypeSubagentState),
 		SessionId: childRec.SessionID,
@@ -189,6 +269,11 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 				map[string]any{"panic": fmt.Sprintf("%v", r)})
 		}
 	}()
+	// Launcher-authored events are already persisted synchronously before
+	// emission. This subscriber serves only the legacy executor.
+	if evt.Meta.Source == "steer" {
+		return
+	}
 	switch p := evt.Payload.(type) {
 	case SubTurnSpawnPayload:
 		if p.SessionID == "" || p.ParentSpawnCallID == "" {
@@ -245,7 +330,7 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 }
 
 // deliverGoalVerdictUpward covers ADR-091 FR-B-017 (I-5, AS-12): when the
-// Judge rules a goal's criteria NOT met, the deciding verdict is delivered
+// Judge rules on a goal's criteria, the deciding verdict is delivered
 // upward through steer.UpwardDeliverer as a goal_status SessionMessage —
 // direction session_to_parent, condition not_met, one evidence item per
 // judged criterion — the same one upward-delivery operation every other
@@ -255,10 +340,6 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 // goal_loop.go::writeGoalVerdictTranscript — this function is the shared
 // body both call).
 //
-// A MET verdict is a deliberate no-op: the handback/final-answer path
-// already covers "goal succeeded" (FR-B-002); a second "all good" card off
-// this call site would be noise, not signal (mirrors
-// TestDeliver_HandbackOnePerChild_Identity's "exactly one entry" contract).
 // sessionID with no steered parent, or with no active /goal record bound to
 // it (activeGoalForSession, GOAL-FR-013's one session-bound lookup for both
 // owner kinds), both no-op silently and are logged at Warn only for the
@@ -266,7 +347,7 @@ func (al *AgentLoop) persistSubTurnSpawnOrEnd(evt Event) {
 // "no steering parent to deliver to" the same way every other Deliver call
 // site in this package does (best-effort, never fails the caller).
 func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID string, verdict *task.JudgeVerdict) {
-	if verdict == nil || verdict.Met || sessionID == "" {
+	if verdict == nil || sessionID == "" {
 		return
 	}
 	deliverer := al.getUpwardDeliverer()
@@ -291,6 +372,10 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 		evidence[i].Note = &c.Reason
 	}
 	var sm generated.SessionMessage
+	condition := generated.SessionMessageGoalStatusConditionNotMet
+	if verdict.Met {
+		condition = generated.SessionMessageGoalStatusConditionMet
+	}
 	if err := sm.FromSessionMessageGoalStatus(generated.SessionMessageGoalStatus{
 		Kind:            generated.SessionMessageGoalStatusKindGoalStatus,
 		MessageId:       fmt.Sprintf("%s-verdict-%d", rec.GoalID, verdict.Round),
@@ -299,7 +384,7 @@ func (al *AgentLoop) deliverGoalVerdictUpward(ctx context.Context, sessionID str
 		CreatedAt:       time.Now().UTC(),
 		Depth:           1,
 		GoalId:          rec.GoalID,
-		Condition:       generated.SessionMessageGoalStatusConditionNotMet,
+		Condition:       condition,
 		Direction:       generated.SessionMessageGoalStatusDirectionSessionToParent,
 		Evidence:        &evidence,
 		UntrustedOrigin: false,

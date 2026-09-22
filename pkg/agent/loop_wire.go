@@ -728,11 +728,6 @@ func (rw *registerSharedToolsWire3) registerHandoffAndSkills(agentID string, age
 func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agent *AgentInstance, sharedStore *session.UnifiedStore) {
 	{
 		delegateTool := tools.NewDelegateTool(agent.Model, agent.MaxTokens, agent.Temperature)
-		// Retain it so Close() can drain its background delegations before
-		// the stores they write through are torn down. See delegateTools.
-		rw.rs.al.delegateToolsMu.Lock()
-		rw.rs.al.delegateTools = append(rw.rs.al.delegateTools, delegateTool)
-		rw.rs.al.delegateToolsMu.Unlock()
 		// FR-196 kill switch — wire it HERE, at construction, not only in
 		// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
 		// DelegateTool: the session_messaging_wire.go re-wire walks the

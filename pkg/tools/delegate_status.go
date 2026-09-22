@@ -156,13 +156,7 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 			return ErrorResult("session_id must be a string")
 		}
 		if sid := strings.TrimSpace(sessionIDStr); sid != "" {
-			t.mu.Lock()
-			resolved, found := t.sessionIndex[sid]
-			t.mu.Unlock()
-			if !found {
-				return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sid))
-			}
-			taskID = resolved
+			return t.executeDurableStatus(ctx, sid)
 		}
 	}
 
@@ -253,6 +247,92 @@ func (t *DelegateTool) executeStatus(ctx context.Context, args map[string]any) *
 	}
 
 	return NewToolResult(strings.TrimRight(sb.String(), "\n"))
+}
+
+type delegateInboxLatestStore interface {
+	Latest(ownerKey, childSessionID string) (*generated.SessionMessage, error)
+}
+
+type delegateStatusMessageEnvelope struct {
+	CreatedAt   time.Time `json:"created_at"`
+	Kind        string    `json:"kind"`
+	Text        string    `json:"text"`
+	Summary     string    `json:"summary"`
+	ResultSoFar string    `json:"result_so_far"`
+	Condition   string    `json:"condition"`
+	Note        string    `json:"note"`
+}
+
+func (t *DelegateTool) executeDurableStatus(ctx context.Context, sessionID string) *ToolResult {
+	if t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured")
+	}
+	rec, err := t.lifecycle.Load(sessionID)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
+	}
+	if err := t.verifyCallerOwnsSession(ctx, rec); err != nil {
+		return ErrorResult(fmt.Sprintf("No subagent found with session ID: %s", sessionID))
+	}
+
+	state := string(rec.State)
+	if t.inbox == nil {
+		return NewToolResult(fmt.Sprintf("%s, no message yet, started %s ago", state, formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))))
+	}
+
+	var latest *generated.SessionMessage
+	if store, ok := t.inbox.(delegateInboxLatestStore); ok {
+		latest, err = store.Latest(rec.SteeringSessionID(), sessionID)
+	} else {
+		var msgs []generated.SessionMessage
+		msgs, _, _, err = t.inbox.Drain(rec.SteeringSessionID(), sessionID, "", 0)
+		if len(msgs) > 0 {
+			latest = &msgs[len(msgs)-1]
+		}
+	}
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: status: %v", err)).WithError(err)
+	}
+	if latest == nil {
+		return NewToolResult(fmt.Sprintf("%s, no message yet, started %s ago", state, formatDelegateStatusAge(t.now().Sub(rec.CreatedAt))))
+	}
+
+	raw, err := json.Marshal(latest)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: status: encode latest inbox entry: %v", err))
+	}
+	var envelope delegateStatusMessageEnvelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return ErrorResult(fmt.Sprintf("delegate: status: decode latest inbox entry: %v", err))
+	}
+	line := firstNonBlank(envelope.Text, envelope.Summary, envelope.ResultSoFar, envelope.Condition, envelope.Note, envelope.Kind)
+	return NewToolResult(fmt.Sprintf("%s, %s, %s ago", state, line, formatDelegateStatusAge(t.now().Sub(envelope.CreatedAt))))
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return "message received"
+}
+
+func formatDelegateStatusAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	seconds := int(age / time.Second)
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%d s", seconds)
+	case seconds < 60*60:
+		return fmt.Sprintf("%d min", seconds/60)
+	case seconds < 24*60*60:
+		return fmt.Sprintf("%d h", seconds/(60*60))
+	default:
+		return fmt.Sprintf("%d d", seconds/(24*60*60))
+	}
 }
 
 // getTaskCopy returns a copy of the task with the given ID, taken under the
