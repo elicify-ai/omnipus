@@ -9,9 +9,8 @@
 // declares an `envPrefix` that duplicates the same prefix, the accumulated
 // Key doubles the prefix (e.g.
 // "OMNIPUS_TOOLS_BROWSER_OMNIPUS_TOOLS_BROWSER_HEADLESS") — a name nobody
-// sets, so the override silently never fires. This shipped ~20 dead env vars
-// (BrowserToolConfig's 15 fields + AgentDefaults.SubTurn's 5 fields) with
-// zero test coverage to catch it.
+// sets, so the override silently never fires. This shipped multiple dead env
+// vars with zero test coverage to catch it.
 //
 // TestConfig_EnvKeys_NoDoublePrefix is the general guardrail: it walks every
 // env-tagged field on Config via env.GetFieldParams and asserts that any
@@ -37,8 +36,7 @@ import (
 // from Config and fails if any field's own tag is already a fully-qualified
 // "OMNIPUS_..." key but resolves to a DIFFERENT (prefix-augmented) Key. This
 // is the guardrail requested by the B2b RCA: it would have failed on the
-// original code for all 15 BrowserToolConfig fields, all 5
-// AgentDefaults.SubTurn fields, and BrowserToolConfig's embedded
+// original code for all 15 BrowserToolConfig fields and BrowserToolConfig's embedded
 // ToolConfig.Enabled (via the different failure mode covered by
 // TestBrowserToolConfig_EmbeddedToolConfig_RequiresEnvPrefix below).
 func TestConfig_EnvKeys_NoDoublePrefix(t *testing.T) {
@@ -253,27 +251,34 @@ func TestBrowserToolConfig_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 	}
 }
 
-// TestAgentDefaultsSubTurn_EnvOverride_ActuallyOverridesJSON is the
-// REVERT-PROOF test for the AgentDefaults.SubTurn half of B2b.
-func TestAgentDefaultsSubTurn_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
+// TestPerformanceDelegation_EnvOverride_ActuallyOverridesJSON is the
+// revert-proof test for the two delegation limits folded into Performance.
+func TestPerformanceDelegation_EnvOverride_ActuallyOverridesJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := tmpDir + "/config.json"
-	configJSON := `{"version":1,"agents":{"defaults":{"subturn":{"max_depth":3}}}}`
+	configJSON := `{"version":1,"performance":{"max_delegation_depth":3,"delegation_timeout_minutes":4}}`
 	if err := writeTestConfigFile(t, configPath, configJSON); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
-	t.Setenv("OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH", "9")
+	t.Setenv("OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH", "9")
+	t.Setenv("OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES", "12")
 
 	cfg, err := LoadConfig(configPath)
 	if err != nil {
 		t.Fatalf("LoadConfig() error: %v", err)
 	}
 
-	if cfg.Agents.Defaults.SubTurn.MaxDepth != 9 {
+	if cfg.Performance.MaxDelegationDepth != 9 {
 		t.Errorf(
-			"SubTurn.MaxDepth=%d: env var OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH=9 did not override JSON 3 (B2b regression)",
-			cfg.Agents.Defaults.SubTurn.MaxDepth,
+			"Performance.MaxDelegationDepth=%d: env override did not replace JSON 3",
+			cfg.Performance.MaxDelegationDepth,
+		)
+	}
+	if cfg.Performance.DelegationTimeoutMinutes != 12 {
+		t.Errorf(
+			"Performance.DelegationTimeoutMinutes=%d: env override did not replace JSON 4",
+			cfg.Performance.DelegationTimeoutMinutes,
 		)
 	}
 }

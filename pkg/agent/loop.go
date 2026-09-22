@@ -580,6 +580,10 @@ type processOptions struct {
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+	// OriginKind identifies the durable execution origin when this turn does
+	// not have a lifecycle record to supply it. The zero value is an ordinary
+	// interactive turn. Publication policy resolves the record first.
+	OriginKind session.OriginKind
 
 	// WorkspaceID is the Spec-1 Workspace identifier for this turn.
 	// When set, the memory store uses the shared workspace room
@@ -1477,10 +1481,6 @@ func (al *AgentLoop) writeTurnCancelledRestartForActiveTurns() {
 // contract requires on the wire for a session-scoped frame, for the two Go
 // event payloads ToolExecStartPayload and ToolExecEndPayload.
 //
-// ADR-091 D7/I-4: ProducingSessionID — the workaround field this function
-// used to ALSO compute, so the WS forwarder could stamp an optional
-// producing_session_id "present iff it differs from session_id" — is
-// deleted (events.go), and this function now returns only sessionID.
 // SessionID is the producer's own transcript identity. routingSessionID is
 // retained only for cascade cancellation and is never a frame destination.
 func u9ToolExecSessionIDs(ts *turnState) (sessionID string) {
@@ -2303,13 +2303,8 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 				// inherited verbatim from the root of the delegation subtree
 				// — not this turn's own store-backed transcriptSessionID,
 				// which for a delegated child differs from the root's. No
-				// ProducingSessionID sibling exists on this payload today
-				// (events.go/U23 added that field only to
-				// ToolExecStart/EndPayload) even though the W5 audit already
-				// classifies "done" as carrying both ids on the wire schema
-				// (contracts/asyncapi.yaml) — closing that gap is events.go's
-				// (U23) and the WS forwarder's (U11) cross-unit follow-up,
-				// not something addable from this file.
+				// The frame is keyed by this producing turn's routing identity;
+				// the payload carries no second session identity.
 				SessionID: string(rz.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID),
 				IsRoot:    rz.rc.rx.rr.rq.ri.rf.rt.ts.parentTurnID == "",
 			},
@@ -2410,7 +2405,8 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 //   - one transcript entry with the typed code (replay).
 //
 // A delegated child timeout is the exception: typedTurnExit records the
-// child-local transcript entry but leaves live publication to spawnSubTurn.
+// child-local transcript entry but leaves live publication to the session
+// completion path.
 // The coordinator waits until it has either disarmed the delegation timer or
 // observed its completed callback before choosing either the generic
 // child-timeout frame or the identified delegated-task-limit frame. That
@@ -2476,29 +2472,6 @@ func (al *AgentLoop) emitTurnErrorFrame(
 ) {
 	al.emitErrorEvent(ts, meta, payloadStage, llm)
 	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
-}
-
-// emitDelegatedTaskLimitNotice keeps publication ownership coherent by
-// deriving both destinations from sourceTS: live delivery uses the child's
-// own event identity, and persistence writes to that SAME child's own
-// transcript.
-//
-// ADR-091 boundary 11 (landing order §6): this used to walk
-// rootTurnState(sourceTS) and persist there — "always tell the top of the
-// tree" is exactly the hardcoded audience decision D3 replaces. A steered
-// child's own view is where R1 ("errors visible in the session's own view
-// and transcript") puts this; the upward half (the parent's side panel
-// status line) is subturn_result.go::emitSubTurnIterationLimitNotice's own
-// added Deliver call, not this shared helper — subTurnTimedOutResult's own
-// call site does not duplicate that upward delivery, since a timeout is
-// already one of I-5's terminal Outcomes, delivered once via turn
-// reconstruction (I-3, WP-A).
-func (al *AgentLoop) emitDelegatedTaskLimitNotice(
-	sourceTS *turnState, meta EventMeta, notice delegatedTaskLimitNotice,
-) {
-	llm := notice.llmError()
-	al.emitErrorEvent(sourceTS, meta, string(notice.stage), llm)
-	sourceTS.appendDelegatedTaskLimitNotice(notice)
 }
 
 func (al *AgentLoop) emitErrorEvent(ts *turnState, meta EventMeta, stage string, llm LLMError) {

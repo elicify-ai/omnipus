@@ -17,7 +17,7 @@ import (
 )
 
 // Regression coverage for the self-delegation authorization bypass and its
-// intentionally-asymmetric counterpart. The delegate TOOL spawns a real sub-turn
+// intentionally-asymmetric counterpart. The delegate tool launches a distinct session
 // instance, so delegate(agent_id=self) IS delegation and is ALWAYS denied
 // (buildDelegationDenyCheckerForDelegate). The task tools, in contrast, treat a
 // self-target as a no-op reassignment to the task's existing owner and correctly
@@ -25,7 +25,7 @@ import (
 //
 // This file proves BOTH halves end-to-end, not just at the raw checker level:
 //   - delegate self-target DENIED — in the checker, through DelegateTool.Execute
-//     (background + await), and with the depth resolver never reached;
+//     and through DelegateTool.Execute, with the launcher never reached;
 //   - task self-target ALLOWED — through the real registerSharedTools construction
 //     path (TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools);
 //   - the cross-workspace task gate (NewSysagentDelegationDeny) enforces the same
@@ -56,7 +56,7 @@ func (*spySessionLauncher) Dispatch(context.Context, string, int) (steer.Dispatc
 }
 
 // TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate checks the gate
-// in isolation for the delegate tool's background (async=true) mode: a self-target
+// in isolation for the delegate tool's background mode: a self-target
 // with selfAssignmentExempt=false falls through to the graph lookup and is denied
 // with trust_set (no self-edge can exist).
 func TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate(t *testing.T) {
@@ -64,7 +64,7 @@ func TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate(t *testing.
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil),
 	})
-	check := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground)
+	check := buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground)
 
 	denial := check(ctxWS(testWS, 0), "mia") // self-target
 	if denial == nil {
@@ -77,25 +77,24 @@ func TestDelegationDenyChecker_SelfTargetDeniedForBackgroundDelegate(t *testing.
 }
 
 // newSelfTargetDelegateTool builds a DelegateTool wired EXACTLY as
-// registerSharedTools wires it (background + await deny checkers with
-// selfAssignmentExempt=false, plus the depth resolver), for caller "mia".
+// registerSharedTools wires it (the background deny checker uses
+// selfAssignmentExempt=false), for caller "mia".
 func newSelfTargetDelegateTool() (*tools.DelegateTool, *spySessionLauncher) {
 	dt := tools.NewDelegateTool("model", 1000, 0.7)
 	spy := &spySessionLauncher{}
 	dt.SetSessionLauncher(spy)
 	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
-	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{}))
+		buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground))
 	return dt, spy
 }
 
 // TestDelegateTool_SelfTargetDeniedAtExecute drives an actual DelegateTool.Execute
 // call with agent_id equal to the caller's own id and asserts it is denied
-// end-to-end (not merely that the checker returns non-nil in isolation), for both
-// the background and await modes. The spawner must never run.
+// end-to-end (not merely that the checker returns non-nil in isolation). The
+// launcher must never run.
 func TestDelegateTool_SelfTargetDeniedAtExecute(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background", "await"}, nil),
+		edge("mia", "ray", []string{"background"}, nil),
 	})
 
 	dt, spy := newSelfTargetDelegateTool()
@@ -116,15 +115,10 @@ func TestDelegateTool_SelfTargetDeniedAtExecute(t *testing.T) {
 	}
 }
 
-// TestDelegateTool_SelfTargetDeniedBeforeDepthResolver proves the CHECK ORDERING
-// that makes the depth resolver's own self-target branch (delegation_depth.go)
-// unreachable dead code: the deny checker runs FIRST in DelegateTool.executeRun and
-// returns on denial BEFORE the depth resolver is consulted. A self-targeted
-// delegate() is therefore denied without the depth resolver ever running. If a
-// future change reorders the checks (depth resolver before deny checker), the spy
-// resolver would be invoked and this test fails — the guard the delegation_depth.go
-// comment references.
-func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
+// TestDelegateTool_SelfTargetDeniedBeforeLauncher proves that authorization
+// runs before the production launch boundary. A denied self-target must not
+// create a durable session.
+func TestDelegateTool_SelfTargetDeniedBeforeLauncher(t *testing.T) {
 	seedWorkspaceGraph(t, testWS, true, []graphEdge{
 		edge("mia", "ray", []string{"background"}, nil),
 	})
@@ -133,14 +127,7 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 	spy := &spySessionLauncher{}
 	dt.SetSessionLauncher(spy)
 	dt.SetDelegationDenyCheckerBackground(
-		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
-
-	depthResolverCalled := false
-	realResolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
-	dt.SetDelegationDepthResolver(func(ctx context.Context, target string) *int {
-		depthResolverCalled = true
-		return realResolver(ctx, target)
-	})
+		buildDelegationDenyCheckerForDelegate("mia", config.PerformanceConfig{}, config.DelegationModeBackground))
 
 	res := dt.Execute(ctxWS(testWS, 0), map[string]any{
 		"task":     "attempt self-delegation",
@@ -148,10 +135,6 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 	})
 	if res == nil || !res.IsError {
 		t.Fatalf("self-target delegate() must be denied, got: %+v", res)
-	}
-	if depthResolverCalled {
-		t.Fatal("depth resolver was reached for a DENIED self-delegation — the deny checker must run FIRST " +
-			"(check-ordering regression); the resolver's self-branch must stay unreachable dead code")
 	}
 	if spy.called {
 		t.Fatal("launcher must not run for a denied self-target delegation")

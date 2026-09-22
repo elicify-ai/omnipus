@@ -59,7 +59,7 @@ func (r *OutboundRecorder) Record(boundary steer.Boundary, sessionID, address, k
 	})
 }
 
-// PublishOutbound wraps the text bus sink shared by boundaries 1, 2, 3, 5, 9, 10 and 11.
+// PublishOutbound wraps the text bus sink shared by text-producing boundaries.
 func (r *OutboundRecorder) PublishOutbound(boundary steer.Boundary, sessionID, address, kind string) {
 	r.Record(boundary, sessionID, address, kind)
 }

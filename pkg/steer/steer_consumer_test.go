@@ -14,6 +14,7 @@ package steer_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -264,26 +265,38 @@ func TestNopBoundaryObserver_IsANoOp(t *testing.T) {
 }
 
 // TestRecordingObserver_ObservesEveryBoundary drives a BoundaryObserver
-// implementation through all twelve landing-order boundaries — proving
-// steer.Boundaries lists exactly the set §6 defines and that a consumer
-// outside pkg/agent can iterate it.
+// implementation through every reachable landing-order boundary and pins the
+// exact inventory so a dead boundary cannot make the coverage loop vacuous.
 func TestRecordingObserver_ObservesEveryBoundary(t *testing.T) {
-	if len(steer.Boundaries) != 12 {
-		t.Fatalf("len(steer.Boundaries) = %d, want 12 (landing order §6)", len(steer.Boundaries))
+	want := []steer.Boundary{
+		steer.BoundarySyncToolText,
+		steer.BoundaryAsyncToolFeedback,
+		steer.BoundaryFinalReply,
+		steer.BoundaryMedia,
+		steer.BoundaryRetryNotice,
+		steer.BoundaryWebchatStreaming,
+		steer.BoundaryExternalChannelStreaming,
+		steer.BoundaryAgentRequestedMessage,
+		steer.BoundaryTaskResultNotification,
+		steer.BoundaryTypedErrorFrame,
+		steer.BoundaryQuestionCard,
+	}
+	if !reflect.DeepEqual(steer.Boundaries, want) {
+		t.Fatalf("steer.Boundaries = %v, want reachable inventory %v", steer.Boundaries, want)
 	}
 	obs := &recordingObserver{}
 	for _, b := range steer.Boundaries {
 		obs.Observe(b, "child-1", steer.AudienceSteeringSession)
 	}
-	if len(obs.calls) != 12 {
-		t.Fatalf("observed %d boundary calls, want 12", len(obs.calls))
+	if len(obs.calls) != len(want) {
+		t.Fatalf("observed %d boundary calls, want %d", len(obs.calls), len(want))
 	}
 	seen := map[steer.Boundary]bool{}
 	for _, call := range obs.calls {
 		seen[call.boundary] = true
 	}
-	if len(seen) != 12 {
-		t.Fatalf("observed %d DISTINCT boundaries, want 12 (a duplicate or collision)", len(seen))
+	if len(seen) != len(want) {
+		t.Fatalf("observed %d DISTINCT boundaries, want %d (a duplicate or collision)", len(seen), len(want))
 	}
 }
 

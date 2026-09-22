@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -130,6 +133,14 @@ func newAsyncChildPublicationTestLoop(
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	t.Cleanup(al.Close)
+	lifecycle := session.NewLifecycleStore(filepath.Join(home, "session_lifecycle"))
+	inbox := session.NewMessageInboxStore(filepath.Join(home, "session_messages"))
+	al.SetSessionMessagingStores(inbox, lifecycle)
+	al.SetSteerAudienceDeps(
+		NewSteerAudienceResolver(NewSteerRecordClassifier(lifecycle, al.GetSessionStore())),
+		steer.NopBoundaryObserver{},
+		NewSteerUpwardDeliverer(),
+	)
 
 	agent := al.GetRegistry().GetDefaultAgent()
 	require.NotNil(t, agent, "test setup: default agent must exist")
@@ -185,6 +196,42 @@ func TestInteractiveRoot_ToolPreviewStillPublishesOnExternalChannel(t *testing.T
 		ChatID:  "root-chat",
 		Content: "[tool] `child_preview_probe`\n```\n{\"argument\":\"root-visible\"}\n```",
 	}}, drainOutbound(msgBus), "interactive root tool previews must remain user-visible")
+}
+
+func TestSteeredChild_ToolPreviewDoesNotPublishToRootChannel(t *testing.T) {
+	provider := testutil.NewScenario().
+		WithToolCall(childPreviewProbeName, `{"argument":"child-contained"}`).
+		WithText("child completed")
+	al, msgBus, agent := newAsyncChildPublicationTestLoop(t, provider, true)
+	probe := &childPreviewProbe{}
+	al.RegisterTool(probe)
+	setAskPolicyForAllAgents(t, al, childPreviewProbeName, config.ToolPolicyAllow)
+
+	steerer, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "telegram", "mia")
+	require.NoError(t, err)
+	launched, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+		SteeringSessionID: steerer.ID,
+		TargetAgentID:     "mia",
+		Task:              "run the child preview probe",
+		Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-child-preview"},
+	})
+	require.NoError(t, err)
+
+	result, err := al.runAgentLoop(context.Background(), agent, processOptions{
+		SessionKey:          launched.SessionID,
+		Channel:             "telegram",
+		ChatID:              "root-chat",
+		UserMessage:         "run the preview probe",
+		DefaultResponse:     defaultResponse,
+		TranscriptSessionID: launched.SessionID,
+		TranscriptStore:     al.GetSessionStore(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "child completed", result)
+	require.Equal(t, int32(1), probe.executionCount.Load(),
+		"the steered child must execute the probe before publication is asserted")
+	assert.Empty(t, drainOutbound(msgBus),
+		"a steered child has the steering-session audience and must not publish a preview to the root channel")
 }
 
 func TestInternalSessions_AsyncForUserDoesNotPublishTopLevel(t *testing.T) {

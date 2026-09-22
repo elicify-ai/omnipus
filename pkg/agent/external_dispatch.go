@@ -759,7 +759,7 @@ func transcriptModelFor(agent *AgentInstance) string {
 	return strings.TrimSpace(agent.Model)
 }
 
-// newExternalDriver is the driver factory used by runExternalCLISubTurn. It is a
+// newExternalDriver is the driver factory used by the external command-line runner. It is a
 // package var (not a direct call to runner.NewDriver) solely so in-package tests
 // can inject a fake/stub ExternalAgentRunner and exercise the full dispatch flow
 // (worktree → run → stream → consent → teardown) without a real external CLI on

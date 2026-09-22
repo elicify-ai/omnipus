@@ -321,8 +321,8 @@ type TranscriptEntry struct {
 	//
 	// Populated only by pkg/agent/turn.go's appendIntermediateAssistantTranscript
 	// / appendAssistantTranscript and pkg/gateway/websocket.go's
-	// wsStreamer.Finalize, from turnState.parentSpawnCallID — non-empty ONLY
-	// for a child turnState created by pkg/agent/subturn.go's spawnSubTurn.
+	// wsStreamer.Finalize, from turnState.parentSpawnCallID — non-empty only
+	// for a child turn correlated to a parent tool call.
 	// Empty (and omitted from JSON) for every entry produced by a root
 	// (non-delegated) turn, so existing/legacy transcripts round-trip
 	// unchanged.

@@ -3,18 +3,19 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // ADR-091 WP-B — the shared per-boundary helper every landing-order §6 site
-// (the twelve boundaries) calls: resolve audience through the injected
+// calls: resolve audience through the injected
 // steer.AudienceResolver, then call steer.BoundaryObserver.Observe BEFORE
 // the caller acts on the decision (I-5, FR-B-001, FR-B-014). One function,
-// reused by every boundary this package hosts directly (1-5, 9, 11) — the
-// boundaries hosted by pkg/tools (8), pkg/channels (7), pkg/gateway (6) and
-// pkg/askuser (12) call the injected steer.AudienceResolver/BoundaryObserver
-// directly, since those packages cannot import this one (landing order §2).
+// reused by every boundary this package hosts directly. Boundaries hosted by
+// pkg/tools, pkg/channels, pkg/gateway and pkg/askuser call the injected
+// steer.AudienceResolver/BoundaryObserver directly, since those packages
+// cannot import this one (landing order §2).
 package agent
 
 import (
 	"context"
 
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -114,7 +115,7 @@ func (al *AgentLoop) getUpwardDeliverer() steer.UpwardDeliverer {
 
 // audienceFor resolves sessionID's audience for boundary through the
 // injected steer.AudienceResolver, then calls
-// steer.BoundaryObserver.Observe — the twelve-boundary contract every
+// steer.BoundaryObserver.Observe — the publication-boundary contract every
 // landing-order §6 site follows (FR-B-001, FR-B-014). A resolver that was
 // never wired (nil — a bare test AgentLoop that never called
 // SetSteerAudienceDeps) answers AudienceUser, matching today's unrestricted
@@ -134,4 +135,25 @@ func (al *AgentLoop) audienceFor(ctx context.Context, boundary steer.Boundary, s
 	}
 	observer.Observe(boundary, sessionID, audience)
 	return audience
+}
+
+// toolFeedbackReachesUser is the single publication decision for automatic
+// tool feedback. I-5 decides the recipient, then the durable record's origin
+// excludes internal task and verifier work. OriginKind is only the fallback
+// for internal turns that predate or do not own a lifecycle record.
+func (al *AgentLoop) toolFeedbackReachesUser(ctx context.Context, boundary steer.Boundary, ts *turnState) bool {
+	if ts == nil {
+		return false
+	}
+	audience := al.audienceFor(ctx, boundary, ts.transcriptSessionID)
+	if audience != steer.AudienceUser {
+		return false
+	}
+	origin := ts.opts.OriginKind
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil && ts.transcriptSessionID != "" {
+		if rec, err := lifecycle.Load(ts.transcriptSessionID); err == nil && rec.Origin != nil {
+			origin = rec.Origin.Kind
+		}
+	}
+	return origin != session.OriginKindTask && origin != session.OriginKindVerifier
 }

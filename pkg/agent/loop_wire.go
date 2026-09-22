@@ -816,22 +816,11 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 			// real sub-turn and MUST be graph-gated (and thus denied), never exempted.
 			buildDelegationDenyCheckerForDelegate(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeBackground,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
-		// gates above just authorized against into spawnSubTurn's own
-		// depth check — the resolver is mode-agnostic (sourced only from
-		// the matched edge's own Depth, shared by both the background and
-		// await gates) — so the spawn-time backstop does not
-		// independently re-derive (and silently override) an explicit
-		// per-edge Depth.
-		delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
-			currentAgentID, rw.cfg.Agents.Defaults, rw.cfg.Performance,
-		))
-
 		// ADR-057: derive the ownership-walk bound from the SAME operator
 		// setting that bounds delegation depth. Left unwired, the walk used
 		// a hardcoded 3 while delegation depth stayed configurable — so
@@ -839,7 +828,11 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// child fail with an ownership error indistinguishable from a real
 		// cross-tenant attempt. Zero/unset is ignored by the setter, which
 		// keeps its own default.
-		delegateTool.SetOwnershipWalkMaxDepth(rw.cfg.Agents.Defaults.SubTurn.MaxDepth)
+		configuredDepthCap, depthErr := rw.cfg.Performance.EffectiveMaxDelegationDepth()
+		if depthErr != nil {
+			configuredDepthCap = 0
+		}
+		delegateTool.SetOwnershipWalkMaxDepth(resolveEffectiveDelegationDepth(nil, configuredDepthCap))
 
 		agent.Tools.RegisterReplacing(delegateTool)
 	}
@@ -892,7 +885,7 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// oneself is not delegation (no new instance spawned), not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),
@@ -963,14 +956,14 @@ func (rw *registerSharedToolsWire3) registerTaskAndPlanTools(agentID string, age
 			// existing owner is a no-op reassignment, not delegation — not graph-gated.
 			buildDelegationDenyCheckerForTaskReassignment(
 				currentAgentID,
-				rw.cfg.Agents.Defaults,
+				rw.cfg.Performance,
 				config.DelegationModeTask,
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
 		// Same rationale as taskCreate above: the subagent_3p reassignment
 		// guard is retired now that processTaskDirect dispatches an
-		// external-CLI worker's task run through runExternalCLISubTurn.
+		// external-CLI worker's task run through the shared command-line runner.
 		agent.Tools.RegisterReplacing(taskUpdate)
 
 		setTodos := tools.NewSetTodosTool(rw.rs.al.taskStore)

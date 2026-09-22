@@ -239,7 +239,7 @@ func EdgeModeCategory(mode config.DelegationMode) workspace.DelegationMode {
 //     tool's real 3-value config.DelegationMode parameter, so the two are never
 //     directly comparable.
 //   - depth: edge.Depth (when non-nil) is the per-edge onward-delegation cap; nil
-//     inherits — no per-edge cap. The global SubTurn.MaxDepth ceiling (passed as
+//     inherits — no per-edge cap. The performance depth ceiling (passed as
 //     globalDepthCap, 0 = none) ALWAYS applies as an additional, independent cap.
 func enforceEdgeModeAndDepth(
 	ctx context.Context,
@@ -303,14 +303,12 @@ func enforceEdgeModeAndDepth(
 	}
 
 	// Otherwise enforce the effective depth cap: the tighter of the per-edge
-	// cap (edge.Depth, nil = inherit) and the global SubTurn.MaxDepth ceiling,
+	// cap (edge.Depth, nil = inherit) and the performance depth ceiling,
 	// falling back to the safety-backstop default when NEITHER source
-	// expresses an explicit value. Resolved via resolveEffectiveDelegationDepth
-	// — the SAME shared function spawnSubTurn's own depth check
-	// (SubTurnConfig.ResolvedMaxDepth, threaded via buildDelegationDepthResolver)
-	// and the delegation system-prompt builder (wireDelegationInjectors) use, so
-	// this gate's decision and the eventual spawn-time enforcement are never
-	// computed independently (#477, FR-D9/FR-D10).
+	// expresses an explicit value. resolveEffectiveDelegationDepth is also used
+	// by the session launcher and delegation system-prompt builder, so the gate,
+	// durable depth budget, and advertised cap are never computed independently
+	// (#477, FR-D9/FR-D10).
 	depthCap := resolveEffectiveDelegationDepth(edge.Depth, globalDepthCap)
 	if d := currentDelegationDepth(ctx); d >= depthCap {
 		logger.WarnCF("agent", "delegation denied: max delegation depth exceeded", map[string]any{
@@ -346,7 +344,7 @@ func enforceEdgeModeAndDepth(
 //     must be in the edge's Modes (empty Modes = all allowed).
 //  3. depth     — the current delegation-chain depth must be below the edge's
 //     Depth cap (nil = inherit; 0 = no onward delegation). The global
-//     SubTurn.MaxDepth ceiling always applies as an additional cap.
+//     performance depth ceiling always applies as an additional cap.
 //
 // FAIL-CLOSED: a graph load error, a missing workspace, or no default workspace
 // all DENY — a delegation check with no readable governing graph never falls
@@ -388,9 +386,8 @@ func enforceEdgeModeAndDepth(
 // prohibition as the guard, and with a distinct reason so the caught bypass
 // attempt is distinguishable from a routine trust_set denial.
 //
-// defaults is only consulted for its SubTurn.MaxDepth global depth cap — there
-// is no per-agent config.DelegationPolicy to read anymore (ADR-037); the
-// per-workspace graph is the sole authority.
+// performance supplies the process-wide depth cap. There is no per-agent
+// delegation policy to read; the per-workspace graph is the sole authority.
 //
 // agentExists is an optional trailing arg (variadic, same rationale as
 // findDelegationEdge's own doc comment) forwarded to findDelegationEdge
@@ -398,12 +395,15 @@ func enforceEdgeModeAndDepth(
 // affects the allow/deny decision itself.
 func buildDelegationDenyChecker(
 	currentAgentID string,
-	defaults config.AgentDefaults,
+	performance config.PerformanceConfig,
 	mode config.DelegationMode,
 	selfAssignmentExempt bool,
 	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	globalDepthCap := defaults.SubTurn.MaxDepth
+	globalDepthCap, depthErr := performance.EffectiveMaxDelegationDepth()
+	if depthErr != nil {
+		globalDepthCap = 0
+	}
 
 	return func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
 		if targetAgentID == currentAgentID {
@@ -468,11 +468,11 @@ func buildDelegationDenyChecker(
 // checker (see registerSharedTools / NewSysagentDelegationDeny).
 func buildDelegationDenyCheckerForDelegate(
 	currentAgentID string,
-	defaults config.AgentDefaults,
+	performance config.PerformanceConfig,
 	mode config.DelegationMode,
 	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false, agentExists...)
+	return buildDelegationDenyChecker(currentAgentID, performance, mode, false, agentExists...)
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the
@@ -487,11 +487,11 @@ func buildDelegationDenyCheckerForDelegate(
 // in production" expectation.
 func buildDelegationDenyCheckerForTaskReassignment(
 	currentAgentID string,
-	defaults config.AgentDefaults,
+	performance config.PerformanceConfig,
 	mode config.DelegationMode,
 	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true, agentExists...)
+	return buildDelegationDenyChecker(currentAgentID, performance, mode, true, agentExists...)
 }
 
 // evalUntargetedDelegation gates an untargeted delegation (no explicit target)
@@ -589,15 +589,15 @@ func (al *AgentLoop) NewSysagentDelegationDeny() func(ctx context.Context, calle
 		if targetAgentID == "" || targetAgentID == callerAgentID {
 			return nil
 		}
-		var defaults config.AgentDefaults
+		var performance config.PerformanceConfig
 		if cfg := al.GetConfig(); cfg != nil {
-			defaults = cfg.Agents.Defaults
+			performance = cfg.Performance
 		}
 		// ForTaskReassignment (exempt=true): these are the cross-workspace TASK tools
 		// (create_task_in_workspace / update_task_in_workspace) — a self-target is a
 		// no-op task reassignment, not delegation (also short-circuited above).
 		gate := buildDelegationDenyCheckerForTaskReassignment(
-			callerAgentID, defaults, config.DelegationModeTask, agentExistsChecker(al.GetRegistry()),
+			callerAgentID, performance, config.DelegationModeTask, agentExistsChecker(al.GetRegistry()),
 		)
 		return gate(ctx, targetAgentID)
 	}

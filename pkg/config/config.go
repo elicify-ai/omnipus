@@ -353,9 +353,8 @@ type PerformanceConfig struct {
 	// configured — see clampParallelExplicit.
 	MaxParallelAgents int `json:"max_parallel_agents,omitempty" env:"OMNIPUS_MAX_PARALLEL_AGENTS"`
 
-	// MaxDelegationDepth is ADR-091 D9's config fold: the single source of
-	// truth for the onward-delegation depth ceiling, replacing
-	// agents.defaults.subturn.max_depth. Every reader of the global ceiling
+	// MaxDelegationDepth is ADR-091 D9's single source of truth for the
+	// onward-delegation depth ceiling. Every reader of the global ceiling
 	// resolves through this key, so there is exactly one number. 0 means
 	// unset — the same
 	// defaultMaxSubTurnDepth backstop resolveEffectiveDelegationDepth
@@ -364,9 +363,8 @@ type PerformanceConfig struct {
 	// never silently reinterpreted).
 	MaxDelegationDepth int `json:"max_delegation_depth,omitempty" env:"OMNIPUS_PERFORMANCE_MAX_DELEGATION_DEPTH"`
 
-	// DelegationTimeoutMinutes is D9's fold for
-	// agents.defaults.subturn.default_timeout_minutes — same rationale as
-	// MaxDelegationDepth above. 0 means unset (the existing
+	// DelegationTimeoutMinutes is the shared timeout for a delegated session.
+	// 0 means unset (the existing
 	// defaultSubTurnTimeout backstop applies); negative is a
 	// configuration error.
 	DelegationTimeoutMinutes int `json:"delegation_timeout_minutes,omitempty" env:"OMNIPUS_PERFORMANCE_DELEGATION_TIMEOUT_MINUTES"`
@@ -886,12 +884,6 @@ type RoutingConfig struct {
 	Threshold  float64 `json:"threshold"`   // complexity score in [0,1]; score >= threshold → primary model
 }
 
-// SubTurnConfig configures the SubTurn execution system.
-type SubTurnConfig struct {
-	MaxDepth              int `json:"max_depth"      env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_MAX_DEPTH"`
-	DefaultTimeoutMinutes int `json:"default_timeout_minutes" env:"OMNIPUS_AGENTS_DEFAULTS_SUBTURN_DEFAULT_TIMEOUT_MINUTES"`
-}
-
 type ToolFeedbackConfig struct {
 	Enabled       bool `json:"enabled"         env:"OMNIPUS_AGENTS_DEFAULTS_TOOL_FEEDBACK_ENABLED"`
 	MaxArgsLength int  `json:"max_args_length" env:"OMNIPUS_AGENTS_DEFAULTS_TOOL_FEEDBACK_MAX_ARGS_LENGTH"`
@@ -988,7 +980,6 @@ type AgentDefaults struct {
 	MaxMediaSize   int                `json:"max_media_size,omitempty"        env:"OMNIPUS_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
 	Routing        *RoutingConfig     `json:"routing,omitempty"`
 	SteeringMode   string             `json:"steering_mode,omitempty"         env:"OMNIPUS_AGENTS_DEFAULTS_STEERING_MODE"` // "one-at-a-time" (default) or "all"
-	SubTurn        SubTurnConfig      `json:"subturn"`
 	ToolFeedback   ToolFeedbackConfig `json:"tool_feedback,omitempty"`
 	SplitOnMarker  bool               `json:"split_on_marker"                 env:"OMNIPUS_AGENTS_DEFAULTS_SPLIT_ON_MARKER"` // split messages on <|[SPLIT]|> marker
 	TimeoutSeconds int                `json:"timeout_seconds"                 env:"OMNIPUS_AGENTS_DEFAULTS_TIMEOUT_SECONDS"` // per-turn timeout in seconds; 0 = disabled

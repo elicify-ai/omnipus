@@ -360,10 +360,8 @@ func (al *AgentLoop) recordEmptiedOnTranscript(ts *turnState, emptied []emptiedT
 }
 
 // emitProjectionEvents emits one EventKindToolResultProjection per emptied
-// result, with the ADR-057 routing session id the tool_call frames use
-// (u9ToolExecSessionIDs). ADR-091 D7/I-4 deleted ProducingSessionID (the
-// workaround field u9ToolExecSessionIDs used to also compute) — see that
-// function's own doc comment for the residual gap this leaves.
+// result, with the producing session identity used by the tool-call frames
+// (u9ToolExecSessionIDs).
 func (al *AgentLoop) emitProjectionEvents(ts *turnState, emptied []emptiedToolResult) {
 	sid := u9ToolExecSessionIDs(ts)
 	for _, e := range emptied {

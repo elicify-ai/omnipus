@@ -27,6 +27,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // maxLaunchAncestorWalk bounds Launch's root-verification walk — mirrors
@@ -220,14 +221,12 @@ func (l *SteerLauncher) launchOrdinaryRoot(
 // launchSteered is Launch's steered path (I-1): the child's record is
 // published under the steering session's own record lock via
 // PublishChildUnderParentLock (pkg/session/lifecycle.go) — the primitive
-// that closes the atomicity gap the CP-0 report flagged. Everything that
-// decides the edge (root walk, depth, the Stop-marker stamp) AND every
-// mandatory child write (session identity, meta, history, transcript) runs
-// inside that one callback, so a concurrent Stop cascade against the SAME
-// steering session cannot land between "read the parent's Stop status" and
-// "the child exists" — see PublishChildUnderParentLock's own doc comment
-// for why this is deadlock-safe across arbitrarily many concurrent
-// launches under different parents.
+// that closes the atomicity gap the CP-0 report flagged. The depth decision,
+// Stop-marker stamp, and mandatory child writes run inside that callback, so
+// a concurrent Stop cascade against the same steering session cannot land
+// between "read the parent's Stop status" and "the child exists." Ancestor
+// records are loaded before the callback because lifecycle shard locks are
+// not re-entrant; the callback revalidates the direct edge before publishing.
 func (l *SteerLauncher) launchSteered(
 	sessions *session.UnifiedStore,
 	lifecycle *session.LifecycleStore,
@@ -259,9 +258,10 @@ func (l *SteerLauncher) launchSteered(
 			steer.ErrInvalidEdge, preParentErr)
 	}
 	rootID := req.SteeringSessionID
+	parentDepth := 0
 	if preParentExisted {
 		var walkErr error
-		rootID, walkErr = l.walkVerifiedRoot(req.SteeringSessionID, preParent)
+		rootID, parentDepth, walkErr = l.walkVerifiedRoot(req.SteeringSessionID, preParent)
 		if walkErr != nil {
 			return steer.LaunchResult{}, fmt.Errorf("steer: launch: %w: %v", steer.ErrInvalidEdge, walkErr)
 		}
@@ -301,7 +301,7 @@ func (l *SteerLauncher) launchSteered(
 				parentRec.Origin = &session.Origin{Kind: session.OriginKind(steererMeta.Type)}
 			}
 
-			remainingDepth := l.startingRemainingDepth(parentRec)
+			remainingDepth := l.startingRemainingDepth(parentRec, req.TargetAgentID, parentDepth)
 			if remainingDepth <= 0 {
 				return nil, steer.ErrDepthExceeded
 			}
@@ -515,49 +515,63 @@ func (l *SteerLauncher) writeChildMetaAndHistory(
 // nil), it IS the root. Otherwise walks its own ancestor chain — bounded by
 // a visited-id set (the real cycle detector) plus maxLaunchAncestorWalk (a
 // backstop) — refusing a cycle or an ancestor whose record cannot be read.
-func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *session.LifecycleRecord) (string, error) {
+func (l *SteerLauncher) walkVerifiedRoot(steeringSessionID string, steererRec *session.LifecycleRecord) (string, int, error) {
 	if steererRec.SteeredBy == nil {
-		return steeringSessionID, nil
+		return steeringSessionID, 0, nil
 	}
 	lifecycle := l.al.GetSessionLifecycleStore()
 	visited := map[string]bool{steeringSessionID: true}
 	cur := steererRec.SteeredBy.SteeringSessionID
-	for i := 0; i < maxLaunchAncestorWalk; i++ {
+	for depth := 1; depth <= maxLaunchAncestorWalk; depth++ {
 		if cur == "" || visited[cur] {
-			return "", fmt.Errorf("cycle or invalid ancestor at %q", cur)
+			return "", 0, fmt.Errorf("cycle or invalid ancestor at %q", cur)
 		}
 		visited[cur] = true
 		ancestorRec, err := lifecycle.Load(cur)
 		if err != nil {
-			return "", fmt.Errorf("unknown ancestor %q: %w", cur, err)
+			return "", 0, fmt.Errorf("unknown ancestor %q: %w", cur, err)
 		}
 		if ancestorRec.SteeredBy == nil {
-			return cur, nil
+			return cur, depth, nil
 		}
 		cur = ancestorRec.SteeredBy.SteeringSessionID
 	}
-	return "", fmt.Errorf("ancestor chain exceeded the walk bound (%d)", maxLaunchAncestorWalk)
+	return "", 0, fmt.Errorf("ancestor chain exceeded the walk bound (%d)", maxLaunchAncestorWalk)
 }
 
-// startingRemainingDepth is the RemainingDepth a new child inherits: the
-// steering session's own remaining budget (already inductively verified at
-// ITS launch) when it is itself steered, else the effective global
-// delegation-depth ceiling for a first hop off a root.
-//
-// The global budget comes from performance.max_delegation_depth, the sole
-// source of truth after the retired subturn-specific depth setting was folded
-// into the shared performance configuration.
-func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord) int {
-	if steererRec.SteeredBy != nil {
-		return steererRec.SteeredBy.Authorization.RemainingDepth
-	}
+// startingRemainingDepth resolves the budget available at the steering
+// session before minting its child. The new edge and the performance ceiling
+// use the shared precedence function; an inherited budget can only tighten
+// that result. parentDepth is verified by the ancestor walk before the parent
+// record lock is taken.
+func (l *SteerLauncher) startingRemainingDepth(steererRec *session.LifecycleRecord, targetAgentID string, parentDepth int) int {
 	globalMaxDepth := 0
 	if cfg := l.al.GetConfig(); cfg != nil {
 		if configured, err := cfg.Performance.EffectiveMaxDelegationDepth(); err == nil {
 			globalMaxDepth = configured
 		}
 	}
-	return resolveEffectiveDelegationDepth(nil, globalMaxDepth)
+	depthCap := resolveEffectiveDelegationDepth(nil, globalMaxDepth)
+	if steererRec.WorkspaceID != "" && steererRec.AgentID != "" && targetAgentID != "" {
+		if edges, err := workspace.ReadDelegation(omnipusHome(), steererRec.WorkspaceID); err == nil {
+			for i := range edges {
+				edge := &edges[i]
+				if edge.FromAgent != steererRec.AgentID || edge.ToAgent != targetAgentID {
+					continue
+				}
+				if edge.Depth != nil && *edge.Depth <= 0 {
+					return 0
+				}
+				depthCap = resolveEffectiveDelegationDepth(edge.Depth, globalMaxDepth)
+				break
+			}
+		}
+	}
+	available := depthCap - parentDepth
+	if steererRec.SteeredBy != nil && steererRec.SteeredBy.Authorization.RemainingDepth < available {
+		available = steererRec.SteeredBy.Authorization.RemainingDepth
+	}
+	return available
 }
 
 // Dispatch implements steer.SessionLauncher (I-2/I-3): a thin delegate onto

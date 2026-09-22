@@ -8,16 +8,13 @@ package agent
 import (
 	"fmt"
 	"testing"
-
-	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // TestResolveEffectiveDelegationDepth_SharedByPromptAndEnforcement pins every
 // row of the "Effective depth cap resolution" dataset table in
 // docs/internal/specs/agent-delegation-spec.md (#477, FR-D9/FR-D10). This is
-// the ONE shared function enforceEdgeModeAndDepth, getSubTurnConfig, and
-// wireDelegationInjectors all consult — no second, independently-maintained
-// computation of this value may exist anywhere in the codebase.
+// the ONE shared function the edge gate, launcher, and prompt builder consult —
+// no second, independently-maintained computation may exist.
 func TestResolveEffectiveDelegationDepth_SharedByPromptAndEnforcement(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -79,86 +76,4 @@ func formatIntPtrForTest(p *int) string {
 		return "nil"
 	}
 	return fmt.Sprintf("%d", *p)
-}
-
-// TestBuildDelegationDepthResolver_TargetedEdgeReturnsResolvedCap proves the
-// resolver threaded into SubTurnConfig.ResolvedMaxDepth computes the SAME
-// effective cap the delegation-graph gate (enforceEdgeModeAndDepth) already
-// authorized this call against — the specific #477 regression: an explicit
-// per-edge Depth (10) with the global config left unset must resolve to 10,
-// not the backstop's own default of 3.
-func TestBuildDelegationDepthResolver_TargetedEdgeReturnsResolvedCap(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, intPtr(10)),
-	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
-
-	got := resolver(ctxWS(testWS, 4), "ray")
-	if got == nil {
-		t.Fatal("expected a resolved cap for a targeted, edge-authorized delegation, got nil (no override)")
-	}
-	if *got != 10 {
-		t.Fatalf("expected resolved cap 10 (edge Depth=10, global unset), got %d", *got)
-	}
-}
-
-// TestBuildDelegationDepthResolver_GlobalTightensEdge proves the resolver
-// applies the SAME tighter-of-both logic as resolveEffectiveDelegationDepth
-// when the global ceiling is stricter than the edge's own Depth.
-func TestBuildDelegationDepthResolver_GlobalTightensEdge(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, intPtr(10)),
-	})
-	perf := config.PerformanceConfig{MaxDelegationDepth: 2}
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, perf)
-
-	got := resolver(ctxWS(testWS, 0), "ray")
-	if got == nil || *got != 2 {
-		t.Fatalf("expected resolved cap 2 (global stricter than edge's 10), got %v", got)
-	}
-}
-
-// TestBuildDelegationDepthResolver_UntargetedReturnsNilOverride proves the
-// untargeted path (no explicit agent_id) returns nil — no single edge's Depth
-// uniquely applies, so spawnSubTurn falls back to its own shared-function
-// default resolution (getSubTurnConfig).
-func TestBuildDelegationDepthResolver_UntargetedReturnsNilOverride(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, intPtr(10)),
-	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
-
-	if got := resolver(ctxWS(testWS, 0), ""); got != nil {
-		t.Fatalf("untargeted delegation must return nil (no override), got %d", *got)
-	}
-}
-
-// TestBuildDelegationDepthResolver_SelfAssignmentReturnsNilOverride proves
-// self-assignment (target == caller) — not delegation, no graph edge
-// consulted — returns nil (no override).
-func TestBuildDelegationDepthResolver_SelfAssignmentReturnsNilOverride(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, intPtr(10)),
-	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
-
-	if got := resolver(ctxWS(testWS, 0), "mia"); got != nil {
-		t.Fatalf("self-assignment must return nil (no override), got %d", *got)
-	}
-}
-
-// TestBuildDelegationDepthResolver_NoEdgeReturnsNilOverride proves that when
-// no authorizing edge exists (a call the deny checker would already have
-// rejected), the resolver fails safe and returns nil rather than fabricating
-// a cap.
-func TestBuildDelegationDepthResolver_NoEdgeReturnsNilOverride(t *testing.T) {
-	seedWorkspaceGraph(t, testWS, true, []graphEdge{
-		edge("mia", "ray", []string{"background"}, intPtr(10)),
-	})
-	resolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
-
-	// No mia→ava edge in the seeded graph.
-	if got := resolver(ctxWS(testWS, 0), "ava"); got != nil {
-		t.Fatalf("no authorizing edge must return nil (no override), got %d", *got)
-	}
 }

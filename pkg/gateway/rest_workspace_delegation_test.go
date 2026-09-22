@@ -85,7 +85,7 @@ func buildWorkspaceDelegationTestAPI(t *testing.T) (*restAPI, string) {
 			},
 		},
 	}
-	cfg.Agents.Defaults.SubTurn.MaxDepth = 3
+	cfg.Performance.MaxDelegationDepth = 3
 
 	// Real entity records (ADR-054) — see the doc comment above for why this
 	// replaces the old dead on-disk config.json splice. Nothing in this
@@ -861,7 +861,7 @@ func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3(t *testin
 			cfg := &config.Config{}
 			require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on empty config must modify")
 			if tc.configured > 0 {
-				cfg.Agents.Defaults.SubTurn.MaxDepth = tc.configured
+				cfg.Performance.MaxDelegationDepth = tc.configured
 			}
 
 			edges := defaultWorkspaceDelegationEdges(cfg)

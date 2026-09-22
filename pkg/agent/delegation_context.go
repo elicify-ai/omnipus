@@ -40,7 +40,7 @@ type delegationTarget struct {
 //
 // It takes a slice of targets sourced from the workspace delegation graph
 // (each already filtered to FromAgent==callerID) and the global depth ceiling
-// from defaults.SubTurn.MaxDepth (0 = uncapped when called directly; the
+// from performance.max_delegation_depth (0 = uncapped when called directly; the
 // production caller (wireDelegationInjectors) always pre-resolves this via
 // resolveEffectiveDelegationDepth, so a live turn's prompt never actually
 // renders "uncapped").

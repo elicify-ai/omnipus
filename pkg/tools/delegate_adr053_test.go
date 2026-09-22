@@ -24,23 +24,20 @@ import (
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
-	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
 // fakeSteeringSink implements DelegateSteeringSink for tests.
 type fakeSteeringSink struct {
-	mu         sync.Mutex
-	delivered  []providers.Message
-	scopes     []string
-	principals []steer.Principal
+	mu        sync.Mutex
+	delivered []providers.Message
+	scopes    []string
 }
 
-func (f *fakeSteeringSink) EnqueueSteeringMessage(scope, agentID string, principal steer.Principal, msg providers.Message) error {
+func (f *fakeSteeringSink) EnqueueSteeringMessage(scope, agentID string, msg providers.Message) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.delivered = append(f.delivered, msg)
 	f.scopes = append(f.scopes, scope)
-	f.principals = append(f.principals, principal)
 	return nil
 }
 
@@ -55,7 +52,7 @@ func (f *fakeSteeringSink) last() (providers.Message, string) {
 
 // newADR053TestTool builds a DelegateTool wired with real (t.TempDir()-backed)
 // session.LifecycleStore/session.MessageInboxStore, a permissive delegation-
-// deny gate, and a mock spawner — enough to exercise the full ADR-053 action
+// deny gate, and a recording launcher — enough to exercise the full ADR-053 action
 // set end to end.
 func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *session.MessageInboxStore, *fakeSteeringSink) {
 	t.Helper()
@@ -77,25 +74,23 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 	return tool, lc, inbox, steer
 }
 
-// runAndExtractSessionID delegates a task via action=run(async=true) and
-// returns the durable session_id from the ack message.
+// runAndExtractSessionID launches a delegated task and returns the durable
+// session_id from the generated response payload.
 func runAndExtractSessionID(t *testing.T, tool *DelegateTool, ctx context.Context, task string) string {
 	t.Helper()
 	result := tool.Execute(ctx, map[string]any{"task": task})
 	if result.IsError {
 		t.Fatalf("run failed: %s", result.ForLLM)
 	}
-	const marker = "session_id: "
-	idx := strings.Index(result.ForLLM, marker)
-	if idx == -1 {
-		t.Fatalf("expected %q in run ack, got: %s", marker, result.ForLLM)
+	payload, _, _ := strings.Cut(result.ForLLM, "\n")
+	var response generated.DelegateSessionResponse
+	if err := json.Unmarshal([]byte(payload), &response); err != nil {
+		t.Fatalf("decode run response: %v; payload: %s", err, result.ForLLM)
 	}
-	rest := result.ForLLM[idx+len(marker):]
-	end := strings.IndexAny(rest, ")\n")
-	if end == -1 {
-		end = len(rest)
+	if response.SessionId == "" {
+		t.Fatalf("run response has empty session_id: %s", result.ForLLM)
 	}
-	return strings.TrimSpace(rest[:end])
+	return response.SessionId
 }
 
 func TestDelegateTool_Run_SnapshotOverCap_Rejected(t *testing.T) {
@@ -116,8 +111,8 @@ func TestDelegateTool_Run_SnapshotOverCap_Rejected(t *testing.T) {
 	}
 }
 
-func TestDelegateTool_Run_PersistsQueuedThenRunningLifecycleRecord(t *testing.T) {
-	tool, lc, _, _ := newADR053TestTool(t)
+func TestDelegateTool_Run_PassesSteeringSessionToLauncher(t *testing.T) {
+	tool, launcher := u14PermissiveTool(t)
 	// FR-015: the lifecycle mint fails closed without a resolvable
 	// delegating agent, so a run context must carry one — the agent loop
 	// injects it unconditionally on the turn path (pkg/agent/loop.go).
@@ -128,26 +123,14 @@ func TestDelegateTool_Run_PersistsQueuedThenRunningLifecycleRecord(t *testing.T)
 		t.Fatal("expected a non-empty session_id")
 	}
 
-	// The async goroutine transitions queued -> running -> completed; give
-	// it a moment (the recording launcher returns immediately, but the
-	// goroutine scheduling is still async).
-	var rec *session.LifecycleRecord
-	for i := 0; i < 50; i++ {
-		r, err := lc.Load(sessionID)
-		if err == nil && r.Terminal() {
-			rec = r
-			break
-		}
-		time.Sleep(2 * time.Millisecond)
+	if sessionID != launcher.launchRes.SessionID {
+		t.Fatalf("response session_id = %q, launcher returned %q", sessionID, launcher.launchRes.SessionID)
 	}
-	if rec == nil {
-		t.Fatal("expected the lifecycle record to reach a terminal state")
+	if launcher.launchReq.SteeringSessionID != "parent-1" {
+		t.Errorf("LaunchRequest.SteeringSessionID = %q, want %q", launcher.launchReq.SteeringSessionID, "parent-1")
 	}
-	if rec.State != session.LifecycleCompleted {
-		t.Errorf("state = %q, want %q", rec.State, session.LifecycleCompleted)
-	}
-	if rec.SteeringSessionID() != "parent-1" {
-		t.Errorf("SteeringSessionID = %q, want %q", rec.SteeringSessionID(), "parent-1")
+	if launcher.dispatchSessionID != sessionID || launcher.dispatchGeneration != launcher.launchRes.Generation {
+		t.Errorf("Dispatch = (%q, %d), want (%q, %d)", launcher.dispatchSessionID, launcher.dispatchGeneration, sessionID, launcher.launchRes.Generation)
 	}
 }
 

@@ -1024,13 +1024,9 @@ func (ex *agentLoopRunTurnToolsExecute) resolveAskPolicy(tc providers.ToolCall) 
 // prepareDispatch records dispatch metadata and prepares asynchronous result handling.
 func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) agentLoopRunTurnToolsExecuteFlow {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
-	// Temporary origin containment until the compiled per-turn publication
-	// policy replaces these distributed predicates. Automatic tool feedback is
-	// top-level only for root, non-task turns: delegated children inherit the
-	// parent route but must not publish standalone feedback there, while native
-	// task and verifier turns use internal webchat-labelled routes. depth and
-	// IsTaskRun are existing origin proxies, not new flags.
-	allowTopLevelToolFeedback := !ts.opts.SuppressToolFeedback && ts.depth == 0 && !ts.opts.IsTaskRun
+	feedbackReachesUser := ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+		ex.rx.ctx, steer.BoundarySyncToolText, ts,
+	)
 
 	argsJSON, marshalErr := json.Marshal(ex.toolArgs)
 	if marshalErr != nil {
@@ -1053,10 +1049,8 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 			ChatID:     ex.rx.rr.rq.ri.rf.rt.ts.chatID,
 			// ADR-057 FR-011/FR-012 (W4/W5d, U9): see u9ToolExecSessionIDs
 			// and ToolExecStartPayload.SessionID's doc comments (events.go,
-			// U23) for the full rationale. ADR-091 D7/I-4 deleted
-			// ProducingSessionID (the workaround field) — see
-			// u9ToolExecSessionIDs' own doc comment for the residual gap
-			// this leaves.
+			// U23) for the full rationale. The session ID is always the
+			// tool-producing session's own transcript identity.
 			SessionID:         toolExecSID,
 			Tool:              ex.toolName,
 			Arguments:         cloneEventArguments(ex.toolArgs),
@@ -1071,7 +1065,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	// channels suppress feedback because the UI already renders tool calls
 	// inline or because the channel has no human recipient.
 	if ex.rx.rr.rq.ri.cfg.Agents.Defaults.IsToolFeedbackEnabled() &&
-		allowTopLevelToolFeedback &&
+		feedbackReachesUser && !ts.opts.SuppressToolFeedback &&
 		isMessagingChannel(ts.channel) {
 		feedbackPreview := utils.Truncate(
 			string(argsJSON),
@@ -1096,7 +1090,7 @@ func (ex *agentLoopRunTurnToolsExecute) prepareDispatch(tc providers.ToolCall) a
 	asyncToolCallID := tc.ID
 	gate := &asyncToolCallbackGate{
 		handle: func(result *tools.ToolResult) {
-			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration, allowTopLevelToolFeedback)
+			ex.handleAsyncResult(result, asyncToolName, asyncToolCallID, toolIteration)
 		},
 	}
 	ex.asyncCallbackGate = gate
@@ -1174,22 +1168,15 @@ func (ex *agentLoopRunTurnToolsExecute) handleAsyncResult(
 	toolName string,
 	toolCallID string,
 	toolIteration int,
-	allowTopLevelToolFeedback bool,
 ) {
 	ts := ex.rx.rr.rq.ri.rf.rt.ts
-	// Ordinary async feedback follows the captured top-level origin gate.
-	// System-woken roots are the one error-only exception: SendResponse
-	// distinguishes them from internal task/verifier turns, while depth and
-	// IsTaskRun keep delegated children and task work contained.
-	allowSuppressedErrorFeedback := result.IsError &&
-		ts.opts.SuppressToolFeedback && ts.opts.SendResponse &&
-		ts.depth == 0 && !ts.opts.IsTaskRun
-	// ADR-091 boundary 2 (landing order §6, FR-B-001): a steered session's
-	// audience is never the user, regardless of the origin gate above.
-	// audienceFor also calls steer.BoundaryObserver.Observe before this
-	// decision is acted on (FR-B-014).
-	asyncAudience := ex.rx.rr.rq.ri.rf.rt.al.audienceFor(ex.rx.ctx, steer.BoundaryAsyncToolFeedback, ts.transcriptSessionID)
-	if (allowTopLevelToolFeedback || allowSuppressedErrorFeedback) && asyncAudience == steer.AudienceUser {
+	feedbackReachesUser := ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+		ex.rx.ctx, steer.BoundaryAsyncToolFeedback, ts,
+	)
+	allowOrdinaryFeedback := feedbackReachesUser && !ts.opts.SuppressToolFeedback
+	allowSuppressedErrorFeedback := feedbackReachesUser && result.IsError &&
+		ts.opts.SuppressToolFeedback && ts.opts.SendResponse
+	if allowOrdinaryFeedback || allowSuppressedErrorFeedback {
 		// Send ForUser content directly to the user (immediate feedback),
 		// mirroring the synchronous tool execution path. This stays separate
 		// from AsyncNotifier, which owns the reactive continuation turn below.
@@ -1557,8 +1544,11 @@ func (ex *agentLoopRunTurnToolsExecute) deliverToolOutput() {
 	// audience is never the user, regardless of SendResponse. audienceFor
 	// also calls steer.BoundaryObserver.Observe before this decision is
 	// acted on (FR-B-014).
-	audience := ex.rx.rr.rq.ri.rf.rt.al.audienceFor(ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts.transcriptSessionID)
-	if userContent != "" && ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse && audience == steer.AudienceUser {
+	if userContent != "" &&
+		ex.rx.rr.rq.ri.rf.rt.ts.opts.SendResponse &&
+		ex.rx.rr.rq.ri.rf.rt.al.toolFeedbackReachesUser(
+			ex.rx.ctx, steer.BoundarySyncToolText, ex.rx.rr.rq.ri.rf.rt.ts,
+		) {
 		if pubErr := ex.rx.rr.rq.ri.rf.rt.al.bus.PublishOutbound(ex.rx.ctx, bus.OutboundMessage{
 			Channel: ex.rx.rr.rq.ri.rf.rt.ts.channel,
 			ChatID:  ex.rx.rr.rq.ri.rf.rt.ts.chatID,

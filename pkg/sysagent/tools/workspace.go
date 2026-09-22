@@ -1029,21 +1029,15 @@ func configAgentPresenceSet(d *Deps) map[string]bool {
 	return present
 }
 
-// workspaceDelegationDepthCeilingFallback mirrors the gateway's
-// delegationDepthCeilingFallback (and the agent loop's getSubTurnConfig default):
-// the effective max delegation chain depth when agents.defaults.subturn.max_depth
-// is unset. Kept in lock-step so the tool's defensive edge validation applies the
-// exact same depth ceiling the gateway PUT handler does.
+// workspaceDelegationDepthCeilingFallback mirrors the gateway fallback used
+// when performance.max_delegation_depth is unset. Kept in lock-step so the
+// tool and gateway validate edges against the same ceiling.
 const workspaceDelegationDepthCeilingFallback = 3
 
 // workspaceDelegationDepthCeiling returns the effective delegation depth
 // ceiling from the live config, mirroring gateway.delegationDepthCeiling:
-// the configured performance.max_delegation_depth when set (> 0) — ADR-091
-// D9's config fold moved this off agents.defaults.subturn.max_depth, the
-// same single-source-of-truth key
-// pkg/agent/delegation_depth.go::buildDelegationDepthResolver and
-// pkg/agent/subturn.go::getSubTurnConfig both read — else the fallback of
-// 3. A nil GetCfg (tests without a wired config) yields the fallback.
+// performance.max_delegation_depth when set (> 0), otherwise 3. A nil GetCfg
+// (tests without a wired config) yields the fallback.
 func workspaceDelegationDepthCeiling(d *Deps) int {
 	if d == nil || d.GetCfg == nil {
 		return workspaceDelegationDepthCeilingFallback
