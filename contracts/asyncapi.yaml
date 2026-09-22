@@ -1666,8 +1666,7 @@ components:
       description: >
         Server → client new session minted. Session-scoped (registered in
         SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit
-        (FR-089) — a chat-lifecycle frame, not turn output — so
-        producing_session_id is absent (FR-013).
+        (FR-089) — a chat-lifecycle frame, not turn output.
       type: object
       required:
       - type
@@ -2674,9 +2673,7 @@ components:
         Server → client subagent span opened (FR-H-004). Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
         ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child
-        (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing
-        key, so producing_session_id would equal session_id and is
-        therefore absent (FR-013's "iff it differs").
+        (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key.
       type: object
       required:
       - type
@@ -2723,8 +2720,7 @@ components:
         Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b)
         per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the
         child (pkg/agent/subturn.go); FR-017 pins its SessionID to the
-        routing key, so producing_session_id would equal session_id and is
-        therefore absent (FR-013's "iff it differs"). Kept in sync by hand
+        routing key. Kept in sync by hand
         with components/schemas/SubagentEndFrame.yaml for the full shape —
         see that file for the per-value description (including "parked",
         ADR-057 UAT defect C2 fix).
@@ -2892,8 +2888,7 @@ components:
       description: >
         Server → client task status updated. Session-scoped (registered in
         SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057
-        W5 audit (FR-089) — do not assume presence or absence of
-        producing_session_id for this type until the audit classifies it.
+        W5 audit (FR-089).
       type: object
       required:
       - type
@@ -2966,8 +2961,7 @@ components:
       description: >
         Server → client replayed transcript entry. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path,
-        not by a turn, so producing_session_id is absent (FR-013).
+        ADR-057 W5 audit (FR-089) — emitted by the gateway replay path.
       type: object
       required:
       - type
@@ -3161,11 +3155,9 @@ components:
         ADR-057 W5 audit (FR-089) — a DOCUMENTED PRE-EXISTING GAP, audited
         and recorded here rather than fixed (operator decision 11): the
         underlying RateLimitPayload (pkg/agent/events.go) carries no
-        SessionID field at all, so there is no child-provenance signal to
-        stamp a producing_session_id from; this frame's session_id is
+        SessionID field at all; this frame's session_id is
         reconstructed downstream from the connection's chat→session map at
-        serialization time. No producing_session_id property is added to
-        this schema.
+        serialization time.
       type: object
       required:
       - type
@@ -3299,8 +3291,7 @@ components:
       description: >
         Server → client active agent changed. Session-scoped (registered
         in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the
-        ADR-057 W5 audit (FR-089) — do not assume presence or absence of
-        producing_session_id for this type until the audit classifies it.
+        ADR-057 W5 audit (FR-089).
       type: object
       required:
       - type
@@ -3742,9 +3733,7 @@ components:
       description: >
         Server → client system at capacity (FR-016, MAJ-009). Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned
-        by the ADR-057 W5 audit (FR-089) — do not assume presence or
-        absence of producing_session_id for this type until the audit
-        classifies it.
+        by the ADR-057 W5 audit (FR-089).
       type: object
       required:
       - type
@@ -3794,9 +3783,7 @@ components:
         Server → client cancel progress notification (B3). stage MUST be one of
         three values — SPA validates via isValidFrame() and drops invalid stages.
         Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not
-        yet assigned by the ADR-057 W5 audit (FR-089) — do not assume
-        presence or absence of producing_session_id for this type until the
-        audit classifies it.
+        yet assigned by the ADR-057 W5 audit (FR-089).
       type: object
       required:
       - type
@@ -3859,8 +3846,7 @@ components:
       description: >
         Server → client session close acknowledged. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the
-        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn
-        output, so producing_session_id is absent (FR-013).
+        ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output.
       type: object
       required:
       - type
@@ -4979,9 +4965,7 @@ components:
         completion, state change, and clear/stop. Session-scoped
         (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep
         in sync by hand with components/schemas/GoalStatusFrame.yaml.
-        Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not
-        assume presence or absence of producing_session_id until the audit
-        classifies it.
+        Class not yet assigned by the ADR-057 W5 audit (FR-089).
       type: object
       required:
         - type
@@ -5301,9 +5285,7 @@ components:
         Server → client. Status push for a session's active /loop (ADR-049
         D6/D7/US-9). Emitted on run completion, state change, and stop.
         Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class
-        not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume
-        presence or absence of producing_session_id until the audit
-        classifies it.
+        not yet assigned by the ADR-057 W5 audit (FR-089).
       type: object
       required:
         - type
