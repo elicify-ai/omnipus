@@ -47,7 +47,39 @@ type TurnPolicyInput struct {
 	// symptom would be a dev server that becomes unreachable the moment
 	// per-turn confinement is switched on. Carrying it keeps the two policies
 	// differing only where they are MEANT to differ: the filesystem.
+	//
+	// Ignored entirely when NetworkAutoDeny is true (D8) — see that field's
+	// doc comment for why bash's Auto rendering does not also special-case
+	// the dev-server range.
 	ConnectPorts []uint16
+
+	// NetworkAutoDeny renders BindPortRules/ConnectPortRules EMPTY instead of
+	// DefaultPolicyForModel's unconditional DefaultConnectPorts seed (ADR-091
+	// D8/FR-042 — Auto denies bash's outbound network by default). On Linux,
+	// ABI v4+ installs handledAccessNet unconditionally at the backend level
+	// (sandbox_linux.go::computeRights), independent of whether the ruleset
+	// carries any port rules — so an empty ConnectPortRules here is a true
+	// kernel-enforced deny-all for this child's connect(2), not "no
+	// restriction." macOS renders ConnectPortRules identically
+	// (seatbelt_profile.go) — same mechanism, no extra code needed there.
+	//
+	// Set ONLY by the bash tool's own per-turn rendering under Auto mode
+	// (pkg/tools/preflight.go's network evaluator supplies the grant state
+	// that decides this). Every other caller — including bash's own
+	// rendering under Ask or God Mode — leaves this false and keeps today's
+	// DefaultConnectPorts-seeded behavior byte-identical.
+	NetworkAutoDeny bool
+
+	// NetworkGranted restores DefaultConnectPorts when NetworkAutoDeny is
+	// also true — the D8 network-widening grant (FR-044): once the pre-flight
+	// escalation is approved for the session, the bash child's connect-port
+	// allow-list reverts to EXACTLY DefaultConnectPorts (port-level, not
+	// domain-level — sandbox.go's own documented Landlock NET_CONNECT_TCP
+	// limitation). The widened render does NOT also pick up ConnectPorts'
+	// dev-server range: a granted bash network escalation is about outbound
+	// need (curl, git push, package registries), not binding a local
+	// listener. Ignored when NetworkAutoDeny is false.
+	NetworkGranted bool
 
 	// WarnFn receives one message per rule the policy computation strips or
 	// skips. May be nil.
@@ -73,10 +105,19 @@ type TurnPolicyInput struct {
 //     exception through fspolicy.DeniedPathsFor.
 //   - AllowedRoots (mounts) become write grants. Reads need no grant under the
 //     open model, so a mount is a write grant and nothing else — see ADR-063 D4.
+//   - PathGrants (ADR-091 D7/FR-036) each become one additional PathRule,
+//     exactly the access class the pre-flight escalation approved — never
+//     a path this turn's own secret set already covers (FR-037; see
+//     pathGrantIsDenied).
 //   - Scope is NOT carried across as a read restriction. Post-ADR-062 reads are
 //     open, and Scope now governs writes only (spec FR-2.5). Rendering it as a
 //     read restriction here would put the kernel back out of step with the app
 //     layer in the one place this whole change exists to fix.
+//   - TurnPolicyInput.NetworkAutoDeny/NetworkGranted (ADR-091 D8/FR-042)
+//     render bash's Auto per-turn ConnectPortRules/BindPortRules empty by
+//     default and widen to exactly DefaultConnectPorts on a network grant —
+//     independent of fspolicy.FSPolicy, which carries no network vocabulary
+//     (the package comment: a stdlib-only leaf that must stay filesystem-only).
 func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxPolicy {
 	allowed := make([]string, 0, len(in.AllowedPaths)+len(authored.AllowedRoots)+1)
 	allowed = append(allowed, in.AllowedPaths...)
@@ -134,10 +175,29 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	// where a divergence can exist, without changing gateway startup.
 	policy.FilesystemRules = narrowSharedTmpWrite(policy.FilesystemRules)
 
-	// Extra connect ports, deduplicated against the DefaultConnectPorts seed.
-	// A duplicate rule is harmless to both backends but is noise in a rendered
-	// Seatbelt profile that a reader then has to discount.
-	if len(in.ConnectPorts) > 0 {
+	if in.NetworkAutoDeny {
+		// D8/FR-042: bash's Auto per-turn render either denies outbound
+		// network entirely (empty ConnectPortRules — a true kernel deny-all
+		// on Linux ABI v4+ and on macOS Seatbelt, per this field's own doc
+		// comment) or, once granted, EXACTLY DefaultConnectPorts. This
+		// bypasses the extra-connect-ports branch below entirely: bash's
+		// Auto network posture does not also inherit in.ConnectPorts' dev-
+		// server range, and BindPortRules stays empty regardless of grant
+		// state — a network-need grant is about outbound connect (curl, git
+		// push, package registries), never about binding a local listener.
+		policy.BindPortRules = nil
+		if in.NetworkGranted {
+			policy.ConnectPortRules = make([]NetPortRule, 0, len(DefaultConnectPorts))
+			for _, p := range DefaultConnectPorts {
+				policy.ConnectPortRules = append(policy.ConnectPortRules, NetPortRule{Port: p})
+			}
+		} else {
+			policy.ConnectPortRules = nil
+		}
+	} else if len(in.ConnectPorts) > 0 {
+		// Extra connect ports, deduplicated against the DefaultConnectPorts
+		// seed. A duplicate rule is harmless to both backends but is noise in
+		// a rendered Seatbelt profile that a reader then has to discount.
 		seenPort := make(map[uint16]struct{}, len(policy.ConnectPortRules)+len(in.ConnectPorts))
 		for _, r := range policy.ConnectPortRules {
 			seenPort[r.Port] = struct{}{}
@@ -214,6 +274,36 @@ func DeriveKernelPolicy(authored fspolicy.FSPolicy, in TurnPolicyInput) SandboxP
 	// a root that is already denied wholesale is redundant, never wrong.
 	policy.DeniedNodes = fspolicy.KernelDeniedNodesFor(in.HomePath, authored.WorkDir)
 
+	// PathGrants (ADR-091 D7/FR-036): each is rendered as one additional
+	// PathRule, additive to the WorkDir/AllowedRoots rendering above — the
+	// same DeriveKernelPolicy call, no parallel construction site.
+	//
+	// fspolicy.FSPolicy.Validate already refuses to construct a policy whose
+	// PathGrants names a path IsCarveOut denies (FR-037), so authored.
+	// PathGrants should never contain one here. This loop checks again
+	// anyway, against policy.DeniedPaths/DeniedNodes (the FINAL, per-turn
+	// deny set this function just computed) rather than trusting the
+	// upstream Validate call happened, or happened against the same denied
+	// set — defense in depth for the one guarantee that must never regress:
+	// a PathGrant can never reopen a path this turn's own kernel-only secret
+	// set (SecretPaths) already covers, even given a bug in whatever
+	// produced the grant. A skipped grant is warned, never silently applied.
+	for _, g := range authored.PathGrants {
+		grantPath := filepath.Clean(g.Path)
+		if g.Access == 0 || grantPath == "" || grantPath == "." {
+			continue
+		}
+		if pathGrantIsDenied(grantPath, policy.DeniedPaths, policy.DeniedNodes) {
+			if in.WarnFn != nil {
+				in.WarnFn("kernel policy: PathGrant refused — path falls within the secret set (FR-037)", grantPath)
+			}
+			slog.Warn("sandbox: PathGrant refused, secret-set path",
+				"path", grantPath, "home", in.HomePath, "work_dir", authored.WorkDir)
+			continue
+		}
+		policy.FilesystemRules = append(policy.FilesystemRules, PathRule{Path: grantPath, Access: g.Access})
+	}
+
 	// DeniedPathPrefixes is NOT set here. It is turn-independent — a backup
 	// copy of a secret is a secret in every turn shape — so DefaultPolicyForModel
 	// above populates it once, for the boot profile and every per-turn policy
@@ -260,6 +350,36 @@ func isSharedTmpPath(p string) bool {
 	switch filepath.Clean(p) {
 	case "/tmp", "/private/tmp":
 		return true
+	}
+	return false
+}
+
+// pathGrantIsDenied reports whether a would-be PathGrant rule at cleanPath
+// (already filepath.Clean'd by the caller) falls within this turn's own
+// kernel deny set — at or under any deniedPaths entry, or an exact match on
+// a deniedNodes entry (a directory that must never carry a right of its own,
+// even a single-path one; see SandboxPolicy.DeniedNodes's own doc comment).
+//
+// ADR-091 FR-037's "never widenable" guarantee is enforced HERE, at the one
+// function that renders every PathGrant into the kernel policy — not only
+// assumed from fspolicy.FSPolicy.Validate having already refused a
+// secret-set grant, and not only from ExpandRulesExcluding's later,
+// Linux-specific rewrite (sibling_grants.go) dropping any rule that lands on
+// a denied path. Checking again here, against THIS function's own final
+// denied/node lists, means the guarantee holds even if one of those other
+// two layers is bypassed, absent, or (macOS) uses a different rendering
+// mechanism (renderDeniedPaths, an explicit Seatbelt deny) that does not go
+// through ExpandRulesExcluding at all.
+func pathGrantIsDenied(cleanPath string, deniedPaths, deniedNodes []string) bool {
+	for _, d := range deniedPaths {
+		if pathIsUnder(cleanPath, filepath.Clean(d)) {
+			return true
+		}
+	}
+	for _, n := range deniedNodes {
+		if cleanPath == filepath.Clean(n) {
+			return true
+		}
 	}
 	return false
 }
