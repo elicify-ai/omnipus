@@ -98,7 +98,7 @@ func newSelfTargetDelegateTool() (*tools.DelegateTool, *spyDelegateSpawner) {
 	dt.SetSpawner(spy)
 	dt.SetDelegationDenyCheckerBackground(
 		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
-	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.AgentDefaults{}))
+	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{}))
 	return dt, spy
 }
 
@@ -152,7 +152,7 @@ func TestDelegateTool_SelfTargetDeniedBeforeDepthResolver(t *testing.T) {
 		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
 
 	depthResolverCalled := false
-	realResolver := buildDelegationDepthResolver("mia", config.AgentDefaults{})
+	realResolver := buildDelegationDepthResolver("mia", config.AgentDefaults{}, config.PerformanceConfig{})
 	dt.SetDelegationDepthResolver(func(ctx context.Context, target string) *int {
 		depthResolverCalled = true
 		return realResolver(ctx, target)

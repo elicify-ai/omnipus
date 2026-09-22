@@ -844,7 +844,7 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 		// independently re-derive (and silently override) an explicit
 		// per-edge Depth.
 		delegateTool.SetDelegationDepthResolver(buildDelegationDepthResolver(
-			currentAgentID, rw.cfg.Agents.Defaults,
+			currentAgentID, rw.cfg.Agents.Defaults, rw.cfg.Performance,
 		))
 
 		// ADR-057: derive the ownership-walk bound from the SAME operator

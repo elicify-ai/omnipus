@@ -88,8 +88,22 @@ func resolveEffectiveDelegationDepth(edgeDepth *int, globalMaxDepth int) int {
 func buildDelegationDepthResolver(
 	currentAgentID string,
 	defaults config.AgentDefaults,
+	performance config.PerformanceConfig,
 ) func(ctx context.Context, targetAgentID string) *int {
-	globalDepthCap := defaults.SubTurn.MaxDepth
+	// ADR-091 D9: performance.max_delegation_depth is now the single
+	// source of truth for the global ceiling (subturn.go::getSubTurnConfig
+	// reads the SAME key — see that function's own comment — so the two
+	// never disagree). A negative configured value is a config error;
+	// EffectiveMaxDelegationDepth surfaces it rather than silently
+	// treating it as unset. This resolver has no error return, so a
+	// misconfigured value degrades to "unset" here (0) — the SAME
+	// degrade-not-panic posture getSubTurnConfig takes for the identical
+	// input; the config-load path is where a negative value should be
+	// caught operator-facing, not this hot resolver.
+	globalDepthCap, depthErr := performance.EffectiveMaxDelegationDepth()
+	if depthErr != nil {
+		globalDepthCap = 0
+	}
 
 	return func(ctx context.Context, targetAgentID string) *int {
 		// targetAgentID == currentAgentID is unreachable for the delegate tool:

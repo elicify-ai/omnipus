@@ -66,13 +66,22 @@ var (
 func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 	cfg := al.cfg.Agents.Defaults.SubTurn
 
-	// #477 / FR-D9: resolve via the SAME shared function enforceEdgeModeAndDepth
-	// and wireDelegationInjectors use, so this backstop's "nothing configured"
-	// default and the delegation graph's own gate are never computed
-	// independently. edgeDepth is nil here — this is the GLOBAL-only fallback;
-	// a specific delegation call's own per-edge override (when one applies)
-	// arrives separately via SubTurnConfig.ResolvedMaxDepth (see spawnSubTurn).
-	maxDepth := resolveEffectiveDelegationDepth(nil, cfg.MaxDepth)
+	// ADR-091 D9 config fold: MaxDepth/DefaultTimeoutMinutes now resolve
+	// from performance.max_delegation_depth /
+	// performance.delegation_timeout_minutes — the SAME keys
+	// delegation_depth.go::buildDelegationDepthResolver reads (see its own
+	// comment) — so this backstop can never silently disagree with the
+	// delegation graph's own gate again (the #477 bug this shared-function
+	// discipline already existed to prevent). cfg.MaxDepth/
+	// DefaultTimeoutMinutes themselves stay declared but are no longer
+	// read here: MaxConcurrent/ConcurrencyTimeoutSec (this function's
+	// OTHER two fields, D9 "no successor") are the reason SubTurnConfig
+	// itself is not yet deleted — see this file's package doc.
+	globalDepthCap, depthErr := al.cfg.Performance.EffectiveMaxDelegationDepth()
+	if depthErr != nil {
+		globalDepthCap = 0
+	}
+	maxDepth := resolveEffectiveDelegationDepth(nil, globalDepthCap)
 
 	maxConcurrent := cfg.MaxConcurrent
 	if maxConcurrent <= 0 {
@@ -86,7 +95,11 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 		concurrencyTimeout = defaultConcurrencyTimeout
 	}
 
-	defaultTimeout := time.Duration(cfg.DefaultTimeoutMinutes) * time.Minute
+	defaultTimeoutMinutes, timeoutErr := al.cfg.Performance.EffectiveDelegationTimeoutMinutes()
+	if timeoutErr != nil {
+		defaultTimeoutMinutes = 0
+	}
+	defaultTimeout := time.Duration(defaultTimeoutMinutes) * time.Minute
 	if defaultTimeout <= 0 {
 		defaultTimeout = defaultSubTurnTimeout
 	}
