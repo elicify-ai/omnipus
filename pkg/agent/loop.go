@@ -580,6 +580,10 @@ type processOptions struct {
 	SkipInitialSteeringPoll bool                  // If true, skip the steering poll at loop start (used by Continue)
 	TranscriptSessionID     string                // Session ID for transcript tool call recording (empty = disabled)
 	TranscriptStore         *session.UnifiedStore // Store for transcript tool call recording (nil = disabled)
+	// OriginKind identifies the durable execution origin when this turn does
+	// not have a lifecycle record to supply it. The zero value is an ordinary
+	// interactive turn. Publication policy resolves the record first.
+	OriginKind session.OriginKind
 
 	// WorkspaceID is the Spec-1 Workspace identifier for this turn.
 	// When set, the memory store uses the shared workspace room

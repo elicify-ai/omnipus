@@ -15,6 +15,7 @@ package agent
 import (
 	"context"
 
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
@@ -134,4 +135,25 @@ func (al *AgentLoop) audienceFor(ctx context.Context, boundary steer.Boundary, s
 	}
 	observer.Observe(boundary, sessionID, audience)
 	return audience
+}
+
+// toolFeedbackReachesUser is the single publication decision for automatic
+// tool feedback. I-5 decides the recipient, then the durable record's origin
+// excludes internal task and verifier work. OriginKind is only the fallback
+// for internal turns that predate or do not own a lifecycle record.
+func (al *AgentLoop) toolFeedbackReachesUser(ctx context.Context, boundary steer.Boundary, ts *turnState) bool {
+	if ts == nil {
+		return false
+	}
+	audience := al.audienceFor(ctx, boundary, ts.transcriptSessionID)
+	if audience != steer.AudienceUser {
+		return false
+	}
+	origin := ts.opts.OriginKind
+	if lifecycle := al.GetSessionLifecycleStore(); lifecycle != nil && ts.transcriptSessionID != "" {
+		if rec, err := lifecycle.Load(ts.transcriptSessionID); err == nil && rec.Origin != nil {
+			origin = rec.Origin.Kind
+		}
+	}
+	return origin != session.OriginKindTask && origin != session.OriginKindVerifier
 }

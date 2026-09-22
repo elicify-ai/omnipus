@@ -1894,6 +1894,7 @@ func (al *AgentLoop) processTaskDirect(
 		SendResponse:           false,
 		TranscriptSessionID:    taskChatID,
 		TranscriptStore:        al.GetAgentStore(agentID),
+		OriginKind:             session.OriginKindTask,
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
 		RunningTaskID:          tools.ToolRunningTaskID(taskCtx),
