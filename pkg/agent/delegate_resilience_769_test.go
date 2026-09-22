@@ -184,9 +184,6 @@ func TestIssue769_DelegateToolExhaustedRateLimitPersistsFailure(t *testing.T) {
 	delegateTool.SetSpawner(NewSubTurnSpawner(al))
 	lifecycle := session.NewLifecycleStore(t.TempDir())
 	delegateTool.SetLifecycleStore(lifecycle)
-	delegateTool.SetDelegationDenyCheckerAwait(
-		func(context.Context, string) *tools.DelegationDenial { return nil },
-	)
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)

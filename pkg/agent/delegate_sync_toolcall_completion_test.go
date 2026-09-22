@@ -142,9 +142,6 @@ func TestRunTurn_SyncDelegate_PersistsResultOnReload(t *testing.T) {
 	delegateTool.SetDelegationDenyCheckerBackground(
 		func(context.Context, string) *tools.DelegationDenial { return nil },
 	)
-	delegateTool.SetDelegationDenyCheckerAwait(
-		func(context.Context, string) *tools.DelegationDenial { return nil },
-	)
 	al.RegisterTool(delegateTool)
 
 	for _, agentID := range al.GetRegistry().ListAgentIDs() {

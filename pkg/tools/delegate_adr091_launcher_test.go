@@ -9,10 +9,35 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
 
+func TestDelegate_RejectsRemovedArgs(t *testing.T) {
+	for _, arg := range []string{"async", "allow_blocking_question"} {
+		t.Run(arg, func(t *testing.T) {
+			tool := NewDelegateTool("", 0, 0)
+			result := tool.Execute(context.Background(), map[string]any{
+				"action": "run",
+				"task":   "inspect checkout",
+				arg:      true,
+			})
+			if !result.IsError {
+				t.Fatalf("removed argument %q was accepted: %s", arg, result.ForLLM)
+			}
+			want := "invalid_argument: " + arg
+			if result.ForLLM != want {
+				t.Fatalf("error = %q, want %q", result.ForLLM, want)
+			}
+		})
+	}
+}
+
 type recordingSessionLauncher struct {
 	launchReq steer.LaunchRequest
 	launchRes steer.LaunchResult
 	dispatch  steer.DispatchResult
+}
+
+// Kept only so the pre-ADR-091 tests still compile until WP-G applies its
+// retain/update/delete classification. Production has no await gate.
+func (t *DelegateTool) SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial) {
 }
 
 func (f *recordingSessionLauncher) Launch(_ context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {

@@ -836,19 +836,6 @@ func (rw *registerSharedToolsWire3) registerDelegationTools(agentID string, agen
 				agentExistsChecker(rw.rs.registry),
 			),
 		)
-		// FR-6.2: full-policy gate for the await (async=false) mode. Uses
-		// the same buildDelegationDenyChecker as the background gate
-		// above but with DelegationModeAwait, so a targeted
-		// delegate(agent_id="X", async=false) is checked against the
-		// caller→X edge for the "await" mode, and an untargeted call
-		// falls back to evalUntargetedDelegation.
-		delegateTool.SetDelegationDenyCheckerAwait(
-			// ForDelegate bakes in exempt=false: same reasoning as the background
-			// gate — a self-targeted await delegate() is real delegation, graph-gated.
-			buildDelegationDenyCheckerForDelegate(
-				currentAgentID, rw.cfg.Agents.Defaults, config.DelegationModeAwait, agentExistsChecker(rw.rs.registry),
-			),
-		)
 		// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
 		// gates above just authorized against into spawnSubTurn's own
 		// depth check — the resolver is mode-agnostic (sourced only from

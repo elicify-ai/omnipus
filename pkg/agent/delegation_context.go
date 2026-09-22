@@ -22,13 +22,9 @@ import (
 //   - ID:    the target agent id (from the edge's ToAgent field)
 //   - Label: the human-readable label resolved via resolveDelegationLabel;
 //     empty means the target is unknown/unavailable and must be skipped.
-//   - Modes: the delegate tool's 3-value config.DelegationMode vocabulary
-//     (await/background/task), already EXPANDED from the workspace edge's
-//     collapsed 2-value form (direct/task) by wireDelegationInjectors — this
-//     type never sees the raw edge.Modes. Empty ⇒ all three modes are allowed,
-//     matching enforceEdgeModeAndDepth semantics exactly (an edge that allows
-//     "direct" always expands to both await and background, so a target
-//     advertising only one of the two never happens).
+//   - Modes: the background/task config.DelegationMode vocabulary, already
+//     translated from the workspace edge's direct/task form by
+//     wireDelegationInjectors. Empty means both modes are allowed.
 //   - Depth: the edge's Depth field; nil ⇒ inherit (no per-edge cap),
 //     0 ⇒ this edge grants NO onward delegation,
 //     >0 ⇒ per-edge onward-delegation cap.
@@ -83,19 +79,15 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 			continue
 		}
 
-		// Determine which modes are active for this target. Empty Modes = all three
+		// Determine which modes are active for this target. Empty Modes = both
 		// allowed, matching enforceEdgeModeAndDepth semantics exactly.
-		activeAwait := true
 		activeBackground := true
 		activeTask := true
 		if len(tgt.Modes) > 0 {
-			activeAwait = false
 			activeBackground = false
 			activeTask = false
 			for _, m := range tgt.Modes {
 				switch m {
-				case config.DelegationModeAwait:
-					activeAwait = true
 				case config.DelegationModeBackground:
 					activeBackground = true
 				case config.DelegationModeTask:
@@ -129,16 +121,6 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 				tgt.ID,
 			)
 		}
-		if activeAwait {
-			// delegate(agent_id=…, async=false) runs the named agent synchronously (await mode).
-			fmt.Fprintf(
-				&sb,
-				"\n- `delegate(agent_id=%q, task=\"…\", async=false)` — blocks this turn; runs %s synchronously and returns the result inline.",
-				tgt.ID,
-				tgt.Label,
-			)
-		}
-
 		// Per-target note when the edge forbids onward delegation (Depth <= 0,
 		// mirroring the DEPTH INVARIANT in enforceEdgeModeAndDepth).
 		if tgt.Depth != nil && *tgt.Depth <= 0 {
@@ -161,6 +143,7 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 	sb.WriteString(
 		"\n\nThese are your ONLY permitted delegation targets. delegate / create_task to any other agent WILL be denied — do not attempt it.",
 	)
+	sb.WriteString("\n\n" + delegateGoalGuidance)
 
 	// Footer: global depth ceiling. globalDepthCap <= 0 only occurs when this
 	// function is called directly with 0 (e.g. from a test) — the production
@@ -174,3 +157,5 @@ func buildDelegationContext(targets []delegationTarget, globalDepthCap int) stri
 
 	return sb.String()
 }
+
+const delegateGoalGuidance = "No goal is the default; set one for multi-step work or work you must verify before relying on it, and leave it off for a quick lookup or a single action."

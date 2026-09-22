@@ -170,22 +170,13 @@ func wireDelegationInjectors(al *AgentLoop, registry *AgentRegistry) {
 					)
 					continue
 				}
-				// Expand the edge's collapsed 2-value workspace.DelegationMode
-				// vocabulary (direct/task) back into the delegate tool's real
-				// 3-value config.DelegationMode runtime parameter (await/
-				// background/task) for the system prompt: ModeDirect authorizes
-				// BOTH the synchronous and background call patterns, so it must
-				// expand to both DelegationModeAwait and DelegationModeBackground
-				// — not just one — or the advertised roster would silently
-				// under-represent what the enforcement gate (EdgeModeCategory in
-				// loop.go) actually allows. ModeTask maps 1:1 to
-				// DelegationModeTask. This is the inverse of EdgeModeCategory's
-				// collapse.
-				modes := make([]config.DelegationMode, 0, len(e.Modes)*2)
+				// Translate the workspace edge's direct/task vocabulary into the
+				// delegate prompt's background/task vocabulary.
+				modes := make([]config.DelegationMode, 0, len(e.Modes))
 				for _, m := range e.Modes {
 					switch m {
 					case workspace.ModeDirect:
-						modes = append(modes, config.DelegationModeAwait, config.DelegationModeBackground)
+						modes = append(modes, config.DelegationModeBackground)
 					case workspace.ModeTask:
 						modes = append(modes, config.DelegationModeTask)
 					}

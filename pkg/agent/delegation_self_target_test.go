@@ -98,8 +98,6 @@ func newSelfTargetDelegateTool() (*tools.DelegateTool, *spyDelegateSpawner) {
 	dt.SetSpawner(spy)
 	dt.SetDelegationDenyCheckerBackground(
 		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeBackground))
-	dt.SetDelegationDenyCheckerAwait(
-		buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait))
 	dt.SetDelegationDepthResolver(buildDelegationDepthResolver("mia", config.AgentDefaults{}))
 	return dt, spy
 }
