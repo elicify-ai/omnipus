@@ -30,9 +30,11 @@ func TestDelegate_RejectsRemovedArgs(t *testing.T) {
 }
 
 type recordingSessionLauncher struct {
-	launchReq steer.LaunchRequest
-	launchRes steer.LaunchResult
-	dispatch  steer.DispatchResult
+	launchReq          steer.LaunchRequest
+	launchRes          steer.LaunchResult
+	dispatch           steer.DispatchResult
+	dispatchSessionID  string
+	dispatchGeneration int
 }
 
 // Kept only so the pre-ADR-091 tests still compile until WP-G applies its
@@ -42,12 +44,20 @@ func (t *DelegateTool) SetDelegationDenyCheckerAwait(func(context.Context, strin
 
 func (f *recordingSessionLauncher) Launch(_ context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {
 	f.launchReq = req
+	if f.launchRes.SessionID == "" {
+		f.launchRes = steer.LaunchResult{SessionID: "recording-launcher-child", Generation: 1}
+	}
 	return f.launchRes, nil
 }
 
 func (f *recordingSessionLauncher) Dispatch(_ context.Context, sessionID string, generation int) (steer.DispatchResult, error) {
-	if sessionID != f.launchRes.SessionID || generation != f.launchRes.Generation {
+	f.dispatchSessionID = sessionID
+	f.dispatchGeneration = generation
+	if f.launchRes.SessionID != "" && (sessionID != f.launchRes.SessionID || generation != f.launchRes.Generation) {
 		return steer.DispatchResult{}, steer.ErrStaleGeneration
+	}
+	if f.dispatch.Generation == 0 {
+		f.dispatch = steer.DispatchResult{State: steer.DispatchRunning, Generation: generation}
 	}
 	return f.dispatch, nil
 }

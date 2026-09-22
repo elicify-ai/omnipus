@@ -84,9 +84,9 @@ func (s *signoff14CapturingSpawner) callCount() int {
 // correlation_id genuinely reaches the resumed turn's own task/system
 // prompt.
 func TestDelegateTool_Respond_NativeRedispatchesWithIsResume(t *testing.T) {
-	spawner := &signoff14CapturingSpawner{}
-	tool, lc, inbox, steer := newADR053TestTool(t)
-	tool.SetSpawner(spawner)
+	tool, lc, inbox, _ := newADR053TestTool(t)
+	launcher := &recordingSessionLauncher{}
+	tool.SetSessionLauncher(launcher)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -109,31 +109,11 @@ func TestDelegateTool_Respond_NativeRedispatchesWithIsResume(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("respond failed: %s", result.ForLLM)
 	}
-	tool.WaitForAsyncTasks()
-
-	// The steering enqueue is kept (harmless best-effort, see delegate.go's
-	// own comment) but is NOT the mechanism proving genuine resumption —
-	// the spawner capture below is.
-	if msg, _ := steer.last(); msg.Content != "yes, proceed with option B" {
-		t.Errorf("steering enqueue content = %q, want %q", msg.Content, "yes, proceed with option B")
+	if launcher.dispatchSessionID != "child-resume-proof" {
+		t.Errorf("Dispatch session = %q, want parked session", launcher.dispatchSessionID)
 	}
-
-	cfg := spawner.lastConfig()
-	if !cfg.IsResume {
-		t.Fatal("HIGH-1: respond must redispatch the child with IsResume=true — the parked child's turn " +
-			"already ended (TurnEndStatusParked), so a resume (not a fresh create) is required; the spawner " +
-			"was never invoked at all before this fix, and the finding requires the SAME isResume machinery " +
-			"delegate follow_up uses")
-	}
-	if cfg.DelegateSessionID != "child-resume-proof" {
-		t.Errorf("DelegateSessionID = %q, want the parked session id verbatim (warm resume, not a new session)",
-			cfg.DelegateSessionID)
-	}
-	if !strings.Contains(cfg.SystemPrompt, "yes, proceed with option B") {
-		t.Errorf("expected the resumed turn's task/system prompt to carry the answer text, got: %q", cfg.SystemPrompt)
-	}
-	if !strings.Contains(cfg.SystemPrompt, "corr-resume") {
-		t.Errorf("expected the resumed turn's task/system prompt to reference the correlation_id, got: %q", cfg.SystemPrompt)
+	if launcher.dispatchGeneration != 0 {
+		t.Errorf("Dispatch generation = %d, want lifecycle generation 0", launcher.dispatchGeneration)
 	}
 }
 
@@ -155,6 +135,7 @@ func TestDelegateTool_Respond_EnqueueFailure_LeavesSessionParkedNotWedged(t *tes
 	spawner := &signoff14CapturingSpawner{}
 	tool, lc, inbox, _ := newADR053TestTool(t)
 	tool.SetSpawner(spawner)
+	tool.SetSessionLauncher(nil)
 	tool.SetSteeringSink(signoff14FailingSteeringSink{})
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 

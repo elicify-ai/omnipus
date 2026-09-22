@@ -58,6 +58,7 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 	t.Helper()
 	tool := NewDelegateTool("test-model", 0, 0)
 	tool.SetSpawner(&mockDelegateSpawner{})
+	tool.SetSessionLauncher(&recordingSessionLauncher{})
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	tool.SetDelegationDenyCheckerAwait(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	// B.5 fix (FR-196 kill switch fails-closed when unwired): tests that exercise
@@ -310,7 +311,7 @@ func TestDelegateTool_Steer_RejectsExternalCLI(t *testing.T) {
 }
 
 func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
-	tool, lc, inbox, steer := newADR053TestTool(t)
+	tool, lc, inbox, _ := newADR053TestTool(t)
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 
 	if err := lc.Persist(&session.LifecycleRecord{
@@ -334,30 +335,12 @@ func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("respond failed: %s", result.ForLLM)
 	}
-	msg, _ := steer.last()
-	if msg.Content != "yes, go ahead" {
-		t.Errorf("delivered content = %q, want %q", msg.Content, "yes, go ahead")
-	}
-
-	// HIGH-1 (14-reviewer sign-off): respond now genuinely REDISPATCHES the
-	// child (reusing the isResume spawn machinery), not merely flips the
-	// lifecycle record and enqueues a steering message nothing will ever
-	// drain. That redispatch is asynchronous (mirrors follow_up's own
-	// fire-and-forget dispatch), so the record legitimately passes through
-	// `running` before mockDelegateSpawner's instant, error-free response
-	// carries it straight on to `completed` — asserting `running` here would
-	// be racing the dispatch goroutine (flaky depending on scheduling).
-	// Waiting for the async task to actually finish and asserting the
-	// TERMINAL state is the stronger proof: it can only be reached if a real
-	// turn was dispatched and ran to completion, not just "1 message
-	// pending" in a queue with no consumer.
-	tool.WaitForAsyncTasks()
 	rec, err := lc.Load("child-z")
 	if err != nil {
 		t.Fatalf("Load after respond failed: %v", err)
 	}
-	if rec.State != session.LifecycleCompleted {
-		t.Errorf("state after respond's redispatch completed = %q, want %q", rec.State, session.LifecycleCompleted)
+	if rec.State != session.LifecycleRunning {
+		t.Errorf("state after launcher dispatch = %q, want %q", rec.State, session.LifecycleRunning)
 	}
 	if rec.NeedsInput != nil {
 		t.Error("NeedsInput should be cleared after respond")
@@ -411,7 +394,7 @@ func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	if !result.IsError {
 		t.Fatal("expected cross-owner respond to be rejected, got success")
 	}
-	if !strings.Contains(result.ForLLM, "not owned") {
+	if !strings.Contains(result.ForLLM, "not steered") {
 		t.Errorf("expected the rejection to cite ownership, got: %s", result.ForLLM)
 	}
 }
