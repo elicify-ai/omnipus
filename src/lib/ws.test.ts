@@ -275,6 +275,77 @@ describe('WsConnection — online event triggers reconnect (B1.3c)', () => {
   })
 })
 
+// ── Issue #812 — offline must not wait for the WebSocket close handshake ───────
+
+describe('WsConnection — offline event disconnects immediately', () => {
+  beforeEach(() => { vi.useFakeTimers() })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('reports disconnected and schedules reconnect when close remains stuck in CLOSING', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    const stalledWs = lastWsInstance
+    const wsCountBeforeOffline = MockWebSocket.mock.calls.length
+    stalledWs.close.mockImplementation(() => {
+      // A real WebSocket enters CLOSING synchronously, but `close` fires only
+      // after the peer answers the closing handshake. With the network down,
+      // that answer may never arrive promptly.
+      stalledWs.readyState = 2 // CLOSING
+    })
+
+    triggerWindowEvent('offline')
+
+    expect(stalledWs.close).toHaveBeenCalledWith(1000, 'offline')
+    expect(cbs.onDisconnected).toHaveBeenCalledTimes(1)
+    expect(cbs.onReconnectStateChange).toHaveBeenCalledWith('reconnecting', 1)
+
+    vi.advanceTimersByTime(1_000)
+    expect(MockWebSocket.mock.calls.length).toBeGreaterThan(wsCountBeforeOffline)
+
+    conn.disconnect()
+  })
+
+  it('detaches the dying socket so late events cannot double-close or deliver stale frames', () => {
+    const cbs = makeCallbacks()
+    const conn = new WsConnection(cbs)
+    conn.connect()
+    lastWsInstance.onopen?.()
+
+    const dyingWs = lastWsInstance
+    dyingWs.close.mockImplementation(() => {
+      dyingWs.readyState = 2 // CLOSING
+    })
+
+    triggerWindowEvent('offline')
+
+    expect(dyingWs.onopen).toBeNull()
+    expect(dyingWs.onmessage).toBeNull()
+    expect(dyingWs.onerror).toBeNull()
+    expect(dyingWs.onclose).toBeNull()
+
+    // Model events that arrive after the synthetic close. A browser dispatches
+    // through the socket's current handler properties, which must all be null.
+    dyingWs.onmessage?.({ data: JSON.stringify({ type: 'token', session_id: 'stale', content: 'late' }) })
+    dyingWs.onerror?.()
+    dyingWs.onclose?.({ code: 1000, reason: 'late close handshake' })
+
+    expect(cbs.onFrame).not.toHaveBeenCalled()
+    expect(cbs.onError).not.toHaveBeenCalled()
+    expect(cbs.onDisconnected).toHaveBeenCalledTimes(1)
+    expect(cbs.onReconnectStateChange).toHaveBeenCalledTimes(2)
+    expect(cbs.onReconnectStateChange).toHaveBeenNthCalledWith(1, null, 0)
+    expect(cbs.onReconnectStateChange).toHaveBeenNthCalledWith(2, 'reconnecting', 1)
+
+    vi.advanceTimersByTime(1_000)
+    expect(lastWsInstance).not.toBe(dyingWs)
+
+    conn.disconnect()
+  })
+})
+
 // ── B1.3(c) — persistent banner for non-1000/1001 close codes ─────────────────
 
 describe('WsConnection — persistent banner for non-1000/1001 close (B1.3c)', () => {
