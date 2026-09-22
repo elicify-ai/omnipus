@@ -134,7 +134,7 @@ func (dt *delegateToolExecuteRespond) verifyQuestionAuthority() (*ToolResult, bo
 	if dt.t.inbox == nil {
 		return ErrorResult("delegate: respond: no message inbox configured to verify question authority"), true
 	}
-	msgs, _, _, derr := dt.t.inbox.Drain(dt.rec.ParentDurableKey, dt.sessionID, "", 0)
+	msgs, _, _, derr := dt.t.inbox.Drain(dt.rec.SteeringSessionID(), dt.sessionID, "", 0)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: %v", derr)).WithError(derr), true
 	}

@@ -562,7 +562,7 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 		maxMessages = n
 	}
 
-	// MEDIUM-2 (14-reviewer sign-off): key the Drain by rec.ParentDurableKey
+	// MEDIUM-2 (14-reviewer sign-off): key the Drain by rec.SteeringSessionID()
 	// (the target session's own DIRECT parent — the key its messages were
 	// actually Appended under), NOT the calling ownerKey. verifyCallerOwnsSession
 	// above already grants an authorized ANCESTOR (grandparent, etc., up to
@@ -573,9 +573,9 @@ func (t *DelegateTool) executeInbox(ctx context.Context, args map[string]any) *T
 	// authorized-ancestor case FR-039 exists to permit — the ownerKey
 	// variable above and its own presence check remain (a caller must still
 	// have SOME resolvable session identity to reach this far at all), but
-	// the store key must be the target's own ParentDurableKey. executeRespond
+	// the store key must be the target's own SteeringSessionID. executeRespond
 	// already uses this correct key (see its own Drain call).
-	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.ParentDurableKey, sessionID, sinceCursor, maxMessages)
+	msgs, nextCursor, hasMore, derr := t.inbox.Drain(rec.SteeringSessionID(), sessionID, sinceCursor, maxMessages)
 	if derr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox: %v", derr)).WithError(derr)
 	}
@@ -611,11 +611,11 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 		return ErrorResult("delegate: no session context available to resolve the inbox owner key")
 	}
 	// HIGH (nested-delegation message leak, 2026-08): the READ path
-	// (executeInbox/executePeek) was re-keyed to rec.ParentDurableKey but the
+	// (executeInbox/executePeek) was re-keyed to rec.SteeringSessionID() but the
 	// ACK path was left on the calling ownerKey, so read and ack disagreed
 	// for every caller that is not the target's DIRECT parent. Because
 	// verifyCallerOwnsSession deliberately permits an ANCESTOR (FR-039) —
-	// whose key is by definition NOT rec.ParentDurableKey — an A -> B -> C
+	// whose key is by definition NOT rec.SteeringSessionID() — an A -> B -> C
 	// chain let A drain C's question successfully and then ack it against
 	// A's OWN inbox file: every id came back Unknown, nothing was actually
 	// acknowledged, the messages were redelivered on every subsequent drain,
@@ -628,7 +628,7 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 	// Appended under.
 	//
 	// Loading the record also closes a second gap this action had: keying by
-	// rec.ParentDurableKey without an ownership check would let any caller
+	// rec.SteeringSessionID() without an ownership check would let any caller
 	// ack messages in an inbox it does not own, so the same MANDATORY,
 	// fail-closed verification executeInbox performs is applied here (a Load
 	// error denies — it never falls through to whatever session_id the
@@ -644,7 +644,7 @@ func (t *DelegateTool) executeInboxAck(ctx context.Context, args map[string]any)
 		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", verr))
 	}
 
-	result, err := t.inbox.AckDetailed(rec.ParentDurableKey, ids)
+	result, err := t.inbox.AckDetailed(rec.SteeringSessionID(), ids)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("delegate: inbox_ack: %v", err)).WithError(err)
 	}
@@ -693,12 +693,12 @@ func (t *DelegateTool) executePeek(ctx context.Context, args map[string]any) *To
 	}
 	state := string(rec.State)
 
-	// MEDIUM-2 (14-reviewer sign-off): key the Peek by rec.ParentDurableKey,
+	// MEDIUM-2 (14-reviewer sign-off): key the Peek by rec.SteeringSessionID(),
 	// not the calling ownerKey — see executeInbox's identical fix above for
 	// the full rationale (FR-039 grants an authorized ancestor reach beyond
 	// the direct parent, but messages are always stored under the target's
 	// own direct parent's key).
-	snap, perr := t.inbox.Peek(rec.ParentDurableKey, sessionID)
+	snap, perr := t.inbox.Peek(rec.SteeringSessionID(), sessionID)
 	if perr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: peek: %v", perr)).WithError(perr)
 	}

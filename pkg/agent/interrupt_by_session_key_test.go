@@ -180,11 +180,11 @@ func TestDelegateCancelHard_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	// check (verifyCallerOwnsSession) passes exactly as it would for a
 	// genuine parent->child cancel — not bypassed for the test.
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:        childID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: callerKey,
-		AgentID:          defAgent.ID,
+		SessionID:      childID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: callerKey},
+		AgentID:        defAgent.ID,
 	}))
 
 	parentTS := &turnState{
@@ -323,11 +323,11 @@ func TestDelegateCancelSoft_RealSubTurn_ActuallyCancelsTargetContext(t *testing.
 	callerKey := parentMeta.ID
 
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:        childID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: callerKey,
-		AgentID:          defAgent.ID,
+		SessionID:      childID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: callerKey},
+		AgentID:        defAgent.ID,
 	}))
 
 	parentTS := &turnState{

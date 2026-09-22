@@ -11,7 +11,7 @@
 //     committed BEFORE delivery was attempted, so a delivery failure left a
 //     wedged, non-retryable state.
 //   - MEDIUM-2: executeInbox/executePeek keyed inbox reads by the CALLER's
-//     ownerKey instead of the target's rec.ParentDurableKey, silently
+//     ownerKey instead of the target's rec.SteeringSessionID(), silently
 //     returning empty results for an authorized ANCESTOR caller (FR-039).
 //   - MEDIUM-3: executeCancel's TOCTOU "nothing to cancel" branch discarded
 //     the killFailed/walkIncomplete background-shell-kill warnings it had
@@ -91,7 +91,7 @@ func TestDelegateTool_Respond_NativeRedispatchesWithIsResume(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-resume-proof", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-resume", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -160,7 +160,7 @@ func TestDelegateTool_Respond_EnqueueFailure_LeavesSessionParkedNotWedged(t *tes
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-enqueue-fail", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-enqueue-fail", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -202,7 +202,7 @@ func TestDelegateTool_Respond_EnqueueFailure_LeavesSessionParkedNotWedged(t *tes
 
 // ---------------------------------------------------------------------
 // MEDIUM-2: executeInbox/executePeek must key reads by the target's own
-// rec.ParentDurableKey, not the calling ancestor's ownerKey.
+// rec.SteeringSessionID(), not the calling ancestor's ownerKey.
 // ---------------------------------------------------------------------
 
 // TestDelegateTool_Inbox_AuthorizedAncestor_SeesMessagesUnderDirectParentKey
@@ -210,7 +210,7 @@ func TestDelegateTool_Respond_EnqueueFailure_LeavesSessionParkedNotWedged(t *tes
 // walk) calls inbox on grandchild D, whose message was Appended under D's
 // DIRECT parent (childB) — a DIFFERENT key than chatA's own. Keying the
 // Drain by the caller's ownerKey (chatA) would silently return empty;
-// keying it by rec.ParentDurableKey (childB) finds it.
+// keying it by rec.SteeringSessionID() (childB) finds it.
 func TestDelegateTool_Inbox_AuthorizedAncestor_SeesMessagesUnderDirectParentKey(t *testing.T) {
 	tool, lc, inbox, _ := newADR053TestTool(t)
 
@@ -234,7 +234,7 @@ func TestDelegateTool_Inbox_AuthorizedAncestor_SeesMessagesUnderDirectParentKey(
 	}
 	if !strings.Contains(result.ForLLM, "signoff14-msg-1") {
 		t.Errorf("MEDIUM-2: expected the message Appended under D's direct parent (childB) to be visible to "+
-			"an authorized ancestor (chatA) keyed correctly by rec.ParentDurableKey, got empty/wrong result: %s",
+			"an authorized ancestor (chatA) keyed correctly by rec.SteeringSessionID(), got empty/wrong result: %s",
 			result.ForLLM)
 	}
 }
@@ -261,7 +261,7 @@ func TestDelegateTool_Peek_AuthorizedAncestor_SeesSnapshotUnderDirectParentKey(t
 	}
 	if !strings.Contains(result.ForLLM, "still working") {
 		t.Errorf("MEDIUM-2: expected the progress message Appended under D's direct parent (childB) to be "+
-			"visible to an authorized ancestor (chatA) keyed correctly by rec.ParentDurableKey, got: %s",
+			"visible to an authorized ancestor (chatA) keyed correctly by rec.SteeringSessionID(), got: %s",
 			result.ForLLM)
 	}
 }
@@ -308,7 +308,7 @@ func TestDelegateTool_Cancel_NothingToCancel_StillSurfacesShellKillWarnings(t *t
 			parentKey := "signoff14-cancel-parent-" + tc.name
 			if err := lc.Persist(&session.LifecycleRecord{
 				SessionID: childID, State: session.LifecycleRunning,
-				OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: parentKey,
+				OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: parentKey},
 				WorkspaceID: "ws-1", AgentID: "worker",
 			}); err != nil {
 				t.Fatalf("seed lifecycle record failed: %v", err)

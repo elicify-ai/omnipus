@@ -548,20 +548,20 @@ func TestListJobs_PlanOwnershipIsOwnerAgentIDNotOwner(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestListJobs_SubagentParentageDoesNotLeakSubtree: ParentAgentID is the ONLY
-// parent linkage. ParentDurableKey is SHARED between a parent and every
+// parent linkage. SteeringSessionID is SHARED between a parent and every
 // descendant, so inferring parentage from it would hand a caller its
 // grandchildren, its cousins and its siblings.
 func TestListJobs_SubagentParentageDoesNotLeakSubtree(t *testing.T) {
 	const sharedTranscript = "chat-123"
 	lifecycles := &fakeJobLifecycleStore{records: []session.LifecycleRecord{
 		{SessionID: "ses-child", WorkspaceID: "ws1", AgentID: "ray",
-			ParentAgentID: "mia", ParentDurableKey: sharedTranscript, State: session.LifecycleRunning},
+			ParentAgentID: "mia", SteeredBy: &session.SteeredBy{SteeringSessionID: sharedTranscript}, State: session.LifecycleRunning},
 		// A grandchild: same shared transcript key, but its parent is Ray.
 		{SessionID: "ses-grandchild", WorkspaceID: "ws1", AgentID: "ava",
-			ParentAgentID: "ray", ParentDurableKey: sharedTranscript, State: session.LifecycleRunning},
+			ParentAgentID: "ray", SteeredBy: &session.SteeredBy{SteeringSessionID: sharedTranscript}, State: session.LifecycleRunning},
 		// A sibling delegated by somebody else on the same transcript.
 		{SessionID: "ses-cousin", WorkspaceID: "ws1", AgentID: "ava",
-			ParentAgentID: "jim", ParentDurableKey: sharedTranscript, State: session.LifecycleRunning},
+			ParentAgentID: "jim", SteeredBy: &session.SteeredBy{SteeringSessionID: sharedTranscript}, State: session.LifecycleRunning},
 	}}
 	tool := NewListJobsTool(nil, nil, lifecycles)
 	tool.SetSessionResolver(func() JobSessionResolver {

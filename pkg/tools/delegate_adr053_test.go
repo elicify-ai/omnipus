@@ -153,8 +153,8 @@ func TestDelegateTool_Run_PersistsQueuedThenRunningLifecycleRecord(t *testing.T)
 	if rec.State != session.LifecycleCompleted {
 		t.Errorf("state = %q, want %q", rec.State, session.LifecycleCompleted)
 	}
-	if rec.ParentDurableKey != "parent-1" {
-		t.Errorf("ParentDurableKey = %q, want %q", rec.ParentDurableKey, "parent-1")
+	if rec.SteeringSessionID() != "parent-1" {
+		t.Errorf("SteeringSessionID = %q, want %q", rec.SteeringSessionID(), "parent-1")
 	}
 }
 
@@ -166,7 +166,7 @@ func TestDelegateTool_Steer_DeliversViaSteeringSink(t *testing.T) {
 	// completion race for a deterministic steer test).
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-x", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
@@ -192,7 +192,7 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-caps", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -213,7 +213,7 @@ func TestDelegateTool_Steer_RateAndBodyCaps(t *testing.T) {
 	tool2, lc2, _, _ := newADR053TestTool(t)
 	if err := lc2.Persist(&session.LifecycleRecord{
 		SessionID: "child-body", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -229,7 +229,7 @@ func TestDelegateTool_Steer_RejectsCrossOwnerAccess(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-y", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-A",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-A"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
@@ -254,7 +254,7 @@ func TestDelegateTool_Steer_Succeeds(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-steer", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
@@ -289,7 +289,7 @@ func TestDelegateTool_Steer_RejectsExternalCLI(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-3p", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker", Is3P: true,
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
@@ -315,7 +315,7 @@ func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-z", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -369,7 +369,7 @@ func TestDelegateTool_Respond_WrongCorrelationRejected(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-w", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-real", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -394,7 +394,7 @@ func TestDelegateTool_Respond_RejectsCrossOwnerAccess(t *testing.T) {
 	tool, lc, _, _ := newADR053TestTool(t)
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-co", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-A",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-A"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-co", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -421,7 +421,7 @@ func TestDelegateTool_Cancel_SoftThenHardBackstop(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-cancel", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -476,7 +476,7 @@ func TestDelegateTool_Cancel_Hard_SkipsGrace(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-hard", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -512,7 +512,7 @@ func TestDelegateTool_InboxAndInboxAck(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-inbox", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -565,7 +565,7 @@ func TestDelegateTool_Peek_NoLifecycleSideEffect(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-peek", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -597,7 +597,7 @@ func TestDelegateTool_FollowUp_RequiresTerminalSession(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-notdone", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -721,7 +721,7 @@ func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
 	// errors (the exact fail-open trigger MAJOR-1 targets).
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-corrupt", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -769,7 +769,7 @@ func TestDelegateTool_Respond_DeniedOnInboxDrainError(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-drain-err", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-1", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -806,7 +806,7 @@ func TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-owner", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-owner", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -845,7 +845,7 @@ func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-selfok", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-selfok", TTLDeadline: time.Now().Add(time.Hour)},
 	}); err != nil {
@@ -876,7 +876,7 @@ func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-3p-resp", State: session.LifecycleNeedsInput,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker-3p",
 		Is3P:       true,
 		NeedsInput: &session.NeedsInput{CorrelationID: "corr-3p", TTLDeadline: time.Now().Add(time.Hour)},
@@ -944,7 +944,7 @@ func TestDelegateTool_Inbox_DeniedOnLifecycleLoadError(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-inbox-corrupt", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -989,7 +989,7 @@ func TestDelegateTool_Peek_DeniedOnLifecycleLoadError(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-peek-corrupt", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)

@@ -59,7 +59,7 @@ func TestDelegateCancel_KillsThatChildsShells(t *testing.T) {
 	delegateTool.SetLifecycleStore(lc)
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: childID, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeHuman,
-		ParentDurableKey: "u14-w9a-parent", WorkspaceID: "ws-1", AgentID: "worker",
+		SteeredBy: &session.SteeredBy{SteeringSessionID: "u14-w9a-parent"}, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}

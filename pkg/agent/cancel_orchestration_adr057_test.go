@@ -92,14 +92,14 @@ func u15RegisterChildTurn(t *testing.T, al *AgentLoop, rootSessionID, childTrans
 func u15PersistLifecycleRecord(t *testing.T, store *session.LifecycleStore, sessionID, parentDurableKey string, state session.LifecycleState) {
 	t.Helper()
 	err := store.Persist(&session.LifecycleRecord{
-		SessionID:        sessionID,
-		Generation:       0,
-		State:            state,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parentDurableKey,
-		ParentDurableKey: parentDurableKey,
-		AgentID:          "u15-test-agent",
-		WorkspaceID:      "u15-test-workspace",
+		SessionID:      sessionID,
+		Generation:     0,
+		State:          state,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parentDurableKey,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey},
+		AgentID:        "u15-test-agent",
+		WorkspaceID:    "u15-test-workspace",
 	})
 	require.NoError(t, err)
 }
@@ -447,7 +447,7 @@ func TestU15Cancel_AuditNamesEveryDescendantAtDepth3(t *testing.T) {
 
 // TestU15Cancel_TransitionsEveryDescendantLifecycleRecord_Depth3 covers
 // BDD-30: a chat with children at DURABLE depths 1, 2 and 3 (persisted
-// LifecycleRecords chained via ParentDurableKey, independent of any
+// LifecycleRecords chained via SteeringSessionID, independent of any
 // in-memory turnState) must have EVERY descendant's persisted record
 // transitioned to cancelled by RequestCancel's own-goroutine durable walk
 // (cancelDurableDescendantLifecycleRecords), not just the root's.

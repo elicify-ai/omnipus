@@ -49,7 +49,7 @@ type MessageParentLifecycleStore interface {
 	// fix6FaultyLifecycleStore) inherits it for free.
 	//
 	// ADR-057 D8/R-13: delegate.go's executeCancel uses this to walk the
-	// durable ParentDurableKey edge from the cancel target down to its own
+	// durable SteeringSessionID edge from the cancel target down to its own
 	// descendants (collectCancelDescendantSessionIDs, delegate.go) so the
 	// background-shell-kill cascade reaches a grandchild's own background
 	// bash/exec work, not just the directly-named session's. Before this,
@@ -353,22 +353,12 @@ func (t *MessageParentTool) Parameters() map[string]any {
 // OwnerScopeKind==human, which would break inbox routing for a human-owned
 // top-level parent — neither of the two sources below has that problem.
 //
-// ADR-091 D2: "move to the edge as part of the one integration, by owner:
-// WP-B tools/message_parent.go::ownerKeyFor" — the edge (SteeredBy,
-// written by the real I-2 launcher) is authoritative when present; a record
-// the launcher has not yet touched (this lane's worktree does not carry
-// WP-A's real launcher — see this lane's final report) falls back to the
-// pre-edge ParentDurableKey, which the launcher will keep writing in step
-// until every ParentDurableKey reader across all six lanes has migrated and
-// WP-A removes the field in one integration (landing order CP-1).
+// ADR-091 D2: SteeredBy is the sole authoritative parent edge.
 func ownerKeyFor(rec *session.LifecycleRecord) string {
 	if rec == nil {
 		return ""
 	}
-	if rec.SteeredBy != nil && strings.TrimSpace(rec.SteeredBy.SteeringSessionID) != "" {
-		return rec.SteeredBy.SteeringSessionID
-	}
-	return strings.TrimSpace(rec.ParentDurableKey)
+	return strings.TrimSpace(rec.SteeringSessionID())
 }
 
 func stringArg(args map[string]any, key string) (string, bool) {
@@ -482,7 +472,7 @@ func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 		// delegated child — only pkg/agent/subturn.go's spawnSubTurn calls
 		// WithDelegateSessionID, and it never runs for a task dispatch. This
 		// is a structural, not transient, gap: a task-dispatch session's
-		// durable lifecycle record deliberately leaves ParentDurableKey empty
+		// durable lifecycle record deliberately leaves SteeringSessionID empty
 		// (task_executor.go's mintTaskLifecycleRecord doc comment — "a task
 		// dispatch is not a delegate.run call, so there is no delegating
 		// parent to attribute"), so there is no parent inbox this call could

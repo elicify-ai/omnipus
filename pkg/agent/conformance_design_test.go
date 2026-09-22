@@ -59,7 +59,7 @@ type conformanceFakeUpwardDeliverer struct {
 func (f *conformanceFakeUpwardDeliverer) Deliver(_ context.Context, event steer.UpwardEvent) (steer.Delivery, error) {
 	ownerKey := ""
 	if rec, err := f.lifecycle.Load(event.ChildSessionID); err == nil && rec != nil {
-		ownerKey = strings.TrimSpace(rec.ParentDurableKey)
+		ownerKey = strings.TrimSpace(rec.SteeringSessionID())
 	}
 	res, err := f.inbox.Append(ownerKey, event.Message)
 	if err != nil {
@@ -279,7 +279,7 @@ func TestConformance_g6_PerChildCeiling_NoisyChildCannotStarveSibling(t *testing
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: sid, State: session.LifecycleRunning,
 			OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: "parent-delegate",
-			ParentDurableKey: "parent-1", WorkspaceID: "ws", AgentID: "worker",
+			SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"}, WorkspaceID: "ws", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed %s: %v", sid, err)
 		}
@@ -372,12 +372,12 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
 		SessionID: parentSession, State: session.LifecycleRunning,
 		OwnerScopeKind: session.OwnerScopeParentSession, AgentID: "parent-agent",
-		OriginChannel: "tc", OriginChatID: "c1", ParentDurableKey: parentSession,
+		OriginChannel: "tc", OriginChatID: "c1", SteeredBy: &session.SteeredBy{SteeringSessionID: parentSession},
 	})
 	seedLifecycleRecord(t, ls, &session.LifecycleRecord{
 		SessionID: childSession, State: session.LifecycleRunning, Generation: childGen,
 		OwnerScopeKind: session.OwnerScopeParentSession, AgentID: childAgent,
-		OriginChannel: "tc", OriginChatID: "c1", ParentDurableKey: parentSession,
+		OriginChannel: "tc", OriginChatID: "c1", SteeredBy: &session.SteeredBy{SteeringSessionID: parentSession},
 	})
 	al.SetSessionMessagingStores(inbox, ls)
 	// ADR-091 I-5: message_parent.go now depends on a single injected
@@ -450,7 +450,7 @@ func TestConformance_g7_SessionRoundTrip_WarmQuestionRespondHandback(t *testing.
 		TargetSessionID: childSession,
 		Message:         resp,
 		// ADR-091 I-5 "Bus route authority" (R17, FR-B-015): the parent is a
-		// genuine ancestor of the child (seeded ParentDurableKey above).
+		// genuine ancestor of the child (seeded SteeringSessionID above).
 		Principal: session.Principal{Kind: session.PrincipalKindAgent, ID: parentSession},
 	}); publishErr != nil {
 		t.Fatalf("(2) PublishSessionMessage: %v", publishErr)

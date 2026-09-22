@@ -110,7 +110,7 @@ func (h *bootRecoveryHarness) steeredRecord(id, parent string, state session.Lif
 		Origin:         &session.Origin{Kind: session.OriginKindDelegate},
 		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent, RootSessionID: parent},
 		OwnerScopeKind: session.OwnerScopeParentSession, OwnerScopeID: parent,
-		ParentDurableKey: parent, WorkspaceID: "ws", AgentID: "agent-1", ParentAgentID: "agent-1",
+		WorkspaceID: "ws", AgentID: "agent-1", ParentAgentID: "agent-1",
 	}
 }
 

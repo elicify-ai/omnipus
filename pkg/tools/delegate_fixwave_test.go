@@ -266,7 +266,7 @@ func TestDelegateTool_FollowUp_EmptyInstruction_Rejected(t *testing.T) {
 	ctx := WithTranscriptSessionID(context.Background(), "parent-1")
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-followup-empty", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -333,7 +333,7 @@ func TestDelegateTool_Steer_TerminalCheck_RoutesThroughMutate(t *testing.T) {
 
 	if err := backing.Persist(&session.LifecycleRecord{
 		SessionID: "child-mutate-check", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -354,12 +354,12 @@ func TestDelegateTool_Steer_TerminalCheck_RoutesThroughMutate(t *testing.T) {
 	// now makes exactly ONE Load() call BEFORE the Mutate above, to verify
 	// ownership (the ancestor-chain walk, FR-039) OUTSIDE the atomic
 	// closure. Doing it inside the closure (as #581's original fix did) is
-	// unsafe post-W12: the walk climbs the ParentDurableKey chain via
+	// unsafe post-W12: the walk climbs the SteeringSessionID chain via
 	// t.lifecycle.Load(ancestor) for every hop beyond the direct parent, and
 	// an ancestor whose id happens to hash to the SAME striped-lock shard as
 	// sessionID would deadlock against Mutate's already-held, non-reentrant
 	// per-shard mutex. Ownership cannot race the way the terminal state can
-	// (ParentDurableKey is immutable after mint — see
+	// (SteeringSessionID is immutable after mint — see
 	// spawnCorrectiveFollowUp's whole-struct-copy comment), so moving ONLY
 	// that check outside Mutate preserves #581's actual TOCTOU fix (the
 	// terminal check stays atomic) while avoiding the new deadlock class.
@@ -384,7 +384,7 @@ func TestDelegateTool_Steer_TerminalSession_Rejected(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-terminal-steer", State: session.LifecycleCompleted,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -493,7 +493,7 @@ func TestDelegateTool_Cancel_AlreadyTerminal_IsIdempotentNoOp(t *testing.T) {
 			sessionID := "child-already-done-" + tc.name
 			if err := lc.Persist(&session.LifecycleRecord{
 				SessionID: sessionID, State: tc.state, FailedReason: tc.failedReason,
-				OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+				OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 				WorkspaceID: "ws-1", AgentID: "worker",
 			}); err != nil {
 				t.Fatalf("seed failed: %v", err)
@@ -553,7 +553,7 @@ func TestDelegateTool_Cancel_NonTerminal_StillSucceeds(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: "child-still-running", State: session.LifecycleRunning,
-		OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+		OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 		WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed failed: %v", err)
@@ -613,7 +613,7 @@ func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T
 
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: "child-racing", State: session.LifecycleRunning,
-			OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+			OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 			WorkspaceID: "ws-1", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)
@@ -664,7 +664,7 @@ func TestDelegateTool_Cancel_DescendantsMiss_ReturnsTerminalMessage(t *testing.T
 
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: "child-racing-soft", State: session.LifecycleRunning,
-			OwnerScopeKind: session.OwnerScopeHuman, ParentDurableKey: "parent-1",
+			OwnerScopeKind: session.OwnerScopeHuman, SteeredBy: &session.SteeredBy{SteeringSessionID: "parent-1"},
 			WorkspaceID: "ws-1", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed failed: %v", err)

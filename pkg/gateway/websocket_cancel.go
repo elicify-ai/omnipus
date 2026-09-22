@@ -180,8 +180,8 @@ func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID st
 }
 
 // u11CollectDescendantSessionIDs walks the durable lifecycle store's
-// ParentDurableKey edges (pkg/session/lifecycle.go, FR-019/FR-020;
-// LifecycleStore.List(LifecycleFilter{ParentDurableKey: id}) returns X's
+// SteeringSessionID edges (pkg/session/lifecycle.go, FR-019/FR-020;
+// LifecycleStore.List(LifecycleFilter{SteeringSessionID: id}) returns X's
 // DIRECT children only, index-backed per BDD-19) to collect EVERY descendant
 // of rootID, however many delegation levels deep. Returns only descendants —
 // rootID itself is never included; the caller prepends it.
@@ -216,7 +216,7 @@ func cancelSteeredSubtree(ctx context.Context, al *agent.AgentLoop, sessionID st
 // react to a partial-walk failure with a more specific diagnostic than the
 // generic one logged here.
 //
-// Guards against a corrupted or cyclic ParentDurableKey chain with a visited
+// Guards against a corrupted or cyclic SteeringSessionID chain with a visited
 // set rather than trusting the system's own delegation-depth cap
 // (config.SubTurn.MaxDepth) to bound recursion — this walk must terminate
 // even over on-disk state that predates or violates that cap. A nil store

@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // ADR-057 U14 (Wave F), W12b/FR-076/FR-077 — the D16 inbox producer
-// (pkg/tools/message_parent.go:640, ownerKeyFor -> rec.ParentDurableKey).
+// (pkg/tools/message_parent.go:640, ownerKeyFor -> rec.SteeringSessionID()).
 //
 // [UPDATED, 14-reviewer sign-off MEDIUM-2, post release/v0.1.1] This test
 // originally also asserted the CONSUMER side (delegate.go's executeInbox)
@@ -18,13 +18,13 @@
 // actions a root chat is PERMITTED to invoke against a grandchild — but
 // executeInbox/executePeek's own DATA READ was never updated to match: they
 // kept resolving the store partition from the CALLER's own key instead of
-// the target's rec.ParentDurableKey (the key the message was actually
+// the target's rec.SteeringSessionID() (the key the message was actually
 // Appended under), so an authorized ancestor's call succeeded (passed the
 // gate) yet silently returned empty — a success-shaped false negative, not
 // a genuine absence. executeRespond in the same file already used the
-// correct key (rec.ParentDurableKey) throughout, which is what exposed the
+// correct key (rec.SteeringSessionID()) throughout, which is what exposed the
 // inconsistency. The fix keys executeInbox/executePeek's store reads by
-// rec.ParentDurableKey unconditionally, matching executeRespond and closing
+// rec.SteeringSessionID() unconditionally, matching executeRespond and closing
 // the gap between "who may call this" (the FR-039 gate) and "what they
 // actually see" (the data key) — see pkg/tools/delegate_signoff14_test.go
 // for the dedicated regression coverage of both actions.
@@ -55,7 +55,7 @@ import (
 // pushes a message via message_parent; B (D's DIRECT parent) drains it via
 // delegate action="inbox" — and so does A (D's grandparent, an ANCESTOR the
 // FR-039 ownership walk authorizes), since both are reading the SAME
-// correctly-keyed partition (rec.ParentDurableKey = B) regardless of which
+// correctly-keyed partition (rec.SteeringSessionID() = B) regardless of which
 // authorized caller asks.
 func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 	lc := session.NewLifecycleStore(t.TempDir())
@@ -70,13 +70,13 @@ func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: childB, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
-		OwnerScopeID: chatA, ParentDurableKey: chatA, WorkspaceID: "ws-1", AgentID: "worker",
+		OwnerScopeID: chatA, SteeredBy: &session.SteeredBy{SteeringSessionID: chatA}, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed B failed: %v", err)
 	}
 	if err := lc.Persist(&session.LifecycleRecord{
 		SessionID: grandchildD, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
-		OwnerScopeID: childB, ParentDurableKey: childB, WorkspaceID: "ws-1", AgentID: "worker",
+		OwnerScopeID: childB, SteeredBy: &session.SteeredBy{SteeringSessionID: childB}, WorkspaceID: "ws-1", AgentID: "worker",
 	}); err != nil {
 		t.Fatalf("seed D failed: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 	// A (grandparent, NOT the direct parent, but an ANCESTOR the FR-039
 	// ownership walk authorizes — TestOwnershipWalk_AllSixGatedActions lists
 	// `inbox` among the six permitted actions) now ALSO finds it: MEDIUM-2's
-	// fix keys the read by D's own rec.ParentDurableKey (= B) unconditionally,
+	// fix keys the read by D's own rec.SteeringSessionID() (= B) unconditionally,
 	// not by which authorized caller happens to ask. See this file's header
 	// comment for why this supersedes BDD-85's original "only the direct
 	// parent" data-visibility text.
@@ -120,7 +120,7 @@ func TestMessageParent_DrainedByDirectParentAtDepth3(t *testing.T) {
 	}
 	if !strings.Contains(aResult.ForLLM, "grandchild is working") {
 		t.Fatalf("MEDIUM-2: expected authorized ancestor A's inbox read to surface D's message (keyed by "+
-			"D's own rec.ParentDurableKey, same as B's read), got: %s", aResult.ForLLM)
+			"D's own rec.SteeringSessionID(), same as B's read), got: %s", aResult.ForLLM)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestPerChildMessageCeiling_IsPerDirectParent(t *testing.T) {
 	for _, id := range []string{childB1, childB2} {
 		if err := lc.Persist(&session.LifecycleRecord{
 			SessionID: id, State: session.LifecycleRunning, OwnerScopeKind: session.OwnerScopeParentSession,
-			OwnerScopeID: chatA, ParentDurableKey: chatA, WorkspaceID: "ws-1", AgentID: "worker",
+			OwnerScopeID: chatA, SteeredBy: &session.SteeredBy{SteeringSessionID: chatA}, WorkspaceID: "ws-1", AgentID: "worker",
 		}); err != nil {
 			t.Fatalf("seed %s failed: %v", id, err)
 		}

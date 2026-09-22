@@ -176,20 +176,13 @@ func subagentStateForOutcome(o steer.Outcome) string {
 	}
 }
 
-// deliverOwnerKey resolves the durable inbox owner key (D16) — the steering
-// session — from a child's own lifecycle record: the edge (I-1 SteeredBy)
-// first, falling back to the pre-edge ParentDurableKey for a record the
-// real launcher (I-2, WP-A, not yet merged into every lane's worktree) has
-// not populated the edge on yet. Landing order D2 assigns this exact
-// migration, for this exact file, to WP-B.
+// deliverOwnerKey resolves the durable inbox owner key (D16) exclusively
+// from the authoritative I-1 SteeredBy edge.
 func deliverOwnerKey(rec *session.LifecycleRecord) string {
 	if rec == nil {
 		return ""
 	}
-	if rec.SteeredBy != nil && strings.TrimSpace(rec.SteeredBy.SteeringSessionID) != "" {
-		return rec.SteeredBy.SteeringSessionID
-	}
-	return strings.TrimSpace(rec.ParentDurableKey)
+	return strings.TrimSpace(rec.SteeringSessionID())
 }
 
 // steeringSessionKey mirrors steering.go::enqueueSteeringFromMessage's own

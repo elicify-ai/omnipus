@@ -253,12 +253,12 @@ func setupC2ParkScenario(t *testing.T) *c2ParkTestHarness {
 	// already-reported executeSync bug (see this file's package doc
 	// comment).
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:        childID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: parentTS.transcriptSessionID,
-		WorkspaceID:      "ws-c2-park",
-		AgentID:          parentTS.agent.ID,
+		SessionID:      childID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentTS.transcriptSessionID},
+		WorkspaceID:    "ws-c2-park",
+		AgentID:        parentTS.agent.ID,
 	}))
 
 	// Subscribe to the event bus BEFORE dispatching, mirroring

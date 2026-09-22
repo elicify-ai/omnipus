@@ -77,12 +77,12 @@ func TestDelegateCancel_WiredThroughRealAgentLoop_ReachesGrandchild(t *testing.T
 	// parent.sessionKey (the caller-owner key the test's context asserts).
 	lifecycleStore := session.NewLifecycleStore(t.TempDir())
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:        child.sessionKey,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parent.sessionKey,
-		ParentDurableKey: parent.sessionKey,
-		AgentID:          "main",
+		SessionID:      child.sessionKey,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parent.sessionKey,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.sessionKey},
+		AgentID:        "main",
 	}))
 
 	// Real production wiring: installs the store AND re-wires every

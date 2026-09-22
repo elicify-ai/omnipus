@@ -27,7 +27,7 @@
 //     a descendant's background shell at all, regardless of how the turn-
 //     level cascade behaved. Fixed in this same change (killChildBackground
 //     Shells / collectCancelDescendantSessionIDs, delegate.go) by walking the
-//     durable ParentDurableKey edge before the kill call, mirroring
+//     durable SteeringSessionID edge before the kill call, mirroring
 //     agent.CollectDescendantSessionIDs's (pkg/agent/cancel.go) walk exactly
 //     (duplicated rather than shared because pkg/tools cannot import
 //     pkg/agent).
@@ -253,12 +253,12 @@ func TestDelegateCancelHard_RealNestedChain_ReachesGrandchildTurnAndBackgroundSh
 	// executeRun when ray's nested delegate call actually fires (below) —
 	// not seeded here.
 	require.NoError(t, lifecycleStore.Persist(&session.LifecycleRecord{
-		SessionID:        rayChildID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeParentSession,
-		OwnerScopeID:     parent.transcriptSessionID,
-		ParentDurableKey: parent.transcriptSessionID,
-		AgentID:          "ray",
+		SessionID:      rayChildID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeParentSession,
+		OwnerScopeID:   parent.transcriptSessionID,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parent.transcriptSessionID},
+		AgentID:        "ray",
 	}))
 
 	spawnDone := make(chan struct{})

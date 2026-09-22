@@ -14,12 +14,11 @@ import (
 
 func testSteerLifecycleRecord(id, parent string, state session.LifecycleState, generation int) *session.LifecycleRecord {
 	rec := &session.LifecycleRecord{
-		SessionID:        id,
-		Generation:       generation,
-		State:            state,
-		Origin:           &session.Origin{Kind: session.OriginKindChat},
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: "deliberately-not-the-edge",
+		SessionID:      id,
+		Generation:     generation,
+		State:          state,
+		Origin:         &session.Origin{Kind: session.OriginKindChat},
+		OwnerScopeKind: session.OwnerScopeHuman,
 	}
 	if parent != "" {
 		rec.Origin = &session.Origin{Kind: session.OriginKindDelegate}

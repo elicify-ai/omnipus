@@ -720,7 +720,7 @@ func (al *AgentLoop) resolveInterruptAnchors(id string) []*turnState {
 // in that case. It is a real, narrower gap for ScopeSubtree rooted at a
 // NON-root delegate whose own subtree contains a mid-chain orphan; no
 // FR/BDD/AC in ADR-057's W13 scope exercises that combination, and the
-// durable ParentDurableKey walk (D3/D7) — which does not have this gap,
+// durable SteeringSessionID walk (D3/D7) — which does not have this gap,
 // because it is not in-memory — is reserved by D4 for non-turn resources
 // off the escalation path, not for this in-memory turn cascade.
 func (al *AgentLoop) collectLiveDescendantTurnStates(rootTurnID string) []*turnState {

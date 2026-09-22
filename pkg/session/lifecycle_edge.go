@@ -135,6 +135,15 @@ type SteeredBy struct {
 	ToolExclusions []string `json:"tool_exclusions,omitempty"`
 }
 
+// SteeringSessionID returns the direct parent named by the durable steering
+// edge. Ordinary roots and damaged records have no steering session.
+func (r *LifecycleRecord) SteeringSessionID() string {
+	if r == nil || r.SteeredBy == nil {
+		return ""
+	}
+	return r.SteeredBy.SteeringSessionID
+}
+
 // Stop is the durable Stop marker on a session's own record (D8). A nil
 // *Stop on LifecycleRecord means no Stop has been stamped for the record.
 // Written by the cascade (I-6 Canceller.CancelSubtree) on the stopped node

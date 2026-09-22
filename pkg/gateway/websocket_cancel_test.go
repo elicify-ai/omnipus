@@ -521,7 +521,7 @@ func TestU11CollectDescendantSessionIDs_NilStoreAndEmptyRoot(t *testing.T) {
 }
 
 // TestU11CollectDescendantSessionIDs_CyclicParentIndexTerminates guards
-// against a corrupted/cyclic ParentDurableKey chain (two sessions each naming
+// against a corrupted/cyclic SteeringSessionID chain (two sessions each naming
 // the other as parent) hanging a Stop forever. The visited-set MUST stop the
 // walk, independent of whatever the system's own delegation-depth cap
 // happens to be — this walk must terminate even over on-disk state that
@@ -545,6 +545,6 @@ func TestU11CollectDescendantSessionIDs_CyclicParentIndexTerminates(t *testing.T
 			t.Errorf("cyclic walk from %q must terminate with exactly [%q], got %v", a, b, got)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("u11CollectDescendantSessionIDs did not terminate over a cyclic ParentDurableKey chain")
+		t.Fatal("u11CollectDescendantSessionIDs did not terminate over a cyclic SteeringSessionID chain")
 	}
 }

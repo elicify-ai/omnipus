@@ -378,9 +378,9 @@ func (te *TaskExecutor) getLifecycleStore() *session.LifecycleStore {
 // mintPlanSession, out of this wave's write-set/scope). A standalone task
 // has no single owning session, so it takes the same OwnerScopeHuman
 // default pkg/tools/delegate.go's own top-level (non-parented) mint uses.
-// ParentAgentID/ParentDurableKey are deliberately left empty: a task
+// ParentAgentID/SteeringSessionID are deliberately left empty: a task
 // dispatch is not a `delegate.run` call, so there is no delegating parent to
-// attribute — and leaving ParentDurableKey empty also means
+// attribute — and leaving SteeringSessionID empty also means
 // verifyCallerOwnsSession (pkg/tools/delegate.go) fails closed if some
 // caller ever names a task's session_id in a delegate.* admin action
 // (cancel/steer/respond/follow_up/peek/inbox), preserving today's behavior

@@ -166,11 +166,11 @@ func TestDelegateMint_StampsParentAgentID(t *testing.T) {
 			}
 			// The linkage must be genuinely distinct from the shared
 			// transcript key — this is the whole reason the field exists.
-			if rec.ParentDurableKey != transcript {
-				t.Fatalf("ParentDurableKey = %q, want %q (fixture broken)", rec.ParentDurableKey, transcript)
+			if rec.SteeringSessionID() != transcript {
+				t.Fatalf("SteeringSessionID = %q, want %q (fixture broken)", rec.SteeringSessionID(), transcript)
 			}
-			if rec.ParentAgentID == rec.ParentDurableKey {
-				t.Errorf("ParentAgentID must differ from ParentDurableKey (which parent and child SHARE); both = %q", rec.ParentAgentID)
+			if rec.ParentAgentID == rec.SteeringSessionID() {
+				t.Errorf("ParentAgentID must differ from SteeringSessionID (which parent and child SHARE); both = %q", rec.ParentAgentID)
 			}
 
 			// And it must be physically present on disk under the key
@@ -192,7 +192,7 @@ func TestDelegateMint_StampsParentAgentID(t *testing.T) {
 
 		// A different agent, same transcript session (see the note in the
 		// report: verifyCallerOwnsSession keys on the SHARED
-		// ParentDurableKey, so this is currently permitted).
+		// SteeringSessionID, so this is currently permitted).
 		otherCtx := WithAgentID(WithTranscriptSessionID(context.Background(), transcript), "jim")
 		result := tool.Execute(otherCtx, map[string]any{
 			"action": "follow_up", "session_id": sessionID, "task": "one more thing",

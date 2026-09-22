@@ -103,13 +103,13 @@ func (t *DelegateTool) executeSteer(ctx context.Context, args map[string]any) *T
 	// ADR-057 W12: ownership is verified via a plain Load BEFORE the Mutate
 	// below, deliberately OUTSIDE the atomic closure — unlike the terminal
 	// check (see the TOCTOU comment below), ownership cannot race: a
-	// session's ParentDurableKey is stamped once at mint time and carried
+	// session's SteeringSessionID is stamped once at mint time and carried
 	// forward unchanged even across follow_up generations (see
 	// spawnCorrectiveFollowUp's whole-struct-copy comment), so a Load taken
 	// a moment before Mutate observes the exact same value Mutate itself
 	// would. Verifying it here, rather than inside the closure below, is
 	// not just style: the ownership walk (verifyCallerOwnsSession, FR-039)
-	// climbs the ParentDurableKey chain via t.lifecycle.Load(ancestor) for
+	// climbs the SteeringSessionID chain via t.lifecycle.Load(ancestor) for
 	// every hop beyond the direct parent, and pkg/session/lifecycle_lock.go's
 	// striped lock is only 64-wide — an ancestor whose id happens to hash to
 	// the SAME shard as sessionID would deadlock against Mutate's
@@ -304,7 +304,7 @@ func (t *DelegateTool) spawnCorrectiveFollowUp(
 	t.mu.Unlock()
 
 	// The whole-struct copy is load-bearing for FR-034: ParentAgentID (and
-	// ParentDurableKey/OriginChannel/OriginChatID with it) MUST be carried
+	// SteeringSessionID/OriginChannel/OriginChatID with it) MUST be carried
 	// forward onto every generation mint. It is deliberately CARRIED FORWARD
 	// from the prior generation rather than re-sourced from ToolAgentID(ctx)
 	// — the follow_up caller is not necessarily the agent that originally

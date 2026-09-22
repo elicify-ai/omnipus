@@ -8,10 +8,10 @@
 // X" to cost one file read per child, never a scan of every persisted
 // session_id (pkg/session/lifecycle.go's pre-ADR-057 List did exactly that —
 // scanSessionIDs() + a full Load() per id, unconditionally). This file adds
-// the missing index: an in-memory map from a session's ParentDurableKey (its
+// the missing index: an in-memory map from a session's SteeredBy.SteeringSessionID (its
 // DIRECT parent's own live routing/session id, D1 — see LifecycleRecord's own
 // field doc in lifecycle.go) to the set of session_ids whose own
-// ParentDurableKey equals that value.
+// SteeredBy.SteeringSessionID equals that value.
 //
 // The index is a property of one LifecycleStore instance (like its striped
 // lock), not a package-level global — two LifecycleStore values rooted at
@@ -28,7 +28,7 @@ import (
 	"sync/atomic"
 )
 
-// LifecycleIndex maps a durable ParentDurableKey to the set of session_ids
+// LifecycleIndex maps a durable SteeredBy.SteeringSessionID to the set of session_ids
 // that are its DIRECT children (FR-020). Safe for concurrent use: a private
 // sync.RWMutex guards byParent, independent of LifecycleStore's per-session
 // striped lock — an update to this shared map can be triggered from any of
@@ -93,13 +93,13 @@ func newLifecycleIndex() *LifecycleIndex {
 
 // add registers childID as a direct child of parentKey. A no-op when either
 // argument is empty — an unattributable or not-yet-parented record (FR-015's
-// degraded mint, or a top-level record with no ParentDurableKey at all) is
+// degraded mint, or a top-level record with no SteeringSessionID at all) is
 // never indexed under an empty key, which would otherwise let every such
-// record collide under LifecycleFilter{ParentDurableKey: ""} — a filter
+// record collide under LifecycleFilter{SteeringSessionID: ""} — a filter
 // value that means "unset" everywhere else on this struct (see
 // LifecycleFilter's own doc comment). Idempotent: adding the same pair twice
 // (e.g. a session's later generations, which all carry the same
-// ParentDurableKey) is harmless.
+// SteeringSessionID) is harmless.
 func (idx *LifecycleIndex) add(parentKey, childID string) {
 	if parentKey == "" || childID == "" {
 		return
@@ -170,7 +170,7 @@ func (idx *LifecycleIndex) children(parentKey string) []string {
 // that alone only indexes records THIS process itself has written. A record
 // persisted by a PRIOR process (the common case immediately after a
 // restart, before the boot sweep or any new delegation has run) exists on
-// disk with a real ParentDurableKey that no in-process Persist call has ever
+// disk with a real SteeringSessionID that no in-process Persist call has ever
 // seen, so relying on Persist-time maintenance alone would silently return
 // zero children for every parent until something happened to re-persist
 // each child — exactly the "success-shaped" silent failure this whole spec
@@ -224,7 +224,7 @@ func (idx *LifecycleIndex) ensureWarm(s *LifecycleStore) error {
 			unreadable = append(unreadable, UnreadableRecord{ID: id, Err: loadErr})
 			continue
 		}
-		idx.add(rec.ParentDurableKey, rec.SessionID)
+		idx.add(rec.SteeringSessionID(), rec.SessionID)
 	}
 	idx.unreadableMu.Lock()
 	idx.unreadable = unreadable

@@ -51,12 +51,12 @@ import (
 // shape delegate_adr057_unix_test.go's real-process precedent uses.
 func fix6NewLifecycleRecord(sessionID, parentDurableKey string) *session.LifecycleRecord {
 	return &session.LifecycleRecord{
-		SessionID:        sessionID,
-		State:            session.LifecycleRunning,
-		OwnerScopeKind:   session.OwnerScopeHuman,
-		ParentDurableKey: parentDurableKey,
-		WorkspaceID:      "ws-1",
-		AgentID:          "worker",
+		SessionID:      sessionID,
+		State:          session.LifecycleRunning,
+		OwnerScopeKind: session.OwnerScopeHuman,
+		SteeredBy:      &session.SteeredBy{SteeringSessionID: parentDurableKey},
+		WorkspaceID:    "ws-1",
+		AgentID:        "worker",
 	}
 }
 
