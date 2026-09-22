@@ -28,16 +28,18 @@
 #    - parentTS.channel
 #    - parentTS.chatID
 #
-# 4. Parent durable identities (deleted by WP-A):
-#    - ParentDurableKey
+# 4. The old parent linkage on the lifecycle record:
+#    - ParentDurableKey (replaced by the steered-by edge, SteeredBy)
 #
-# 5. Child provenance (deleted by WP-A):
-#    - ProducingSessionID (scoped to pkg/agent/events.go and pkg/gateway/websocket_forward.go only)
+# 5. The relabelled-frame workaround:
+#    - ProducingSessionID, banned in pkg/agent/events.go and
+#      pkg/gateway/websocket_forward.go (the retired payloads and their readers;
+#      every frame now carries its own session_id)
 #
-# 6. Sibling notifier (deleted by WP-C):
-#    - notifyParentIfAllSiblingsDone
+# 6. The sibling notifier:
+#    - notifyParentIfAllSiblingsDone (every child now wakes its parent itself)
 #
-# 7. Nested replay (deleted by WP-A):
+# 7. Nested replay of a child's steps inside the parent:
 #    - emitNestedToolCalls
 #
 # WHAT IS ALLOWED
@@ -94,15 +96,15 @@ HITS="$(grep -rnE "$PATTERN" \
   pkg cmd src 2>/dev/null \
   || true)"
 
-# Special handling for ProducingSessionID: only flag if found outside the two
-# scoped files where it legitimately appears in comments about deletion
-PRODUCING_SESSION_HITS="$(grep -rnE 'ProducingSessionID' \
-  --include='*.go' \
-  --exclude='*_test.go' \
-  pkg cmd 2>/dev/null \
-  | grep -v 'pkg/agent/events.go:' \
-  | grep -v 'pkg/gateway/websocket_forward.go:' \
-  || true)"
+# ProducingSessionID is banned only in the two files that carried the retired
+# payload and its readers (ADR-091 WP-F FR-F-003); elsewhere the name is not ours.
+PRODUCING_SESSION_HITS=""
+for f in pkg/agent/events.go pkg/gateway/websocket_forward.go; do
+  if [ -f "$f" ]; then
+    hit="$(grep -nE 'ProducingSessionID' "$f" | sed "s|^|$f:|" || true)"
+    [ -n "$hit" ] && PRODUCING_SESSION_HITS="$(printf '%s\n%s' "$PRODUCING_SESSION_HITS" "$hit")"
+  fi
+done
 
 # Combine all hits
 ALL_HITS="$HITS"
