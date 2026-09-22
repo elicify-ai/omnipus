@@ -93,6 +93,50 @@ func TestLaunch_UnknownAgentRefused(t *testing.T) {
 	}
 }
 
+func TestLaunch_SteeredEmptyParentAgentHonorsFailClosedSwitch(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		strict bool
+		wantErr bool
+	}{
+		{name: "strict default refuses", strict: true, wantErr: true},
+		{name: "operator override permits", strict: false, wantErr: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			al, cleanup := newSteerAL(t)
+			defer cleanup()
+			al.GetConfig().Tools.Delegate.RequireParentAgentID = &tc.strict
+			steerer, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "webchat", "")
+			if err != nil {
+				t.Fatalf("NewSession(steerer): %v", err)
+			}
+
+			result, err := NewSteerLauncher(al).Launch(context.Background(), steer.LaunchRequest{
+				SteeringSessionID: steerer.ID,
+				TargetAgentID:     testDefaultAgentID,
+				Task:              "do something",
+				Origin:            steer.Origin{Kind: steer.OriginKindDelegate, CallID: "call-empty-parent"},
+			})
+			if tc.wantErr {
+				if !errors.Is(err, steer.ErrInvalidEdge) || result.SessionID != "" {
+					t.Fatalf("Launch() = %+v, %v; want no child and ErrInvalidEdge", result, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Launch() with operator override: %v", err)
+			}
+			record, err := al.GetSessionLifecycleStore().Load(result.SessionID)
+			if err != nil {
+				t.Fatalf("Load(child): %v", err)
+			}
+			if record.ParentAgentID != "" {
+				t.Fatalf("ParentAgentID = %q, want empty under explicit override", record.ParentAgentID)
+			}
+		})
+	}
+}
+
 func TestLaunch_GoalWithNoCriteria_Refused(t *testing.T) {
 	al, cleanup := newSteerAL(t)
 	defer cleanup()

@@ -11,6 +11,20 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
+func writeSkillWithName(t *testing.T, workspace, slug, displayName string) {
+	t.Helper()
+	dir := filepath.Join(workspace, "skills", slug)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: " + slug +
+		"\ndescription: A test skill with a sufficiently long description to validate.\n" +
+		"metadata:\n  display_name: " + displayName + "\n---\n\n# " + displayName + "\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // --- moved from subturn.go tests 2026-09-15 ---
 
 // TestResolveRequestedSkillForChild_DirectOutcomes (ADR-072 Finding D) is a

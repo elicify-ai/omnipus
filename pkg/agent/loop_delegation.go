@@ -472,7 +472,7 @@ func buildDelegationDenyCheckerForDelegate(
 	mode config.DelegationMode,
 	agentExists ...func(id string) bool,
 ) func(ctx context.Context, targetAgentID string) *tools.DelegationDenial {
-	return buildDelegationDenyChecker(currentAgentID, defaults, mode, true, agentExists...)
+	return buildDelegationDenyChecker(currentAgentID, defaults, mode, false, agentExists...)
 }
 
 // buildDelegationDenyCheckerForTaskReassignment is the wiring-site constructor for the

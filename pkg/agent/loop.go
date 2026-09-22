@@ -475,23 +475,6 @@ type AgentLoop struct {
 	closing bool
 	recapWG sync.WaitGroup
 
-	// delegateTools are the per-agent DelegateTool instances this loop built,
-	// retained for ONE reason: Close() has to drain their background (async=true)
-	// delegation goroutines before the stores those goroutines write through are
-	// torn down.
-	//
-	// DelegateTool has always exposed WaitForAsyncTasks for exactly this, and its
-	// doc comment names both callers that need it — "tests rooted at t.TempDir()"
-	// and "a graceful-shutdown path that swaps stores". Neither ever called it:
-	// the tools were constructed as locals in registerAgentTools and dropped, so
-	// Close() had no handle to drain and its own promise that "nothing writes
-	// after Close() returns to race temp-dir cleanup" was false for background
-	// delegation specifically. The symptom is a cleanup-time failure in whichever
-	// test happens to lose the race ("TempDir RemoveAll cleanup: ... directory not
-	// empty"), attributed to that test rather than to the missing drain.
-	delegateToolsMu sync.Mutex
-	delegateTools   []*tools.DelegateTool
-
 	// stopCancel is the CancelFunc created by Run to support Stop(). When
 	// Stop() is called it cancels this func so the Run select wakes
 	// immediately without waiting for the next message or ticker. Stored
@@ -521,18 +504,6 @@ type AgentLoop struct {
 	// Resource-aware admission (CPU load, RSS, goroutine count) is out of
 	// scope for v0.1 and filed as a follow-up.
 	admission *AdmissionController
-
-	// rootDelegationAdmission is the ADR-057 W17 (FR-069/FR-070/FR-095)
-	// process-wide gate for ROOT-level `delegate` fan-out — see admission.go's
-	// "ADR-057 W17" block for the full rationale. Constructed exactly once in
-	// NewAgentLoop from agents.defaults.subturn.max_concurrent (unclamped) and
-	// shared by every per-agent DelegateTool's wrapped spawner
-	// (rootDelegationAdmittingSpawner, registerSharedTools' delegate-tool
-	// block) so the cap is enforced once for the whole running process, not
-	// per agent. Always non-nil after successful construction — NewAgentLoop
-	// fails closed (returns an error) rather than proceeding with a nil gate,
-	// per ErrRootDelegationCapMisconfigured's doc comment.
-	rootDelegationAdmission *RootDelegationAdmission
 
 	// channelSessionIdx maps "channel/chatID" → shared session ID for fast per-peer
 	// session resumption. Built on startup and updated on every new channel session.
@@ -1239,13 +1210,6 @@ func (al *AgentLoop) Close() {
 		al.taskExecutor.Drain(30 * time.Second)
 	}
 
-	// Drain background (async=true) delegations for the same reason and with the
-	// same bounded-drain shape as the two above. A background delegate call is
-	// fire-and-forget for its CALLER by design, so its goroutine outlives the
-	// Execute that started it and keeps writing lifecycle/session state through
-	// the stores torn down below.
-	al.waitDelegateAsyncDrain(30 * time.Second)
-
 	// Cancel all active session workers and wait for them to drain (5 s budget).
 	// stopSessionWorkers is idempotent — safe to call here even if Run() has
 	// already called it on context-cancellation, because workers cancel their
@@ -1438,38 +1402,6 @@ func (al *AgentLoop) waitRecapDrain(budget time.Duration) {
 	case <-time.After(budget):
 		logger.WarnCF("agent", "Close: recap drain budget exceeded; proceeding with teardown",
 			map[string]any{"budget": budget.String()})
-	}
-}
-
-// waitDelegateAsyncDrain blocks until every agent's in-flight background
-// delegation goroutine has finished, or the budget expires.
-//
-// Bounded for the same reason waitRecapDrain is: a wedged sub-turn (a mock
-// provider that never returns, a real LLM hanging past its own timeout) must
-// never freeze teardown. Exceeding the budget is logged and teardown proceeds —
-// a delegation that did not finish writing is strictly better than a process
-// that will not exit.
-func (al *AgentLoop) waitDelegateAsyncDrain(budget time.Duration) {
-	al.delegateToolsMu.Lock()
-	pending := append([]*tools.DelegateTool(nil), al.delegateTools...)
-	al.delegateToolsMu.Unlock()
-	if len(pending) == 0 {
-		return
-	}
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for _, dt := range pending {
-			dt.WaitForAsyncTasks()
-		}
-	}()
-	select {
-	case <-done:
-		// Every background delegation finished writing.
-	case <-time.After(budget):
-		logger.WarnCF("agent", "Close: background-delegation drain budget exceeded; proceeding with teardown",
-			map[string]any{"budget": budget.String(), "tools": len(pending)})
 	}
 }
 

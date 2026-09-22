@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -60,11 +59,8 @@ func TestDelegateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
 
 	// A spawner that records whether it ran — it MUST NOT run on a denied delegate.
-	spawned := false
-	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned = true
-		return NewToolResult("ran"), nil
-	}))
+	launcher := &recordingSessionLauncher{}
+	tool.SetSessionLauncher(launcher)
 
 	var gotTarget string
 	tool.SetDelegationDenyCheckerBackground(func(_ context.Context, targetAgentID string) *DelegationDenial {
@@ -100,8 +96,8 @@ func TestDelegateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 	if gotTarget != "evil-agent" {
 		t.Errorf("expected checker to receive target 'evil-agent', got %q", gotTarget)
 	}
-	if spawned {
-		t.Error("spawner must NOT run when delegation is denied")
+	if launcher.launchReq.Task != "" {
+		t.Error("launcher must NOT run when delegation is denied")
 	}
 }
 
@@ -183,11 +179,8 @@ func TestTaskCreateTool_DelegationDenyChecker_Aborts(t *testing.T) {
 // test above for the background (async=true, default) mode.
 func TestDelegateTool_BackgroundNilDenyChecker_FailsClosed(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	spawned := make(chan struct{}, 1)
-	tool.SetSpawner(spawnerFunc(func(context.Context, SubTurnConfig) (*ToolResult, error) {
-		spawned <- struct{}{}
-		return NewToolResult("ran"), nil
-	}))
+	launcher := &recordingSessionLauncher{}
+	tool.SetSessionLauncher(launcher)
 
 	// No SetDelegationDenyCheckerBackground installed at all.
 	result := tool.Execute(context.Background(), map[string]any{
@@ -204,11 +197,8 @@ func TestDelegateTool_BackgroundNilDenyChecker_FailsClosed(t *testing.T) {
 	if failure.Policy != string(DenyTrustSet) {
 		t.Errorf("expected policy %q, got %q", DenyTrustSet, failure.Policy)
 	}
-	select {
-	case <-spawned:
-		t.Error("spawner must NOT run when no deny-checker is installed (fail-closed-when-unwired)")
-	case <-time.After(200 * time.Millisecond):
-		// spawner did not run within the window, as expected for fail-closed.
+	if launcher.launchReq.Task != "" {
+		t.Error("launcher must NOT run when no deny-checker is installed (fail-closed-when-unwired)")
 	}
 }
 
@@ -310,11 +300,4 @@ func TestDelegationDeniedResult_DefaultsInvariant(t *testing.T) {
 	if failure.Tool != "delegate" {
 		t.Errorf("expected tool 'delegate', got %q", failure.Tool)
 	}
-}
-
-// spawnerFunc adapts a function to the SubTurnSpawner interface for tests.
-type spawnerFunc func(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error)
-
-func (f spawnerFunc) SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error) {
-	return f(ctx, cfg)
 }

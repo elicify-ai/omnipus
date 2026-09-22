@@ -60,10 +60,8 @@ func (f *fakeSteeringSink) last() (providers.Message, string) {
 func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *session.MessageInboxStore, *fakeSteeringSink) {
 	t.Helper()
 	tool := NewDelegateTool("test-model", 0, 0)
-	tool.SetSpawner(&mockDelegateSpawner{})
 	tool.SetSessionLauncher(&recordingSessionLauncher{})
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
-	tool.SetDelegationDenyCheckerAwait(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	// B.5 fix (FR-196 kill switch fails-closed when unwired): tests that exercise
 	// the session-messaging plane must explicitly enable it. The default
 	// kill-switch posture is fail-closed (production behavior).
@@ -75,15 +73,6 @@ func newADR053TestTool(t *testing.T) (*DelegateTool, *session.LifecycleStore, *s
 	tool.SetLifecycleStore(lc)
 	tool.SetMessageInbox(inbox)
 	tool.SetSteeringSink(steer)
-
-	// Drain in-flight async delegation goroutines before the t.TempDir()
-	// cleanups run. Registered AFTER the two t.TempDir() calls above so LIFO
-	// cleanup ordering puts this FIRST — the goroutines finish writing before
-	// RemoveAll deletes the directories they are writing into. Without this,
-	// any test that reaches the async path (e.g. the 3P respond corrective
-	// re-dispatch) races its own teardown and fails under -p contention with
-	// "TempDir RemoveAll cleanup: directory not empty".
-	t.Cleanup(tool.WaitForAsyncTasks)
 
 	return tool, lc, inbox, steer
 }
@@ -140,7 +129,7 @@ func TestDelegateTool_Run_PersistsQueuedThenRunningLifecycleRecord(t *testing.T)
 	}
 
 	// The async goroutine transitions queued -> running -> completed; give
-	// it a moment (mockDelegateSpawner returns immediately, but the
+	// it a moment (the recording launcher returns immediately, but the
 	// goroutine scheduling is still async).
 	var rec *session.LifecycleRecord
 	for i := 0; i < 50; i++ {
@@ -736,7 +725,6 @@ func TestDelegateTool_Cancel_DeniedOnLifecycleLoadError(t *testing.T) {
 // at all (can't verify ownership without it).
 func TestDelegateTool_Cancel_DeniedWhenLifecycleUnconfigured(t *testing.T) {
 	tool := NewDelegateTool("test-model", 0, 0)
-	tool.SetSpawner(&mockDelegateSpawner{})
 	tool.SetDelegationDenyCheckerBackground(func(ctx context.Context, targetAgentID string) *DelegationDenial { return nil })
 	tool.SetCancelHooks(
 		func(string, string) ([]string, error) { t.Fatal("soft hook must not fire"); return nil, nil },

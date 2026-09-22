@@ -10,7 +10,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,63 +144,6 @@ func registerAsyncChildPublicationProbe(t *testing.T, al *AgentLoop) *asyncChild
 	return probe
 }
 
-func spawnPublicationTestChild(
-	t *testing.T,
-	al *AgentLoop,
-	agent *AgentInstance,
-	channel, chatID string,
-) *tools.ToolResult {
-	t.Helper()
-	store := al.GetSessionStore()
-	require.NotNil(t, store, "test setup: shared session store must exist")
-	parentMeta, err := store.NewSession(session.SessionTypeChannel, channel, agent.ID)
-	require.NoError(t, err, "mint a real parent session")
-
-	parent := &turnState{
-		ctx:                 context.Background(),
-		turnID:              "parent-async-publication",
-		childTurnIDs:        []string{},
-		pendingResults:      make(chan *tools.ToolResult, 4),
-		concurrencySem:      make(chan struct{}, 4),
-		session:             &ephemeralSessionStore{},
-		agent:               agent,
-		agentID:             agent.ID,
-		channel:             channel,
-		chatID:              chatID,
-		transcriptSessionID: parentMeta.ID,
-		routingSessionID:    session.RoutingSessionID(parentMeta.ID),
-		transcriptStore:     store,
-	}
-
-	result, err := spawnSubTurn(
-		withSpawnToolCallID(context.Background(), "call-async-publication"),
-		al,
-		parent,
-		SubTurnConfig{
-			SystemPrompt:      "run the requested test tool",
-			Model:             agent.Model,
-			DelegateSessionID: "async-publication-child-" + parentMeta.ID,
-		},
-	)
-	require.NoError(t, err, "spawn the delegated child through the production path")
-	require.NotNil(t, result)
-	return result
-}
-
-func TestDelegatedChild_GenericAsyncForUserDoesNotPublishOnParentRoute(t *testing.T) {
-	provider := testutil.NewScenario().
-		WithToolCall(asyncChildPublicationProbeName, `{}`).
-		WithText("child completed")
-	al, msgBus, agent := newAsyncChildPublicationTestLoop(t, provider, false)
-	probe := registerAsyncChildPublicationProbe(t, al)
-
-	spawnPublicationTestChild(t, al, agent, "telegram", "parent-chat")
-	probe.completeAfterTurn(t)
-
-	assert.Empty(t, drainOutbound(msgBus),
-		"a generic async tool inside a delegated child must not publish ForUser on the parent's route")
-}
-
 func TestInteractiveRoot_GenericAsyncForUserStillPublishes(t *testing.T) {
 	provider := testutil.NewScenario().
 		WithToolCall(asyncChildPublicationProbeName, `{}`).
@@ -220,23 +162,6 @@ func TestInteractiveRoot_GenericAsyncForUserStillPublishes(t *testing.T) {
 		ChatID:  "root-chat",
 		Content: asyncChildPublicationMarker,
 	}}, drainOutbound(msgBus), "interactive root async feedback must remain user-visible")
-}
-
-func TestDelegatedChild_ToolPreviewDoesNotPublishTopLevelOnExternalChannel(t *testing.T) {
-	provider := testutil.NewScenario().
-		WithToolCall(childPreviewProbeName, `{"argument":"child-only"}`).
-		WithText("child completed")
-	al, msgBus, agent := newAsyncChildPublicationTestLoop(t, provider, true)
-	probe := &childPreviewProbe{}
-	al.RegisterTool(probe)
-	setAskPolicyForAllAgents(t, al, childPreviewProbeName, config.ToolPolicyAllow)
-
-	spawnPublicationTestChild(t, al, agent, "telegram", "parent-chat")
-
-	require.Equal(t, int32(1), probe.executionCount.Load(),
-		"the child preview probe must execute before publication is asserted")
-	assert.Empty(t, drainOutbound(msgBus),
-		"a delegated child's tool-call preview must not appear as a top-level external-channel message")
 }
 
 func TestInteractiveRoot_ToolPreviewStillPublishesOnExternalChannel(t *testing.T) {

@@ -656,7 +656,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer al.clearActiveTurn(ts)
 
-	rtCfg := al.getSubTurnConfig()
+	delegationTimeout := al.effectiveDelegationTimeout()
 
 	// ADDITIONAL FINDING (surfaced while writing pr-test-analyzer's T2, not
 	// one of the 11 numbered fixes): runExternalCLISubTurn never wraps its
@@ -679,7 +679,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// (loop.go) — so a TaskExecutor-level cancel (te.running[taskID].cancel(),
 	// ExecuteTask/StartTaskNow) still takes effect immediately in addition to
 	// this deadline.
-	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, rtCfg.defaultTimeout)
+	dispatchCtx, dispatchCancel := context.WithTimeout(ctx, delegationTimeout)
 	defer dispatchCancel()
 
 	// FIX 2 (7-reviewer gate, persona dropped): compose the same (soul, task)
@@ -692,7 +692,7 @@ func (al *AgentLoop) processTaskDirectExternalCLI(
 	// task-only input, identical to the pre-fix behavior.
 	externalInput := composeDelegateInput(al, prompt, "", agent.ID)
 
-	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, rtCfg.defaultTimeout)
+	result, err := runExternalCLISubTurn(dispatchCtx, al, ts, externalInput, delegationTimeout)
 	if err != nil {
 		return "", fmt.Errorf("processTaskDirect: external-cli dispatch: %w", err)
 	}

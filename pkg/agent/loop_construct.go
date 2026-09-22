@@ -42,25 +42,6 @@ func (nal *newAgentLoop) initializeCore() {
 		stateManager = state.NewManager(defaultAgent.Home)
 	}
 
-	// ADR-057 W17: a boot-time diagnostic only — genuine construction of the
-	// root-delegation admission gate happens AFTER al exists, below, via a
-	// LIVE resolver (concurrency-gate consolidation, 2026-08-04). A NEGATIVE
-	// agents.defaults.subturn.max_concurrent is the only case
-	// ResolveRootDelegationCap treats as an error (an unset/zero value now
-	// resolves straight to the central Performance.EffectiveMaxParallelAgents()
-	// authority, not an error — see ResolveRootDelegationCap's doc comment).
-	// Logged loudly here so a genuine operator misconfiguration is
-	// diagnosable at boot; does not abort construction, since the live
-	// resolver's own error branch (below) keeps the gate GATED at the
-	// central value either way, never nil (nil would mean UNLIMITED root
-	// fan-out — the "silently reinterpreted as no gate" outcome ADR-037
-	// bans).
-	if _, err := ResolveRootDelegationCap(nal.cfg); err != nil {
-		logger.ErrorCF("agent",
-			"agents.defaults.subturn.max_concurrent is configured to a negative value — the root-delegation admission gate falls back to the central Performance.EffectiveMaxParallelAgents() authority; set it to 0 (inherit the central value) or a positive explicit override",
-			map[string]any{"error": err.Error()})
-	}
-
 	eventBus := NewEventBus()
 	nal.al = &AgentLoop{
 		bus:                     nal.msgBus,
@@ -88,22 +69,6 @@ func (nal *newAgentLoop) initializeCore() {
 	nal.al.admission = newAdmissionControllerWithResolver(func() int {
 		n, _ := nal.al.GetConfig().Performance.EffectiveMaxParallelAgents()
 		return n
-	})
-	// ADR-057 W17, same live-resolution treatment: root-level delegate()
-	// fan-out must never drift from the central authority either. On
-	// ResolveRootDelegationCap's error branch (a NEGATIVE configured value)
-	// this falls back directly to EffectiveMaxParallelAgents() so the gate
-	// stays GATED at the central value rather than degrading to unlimited.
-	nal.al.rootDelegationAdmission = newRootDelegationAdmissionWithResolver(func() int {
-		liveCfg := nal.al.GetConfig()
-		if resolvedCap, capErr := ResolveRootDelegationCap(liveCfg); capErr == nil {
-			return resolvedCap
-		}
-		if liveCfg != nil {
-			n, _ := liveCfg.Performance.EffectiveMaxParallelAgents()
-			return n
-		}
-		return 1
 	})
 	nal.al.hooks = NewHookManager(eventBus)
 	configureHookManagerFromConfig(nal.al.hooks, nal.cfg)

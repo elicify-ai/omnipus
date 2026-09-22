@@ -24,9 +24,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -284,6 +286,14 @@ func (l *SteerLauncher) launchSteered(
 				return nil, fmt.Errorf("steer: launch: %w: resolve steering session %q: %v",
 					steer.ErrInvalidEdge, req.SteeringSessionID, metaErr)
 			}
+			parentAgentID := strings.TrimSpace(steererMeta.ActiveAgentID)
+			if parentAgentID == "" && l.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID() {
+				return nil, fmt.Errorf("steer: launch: %w: delegating agent identity is empty", steer.ErrInvalidEdge)
+			}
+			if parentAgentID == "" {
+				logger.WarnCF("agent", "steer: launch: accepting empty parent agent identity by operator configuration",
+					map[string]any{"session_id": req.SteeringSessionID, "config": "tools.delegate.require_parent_agent_id"})
+			}
 			workspaceID := steererMeta.WorkspaceID
 
 			if !existed {
@@ -352,7 +362,7 @@ func (l *SteerLauncher) launchSteered(
 				GoalRef:        goalID,
 				WorkspaceID:    workspaceID,
 				AgentID:        req.TargetAgentID,
-				ParentAgentID:  steererMeta.ActiveAgentID,
+				ParentAgentID:  parentAgentID,
 				Origin:         &origin,
 				SteeredBy:      steeredBy,
 				Stop:           stopStamp,
@@ -703,6 +713,15 @@ func (al *AgentLoop) dispatchSteeredSessionWithReservation(_ context.Context, se
 		}
 		defer cancel()
 		result, runErr := al.runTurn(runCtx, ts)
+		finalAudience := al.audienceFor(runCtx, steer.BoundaryFinalReply, sessionID)
+		if runErr == nil && result.finalContent != "" && finalAudience == steer.AudienceUser {
+			if publishErr := al.bus.PublishOutbound(runCtx, bus.OutboundMessage{
+				Channel: ts.channel, ChatID: ts.chatID, Content: result.finalContent, SessionID: sessionID,
+			}); publishErr != nil {
+				logger.WarnCF("agent", "steer: publish dispatched final reply failed",
+					map[string]any{"session_id": sessionID, "generation": gen, "error": publishErr.Error()})
+			}
+		}
 		if rec.GoalRef != "" {
 			al.finishSteeredGoalTurn(ts, &result, runErr)
 			return

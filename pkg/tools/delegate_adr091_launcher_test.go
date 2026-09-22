@@ -1,14 +1,42 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 
 	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/steer"
 )
+
+func captureLogs(t *testing.T) func() string {
+	t.Helper()
+	var mu sync.Mutex
+	buf := &bytes.Buffer{}
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&lockedLogWriter{mu: &mu, buf: buf}, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return buf.String()
+	}
+}
+
+type lockedLogWriter struct {
+	mu  *sync.Mutex
+	buf *bytes.Buffer
+}
+
+func (w *lockedLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.Write(p)
+}
 
 func TestDelegate_RejectsRemovedArgs(t *testing.T) {
 	for _, arg := range []string{"async", "allow_blocking_question"} {
@@ -38,9 +66,13 @@ type recordingSessionLauncher struct {
 	dispatchGeneration int
 }
 
-// Kept only so the pre-ADR-091 tests still compile until WP-G applies its
-// retain/update/delete classification. Production has no await gate.
-func (t *DelegateTool) SetDelegationDenyCheckerAwait(func(context.Context, string) *DelegationDenial) {
+func u14PermissiveTool(t *testing.T) (*DelegateTool, *recordingSessionLauncher) {
+	t.Helper()
+	launcher := &recordingSessionLauncher{}
+	tool := NewDelegateTool("test-model", 0, 0)
+	tool.SetSessionLauncher(launcher)
+	tool.SetDelegationDenyCheckerBackground(func(context.Context, string) *DelegationDenial { return nil })
+	return tool, launcher
 }
 
 func (f *recordingSessionLauncher) Launch(_ context.Context, req steer.LaunchRequest) (steer.LaunchResult, error) {

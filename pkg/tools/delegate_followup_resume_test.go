@@ -13,7 +13,7 @@
 // error ever surfaced anywhere. Nothing ever ran.
 //
 // This file proves the WIRING half at the pkg/tools boundary:
-//   - spawnCorrectiveFollowUp now marks the dispatch tools.SubTurnConfig.
+//   - spawnCorrectiveFollowUp now marks the launcher dispatch.
 //     IsResume (true for a native resume, which reuses the session id
 //     verbatim; false for a 3P cold respawn, which mints a brand new
 //     session id and is a genuine create like any other dispatch).
