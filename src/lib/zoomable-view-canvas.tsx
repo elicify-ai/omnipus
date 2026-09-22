@@ -80,7 +80,7 @@ const selectHeight = (state: ReactFlowState) => state.height
 // memo never re-ran on a node-only change.
 const selectNodes = (state: ReactFlowState) => state.nodes
 
-export interface UseZoomableCanvasPillOptions {
+export interface UseZoomableCanvasPillOptions { // not-wire-format: React hook option bag for a local UI widget, never serialised over any wire boundary
   /** Passed to `fitView` for both "Fit" and the opening `fitView` prop —
    *  callers should reuse the same object so opening and Fit agree exactly,
    *  as D18 requires ("Fit reproduces the opening frame identically"). */

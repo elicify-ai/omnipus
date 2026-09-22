@@ -25,6 +25,108 @@ function setup(onFailure?: () => boolean, automatic: { automaticRecoveryIdentity
   return { machine, pc, channels, offer, changed, connect, input, sent }
 }
 
+/** A pc whose ICE gathering never reaches 'complete' on its own — only a
+ * bound timeout or an external `onicegatheringstatechange` trigger can
+ * unblock it. Mirrors browserWebRTC.test.ts's `makeFakePc` for the same
+ * scenario on the media path. */
+function pendingGatherPc() {
+  return {
+    iceGatheringState: 'gathering' as string,
+    connectionState: 'new',
+    localDescription: { sdp: 'offer-sdp' },
+    createDataChannel: vi.fn(() => ({ readyState: 'connecting', bufferedAmount: 0, send: vi.fn(), close: vi.fn() })),
+    createOffer: vi.fn(async () => ({ type: 'offer', sdp: 'offer-sdp' })),
+    setLocalDescription: vi.fn(async () => {}),
+    setRemoteDescription: vi.fn(async () => {}),
+    close: vi.fn(),
+    onconnectionstatechange: null as (() => void) | null,
+    onicegatheringstatechange: null as (() => void) | null,
+  }
+}
+
+describe('BrowserInputWebRTCSession — ICE gathering bound (parity with the media path)', () => {
+  it('sends the offer after the ICE-gathering bound elapses even if gathering never completes', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = pendingGatherPc()
+      const offer = vi.fn(() => true)
+      const machine = new BrowserInputWebRTCSession({
+        pcFactory: () => pc as unknown as RTCPeerConnection,
+        sendOffer: offer,
+        onState: vi.fn(),
+        iceGatheringTimeoutMs: 50,
+      })
+      machine.start()
+      await vi.advanceTimersByTimeAsync(0) // let createOffer/setLocalDescription settle
+
+      // iceGatheringState is left at 'gathering' — never reaches 'complete' —
+      // so only the bound timeout can unblock this.
+      expect(offer).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(50)
+
+      expect(offer).toHaveBeenCalledWith({ sdp: 'offer-sdp', offer_id: 1, input_epoch: 1, control_epoch: 0 })
+      machine.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('still resolves via the real ICE-gathering-complete event, not the bound, when gathering finishes first', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = pendingGatherPc()
+      const offer = vi.fn(() => true)
+      const machine = new BrowserInputWebRTCSession({
+        pcFactory: () => pc as unknown as RTCPeerConnection,
+        sendOffer: offer,
+        onState: vi.fn(),
+        iceGatheringTimeoutMs: 5000,
+      })
+      machine.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      pc.iceGatheringState = 'complete'
+      pc.onicegatheringstatechange?.()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(offer).toHaveBeenCalledTimes(1)
+      expect(offer).toHaveBeenCalledWith({ sdp: 'offer-sdp', offer_id: 1, input_epoch: 1, control_epoch: 0 })
+
+      // The 5s bound must never fire on top of the already-sent offer.
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(offer).toHaveBeenCalledTimes(1)
+      machine.stop()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not send the offer when stop() cancels mid-gather, before the bound elapses', async () => {
+    vi.useFakeTimers()
+    try {
+      const pc = pendingGatherPc()
+      const offer = vi.fn(() => true)
+      const machine = new BrowserInputWebRTCSession({
+        pcFactory: () => pc as unknown as RTCPeerConnection,
+        sendOffer: offer,
+        onState: vi.fn(),
+        iceGatheringTimeoutMs: 50,
+      })
+      machine.start()
+      await vi.advanceTimersByTimeAsync(0)
+
+      machine.stop()
+      await vi.advanceTimersByTimeAsync(100)
+
+      expect(offer).not.toHaveBeenCalled()
+      expect(machine.state).toBe('idle')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 it('uses the same default STUN path as video without a gateway relay', async () => {
   const seen: RTCConfiguration[] = []
   const pc = {

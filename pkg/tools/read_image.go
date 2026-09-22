@@ -77,6 +77,15 @@ func inspectionImageResult(ctx context.Context, file fs.File, source string, sni
 		}
 		return ErrorResult(fmt.Sprintf("invalid image: %v", err)), true
 	}
+	// A canceled context can race a legitimate io.EOF from io.LimitReader:
+	// the bounded read loop may consume its final, in-limit chunk and see a
+	// clean end-of-stream before the next contextReader.Read call would have
+	// observed ctx.Done(). Re-check here so cancellation deterministically
+	// wins over the byte-limit outcome below, instead of depending on which
+	// one the scheduler happens to observe first.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ErrorResult(ctxErr.Error()), true
+	}
 	data := append(append([]byte(nil), sniff...), tail...)
 	if int64(len(data)) > maxBytes {
 		return ErrorResult("image exceeds byte limit"), true

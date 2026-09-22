@@ -620,8 +620,12 @@ export function planBrowserLiveViewDriveChip(source, text) {
   const iifeIdx = text.indexOf(DRIVE_CHIP_IIFE_ORIGINAL)
 
   if (iifeIdx === -1) {
-    if (text.includes('function driveChipConfig(') && text.includes('function driveChipKeyFor(')) {
-      return noop(['already rewritten (driveChipKeyFor/driveChipConfig top-level functions present)'])
+    // The applied shape (a single top-level switch on `driveChipKeyFor`,
+    // every clause returning a literal object) lives in BrowserLiveToolbar.tsx
+    // under the name `resolveDriveChip` — accept either that name or the
+    // original `driveChipConfig` name, since both denote the same shape.
+    if ((text.includes('function driveChipConfig(') || text.includes('function resolveDriveChip(')) && text.includes('function driveChipKeyFor(')) {
+      return noop(['already rewritten (driveChipKeyFor/driveChipConfig-or-resolveDriveChip top-level functions present)'])
     }
     return refuse('could not find the exact original driveChip IIFE text — site has changed; refusing rather than guess at a partial match')
   }
@@ -643,7 +647,10 @@ export const SITES = [
   { id: 'goal-pill-tray-icon-and-pulse', file: 'src/components/chat/GoalPillTray.tsx', plan: planGoalPillTrayIconAndPulse },
   { id: 'file-write-confirm-text-class', file: 'src/components/chat/tools/FileWriteConfirm.tsx', plan: planFileWriteConfirmTextClass },
   { id: 'table-part-inert-props', file: 'src/components/library/preview/viewparts/TablePart.tsx', plan: planTablePartInertProps },
-  { id: 'browser-live-view-drive-chip', file: 'src/components/browser/BrowserLiveView.tsx', plan: planBrowserLiveViewDriveChip },
+  // The drive-chip logic this recipe targets lives in BrowserLiveToolbar.tsx
+  // (see planBrowserLiveViewDriveChip's already-applied check for the
+  // accompanying `resolveDriveChip`/`driveChipConfig` name note).
+  { id: 'browser-live-view-drive-chip', file: 'src/components/browser/BrowserLiveToolbar.tsx', plan: planBrowserLiveViewDriveChip },
 ]
 
 export function planSite(repoRoot, site) {

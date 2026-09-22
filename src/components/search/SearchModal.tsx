@@ -387,9 +387,22 @@ function SessionRow({ session, isActive, isHighlighted, onSelect, onRename, onDe
       <IconButton ref={renameButtonRef} onClick={() => { setVal(session.title || ''); setEditing(true) }}
         className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-accent)] hover:bg-[var(--color-surface-3)]"
         aria-label={`Rename ${session.title || 'Untitled session'}`} title="Rename"><PencilSimple size={13} /></IconButton>
-      <IconButton onClick={() => setConfirmDelete(true)} disabled={deleting || session.protected === true}
-        className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] disabled:opacity-30 disabled:cursor-not-allowed"
-        aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : 'Delete'}><Trash size={13} /></IconButton>
+      <IconButton
+        onClick={() => {
+          // aria-disabled (not the native `disabled` attribute) — a truly
+          // `disabled` button carries `disabled:pointer-events-none`
+          // (button.tsx's base variant), which blocks hover entirely and
+          // with it the native `title` tooltip below — the only explanation
+          // a pointer user gets for why delete is greyed out on a protected
+          // (heartbeat) or in-flight-delete session. Staying focusable/hoverable
+          // and no-opping the click here instead (same pattern as
+          // EdgeModeEditor's mode chips) keeps that explanation reachable.
+          if (deleting || session.protected === true) return
+          setConfirmDelete(true)
+        }}
+        aria-disabled={deleting || session.protected === true}
+        className="h-auto w-auto shrink-0 rounded p-[var(--space-1)] text-[var(--color-muted)] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-[var(--color-error)] hover:bg-[var(--color-surface-3)] aria-disabled:opacity-30 aria-disabled:cursor-not-allowed aria-disabled:hover:text-[var(--color-muted)] aria-disabled:hover:bg-transparent"
+        aria-label={`Delete ${session.title || 'Untitled session'}`} title={session.protected ? 'Protected (heartbeat)' : deleting ? 'Deleting…' : 'Delete'}><Trash size={13} /></IconButton>
     </div>
   )
 }

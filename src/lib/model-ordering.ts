@@ -32,7 +32,7 @@ export const RECOMMENDED_CHIP_LABEL = 'Recommended for chat'
 /** FR-030: above this many models the selector list must be virtualised. */
 export const MODEL_VIRTUALISATION_THRESHOLD = 100
 
-export interface ModelVendorGroup {
+export interface ModelVendorGroup { // not-wire-format: client-side grouping of generated CatalogModel rows for display only, never serialised over any wire boundary
   /** Grouping key — the id's vendor prefix, or the fallback for bare ids. */
   vendor: string
   models: CatalogModel[]

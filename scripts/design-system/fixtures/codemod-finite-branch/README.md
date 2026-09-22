@@ -20,4 +20,4 @@ typography.mjs, ts-colors.mjs scan `src/` and `packages/ui/src/` only), `tsc`, a
 | `GoalPillTray.tsx.fixture` | `0650b3c23~1` | `src/components/chat/GoalPillTray.tsx` |
 | `FileWriteConfirm.tsx.fixture` | `0650b3c23~1` | `src/components/chat/tools/FileWriteConfirm.tsx` |
 | `TablePart.tsx.fixture` | `0650b3c23~1` | `src/components/library/preview/viewparts/TablePart.tsx` |
-| `BrowserLiveView.tsx.fixture` | `0650b3c23~1` | `src/components/browser/BrowserLiveView.tsx` |
+| `BrowserLiveToolbar.tsx.fixture` | `0650b3c23~1` | `src/components/browser/BrowserLiveView.tsx` (content now applies to `src/components/browser/BrowserLiveToolbar.tsx`; filename matches the current `SITES` registry entry in `codemod-finite-branch.mjs`, which the test harness derives the fixture name from) |

@@ -127,81 +127,130 @@ describe('Button — action contract', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toHaveAttribute('data-action-state', actionState)
   })
 
-  describe('observable action feedback', () => {
-    beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] }))
-    afterEach(() => vi.useRealTimers())
+  // Button's live-announcement region is nested INSIDE the <button>, not a
+  // DOM sibling — so a Button placed inside a role that restricts its
+  // direct children (radiogroup, tablist, toolbar, menu, listbox —
+  // RadioGroupItem and SegmentedControlItem are both built on Button) never
+  // gets an illegal second child (axe aria-required-children). Asserted
+  // across idle AND every action state, since the announcement region is
+  // always present, not conditionally omitted.
+  it.each(['idle', 'pending', 'success', 'error'] as const)(
+    'renders exactly one DOM child into a role-restrictive parent in the %s action state',
+    (actionState) => {
+      const { container } = render(
+        <div role="radiogroup" aria-label="Choice">
+          <Button role="radio" aria-checked actionState={actionState}>A</Button>
+        </div>,
+      )
+      const group = container.querySelector('[role="radiogroup"]')!
+      expect(group.children).toHaveLength(1)
+      expect(group.children[0].tagName).toBe('BUTTON')
+    },
+  )
+})
 
-    it('reserves feedback geometry immediately and reveals pending at the 400ms boundary', () => {
-      render(<Button actionState="pending">Save</Button>)
-      const button = screen.getByRole('button', { name: 'Save' })
-      const announcement = screen.getByRole('status')
-      expect(announcement).toBeEmptyDOMElement()
-      expect(button.querySelector('[data-action-indicator]')).toBeInTheDocument()
-      expect(button.querySelector('[data-action-feedback]')).not.toBeInTheDocument()
-      act(() => vi.advanceTimersByTime(399))
-      expect(button.querySelector('[data-action-feedback="pending"]')).not.toBeInTheDocument()
-      expect(announcement).toBeEmptyDOMElement()
-      act(() => vi.advanceTimersByTime(1))
-      expect(button.querySelector('[data-action-feedback="pending"]')).toBeInTheDocument()
-      expect(screen.getByRole('status')).toBe(announcement)
-      expect(announcement).toHaveTextContent('Action in progress')
-    })
-
-    it('keeps visible pending feedback for 300ms before presenting success', () => {
-      const { rerender } = render(<Button actionState="pending">Save</Button>)
-      act(() => vi.advanceTimersByTime(400))
-      rerender(<Button actionState="success">Save</Button>)
-      const button = screen.getByRole('button', { name: 'Save' })
-      expect(button.querySelector('[data-action-feedback="pending"]')).toBeInTheDocument()
-      act(() => vi.advanceTimersByTime(299))
-      expect(button.querySelector('[data-action-feedback="success"]')).not.toBeInTheDocument()
-      act(() => vi.advanceTimersByTime(1))
-      expect(button.querySelector('[data-action-feedback="success"]')).toBeInTheDocument()
-      expect(button).toHaveAccessibleName('Save')
-      expect(button).toHaveAttribute('aria-description', 'Action succeeded')
-      expect(screen.getByRole('status')).toHaveTextContent('Action succeeded')
-    })
-
-    it('announces an error before a retry even while the pending spinner completes its dwell', () => {
-      const { rerender } = render(<Button actionState="pending">Retry</Button>)
-      const announcement = screen.getByRole('status')
-      act(() => vi.advanceTimersByTime(400))
-      expect(announcement).toHaveTextContent('Action in progress')
-      rerender(<Button actionState="error">Retry</Button>)
-      const button = screen.getByRole('button', { name: 'Retry' })
-      expect(button.querySelector('[data-action-feedback="pending"]')).toBeInTheDocument()
-      expect(button).not.toBeDisabled()
-      expect(button).toHaveAttribute('aria-description', 'Action failed')
-      expect(announcement).toHaveTextContent('Action failed')
-      act(() => vi.advanceTimersByTime(100))
-      rerender(<Button actionState="pending">Retry</Button>)
-      expect(screen.getByRole('status')).toBe(announcement)
-      expect(announcement).toHaveTextContent('Action in progress')
-      expect(button).toBeDisabled()
-    })
-
-    it('presents a quick failure immediately and allows a retry without rewriting content', () => {
-      const retry = vi.fn()
-      const { rerender } = render(<Button actionState="pending" onClick={retry}><span>Try again</span></Button>)
-      act(() => vi.advanceTimersByTime(399))
-      rerender(<Button actionState="error" onClick={retry}><span>Try again</span></Button>)
-      const button = screen.getByRole('button', { name: 'Try again' })
-      expect(button.querySelector('[data-action-feedback="error"]')).toBeInTheDocument()
-      expect(button).toHaveAttribute('aria-description', 'Action failed')
-      expect(screen.getByRole('status')).toHaveTextContent('Action failed')
-      fireEvent.click(button)
-      expect(retry).toHaveBeenCalledOnce()
-    })
-
-    it('preserves an asChild accessible name and native link contract with success feedback', () => {
-      render(<Button asChild actionState="success"><a href="/done">Continue</a></Button>)
-      const link = screen.getByRole('link', { name: 'Continue' })
-      expect(link).toHaveAttribute('href', '/done')
-      expect(link).toHaveAttribute('aria-description', 'Action succeeded')
-      expect(link.querySelector('[data-action-feedback="success"]')).toBeInTheDocument()
-    })
+// The name shield (aria-labelledby={contentId}) engages ONLY while an
+// announcement is actually present — engaging it unconditionally overrides
+// a `title`-based accessible name (the content span it references contains
+// no text for an icon-only Button), un-naming every idle icon-only Button.
+describe('Button — accessible name from a non-content source (e.g. title)', () => {
+  it('keeps a title-only icon Button named by its title, idle and after an action completes', () => {
+    const { rerender } = render(<Button title="Close panel"><svg aria-hidden="true" /></Button>)
+    expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument()
+    rerender(<Button title="Close panel" actionState="success"><svg aria-hidden="true" /></Button>)
+    expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument()
+    rerender(<Button title="Close panel" actionState="idle"><svg aria-hidden="true" /></Button>)
+    expect(screen.getByRole('button', { name: 'Close panel' })).toBeInTheDocument()
   })
 
+  it('keeps a text Button named by its content during success and error, not just idle', () => {
+    const { rerender } = render(<Button>Save</Button>)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    rerender(<Button actionState="success">Save</Button>)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    rerender(<Button actionState="error">Save</Button>)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    rerender(<Button actionState="idle">Save</Button>)
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+  })
+})
+
+describe('Button — action feedback timing', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date', 'performance'] }))
+  afterEach(() => vi.useRealTimers())
+
+  it('reserves feedback geometry immediately and reveals pending at the 400ms boundary', () => {
+    render(<Button actionState="pending">Save</Button>)
+    const button = screen.getByRole('button', { name: 'Save' })
+    const announcement = screen.getByRole('status')
+    expect(announcement).toBeEmptyDOMElement()
+    expect(button.querySelector('[data-action-indicator]')).toBeInTheDocument()
+    expect(button.querySelector('[data-action-feedback]')).not.toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(399))
+    expect(button.querySelector('[data-action-feedback="pending"]')).not.toBeInTheDocument()
+    expect(announcement).toBeEmptyDOMElement()
+    act(() => vi.advanceTimersByTime(1))
+    expect(button.querySelector('[data-action-feedback="pending"]')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toBe(announcement)
+    expect(announcement).toHaveTextContent('Action in progress')
+  })
+
+  it('keeps visible pending feedback for 300ms before presenting success', () => {
+    const { rerender } = render(<Button actionState="pending">Save</Button>)
+    act(() => vi.advanceTimersByTime(400))
+    rerender(<Button actionState="success">Save</Button>)
+    const button = screen.getByRole('button', { name: 'Save' })
+    expect(button.querySelector('[data-action-feedback="pending"]')).toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(299))
+    expect(button.querySelector('[data-action-feedback="success"]')).not.toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(1))
+    expect(button.querySelector('[data-action-feedback="success"]')).toBeInTheDocument()
+    expect(button).toHaveAccessibleName('Save')
+    expect(button).toHaveAttribute('aria-description', 'Action succeeded')
+    expect(screen.getByRole('status')).toHaveTextContent('Action succeeded')
+  })
+
+  it('announces an error before a retry even while the pending spinner completes its dwell', () => {
+    const { rerender } = render(<Button actionState="pending">Retry</Button>)
+    const announcement = screen.getByRole('status')
+    act(() => vi.advanceTimersByTime(400))
+    expect(announcement).toHaveTextContent('Action in progress')
+    rerender(<Button actionState="error">Retry</Button>)
+    const button = screen.getByRole('button', { name: 'Retry' })
+    expect(button.querySelector('[data-action-feedback="pending"]')).toBeInTheDocument()
+    expect(button).not.toBeDisabled()
+    expect(button).toHaveAttribute('aria-description', 'Action failed')
+    expect(announcement).toHaveTextContent('Action failed')
+    act(() => vi.advanceTimersByTime(100))
+    rerender(<Button actionState="pending">Retry</Button>)
+    expect(screen.getByRole('status')).toBe(announcement)
+    expect(announcement).toHaveTextContent('Action in progress')
+    expect(button).toBeDisabled()
+  })
+
+  it('presents a quick failure immediately and allows a retry without rewriting content', () => {
+    const retry = vi.fn()
+    const { rerender } = render(<Button actionState="pending" onClick={retry}><span>Try again</span></Button>)
+    act(() => vi.advanceTimersByTime(399))
+    rerender(<Button actionState="error" onClick={retry}><span>Try again</span></Button>)
+    const button = screen.getByRole('button', { name: 'Try again' })
+    expect(button.querySelector('[data-action-feedback="error"]')).toBeInTheDocument()
+    expect(button).toHaveAttribute('aria-description', 'Action failed')
+    expect(screen.getByRole('status')).toHaveTextContent('Action failed')
+    fireEvent.click(button)
+    expect(retry).toHaveBeenCalledOnce()
+  })
+
+  it('preserves an asChild accessible name and native link contract with success feedback', () => {
+    render(<Button asChild actionState="success"><a href="/done">Continue</a></Button>)
+    const link = screen.getByRole('link', { name: 'Continue' })
+    expect(link).toHaveAttribute('href', '/done')
+    expect(link).toHaveAttribute('aria-description', 'Action succeeded')
+    expect(link.querySelector('[data-action-feedback="success"]')).toBeInTheDocument()
+  })
+})
+
+describe('Button — asChild capture and activation', () => {
   it('does not invent native button attributes for an asChild link', () => {
     render(<Button asChild><a href="/settings">Settings</a></Button>)
     const link = screen.getByRole('link', { name: 'Settings' })
@@ -249,18 +298,6 @@ describe('Button — action contract', () => {
     expect(order).toEqual(['child-capture', 'button-capture'])
   })
 
-  it('submits a real form only when an enabled submit button activates', () => {
-    const submitted = vi.fn((event: FormEvent) => event.preventDefault())
-    const { rerender } = render(<form onSubmit={submitted}><Button type="submit">Save</Button></form>)
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(submitted).toHaveBeenCalledOnce()
-    rerender(<form onSubmit={submitted}><Button type="submit" actionState="pending">Save</Button></form>)
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    rerender(<form onSubmit={submitted}><Button type="submit" disabled>Save</Button></form>)
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(submitted).toHaveBeenCalledOnce()
-  })
-
   it('suppresses pending asChild link navigation and activation', () => {
     let activations = 0
     render(<Button asChild actionState="pending"><a href="/settings" onClick={() => { activations += 1 }}>Settings</a></Button>)
@@ -298,7 +335,23 @@ describe('Button — action contract', () => {
     expect(fireEvent.click(link)).toBe(false)
     expect(activations).toBe(0)
   })
+})
 
+describe('Button — form submission', () => {
+  it('submits a real form only when an enabled submit button activates', () => {
+    const submitted = vi.fn((event: FormEvent) => event.preventDefault())
+    const { rerender } = render(<form onSubmit={submitted}><Button type="submit">Save</Button></form>)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(submitted).toHaveBeenCalledOnce()
+    rerender(<form onSubmit={submitted}><Button type="submit" actionState="pending">Save</Button></form>)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    rerender(<form onSubmit={submitted}><Button type="submit" disabled>Save</Button></form>)
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(submitted).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Button — aria state contract', () => {
   it('does not allow callers to override enforced pending accessibility state', () => {
     render(<Button actionState="pending" aria-busy={false} aria-disabled={false}>Save</Button>)
     const button = screen.getByRole('button', { name: 'Save' })

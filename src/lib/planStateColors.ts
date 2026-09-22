@@ -30,6 +30,11 @@ export const PLAN_STATE_ORDER: readonly PlanState[] = [
 /** Per-state accent hex. The single source of truth for Plan badge colour. */
 export const PLAN_STATE_COLORS: Record<PlanState, string> = {
   draft: statusContract.inbox.resolvedColor, // neutral grey — being authored
+  // info blue — shared with Task's `next` status
+  // (design-system/tokens/colors.json): `color.status.next` refs the
+  // lighter `primitive.color.blue-label` (#60A5FA), clearing >=7:1 against
+  // near-black chip text (`primitive.color.blue`, #3B82F6, only clears
+  // ~5.4:1) — still recognisably blue, just lighter.
   approved: statusContract.next.resolvedColor, // info blue — locked in, transitional
   running: statusContract.inProgress.resolvedColor, // Forge Gold — the marquee "live" accent
   done: statusContract.done.resolvedColor, // success green — terminal, quiet

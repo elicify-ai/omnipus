@@ -65,6 +65,7 @@ test('Test B: scripts/design-system-locks/ contains expected scanner files', () 
     COVERAGE_FILE,
     'audit.mjs',
     'policy.mjs',
+    'current-checkpoint.mjs',
   ].sort()
 
   // Check for missing files

@@ -14,7 +14,11 @@
 //
 // Palette (Sovereign Deep):
 //   inbox       — neutral grey   (captured, untriaged)
-//   next        — info blue      (triaged, ready)
+//   next        — info blue      (triaged, ready — refs the lighter
+//                                 `primitive.color.blue-label` (#60A5FA,
+//                                 >=7:1 against near-black chip text);
+//                                 `primitive.color.blue` (#3B82F6) only
+//                                 clears ~5.4:1)
 //   in_progress — Forge Gold     (live work — the marquee accent #D4AF37)
 //   blocked     — warning orange (unmet dependency)
 //   done        — success green  (terminal, quiet)
@@ -38,7 +42,7 @@ export const STATUS_ORDER: readonly TaskStatus[] = [
 /** Per-status accent hex. The single source of truth for status colour. */
 export const STATUS_COLORS: Record<TaskStatus, string> = {
   inbox: statusContract.inbox.resolvedColor, // neutral grey
-  next: statusContract.next.resolvedColor, // info blue
+  next: statusContract.next.resolvedColor, // info blue (lighter label)
   in_progress: statusContract.inProgress.resolvedColor, // Forge Gold — the marquee "live work" accent
   blocked: statusContract.blocked.resolvedColor, // warning orange
   done: statusContract.done.resolvedColor, // success green

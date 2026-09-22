@@ -36,9 +36,14 @@
  * Why we assert Sheet vs Dialog:
  *   - McpServerModal renders inside a Radix Sheet (SheetContent) with
  *     data-testid="mcp-sheet" and data-side="right" (slide-out, not centred modal).
- *   - The stdio confirmation AlertDialog also uses role="dialog" — asserting
- *     data-testid="mcp-sheet" unambiguously targets the Sheet, not the AlertDialog
- *     (data-testid="stdio-confirm-dialog").
+ *   - The stdio confirmation dialog is `ConfirmDialog` (src/components/ui/confirm-dialog.tsx),
+ *     built on the shared `AlertDialog` primitive — it carries role="alertdialog" (never
+ *     a data-testid; the component's four-part publication contract catalogues it by
+ *     role/accessible name, not a test hook) with its accessible name driven by
+ *     `AlertDialogTitle`/aria-labelledby ("This runs a program on your server"). Asserting
+ *     data-testid="mcp-sheet" unambiguously targets the Sheet, not this AlertDialog; the
+ *     reverse check below asserts role="alertdialog" has no open instance, and a later
+ *     test proves that role/name selector actually detects the dialog once triggered.
  *
  * Why we use the base @playwright/test rather than the console-errors fixture:
  *   REST stubs in the first three tests are fully deterministic; no WS is involved.
@@ -135,9 +140,54 @@ test(
     })
 
     // ── Negative assertion: the stdio confirm AlertDialog must NOT be open.
-    // data-testid="stdio-confirm-dialog" only appears after selecting stdio mode
-    // and confirming — it must be absent at this point.
-    await expect(page.getByTestId('stdio-confirm-dialog')).toHaveCount(0)
+    // ConfirmDialog only mounts its role="alertdialog" content while `open`
+    // (Radix unmounts on close) — it must be absent merely from clicking
+    // "Add Server", before stdio mode is ever selected. The next test proves
+    // this same role/name selector DOES find the dialog once it is actually
+    // triggered, so this assertion is not vacuously true.
+    await expect(page.getByRole('alertdialog')).toHaveCount(0)
+  },
+)
+
+// ── E2E-7: selecting "A local program" opens the real stdio confirm dialog ───
+// BDD: Given the Sheet is open on the default "network address" mode
+//      When the operator selects "A local program" (data-testid="mode-local")
+//      Then the stdio safety confirmation opens as role="alertdialog"
+//      And its accessible name is "This runs a program on your server"
+//      (ConfirmDialog / AlertDialogTitle, src/components/skills/McpServerModal.tsx)
+//
+// This is the positive half of the Sheet-vs-Dialog check above: it proves
+// `page.getByRole('alertdialog', { name: ... })` actually finds the real
+// dialog when it is open, so the negative "not open yet" assertion in the
+// previous test is a real check, not one that trivially passes because the
+// selector can never match anything.
+//
+// Traces to: E2E-7 / AC1
+
+test(
+  'selecting "A local program" opens the stdio confirm AlertDialog (role="alertdialog", accessible name)',
+  async ({ page }) => {
+    await stubMcpServersRest(page)
+
+    const addServerBtn = await gotoMcpServersTab(page)
+    await addServerBtn.click()
+
+    const sheet = page.getByTestId('mcp-sheet')
+    await expect(sheet).toBeVisible({ timeout: 10_000 })
+
+    // Not open yet, on the default "network address" mode.
+    const stdioConfirm = page.getByRole('alertdialog', { name: 'This runs a program on your server' })
+    await expect(stdioConfirm).toHaveCount(0)
+
+    // Select "A local program" — triggers the stdio safety gate (pendingLocal).
+    await sheet.getByTestId('mode-local').click()
+
+    // ── Core assertion: the real dialog is now open, found by role + accessible name.
+    await expect(stdioConfirm).toBeVisible({ timeout: 5_000 })
+
+    // The underlying Sheet stays mounted behind the AlertDialog (it is a stacked
+    // confirmation, not a replacement panel).
+    await expect(sheet).toBeVisible()
   },
 )
 

@@ -90,6 +90,30 @@ describe('RadioGroup — base contract', () => {
     expect(screen.getByRole('radio', { name: 'Show all' })).toHaveAttribute('tabindex', '0')
   })
 
+  it('gives the first enabled item tabIndex 0 when no item matches the current value (WAI-ARIA APG fallback)', () => {
+    render(
+      <RadioGroup value="unset" onValueChange={vi.fn()} aria-label="Choice">
+        <RadioGroupItem value="a">A</RadioGroupItem>
+        <RadioGroupItem value="b">B</RadioGroupItem>
+      </RadioGroup>,
+    )
+    expect(screen.getByRole('radio', { name: 'A' })).toHaveAttribute('tabindex', '0')
+    expect(screen.getByRole('radio', { name: 'B' })).toHaveAttribute('tabindex', '-1')
+  })
+
+  it('skips a disabled first item for the no-match fallback, landing on the first ENABLED item', () => {
+    render(
+      <RadioGroup value="unset" onValueChange={vi.fn()} aria-label="Choice">
+        <RadioGroupItem value="a" disabled>A</RadioGroupItem>
+        <RadioGroupItem value="b">B</RadioGroupItem>
+      </RadioGroup>,
+    )
+    expect(screen.getByRole('radio', { name: 'A' })).toHaveAttribute('tabindex', '-1')
+    expect(screen.getByRole('radio', { name: 'B' })).toHaveAttribute('tabindex', '0')
+  })
+})
+
+describe('RadioGroup — keyboard navigation, disabled items, and misc contract', () => {
   // ── Arrow-key navigation (with wrap) + Home/End ───────────────────────────
 
   it('ArrowRight/ArrowDown selects the next option, wrapping past the last', () => {

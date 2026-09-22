@@ -8,7 +8,7 @@
  * changes during a pinch inside the view").
  */
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -21,6 +21,7 @@ import {
   computeOpeningScale,
   effectiveMinScale,
   resolveSvgIntrinsicSize,
+  useZoomableMedia,
   useZoomableViewKeyboard,
 } from './zoomable-view'
 import { renderHook } from '@testing-library/react'
@@ -234,6 +235,49 @@ describe('useZoomableViewKeyboard — the +, −, 0, 1 shortcut contract', () =>
     expect(preventDefault).not.toHaveBeenCalled()
     expect(Object.values(handlers).some((fn) => fn.mock.calls.length > 0)).toBe(false)
   })
+
+  // LibraryPdfPreview attaches this handler to a container that ALSO holds
+  // fillable PDF form fields — typing "10" into a date field must never
+  // zoom.
+  it('leaves a zoom shortcut typed into an editable field inside the view alone', async () => {
+    const handlers = { onZoomIn: vi.fn(), onZoomOut: vi.fn(), onFit: vi.fn(), onZoomTo100: vi.fn() }
+    function ZoomKeyboardHost() {
+      const onKeyDown = useZoomableViewKeyboard(handlers)
+      return (
+        <div onKeyDown={onKeyDown}>
+          <input aria-label="Date" />
+        </div>
+      )
+    }
+    const user = userEvent.setup()
+    render(<ZoomKeyboardHost />)
+    await user.type(screen.getByRole('textbox', { name: 'Date' }), '10')
+    expect(screen.getByRole('textbox', { name: 'Date' })).toHaveValue('10')
+    expect(handlers.onZoomIn).not.toHaveBeenCalled()
+    expect(handlers.onZoomOut).not.toHaveBeenCalled()
+    expect(handlers.onFit).not.toHaveBeenCalled()
+    expect(handlers.onZoomTo100).not.toHaveBeenCalled()
+  })
+
+  it('still fires for the view frame itself, outside any editable target', () => {
+    const handlers = { onZoomIn: vi.fn(), onZoomOut: vi.fn(), onFit: vi.fn(), onZoomTo100: vi.fn() }
+    function ZoomKeyboardHost() {
+      const onKeyDown = useZoomableViewKeyboard(handlers)
+      return <div data-testid="frame" tabIndex={0} onKeyDown={onKeyDown} />
+    }
+    render(<ZoomKeyboardHost />)
+    fireEvent.keyDown(screen.getByTestId('frame'), { key: '1' })
+    expect(handlers.onZoomTo100).toHaveBeenCalledTimes(1)
+  })
+
+  it('lets the browser own a Ctrl/Cmd zoom combo instead of hijacking it', () => {
+    const handlers = { onZoomIn: vi.fn(), onZoomOut: vi.fn(), onFit: vi.fn(), onZoomTo100: vi.fn() }
+    const { result } = renderHook(() => useZoomableViewKeyboard(handlers))
+    const preventDefault = vi.fn()
+    result.current({ key: '=', ctrlKey: true, preventDefault } as unknown as React.KeyboardEvent)
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(handlers.onZoomIn).not.toHaveBeenCalled()
+  })
 })
 
 describe('ZoomableMediaSurface — wheel zoom never leaks to the page', () => {
@@ -272,6 +316,72 @@ describe('ZoomableMediaSurface — wheel zoom never leaks to the page', () => {
     const surface = screen.getByTestId('zoomable-media-surface')
     fireEvent.wheel(surface, { deltaY: -100 })
     expect(onScaleChange).not.toHaveBeenCalled()
+  })
+})
+
+// The doc (docs/internal/design/components/zoomable-view.md) claims pinch is
+// pointer-centred, same as wheel. These derive the expected translate
+// directly from the SAME formula the wheel handler already uses
+// (`next = anchor - (anchor - prevTranslate) * (nextScale / prevScale)`),
+// never by reading the implementation.
+describe('useZoomableMedia — pinch zoom is pointer-centred, like wheel', () => {
+  function fakeFrame(rect: { left: number; top: number; width: number; height: number }) {
+    return { getBoundingClientRect: () => rect } as unknown as HTMLDivElement
+  }
+  function pointerEvent(pointerId: number, clientX: number, clientY: number) {
+    return { pointerId, clientX, clientY, target: {} } as unknown as React.PointerEvent<HTMLDivElement>
+  }
+
+  it('re-centres translate on the pinch midpoint across two incremental pinch-apart moves', () => {
+    const { result } = renderHook(() => useZoomableMedia({ contentSize: { width: 400, height: 300 } }))
+    act(() => { result.current.frameRef.current = fakeFrame({ left: 0, top: 0, width: 200, height: 200 }) })
+    act(() => { result.current.controller.zoomTo100() }) // known baseline: scale=1, translate={0,0}
+
+    // Two fingers land at (50,100) and (150,100) — distance 100, midpoint (100,100)
+    // i.e. exactly the frame centre (anchor 0,0).
+    act(() => { result.current.frameProps.onPointerDown(pointerEvent(1, 50, 100)) })
+    act(() => { result.current.frameProps.onPointerDown(pointerEvent(2, 150, 100)) })
+
+    // Move 1: finger 1 -> (0,100). Pair is now (0,100)/(150,100), distance 150,
+    // ratio 1.5, midpoint (75,100) -> anchor (-25,0). prevScale=1, nextScale=1.5,
+    // delta=1.5, prevTranslate={0,0}: next.x = -25 - (-25-0)*1.5 = 12.5.
+    act(() => { result.current.frameProps.onPointerMove(pointerEvent(1, 0, 100)) })
+    expect(result.current.scale).toBeCloseTo(1.5)
+    expect(result.current.translate.x).toBeCloseTo(12.5)
+    expect(result.current.translate.y).toBeCloseTo(0)
+
+    // Move 2: finger 2 -> (200,100). Pair is now (0,100)/(200,100), distance 200,
+    // ratio 2.0, midpoint (100,100) -> anchor (0,0). prevScale=1.5, nextScale=2,
+    // delta=4/3, prevTranslate={12.5,0}: next.x = 0 - (0-12.5)*(4/3) = 50/3.
+    act(() => { result.current.frameProps.onPointerMove(pointerEvent(2, 200, 100)) })
+    expect(result.current.scale).toBeCloseTo(2)
+    expect(result.current.translate.x).toBeCloseTo(50 / 3)
+    expect(result.current.translate.y).toBeCloseTo(0)
+  })
+
+  it('shifts translate toward an off-centre pinch midpoint, not just the frame centre', () => {
+    const { result } = renderHook(() => useZoomableMedia({ contentSize: { width: 400, height: 300 } }))
+    act(() => { result.current.frameRef.current = fakeFrame({ left: 0, top: 0, width: 200, height: 200 }) })
+    act(() => { result.current.controller.zoomTo100() })
+
+    // Both fingers pinch near the frame's top-left, well off centre.
+    act(() => { result.current.frameProps.onPointerDown(pointerEvent(1, 10, 10)) })
+    act(() => { result.current.frameProps.onPointerDown(pointerEvent(2, 30, 10)) })
+    // Move 1: finger 1 -> (0,10). Pair (0,10)/(30,10), distance 30, ratio 1.5,
+    // midpoint (15,10) -> anchor (-85,-90). prevScale=1, nextScale=1.5, delta=1.5,
+    // prevTranslate={0,0}: next = (42.5, 45).
+    act(() => { result.current.frameProps.onPointerMove(pointerEvent(1, 0, 10)) })
+    expect(result.current.translate.x).toBeCloseTo(42.5)
+    expect(result.current.translate.y).toBeCloseTo(45)
+    // Move 2: finger 2 -> (40,10). Pair (0,10)/(40,10), distance 40, ratio 2,
+    // midpoint (20,10) -> anchor (-80,-90). prevScale=1.5, nextScale=2, delta=4/3,
+    // prevTranslate={42.5,45}: next.x = -80 - (-80-42.5)*(4/3) = 250/3;
+    // next.y = -90 - (-90-45)*(4/3) = 90 — off the frame centre in BOTH axes,
+    // proving this isn't accidentally landing back on (0,0) by symmetry.
+    act(() => { result.current.frameProps.onPointerMove(pointerEvent(2, 40, 10)) })
+    expect(result.current.scale).toBeCloseTo(2)
+    expect(result.current.translate.x).toBeCloseTo(250 / 3)
+    expect(result.current.translate.y).toBeCloseTo(90)
   })
 })
 

@@ -185,10 +185,50 @@ const DEFAULT_MAX_RETRIES = 5
 // sent are never delivered at all. The old value shipped an offer with ZERO
 // candidates, Pion had nothing to pair against, and ICE failed 30s later with
 // no indication why. Every live-browser session on macOS hit this.
-const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 12000
+export const DEFAULT_ICE_GATHERING_TIMEOUT_MS = 12000
 
 function defaultPcFactory(): RTCPeerConnection {
   return new RTCPeerConnection({ iceServers: [{ urls: DEFAULT_STUN_SERVER }] })
+}
+
+/** A bounded wait for `pc.iceGatheringState` to reach 'complete', shared by
+ * the media (`BrowserWebRTCSession`) and dedicated-input
+ * (`BrowserInputWebRTCSession`) offer paths so neither wedges forever on a
+ * stuck gathering (see `DEFAULT_ICE_GATHERING_TIMEOUT_MS`'s doc comment) and
+ * neither duplicates this timer/listener bookkeeping. */
+export interface BoundedIceGathering { // not-wire-format: local return shape of a client-side timer/listener helper; never serialized
+  /** Resolves once `pc.iceGatheringState` reaches 'complete', or once
+   * `timeoutMs` elapses — whichever comes first. Never rejects. After it
+   * resolves, check `pc.iceGatheringState === 'complete'` to tell which one
+   * happened: 'complete' means gathering actually finished; anything else
+   * means the bound elapsed with a partial (possibly empty) candidate set. */
+  promise: Promise<void>
+  /** Resolves `promise` immediately and tears down the timer/listener.
+   * Idempotent. The caller MUST invoke this on teardown (peer
+   * closed/superseded) so a bound timer/listener never outlives its
+   * RTCPeerConnection or fires into a torn-down instance's state. */
+  cancel: () => void
+}
+
+export function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs: number): BoundedIceGathering {
+  if (pc.iceGatheringState === 'complete') return { promise: Promise.resolve(), cancel: () => {} }
+  let finish: () => void = () => {}
+  const promise = new Promise<void>((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    finish = () => {
+      if (timer !== null) {
+        clearTimeout(timer)
+        timer = null
+      }
+      pc.onicegatheringstatechange = null
+      resolve()
+    }
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === 'complete') finish()
+    }
+    timer = setTimeout(finish, timeoutMs)
+  })
+  return { promise, cancel: () => finish() }
 }
 
 /**
@@ -359,7 +399,7 @@ export class BrowserWebRTCSession {
   private answerTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   private disconnectedTimer: ReturnType<typeof setTimeout> | null = null
   private retryTimer: ReturnType<typeof setTimeout> | null = null
-  private iceGatheringTimer: ReturnType<typeof setTimeout> | null = null
+  private cancelIceGathering: (() => void) | null = null
   private receiverHealthTimer: ReturnType<typeof setInterval> | null = null
   private videoTrack: MediaStreamTrack | null = null
   private stopDiagnostics: (() => void) | null = null
@@ -654,71 +694,54 @@ export class BrowserWebRTCSession {
     }
   }
 
-  private _waitForIceGatheringComplete(pc: RTCPeerConnection): Promise<void> {
-    if (pc.iceGatheringState === 'complete') return Promise.resolve()
-    return new Promise((resolve) => {
-      // fix-wave B (LOW): bound the wait — a gathering process that never
-      // reaches 'complete' (a stuck STUN round trip, a flaky network) used to
-      // wedge this Promise forever, leaving the machine stuck in 'offering'
-      // with no offer ever sent and no fallback ever triggered. Non-trickle
-      // still works with whatever candidates gathered in the timeout window,
-      // so proceeding with a PARTIAL set beats never proceeding at all. NOTE:
-      // an earlier revision of this comment claimed the worst case was 'fewer
-      // candidate types, not zero'. That is false on macOS, where the sole
-      // candidate is an mDNS name whose registration can outlast the deadline
-      // — measured 3224ms against a 3000ms timeout — leaving exactly zero. The caller
-      // (`_beginOffer`) re-checks `this.pc !== pc` right after this resolves,
-      // so a timeout firing after the session was superseded/stopped is
-      // harmless.
-      this.iceGatheringTimer = setTimeout(() => {
-        this.iceGatheringTimer = null
-        pc.onicegatheringstatechange = null
-        // Proceeding with a PARTIAL candidate set is fine. Proceeding with an
-        // EMPTY one never is: non-trickle means an offer carrying no
-        // candidates can only ever fail, 30s later, with ICE 'failed' and
-        // nothing pointing at the cause.
-        //
-        // Bugfix (SMALL-1, external review 2026-08-13): an earlier revision
-        // (277cf7b7) titled itself "refuse to ship an empty offer" but only
-        // ever logged the console.warn below and then called `resolve()`
-        // regardless — the offer shipped anyway, exactly as before. The
-        // commit message overclaimed what the code did. This now genuinely
-        // refuses: `_fallback` reports a real, visible reason immediately
-        // (ADR-061 — no silent failures) instead of shipping a doomed offer
-        // and burning the full answer timeout waiting on a reply that could
-        // never arrive. `_fallback` tears down `this.pc` itself, so
-        // `_beginOffer`'s own `if (this.pc !== pc) return` guard — the same
-        // "superseded" check it already uses for a stop()/retry mid-flight —
-        // is what actually stops the offer from going out; the `resolve()`
-        // below only unblocks that check, it does not mean "proceed".
-        const gathered = (pc.localDescription?.sdp ?? '')
-          .split('\n')
-          .filter((l) => l.trim().startsWith('a=candidate:')).length
-        if (gathered === 0) {
-          console.warn(
-            `[browserWebRTC] ICE gathering timed out after ${this.iceGatheringTimeoutMs}ms with ZERO ` +
-              'candidates. Refusing to ship an undeliverable offer — signaling is non-trickle, so ' +
-              'candidates gathered after this point would never be sent anyway. Falling back now ' +
-              'instead of waiting 30s for an answer that could never come. On macOS this is usually ' +
-              'slow or blocked mDNS (.local) candidate registration.',
-          )
-          this._fallback('ice-gathering-empty')
-          resolve()
-          return
-        }
-        resolve()
-      }, this.iceGatheringTimeoutMs)
-      pc.onicegatheringstatechange = () => {
-        if (pc.iceGatheringState === 'complete') {
-          if (this.iceGatheringTimer !== null) {
-            clearTimeout(this.iceGatheringTimer)
-            this.iceGatheringTimer = null
-          }
-          pc.onicegatheringstatechange = null
-          resolve()
-        }
-      }
-    })
+  // Bounded because a gathering process that never reaches 'complete' (a
+  // stuck STUN round trip, a flaky network) would otherwise wedge this
+  // promise forever, leaving the machine stuck in 'offering' with no offer
+  // ever sent and no fallback ever triggered. Non-trickle still works with
+  // whatever candidates gathered in the timeout window, so proceeding with a
+  // PARTIAL set beats never proceeding at all. On macOS the worst case is
+  // exactly zero candidates, not merely fewer types: the sole candidate can
+  // be an mDNS name whose registration outlasts the deadline (measured
+  // 3224ms against a 3000ms timeout). The bound wait itself lives in
+  // `waitForIceGatheringComplete` (shared with `BrowserInputWebRTCSession`);
+  // this method layers the media path's own "refuse an undeliverable empty
+  // offer" policy on top of it.
+  private async _waitForIceGatheringComplete(pc: RTCPeerConnection): Promise<void> {
+    const gathering = waitForIceGatheringComplete(pc, this.iceGatheringTimeoutMs)
+    this.cancelIceGathering = gathering.cancel
+    await gathering.promise
+    this.cancelIceGathering = null
+    // Superseded/stopped mid-wait (`_cleanupPeer` calls `cancel()` above to
+    // unblock this await) — the caller's own `if (this.pc !== pc) return`
+    // guard after calling this method is belt-and-braces; this guard is what
+    // actually stops a torn-down instance from evaluating (or re-triggering)
+    // the empty-candidate fallback below.
+    if (this.pc !== pc || pc.iceGatheringState === 'complete') return
+    // Proceeding with a PARTIAL candidate set is fine. Proceeding with an
+    // EMPTY one never is: non-trickle means an offer carrying no candidates
+    // can only ever fail, 30s later, with ICE 'failed' and nothing pointing
+    // at the cause.
+    //
+    // `_fallback` reports a real, visible reason immediately (ADR-061 — no
+    // silent failures) instead of shipping a doomed offer and burning the
+    // full answer timeout waiting on a reply that could never arrive.
+    // `_fallback` tears down `this.pc` itself, so `_beginOffer`'s own
+    // `if (this.pc !== pc) return` guard — the same "superseded" check it
+    // already uses for a stop()/retry mid-flight — is what actually stops
+    // the offer from going out.
+    const gathered = (pc.localDescription?.sdp ?? '')
+      .split('\n')
+      .filter((l) => l.trim().startsWith('a=candidate:')).length
+    if (gathered === 0) {
+      console.warn(
+        `[browserWebRTC] ICE gathering timed out after ${this.iceGatheringTimeoutMs}ms with ZERO ` +
+          'candidates. Refusing to ship an undeliverable offer — signaling is non-trickle, so ' +
+          'candidates gathered after this point would never be sent anyway. Falling back now ' +
+          'instead of waiting 30s for an answer that could never come. On macOS this is usually ' +
+          'slow or blocked mDNS (.local) candidate registration.',
+      )
+      this._fallback('ice-gathering-empty')
+    }
   }
 
   private _wirePeerConnectionEvents(pc: RTCPeerConnection): void {
@@ -895,9 +918,9 @@ export class BrowserWebRTCSession {
     this.videoTrack = null
     this._clearAnswerTimeout()
     this._clearDisconnectedTimer()
-    if (this.iceGatheringTimer !== null) {
-      clearTimeout(this.iceGatheringTimer)
-      this.iceGatheringTimer = null
+    if (this.cancelIceGathering !== null) {
+      this.cancelIceGathering()
+      this.cancelIceGathering = null
     }
     if (this.inputChannel) {
       try {

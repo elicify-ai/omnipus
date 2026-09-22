@@ -373,25 +373,46 @@
       "ref": "primitive.color.grey-hover"
     },
     {
+      "id": "primitive.color.blue-label",
+      "css": "--primitive-color-blue-label",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#60A5FA"
+    },
+    {
+      "id": "primitive.color.blue-label-tint",
+      "css": "--primitive-color-blue-label-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#60A5FA1A"
+    },
+    {
+      "id": "primitive.color.blue-label-hover",
+      "css": "--primitive-color-blue-label-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#60A5FA26"
+    },
+    {
       "id": "color.status.next",
       "css": "--color-status-next",
       "layer": "semantic",
       "kind": "color",
-      "ref": "primitive.color.blue"
+      "ref": "primitive.color.blue-label"
     },
     {
       "id": "color.status.next.background",
       "css": "--color-status-next-background",
       "layer": "semantic",
       "kind": "color",
-      "ref": "primitive.color.blue-tint"
+      "ref": "primitive.color.blue-label-tint"
     },
     {
       "id": "color.status.next.hover",
       "css": "--color-status-next-hover",
       "layer": "semantic",
       "kind": "color",
-      "ref": "primitive.color.blue-hover"
+      "ref": "primitive.color.blue-label-hover"
     },
     {
       "id": "color.status.in-progress",
@@ -461,21 +482,21 @@
       "css": "--color-status-failed",
       "layer": "semantic",
       "kind": "color",
-      "ref": "primitive.color.red"
+      "ref": "primitive.color.red-label"
     },
     {
       "id": "color.status.failed.background",
       "css": "--color-status-failed-background",
       "layer": "semantic",
       "kind": "color",
-      "ref": "primitive.color.red-tint"
+      "ref": "primitive.color.red-label-tint"
     },
     {
       "id": "color.status.failed.hover",
       "css": "--color-status-failed-hover",
       "layer": "semantic",
       "kind": "color",
-      "ref": "primitive.color.red-status-hover"
+      "ref": "primitive.color.red-label-hover"
     },
     {
       "id": "color.status.cancelled",
@@ -1631,6 +1652,20 @@
       "layer": "primitive",
       "kind": "color",
       "value": "#F87171"
+    },
+    {
+      "id": "primitive.color.red-label-tint",
+      "css": "--primitive-color-red-label-tint",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#F871711A"
+    },
+    {
+      "id": "primitive.color.red-label-hover",
+      "css": "--primitive-color-red-label-hover",
+      "layer": "primitive",
+      "kind": "color",
+      "value": "#F8717126"
     },
     {
       "id": "color.text.error",

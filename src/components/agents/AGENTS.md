@@ -3,6 +3,12 @@
 The screen shell `AgentListScreen.tsx` lives in `src/components/screens/`;
 this folder holds the profile, form, wizard, and tool-approval pieces.
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## Agent types (spec: `docs/internal/specs/agent-form-requirements.md`)
 
 - Wire taxonomy: `Main` (chat colleague) / `Subagent` (delegation-only worker

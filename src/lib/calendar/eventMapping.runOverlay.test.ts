@@ -368,11 +368,36 @@ describe('four-state chip rule — state 5: skipped (overlap-guard run outcome)'
     const ext = events[0].extendedProps
     expect(ext?.status).toBe('skipped')
     expect(ext?.icon).toBe('SkipForward')
-    expect(events[0].backgroundColor).toBe('#F97316') // SKIPPED_STYLE.bg — the orange, not the grey fallback
+    // SKIPPED_STYLE.bg — the amber (statusContract.cancelled), not the grey
+    // fallback; see SKIPPED_STYLE's own doc comment in types.ts. The next
+    // test proves it stays distinct from STATUS_STYLE.blocked's orange.
+    expect(events[0].backgroundColor).toBe('#EAB308')
     if (ext?.kind === 'task-occurrence') {
       expect(ext.runId).toBe('run-skip')
       expect(ext.sessionId).toBe('s-skip')
     }
+  })
+
+  // Independent oracle: renders a REAL 'blocked' task chip AND a real
+  // skipped-run chip through the same `mapToCalendarEvents` path (not a copy
+  // read out of STATUS_STYLE/SKIPPED_STYLE) and compares their actual
+  // rendered colours directly, so a future change that collapses the two
+  // statuses onto the same hex fails here even if neither constant is ever
+  // read by name.
+  it('a blocked task chip renders a different colour than a skipped run chip', () => {
+    const blockedTask = makeTask({ status: 'blocked', due: '2026-06-20' })
+    const [blockedEvent] = mapToCalendarEvents([blockedTask])
+
+    const occurrenceMs = NOW - 60_000
+    const skippedSet = makeOccurrenceSet({
+      occurrences_ms: [occurrenceMs],
+      occurrence_runs: [
+        { occurrence_ms: occurrenceMs, status: 'skipped', run_id: 'run-skip-3', session_id: 's-3', has_result: false },
+      ],
+    })
+    const [skippedEvent] = mapToCalendarEvents([makeTask({ status: 'next' })], [skippedSet], NOW, NOW)
+
+    expect(blockedEvent.backgroundColor).not.toBe(skippedEvent.backgroundColor)
   })
 
   it('a skipped run is NOT overridden by task.status, and never falls back to STATUS_STYLE_FALLBACK grey', () => {

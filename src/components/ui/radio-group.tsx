@@ -36,6 +36,13 @@ interface RadioGroupContextValue {
   value: string
   onValueChange: (value: string) => void
   disabled?: boolean
+  /** The value that should carry the group's one Tab stop (WAI-ARIA APG
+   *  roving tabindex): normally the checked value, but when `value` matches
+   *  no rendered item — a group whose initial/external value hasn't landed
+   *  on an option yet — the checked-item fallback leaves the WHOLE group
+   *  unreachable by keyboard (every item at tabIndex -1). Falls back to the
+   *  first enabled item's value so the group is always reachable. */
+  activeTabValue: string | undefined
 }
 
 const RadioGroupContext = React.createContext<RadioGroupContextValue | null>(null)
@@ -75,9 +82,26 @@ export type RadioGroupProps = Omit<
 
 const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(
   ({ value, onValueChange, disabled, orientation = 'horizontal', className, children, ...props }, ref) => {
+    // Computed from the rendered items themselves (their own `value`/
+    // `disabled` props), the same source the keyboard navigation already
+    // reads via the DOM (`RADIO_SELECTOR`) — see the interface doc above.
+    const activeTabValue = React.useMemo(() => {
+      let matched = false
+      let firstEnabled: string | undefined
+      React.Children.forEach(children, (child) => {
+        if (!React.isValidElement(child)) return
+        const itemProps = child.props as { value?: string; disabled?: boolean }
+        if (itemProps.value === undefined) return
+        if (itemProps.value === value) matched = true
+        if (firstEnabled === undefined && !(itemProps.disabled ?? disabled)) {
+          firstEnabled = itemProps.value
+        }
+      })
+      return matched ? value : firstEnabled
+    }, [children, value, disabled])
     const contextValue = React.useMemo(
-      () => ({ value, onValueChange, disabled }),
-      [value, onValueChange, disabled],
+      () => ({ value, onValueChange, disabled, activeTabValue }),
+      [value, onValueChange, disabled, activeTabValue],
     )
     return (
       <RadioGroupContext.Provider value={contextValue}>
@@ -162,7 +186,7 @@ const RadioGroupItem = React.forwardRef<HTMLButtonElement, RadioGroupItemProps>(
         variant="ghost"
         role="radio"
         aria-checked={checked}
-        tabIndex={checked ? 0 : -1}
+        tabIndex={value === ctx.activeTabValue ? 0 : -1}
         disabled={isDisabled}
         data-radio-value={value}
         data-state={checked ? 'checked' : 'unchecked'}

@@ -41,9 +41,10 @@ const LEDGER_VERSION = 1
  * The only two registrable ruleId classes for this builder (lane R1 brief):
  * "*\/extension-boundary" (any scanner) or the exact ts-colors governed-value
  * rule. Never raw-color, off-scale, unsupported, or any other debt ruleId.
- * Re-exported under this name for backward compatibility; the logic itself
- * lives in scripts/design-system-locks/audit.mjs so its ledger-exception
- * gate can never diverge from this builder's allow-list.
+ * This module's established name for the check, bound directly to
+ * scripts/design-system-locks/audit.mjs's implementation (not a copy) so
+ * this builder's allow-list and the CI gate's ledger-exception check can
+ * never diverge — see registry-build.test.mjs's identity assertion.
  */
 export const isAllowedRuleId = isAllowedExceptionRuleId
 

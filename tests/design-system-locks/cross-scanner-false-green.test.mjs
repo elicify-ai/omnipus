@@ -20,8 +20,9 @@ import { scan as scanTsColors } from '../../scripts/design-system-locks/ts-color
 // `p-4`/`text-sm`-style utilities: those are themselves violations under this
 // repo's policy and would silently invalidate any case that used them.
 //
-// This suite is expected to be RED for some scanners today -- that is its
-// purpose. Nothing here is marked todo/skip.
+// All three scanners pass every case in this suite. Nothing here is marked
+// todo/skip: a regression in any scanner's resolution path turns this suite
+// RED, which is its ongoing purpose.
 
 const policy = loadPolicy()
 

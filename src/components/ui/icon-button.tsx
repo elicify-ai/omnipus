@@ -1,7 +1,7 @@
 import * as React from 'react'
 
 import { Button, type ButtonProps } from './button'
-import { clsx } from 'clsx'
+import { cn } from '@/lib/utils'
 
 type AccessibleName =
   | { 'aria-label': string; 'aria-labelledby'?: never }
@@ -12,6 +12,20 @@ export type IconButtonProps = Omit<ButtonProps, 'aria-label' | 'aria-labelledby'
 }
 
 const iconButtonSizes = { sm: 'h-8 w-8 p-0', default: 'h-9 w-9 p-0', lg: 'h-10 w-10 p-0' } as const
+
+// Thrown (never a raw TypeError from a missing property) when a caller
+// bypasses the AccessibleName union at runtime — e.g. spreading untyped
+// props — without supplying either accessible-name mechanism. Internal only:
+// no consumer outside this module and its test catches this specific class
+// (unlike e.g. `buttonVariants`, which is a genuine public export of
+// button.tsx) — callers only need `Error.name`/`message`, so it is not
+// re-exported from the barrel or the design-system catalog.
+class IconButtonAccessibleNameError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'IconButtonAccessibleNameError'
+  }
+}
 
 // Defaults to `ghost`, NOT to Button's own `default`. An icon-only control is
 // a toolbar affordance — close, remove, zoom, expand — essentially never the
@@ -24,13 +38,18 @@ const iconButtonSizes = { sm: 'h-8 w-8 p-0', default: 'h-9 w-9 p-0', lg: 'h-10 w
 // `variant="default"` explicitly.
 const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(({ size = 'default', variant = 'ghost', className, children, 'aria-label': ariaLabel, 'aria-labelledby': ariaLabelledBy, ...buttonProps }, ref) => {
   const accessibleName = ariaLabel ?? ariaLabelledBy
-  if (accessibleName.trim().length === 0) throw new Error('IconButton accessible name must contain visible text')
+  if (accessibleName === undefined) {
+    throw new IconButtonAccessibleNameError('IconButton requires an aria-label or aria-labelledby prop')
+  }
+  if (accessibleName.trim().length === 0) {
+    throw new IconButtonAccessibleNameError('IconButton accessible name must contain visible text')
+  }
   return (
     <Button
       ref={ref}
       size="icon"
       variant={variant}
-      className={clsx(`${iconButtonSizes[size]}`, className)}
+      className={cn(iconButtonSizes[size], className)}
       {...buttonProps}
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledBy}

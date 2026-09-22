@@ -49,6 +49,33 @@ export function LibraryVideoPreview({ workspaceId, entry, variant = 'pane' }: Li
     }
   }
 
+  // No <track>: a workspace video file carries no caption track to attach.
+  // Shared by both variants; only the inline variant adds its own frame.
+  const player = (
+    <>
+      <video
+        ref={videoRef}
+        controls
+        // UAT D-102: same native-control colour rule as LibraryAudioPreview.
+        style={{ colorScheme: 'dark' }}
+        src={src}
+        onError={() => setFailed(true)}
+        className="block max-h-full max-w-full rounded-md"
+        data-testid="library-video-element"
+      >
+        Your browser does not support playing this video. Use Download instead.
+      </video>
+      <IconButton
+        onClick={handleFullscreen}
+        aria-label="Open full screen"
+        className="absolute top-2 right-2 h-7 w-7 flex items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
+        data-testid="library-video-fullscreen"
+      >
+        <ArrowsOutSimple size={14} />
+      </IconButton>
+    </>
+  )
+
   return (
     <div
       // Same container as LibraryAudioPreview — keep both literal strings in sync by hand.
@@ -63,30 +90,14 @@ export function LibraryVideoPreview({ workspaceId, entry, variant = 'pane' }: Li
     >
       {failed ? (
         <MediaUnplayableNotice kind="video" name={entry.path} href={src} />
+      ) : variant === 'inline' ? (
+        // The frame shrink-wraps the rendered video, so the full-screen
+        // button sits in the video's own corner rather than the note column's.
+        <div className="relative inline-block" data-testid="library-video-frame">
+          {player}
+        </div>
       ) : (
-        /* No <track>: a workspace video file carries no caption track to attach. */
-        <>
-          <video
-            ref={videoRef}
-            controls
-            // UAT D-102: same native-control colour rule as LibraryAudioPreview.
-            style={{ colorScheme: 'dark' }}
-            src={src}
-            onError={() => setFailed(true)}
-            className="max-h-full max-w-full rounded-md"
-            data-testid="library-video-element"
-          >
-            Your browser does not support playing this video. Use Download instead.
-          </video>
-          <IconButton
-            onClick={handleFullscreen}
-            aria-label="Open full screen"
-            className="absolute top-2 right-2 h-7 w-7 flex items-center justify-center rounded transition-colors text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)]"
-            data-testid="library-video-fullscreen"
-          >
-            <ArrowsOutSimple size={14} />
-          </IconButton>
-        </>
+        player
       )}
     </div>
   )

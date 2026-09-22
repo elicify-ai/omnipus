@@ -66,7 +66,7 @@ export type OccurrenceChipStatus = TaskStatus | 'scheduled' | 'no_record' | 'ski
  * fifth REAL `TaskRun.status` member — a scheduled fire that never ran
  * because the previous occurrence was still `in_progress` — not a synthetic
  * day-vs-now state like `'scheduled'`/`'no_record'`. It renders as its own
- * distinct orange chip (`SKIPPED_STYLE`) rather than falling through
+ * distinct amber chip (`SKIPPED_STYLE`) rather than falling through
  * `STATUS_STYLE` (which stays `TaskStatus`-only — `skipped` is NOT a
  * `Task.status` value).
  */
@@ -210,8 +210,17 @@ export const CHIP_TEXT_COLOR = 'var(--color-primary)'
 
 /**
  * Canonical status → chip style map (single source of truth, FR-005).
- * `bg` is the chip background; the icon is the StatusIconKey. All clear >=7:1
- * contrast with CHIP_TEXT_COLOR. `next`/`inbox` are muted/slate.
+ * `bg` is the chip background; the icon is the StatusIconKey. `inbox` is
+ * muted/slate; `next` is a lighter "info" blue (see `next`'s entry below).
+ *
+ * Every entry MUST read `statusContract.<matching status>.resolvedColor` —
+ * this is mechanically enforced product-wide by
+ * `scripts/design-system-locks/status.mjs` (`design-system/status-mismatch`):
+ * a status keyed `next` sourced from any OTHER status's contract entry (or a
+ * raw hex, even one matching the right value) is a lock finding, not a style
+ * choice. A per-file colour that this contract's shared value can't satisfy
+ * must be fixed at the token (`design-system/tokens/colors.json`), never
+ * worked around locally.
  */
 export interface ChipStyle {
   bg: string
@@ -224,6 +233,15 @@ export const STATUS_STYLE: Record<TaskStatus, ChipStyle> = {
   blocked: { bg: statusContract.blocked.resolvedColor, icon: 'Prohibit' },
   failed: { bg: statusContract.failed.resolvedColor, icon: 'XCircle' },
   inbox: { bg: statusContract.inbox.resolvedColor, icon: 'Circle' },
+  // `color.status.next` reads `primitive.color.blue-label` (#60A5FA, one
+  // step lighter than `primitive.color.blue`, mirroring the existing
+  // `red`/`red-label` pattern): clears >=7:1 against `CHIP_TEXT_COLOR` while
+  // staying recognisably blue, distinct from `inbox`'s grey. Must not match
+  // `inbox`'s grey — Plan's `approved` state (planStateColors.ts) reads this
+  // same shared contract entry and would then collide with its own `draft`
+  // state (planStateColors.test.ts enforces that no two states share a
+  // colour). Verified in eventMapping.test.ts, status.test.ts, and
+  // planStateColors.test.ts.
   next: { bg: statusContract.next.resolvedColor, icon: 'Circle' },
 }
 
@@ -253,15 +271,21 @@ export const NO_RECORD_STYLE: ChipStyle = { bg: '#94A3B8', icon: 'Circle' }
  * "Skipped" occurrence chip style — a real `TaskRun.status` value (not a
  * synthetic day-vs-now state): a scheduled fire the backend's overlap guard
  * declined to run because the previous occurrence was still `in_progress`.
- * Distinct orange (operator direction: "make it orange... so it is
- * transparent to the user what happened") — reuses the SAME hex as
- * `src/lib/statusColors.ts`'s `blocked` (`#F97316` / `--color-cancelled` in
- * `src/styles/globals.css`), this codebase's one established "orange", never
- * a newly invented hue. `SkipForward` (not `Prohibit`, already `blocked`;
- * not `Warning`/`WarningCircle`, already error-banner meaning) reads as
- * "this fire was skipped".
+ *
+ * Reuses `statusContract.cancelled` (amber, `--color-status-cancelled`), an
+ * already-registered, already >=7:1-vs-`CHIP_TEXT_COLOR` status token. Must
+ * stay distinct from `STATUS_STYLE.blocked`'s orange (and from
+ * `in_progress`'s gold): `statusContract.blocked` is locked to the app-wide
+ * "blocked" hue by `scripts/design-system-locks/status.mjs` and cannot
+ * change here (see `STATUS_STYLE`'s doc comment), so a blocked task chip and
+ * a skipped run chip would otherwise be pixel-identical on the same
+ * calendar grid — and this file's own design intent (FR-005 comment,
+ * `STATUS_STYLE`'s doc comment) requires colour, not icon alone, to carry
+ * the distinction. `SkipForward` (not `Prohibit`, already `blocked`; not
+ * `Warning`/`WarningCircle`, already error-banner meaning) reads as "this
+ * fire was skipped".
  */
-export const SKIPPED_STYLE: ChipStyle = { bg: '#F97316', icon: 'SkipForward' }
+export const SKIPPED_STYLE: ChipStyle = { bg: statusContract.cancelled.resolvedColor, icon: 'SkipForward' }
 
 /** The forwarded ref both FullCalendarView and CalendarToolbar share. */
 export type CalendarApiRef = MutableRefObject<FullCalendar | null>

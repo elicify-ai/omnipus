@@ -3,6 +3,12 @@
 `BrowserLiveView.tsx` (video + input) and `BrowserLivePanel.tsx`. Reached via
 `src/routes/_app/browser-live.tsx` and the chat browser handover.
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## WebRTC is the ONLY live-browser video path (ADR-061)
 
 - The JPEG screencast fallback is deleted in full, including the SPA sink

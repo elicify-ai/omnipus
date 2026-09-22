@@ -4,6 +4,12 @@ The screen is Connectors — route `/#/connectors` (`src/routes/_app/connectors.
 body `src/components/screens/ConnectorsScreen.tsx`. `/#/channels` is a 404
 (negation test `src/routes/_app/-channels.test.tsx`).
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## The rename stops at the UI — everything below is still "channel"
 
 The UI screen was renamed Channels → Connectors (commit `1b95ced6`); NOTHING

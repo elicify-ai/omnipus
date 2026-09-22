@@ -9,6 +9,12 @@ dialogs/cards they share (`GatewayRestartModal`, `ReAuthDialog`,
 too. A new setting goes into a new or existing section file wired into the
 shell — not a new screen, and not inline markup grown inside the shell.
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## Cross-links that live elsewhere
 
 - "Verbose chat" (`ChatSection.tsx`) governs chat thread/panel tool-call

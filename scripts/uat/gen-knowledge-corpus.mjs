@@ -486,647 +486,702 @@ function slugify(s) {
 // Corpus construction
 // ---------------------------------------------------------------------------
 
-function buildCorpus(tier, seed) {
-  const rng = makeRng(seed);
-  const sizes = TIERS[tier];
-  const notes = [];
-  const scenarios = [];
+// CorpusBuilder holds buildCorpus's shared state (rng, notes, scenarios, the
+// name pools, ...) as instance fields, so each numbered build section is its
+// own method: a class declaration is not itself a function-like node the
+// function-size scanner counts, so each method is measured separately --
+// same technique as scripts/design-system-locks/typography/ts-scan.mjs's
+// ClassExpressionEngine. buildCorpus is the public entry point.
+// invalidRecords and companySchema are instance fields too, even though
+// neither is part of the "preamble" -- each is set partway through one
+// section and read again by a later one.
+class CorpusBuilder {
+  constructor(tier, seed) {
+      this.rng = makeRng(seed);
 
-  // Counters used for stable, zero-padded filenames per bucket.
-  const seq = { notes: 0, companies: 0, projects: 0, people: 0, meetings: 0, probes: 0 };
-  // label -> file stem, so a wikilink can be written in the ONE form that
-  // resolves. Omnipus resolves `[[...]]` by FILENAME BASENAME only
-  // (knowledge/links.go::NoteIndex.Resolve indexes path.Base and its stem and
-  // nothing else) — never by a `name:` property, an `id:`, or a title.
-  //
-  // An earlier version emitted `[[${label}]]` while naming the file
-  // `<prefix>-<seq>-<slug(label)>.md`, so EVERY filler relation dangled by
-  // construction. Not cosmetic: the corpus then exercised none of relation
-  // resolution, backlinks, or the rename cascade's frontmatter rewriting while
-  // appearing to, and a UAT run mistook the resulting honest "0 backlinks" for
-  // link corruption.
-  const stemByLabel = new Map();
-  const nextPath = (bucket, label) => {
-    seq[bucket] += 1;
-    const prefix = { notes: 'n', companies: 'co', projects: 'pr', people: 'pe', meetings: 'me', probes: 'pb' }[bucket];
-    const stem = `${prefix}-${String(seq[bucket]).padStart(4, '0')}-${slugify(label)}`;
-    // First writer wins: two notes sharing a label make a link spelling that
-    // label ambiguous anyway, so pick one and stay deterministic.
-    if (!stemByLabel.has(label)) stemByLabel.set(label, stem);
-    return `${bucket}/${stem}.md`;
-  };
+      this.sizes = TIERS[tier];
 
-  // A stable pool of link targets so relations point at plausible names.
-  // Two pools, deliberately. `*Names` is every name in the corpus, used for
-  // reporting; `filler*Names` is what a FILLER relation is allowed to point at.
-  // Letting fillers link to the planted names put "[[Vorlex Orbital]]" into the
-  // frontmatter of three filler projects — harmless for the property-scoped
-  // scenarios, which are typed, but a contamination the corpus should not have
-  // to reason about at all.
-  const companyNames = [];
-  const personNames = [];
-  const projectNames = [];
-  const fillerCompanyNames = [];
-  const fillerPersonNames = [];
-  const fillerProjectNames = [];
+      this.notes = [];
 
-  // -------------------------------------------------------------------------
-  // 1. PLANTED SEARCH NOTES — fixed, seed-independent, tier-independent.
-  //
-  // Seed-independence is a deliberate design choice, recorded in the key as
-  // `seed_scope`. It means the planted answer sets are IDENTICAL at 200 notes
-  // and at 2,000 notes, which is what makes the plan's B-01 ("latency vs corpus
-  // size") a comparison of the same question at two scales rather than two
-  // different questions.
-  // -------------------------------------------------------------------------
+      this.scenarios = [];
 
-  const plantedNotePaths = {
-    sc01_match: [], sc01_codefence: [], sc01_neartoken: [],
-    sc02_match: [], sc02_bagofwords: [],
-    sc03_codefence: [],
-    sc04_name: [], sc04_alias: [], sc04_body: [],
-    sc05_bodyword: [],
-  };
+      // Counters used for stable, zero-padded filenames per bucket.
+      this.seq = { notes: 0, companies: 0, projects: 0, people: 0, meetings: 0, probes: 0 };
 
-  // -- SC-01: an exact term in prose ---------------------------------------
-  const SC01_MATCH_SUBJECTS = [
-    'Quenlaris migration kickoff',
-    'Quenlaris rollout risks',
-    'Quenlaris data retention',
-    'Quenlaris runbook review',
-    'Quenlaris cutover window',
-    'Quenlaris post-mortem',
-  ];
-  for (let i = 0; i < SC01_MATCH_SUBJECTS.length; i++) {
-    const subject = SC01_MATCH_SUBJECTS[i];
-    const p = nextPath('notes', subject);
-    plantedNotePaths.sc01_match.push(p);
-    notes.push(note({
-      path: p,
-      recordType: null,
-      extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
-      body: [
-        `# ${subject}`, '',
-        `The quenlaris programme moved a step forward this week. Ownership of quenlaris sits with the platform group until the handover is signed.`,
-        '',
-        `A second reading of the quenlaris plan is scheduled for the following month.`,
-        '',
-      ].join('\n'),
-      planted: { scenario: 'SC-01', role: 'match' },
-    }));
+      // label -> file stem, so a wikilink can be written in the ONE form that
+      // resolves. Omnipus resolves `[[...]]` by FILENAME BASENAME only
+      // (knowledge/links.go::NoteIndex.Resolve indexes path.Base and its stem and
+      // nothing else) — never by a `name:` property, an `id:`, or a title.
+      //
+      // An earlier version emitted `[[${label}]]` while naming the file
+      // `<prefix>-<seq>-<slug(label)>.md`, so EVERY filler relation dangled by
+      // construction. Not cosmetic: the corpus then exercised none of relation
+      // resolution, backlinks, or the rename cascade's frontmatter rewriting while
+      // appearing to, and a UAT run mistook the resulting honest "0 backlinks" for
+      // link corruption.
+      this.stemByLabel = new Map();
+
+      this.nextPath = (bucket, label) => {
+        this.seq[bucket] += 1;
+        const prefix = { notes: 'n', companies: 'co', projects: 'pr', people: 'pe', meetings: 'me', probes: 'pb' }[bucket];
+        const stem = `${prefix}-${String(this.seq[bucket]).padStart(4, '0')}-${slugify(label)}`;
+        // First writer wins: two notes sharing a label make a link spelling that
+        // label ambiguous anyway, so pick one and stay deterministic.
+        if (!this.stemByLabel.has(label)) this.stemByLabel.set(label, stem);
+        return `${bucket}/${stem}.md`;
+      };
+
+      // A stable pool of link targets so relations point at plausible names.
+      // Two pools, deliberately. `*Names` is every name in the corpus, used for
+      // reporting; `filler*Names` is what a FILLER relation is allowed to point at.
+      // Letting fillers link to the planted names put "[[Vorlex Orbital]]" into the
+      // frontmatter of three filler projects — harmless for the property-scoped
+      // scenarios, which are typed, but a contamination the corpus should not have
+      // to reason about at all.
+      this.companyNames = [];
+
+      this.personNames = [];
+
+      this.projectNames = [];
+
+      this.fillerCompanyNames = [];
+
+      this.fillerPersonNames = [];
+
+      this.fillerProjectNames = [];
+
+      // -------------------------------------------------------------------------
+      // 1. PLANTED SEARCH NOTES — fixed, seed-independent, tier-independent.
+      //
+      // Seed-independence is a deliberate design choice, recorded in the key as
+      // `seed_scope`. It means the planted answer sets are IDENTICAL at 200 notes
+      // and at 2,000 notes, which is what makes the plan's B-01 ("latency vs corpus
+      // size") a comparison of the same question at two scales rather than two
+      // different questions.
+      // -------------------------------------------------------------------------
+
+      this.plantedNotePaths = {
+        sc01_match: [], sc01_codefence: [], sc01_neartoken: [],
+        sc02_match: [], sc02_bagofwords: [],
+        sc03_codefence: [],
+        sc04_name: [], sc04_alias: [], sc04_body: [],
+        sc05_bodyword: [],
+      };
   }
 
-  for (let i = 0; i < 3; i++) {
-    const subject = `Deployment snippet ${i + 1}`;
-    const p = nextPath('notes', subject);
-    plantedNotePaths.sc01_codefence.push(p);
-    notes.push(note({
-      path: p,
-      recordType: null,
-      extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
-      body: [
-        `# ${subject}`, '',
-        'The command below is copied verbatim from an operator transcript. Nothing in this note is about the subject the identifier names; it is a shell invocation.',
-        '',
-        '```sh',
-        'export SERVICE_NAME=quenlaris',
-        'omnipus deploy --service "$SERVICE_NAME" --wait',
-        '```',
-        '',
-        'The surrounding prose deliberately avoids the identifier so that a match here can only have come from inside the fence.',
-        '',
-      ].join('\n'),
-      planted: { scenario: 'SC-01', role: 'distractor', kind: 'code_fence' },
-    }));
-  }
+  // -- 1. PLANTED SEARCH NOTES -------------------------------------------
+  buildPlantedSearchNotes() {
+      // -- SC-01: an exact term in prose ---------------------------------------
+      const SC01_MATCH_SUBJECTS = [
+        'Quenlaris migration kickoff',
+        'Quenlaris rollout risks',
+        'Quenlaris data retention',
+        'Quenlaris runbook review',
+        'Quenlaris cutover window',
+        'Quenlaris post-mortem',
+      ];
 
-  for (let i = 0; i < 3; i++) {
-    const subject = `Quenlarium supply note ${i + 1}`;
-    const p = nextPath('notes', subject);
-    plantedNotePaths.sc01_neartoken.push(p);
-    notes.push(note({
-      path: p,
-      recordType: null,
-      extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
-      body: [
-        `# ${subject}`, '',
-        'Quenlarium is a mineral, not a programme. It shares a prefix with the identifier in the neighbouring notes and means something entirely different.',
-        '',
-        'A search that stems or prefix-matches will return this note. An exact-term search must not.',
-        '',
-      ].join('\n'),
-      planted: { scenario: 'SC-01', role: 'distractor', kind: 'near_token' },
-    }));
-  }
-
-  // -- SC-02: a phrase whose two words also occur apart --------------------
-  for (let i = 0; i < 5; i++) {
-    const subject = `Orbital cache design ${i + 1}`;
-    const p = nextPath('notes', subject);
-    plantedNotePaths.sc02_match.push(p);
-    notes.push(note({
-      path: p,
-      recordType: null,
-      extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
-      body: [
-        `# ${subject}`, '',
-        'The orbital cache is a named subsystem. This note discusses the orbital cache and its eviction policy in that sense and no other.',
-        '',
-        'Every occurrence of the phrase here is the subsystem.',
-        '',
-      ].join('\n'),
-      planted: { scenario: 'SC-02', role: 'match' },
-    }));
-  }
-
-  const SC02_BAG = [
-    ['Orbital mechanics reading list', 'The orbital period of the smaller body was recalculated. Separately, a cache of spare parts was found in the eastern store.'],
-    ['Spare parts inventory', 'A cache of manuals turned up during the audit. The orbital diagram on the wall was unrelated and is being returned.'],
-    ['Two unrelated paragraphs', 'Orbital insertion is discussed in the first half of the report.\n\nA cache of correspondence is discussed in the second half. The two halves share no subject.'],
-    ['Glossary fragment', 'Orbital: relating to an orbit. Cache: a hidden store. The two entries are adjacent alphabetically and mean nothing together.'],
-    ['Meeting overflow', 'The orbital telemetry item ran long. The cache invalidation item was pushed to the following week.'],
-    ['Procurement note', 'One line mentions an orbital survey. A later line mentions a cache of batteries. Nothing links them.'],
-  ];
-  for (const [subject, prose] of SC02_BAG) {
-    const p = nextPath('notes', subject);
-    plantedNotePaths.sc02_bagofwords.push(p);
-    notes.push(note({
-      path: p,
-      recordType: null,
-      extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
-      body: [`# ${subject}`, '', prose, ''].join('\n'),
-      planted: { scenario: 'SC-02', role: 'distractor', kind: 'bag_of_words' },
-    }));
-  }
-
-  // -- SC-03: a term that exists ONLY inside fences ------------------------
-  for (let i = 0; i < 5; i++) {
-    const subject = `Configuration sample ${i + 1}`;
-    const p = nextPath('notes', subject);
-    plantedNotePaths.sc03_codefence.push(p);
-    notes.push(note({
-      path: p,
-      recordType: null,
-      extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
-      body: [
-        `# ${subject}`, '',
-        'A configuration sample follows. The identifier inside it appears nowhere else in this corpus outside a fence.',
-        '',
-        '```yaml',
-        'service: parathon',
-        'replicas: 3',
-        '```',
-        '',
-      ].join('\n'),
-      planted: { scenario: 'SC-03', role: 'distractor', kind: 'code_fence' },
-    }));
-  }
-
-  // -------------------------------------------------------------------------
-  // 2. PLANTED COMPANY NOTES — property-scoped scenarios.
-  // -------------------------------------------------------------------------
-
-  const companySchema = SCHEMA_BY_TYPE.get('company');
-
-  function companyNote(opts) {
-    const p = nextPath('companies', opts.name);
-    companyNames.push(opts.name);
-    const entries = [];
-    entries.push(entry('name', 'text', false, 'present', [opts.name]));
-    if (opts.aliases) entries.push(entry('aliases', 'text', true, 'present', opts.aliases));
-    if (opts.summary) entries.push(entry('summary', 'text', false, 'present', [opts.summary]));
-    if (opts.status) entries.push(entry('status', 'enum', false, 'present', [opts.status]));
-    if (opts.industry) entries.push(entry('industry', 'enum', true, 'present', opts.industry));
-    if (opts.headcount !== undefined) entries.push(entry('headcount', 'integer', false, 'present', [String(opts.headcount)]));
-    if (opts.arr !== undefined) entries.push(entry('arr', 'decimal', false, 'present', [opts.arr]));
-    if (opts.isCustomer !== undefined) entries.push(entry('is_customer', 'checkbox', false, 'present', [String(opts.isCustomer)]));
-    const n = note({
-      path: p,
-      recordType: 'company',
-      extraFrontmatter: ['type: company', `id: CO-${String(seq.companies).padStart(4, '0')}`],
-      entries,
-      body: opts.body,
-      planted: opts.planted,
-    });
-    notes.push(n);
-    return n;
-  }
-
-  // SC-04 matches: "Vorlex" in `name`.
-  const SC04_NAMES = ['Vorlex Orbital', 'Vorlex Freight', 'Northern Vorlex', 'Vorlex Analytics'];
-  for (const nm of SC04_NAMES) {
-    const n = companyNote({
-      name: nm,
-      status: 'active',
-      industry: ['saas'],
-      headcount: 240,
-      arr: '820000.00',
-      isCustomer: true,
-      body: ['# ' + nm, '', 'A supplier record. The distinguishing token is in the name property, not in this prose.', ''].join('\n'),
-      planted: { scenario: 'SC-04', role: 'match' },
-    });
-    plantedNotePaths.sc04_name.push(n.path);
-  }
-
-  // SC-04 distractors: "Vorlex" in `aliases` only.
-  for (let i = 0; i < 3; i++) {
-    const nm = `Halbern Freight ${i + 1}`;
-    const n = companyNote({
-      name: nm,
-      aliases: ['Vorlex', `Halbern ${i + 1}`],
-      status: 'prospect',
-      headcount: 90,
-      body: ['# ' + nm, '', 'The token appears in an alias, which is a different property from the one the query names.', ''].join('\n'),
-      planted: { scenario: 'SC-04', role: 'distractor', kind: 'other_property' },
-    });
-    plantedNotePaths.sc04_alias.push(n.path);
-  }
-
-  // SC-04 distractors: "Vorlex" in the BODY only.
-  for (let i = 0; i < 3; i++) {
-    const nm = `Merridew Holdings ${i + 1}`;
-    const n = companyNote({
-      name: nm,
-      status: 'prospect',
-      headcount: 130,
-      body: ['# ' + nm, '', 'This account was once a Vorlex reseller. The token is in the body, not in any property.', ''].join('\n'),
-      planted: { scenario: 'SC-04', role: 'distractor', kind: 'body_only' },
-    });
-    plantedNotePaths.sc04_body.push(n.path);
-  }
-
-  // SC-05 distractors: the WORD "churned" in the body, while `status: active`.
-  for (let i = 0; i < 3; i++) {
-    const nm = `Cottrell Systems ${i + 1}`;
-    const n = companyNote({
-      name: nm,
-      status: 'active',
-      headcount: 410,
-      arr: '1500000.00',
-      isCustomer: true,
-      body: ['# ' + nm, '', 'Two of their smaller subsidiaries churned last year; this account itself did not. The status property is the authority, not this sentence.', ''].join('\n'),
-      planted: { scenario: 'SC-05', role: 'distractor', kind: 'text_not_property' },
-    });
-    plantedNotePaths.sc05_bodyword.push(n.path);
-  }
-
-  // -------------------------------------------------------------------------
-  // 3. DELIBERATELY INVALID NOTES — fixed set, one recorded defect each.
-  //
-  // Fixed rather than scaled so the small and large tiers are comparable: the
-  // plan's Z-03 wants per-type counts to match the key, and a tier-dependent
-  // invalid count makes "the corpus loaded" and "the corpus is the same corpus"
-  // two different questions.
-  //
-  // `expected_finding_code` is the records.FindingCode this defect should
-  // raise. It is the generator's stated expectation, not a measurement — the
-  // grader compares a real run against it, which is the whole point.
-  // -------------------------------------------------------------------------
-
-  const INVALID_SPECS = [
-    { bucket: 'companies', recordType: 'company', label: 'Ashgrove Trading',
-      base: ['type: company', 'name: "Ashgrove Trading"'],
-      bad: ['founded: last spring'],
-      property: 'founded', declaredType: 'date', writtenValue: 'last spring',
-      why: 'prose written into a date property', code: 'not_a_date' },
-    { bucket: 'companies', recordType: 'company', label: 'Pendleton Group',
-      base: ['type: company', 'name: "Pendleton Group"'],
-      bad: ['status: liquidated'],
-      property: 'status', declaredType: 'enum', writtenValue: 'liquidated',
-      why: 'a value outside the declared enum set [prospect, active, churned]', code: 'enum_value_not_permitted' },
-    { bucket: 'companies', recordType: 'company', label: 'Quillane Labs',
-      base: ['type: company', 'name: "Quillane Labs"'],
-      bad: ['headcount: several hundred'],
-      property: 'headcount', declaredType: 'integer', writtenValue: 'several hundred',
-      why: 'prose written into an integer property', code: 'not_a_number' },
-    { bucket: 'companies', recordType: 'company', label: 'Rothsey Works',
-      base: ['type: company', 'name: "Rothsey Works"'],
-      bad: ['headcount: 99999999999999999999999'],
-      property: 'headcount', declaredType: 'integer', writtenValue: '99999999999999999999999',
-      why: 'a whole number outside int64, which FR-013 refuses rather than saturating', code: 'integer_out_of_range' },
-    { bucket: 'companies', recordType: 'company', label: 'Skelmore Partners',
-      base: ['type: company', 'name: "Skelmore Partners"'],
-      bad: ['headcount: 12.5'],
-      property: 'headcount', declaredType: 'integer', writtenValue: '12.5',
-      why: 'a fractional value in an integer property — a distinct fault from "not a number"', code: 'integer_not_whole' },
-    { bucket: 'companies', recordType: 'company', label: 'Trenholme Foundry',
-      base: ['type: company'],
-      bad: [],
-      property: 'name', declaredType: 'text', writtenValue: '(absent)',
-      // This one defect is ABSENCE rather than a non-conforming value, and the
-      // two are different states in pkg/records (StateAbsent vs
-      // StateNonConforming) with different filter behaviour. Recording it as
-      // "nonconforming" would have put a note in the wrong bucket of every
-      // negation scenario.
-      modelState: 'absent',
-      why: 'a required property is missing entirely', code: 'missing_required_property' },
-    { bucket: 'projects', recordType: 'project', label: 'Silverpine Rebuild',
-      base: ['type: project', 'title: "Silverpine Rebuild"'],
-      bad: ['company: Acme Limited'],
-      property: 'company', declaredType: 'relation', writtenValue: 'Acme Limited',
-      why: 'a relation written as bare text instead of a quoted wikilink (D5.1)', code: 'not_a_wikilink' },
-    { bucket: 'projects', recordType: 'project', label: 'Blackthorn Audit',
-      base: ['type: project', 'title: "Blackthorn Audit"'],
-      bad: ['company: |', '  [[Acme]]'],
-      property: 'company', declaredType: 'relation', writtenValue: 'a block scalar whose folded text reads [[Acme]]',
-      why: 'FR-030a — a block scalar is a multi-line string, not a wikilink, however its folded text reads', code: 'not_a_wikilink' },
-    { bucket: 'projects', recordType: 'project', label: 'Whitecliff Pilot',
-      base: ['type: project', 'title: "Whitecliff Pilot"'],
-      bad: ['start:', '  - 2026-01-05', '  - 2026-02-05'],
-      property: 'start', declaredType: 'date', writtenValue: 'a list of two dates',
-      why: 'a list written where the schema declares a scalar (FR-006 arity)', code: 'arity_violation' },
-    { bucket: 'projects', recordType: 'project', label: 'Redgate Handover',
-      base: ['type: project', 'title: "Redgate Handover"'],
-      bad: ['milestones: 2026-04-01'],
-      property: 'milestones', declaredType: 'date', writtenValue: '2026-04-01',
-      why: 'a scalar written where the schema declares a list (FR-006 arity, the other direction)', code: 'arity_violation' },
-    { bucket: 'people', recordType: 'person', label: 'Dara Carrow',
-      base: ['type: person', 'full_name: "Dara Carrow"'],
-      bad: ['active: maybe'],
-      property: 'active', declaredType: 'checkbox', writtenValue: 'maybe',
-      why: 'a checkbox holding a third spelling; the third state is ABSENCE, not a word', code: 'not_a_boolean' },
-    { bucket: 'people', recordType: 'person', label: 'Emrys Denholm',
-      base: ['type: person', 'full_name: "Emrys Denholm"'],
-      bad: ['manager: Fenna Eastwick'],
-      property: 'manager', declaredType: 'person', writtenValue: 'Fenna Eastwick',
-      why: 'a person written as bare text instead of a quoted wikilink', code: 'not_a_wikilink' },
-    { bucket: 'meetings', recordType: 'meeting', label: 'Quarterly Costing',
-      base: ['type: meeting', 'subject: "Quarterly Costing"'],
-      bad: ['cost: about twelve hundred'],
-      property: 'cost', declaredType: 'decimal', writtenValue: 'about twelve hundred',
-      why: 'prose written into a decimal property', code: 'not_a_number' },
-    { bucket: 'meetings', recordType: 'meeting', label: 'Interview Debrief',
-      base: ['type: meeting', 'subject: "Interview Debrief"'],
-      bad: ['kind:', '  note: retro'],
-      property: 'kind', declaredType: 'enum', writtenValue: 'a nested mapping',
-      why: 'a mapping where a scalar was declared — no property type accepts one', code: 'wrong_shape' },
-  ];
-
-  const invalidRecords = [];
-  for (const spec of INVALID_SPECS) {
-    const p = nextPath(spec.bucket, spec.label);
-    const fmLines = spec.base.concat(spec.bad);
-    const n = note({
-      path: p,
-      recordType: spec.recordType,
-      extraFrontmatter: fmLines,
-      // The defective property is recorded in the MODEL as well as in the
-      // rendered YAML, with modelOnly so renderNote does not write it twice.
-      // Without it the classifier saw no entry at all and filed the record
-      // under ABSENT — which put the `status: liquidated` note into SC-08's
-      // must_match and its own must_not_match at the same time. The generator's
-      // disjointness self-check is what surfaced that.
-      entries: [{
-        key: spec.property,
-        type: spec.declaredType,
-        many: false,
-        state: spec.modelState || 'nonconforming',
-        values: [],
-        modelOnly: true,
-      }],
-      // SC-17's term lives ONLY here, so "search over a partly-invalid corpus"
-      // has a query whose entire answer set is the invalid notes.
-      body: [
-        `# ${spec.label}`, '',
-        `This note is deliberately invalid. The thessaly review flagged it: ${spec.why}.`,
-        '',
-      ].join('\n'),
-      invalid: {
-        property: spec.property,
-        declared_type: spec.declaredType,
-        written_value: spec.writtenValue,
-        why: spec.why,
-        expected_finding_code: spec.code,
-      },
-    });
-    notes.push(n);
-    invalidRecords.push(n);
-    if (spec.recordType === 'company') companyNames.push(spec.label);
-    if (spec.recordType === 'project') projectNames.push(spec.label);
-    if (spec.recordType === 'person') personNames.push(spec.label);
-  }
-
-  // -------------------------------------------------------------------------
-  // 4. PROBE NOTES — the type-coverage guarantee.
-  //
-  // Twelve notes: four with every property present, four with every property
-  // explicitly EMPTY (`key:` for scalars, `key: []` for lists), four with every
-  // optional property ABSENT. Together they give, for all eight property types,
-  // a scalar case, a list case, an empty-scalar case, an empty-list case and an
-  // absent case — which is the plan's bullet, made checkable.
-  // -------------------------------------------------------------------------
-
-  const probeSchema = SCHEMA_BY_TYPE.get('probe');
-  const PROBE_ENUMS = ['alpha', 'beta', 'gamma'];
-
-  function probeFilledEntries(i) {
-    const out = [entry('title', 'text', false, 'present', [`Probe filled ${i + 1}`])];
-    out.push(entry('probe_text', 'text', false, 'present', [`filled ${FILLER_NOUNS[i % FILLER_NOUNS.length]}`]));
-    out.push(entry('probe_text_many', 'text', true, 'present', [FILLER_NOUNS[i % FILLER_NOUNS.length], FILLER_NOUNS[(i + 3) % FILLER_NOUNS.length]]));
-    out.push(entry('probe_enum', 'enum', false, 'present', [PROBE_ENUMS[i % 3]]));
-    out.push(entry('probe_enum_many', 'enum', true, 'present', [PROBE_ENUMS[i % 3], PROBE_ENUMS[(i + 1) % 3]]));
-    // Probe link targets are DEDICATED names, never the planted SC-04 token.
-    // An earlier draft pointed these at [[Vorlex Orbital]] and the generator's
-    // own reserved-vocabulary check caught it: the probe notes had quietly
-    // become nine extra SC-04 distractors nobody had accounted for.
-    out.push(entry('probe_relation', 'relation', false, 'present', [`[[${PROBE_ANCHOR}]]`]));
-    out.push(entry('probe_relation_many', 'relation', true, 'present', ['[[Probe Anchor Beta]]', '[[Probe Anchor Gamma]]']));
-    // One probe carries an RFC-3339 INSTANT rather than a bare day, because
-    // records.DateValue treats both as the same declared type and a corpus that
-    // only ever writes days never exercises the other layout.
-    out.push(entry('probe_date', 'date', false, 'present', [i === 0 ? '2026-03-04T09:30:00Z' : `2026-0${(i % 9) + 1}-1${i % 9}`]));
-    out.push(entry('probe_date_many', 'date', true, 'present', ['2026-01-15', '2026-06-15']));
-    out.push(entry('probe_integer', 'integer', false, 'present', [String(1000 + i)]));
-    out.push(entry('probe_integer_many', 'integer', true, 'present', [String(i), String(i + 10)]));
-    out.push(entry('probe_decimal', 'decimal', false, 'present', [decimalFromCents(BigInt(100000 + i * 137))]));
-    out.push(entry('probe_decimal_many', 'decimal', true, 'present', ['1.05', '2.50']));
-    out.push(entry('probe_person', 'person', false, 'present', ['[[Probe Person One]]']));
-    // Only the even-indexed probes carry the SC-15 target, so the membership
-    // scenario has a real non-empty answer AND a real non-empty complement
-    // among notes that all DO write the property. A scenario whose complement
-    // is only "notes that left it out" cannot distinguish a working membership
-    // test from one that matches every record with any value at all.
-    out.push(entry('probe_person_many', 'person', true, 'present',
-      i % 2 === 0 ? [`[[${PROBE_PERSON_TARGET}]]`, '[[Probe Person Three]]'] : ['[[Probe Person Three]]', '[[Probe Person Four]]']));
-    out.push(entry('probe_checkbox', 'checkbox', false, 'present', [i % 2 === 0 ? 'true' : 'false']));
-    out.push(entry('probe_checkbox_many', 'checkbox', true, 'present', ['true', 'false']));
-    return out;
-  }
-
-  function probeEmptyEntries(i) {
-    const out = [entry('title', 'text', false, 'present', [`Probe empty ${i + 1}`])];
-    for (const p of probeSchema.properties) {
-      if (p.name === 'title') continue;
-      out.push(entry(p.name, p.type, !!p.many, p.many ? 'empty_list' : 'empty_scalar', []));
-    }
-    return out;
-  }
-
-  for (let i = 0; i < 4; i++) {
-    const label = `Probe filled ${i + 1}`;
-    const p = nextPath('probes', label);
-    notes.push(note({
-      path: p, recordType: 'probe',
-      extraFrontmatter: ['type: probe', `id: PB-${String(seq.probes).padStart(4, '0')}`],
-      entries: probeFilledEntries(i),
-      body: [`# ${label}`, '', 'Every declared property of the probe type carries a conforming value.', ''].join('\n'),
-    }));
-  }
-  for (let i = 0; i < 4; i++) {
-    const label = `Probe empty ${i + 1}`;
-    const p = nextPath('probes', label);
-    notes.push(note({
-      path: p, recordType: 'probe',
-      extraFrontmatter: ['type: probe', `id: PB-${String(seq.probes).padStart(4, '0')}`],
-      entries: probeEmptyEntries(i),
-      body: [`# ${label}`, '', 'Every optional property is written but EMPTY — `key:` for a scalar, `key: []` for a list. FR-007 keeps these distinct from absence.', ''].join('\n'),
-    }));
-  }
-  for (let i = 0; i < 4; i++) {
-    const label = `Probe absent ${i + 1}`;
-    const p = nextPath('probes', label);
-    notes.push(note({
-      path: p, recordType: 'probe',
-      extraFrontmatter: ['type: probe', `id: PB-${String(seq.probes).padStart(4, '0')}`],
-      entries: [entry('title', 'text', false, 'present', [label])],
-      body: [`# ${label}`, '', 'Only the required property is written. Every other declared property is absent — the third state.', ''].join('\n'),
-    }));
-  }
-
-  // -------------------------------------------------------------------------
-  // 5. FILLER NOTES — seeded, and where the tiers differ.
-  // -------------------------------------------------------------------------
-
-  // Name pools first, so relations can point at them.
-  const fillerCompanyCount = sizes.companies - seq.companies;
-  const fillerProjectCount = sizes.projects - seq.projects;
-  const fillerPersonCount = sizes.people - seq.people;
-  const fillerMeetingCount = sizes.meetings - seq.meetings;
-  const fillerOrdinaryCount = sizes.notes - seq.notes;
-
-  for (const [what, n] of [['companies', fillerCompanyCount], ['projects', fillerProjectCount], ['people', fillerPersonCount], ['meetings', fillerMeetingCount], ['notes', fillerOrdinaryCount]]) {
-    if (n < 0) throw new Error(`tier ${tier}: bucket ${what} target is smaller than its fixed planted/invalid content (short by ${-n})`);
-  }
-
-  for (let i = 0; i < fillerCompanyCount; i++) {
-    const nm = `${FILLER_COMPANY_STEMS[i % FILLER_COMPANY_STEMS.length]} ${FILLER_COMPANY_SUFFIXES[i % FILLER_COMPANY_SUFFIXES.length]} ${i + 1}`;
-    companyNames.push(nm); fillerCompanyNames.push(nm);
-  }
-  for (let i = 0; i < fillerPersonCount; i++) {
-    const nm = `${FILLER_GIVEN[i % FILLER_GIVEN.length]} ${FILLER_FAMILY[(i * 7) % FILLER_FAMILY.length]}`;
-    personNames.push(nm); fillerPersonNames.push(nm);
-  }
-  for (let i = 0; i < fillerProjectCount; i++) {
-    const nm = `${FILLER_PROJECT_STEMS[i % FILLER_PROJECT_STEMS.length]} ${FILLER_NOUNS[(i * 5) % FILLER_NOUNS.length]} ${i + 1}`;
-    projectNames.push(nm); fillerProjectNames.push(nm);
-  }
-
-  // Emits the target's FILE STEM — the only form Omnipus resolves. A label
-  // with no known stem falls back to the label and therefore dangles; that is
-  // what the 'Unknown' case has always meant, and it must not be the norm.
-  const linkTo = (pool, i) => {
-    const label = pool.length ? pool[i % pool.length] : 'Unknown';
-    return `[[${stemByLabel.get(label) ?? label}]]`;
-  };
-
-  // valueFor produces ONE conforming value for a declared property.
-  function valueFor(prop, rng, idx) {
-    switch (prop.type) {
-      case 'text': return `${rng.pick(FILLER_ADJS)} ${rng.pick(FILLER_NOUNS)}`;
-      case 'enum': return rng.pick(prop.values);
-      case 'relation': return linkTo(prop.to === 'company' ? fillerCompanyNames : fillerProjectNames, rng.int(1024) + idx);
-      case 'person': return linkTo(fillerPersonNames, rng.int(1024) + idx);
-      case 'date': return isoDate(rng, 2023, 2026);
-      case 'integer': return String(rng.intBetween(1, 4000));
-      case 'decimal': return decimalFromCents(BigInt(rng.intBetween(1, 400000000)));
-      case 'checkbox': return rng.chance(0.5) ? 'true' : 'false';
-      default: throw new Error(`no value generator for property type ${prop.type}`);
-    }
-  }
-
-  // fillerEntriesFor walks a schema's properties IN DECLARATION ORDER and picks
-  // a state for each. Required properties are always present, because a corpus
-  // whose fillers are half-invalid stops being a control group.
-  function fillerEntriesFor(schema, rng, idx) {
-    const out = [];
-    for (const prop of schema.properties) {
-      if (prop.required) {
-        out.push(entry(prop.name, prop.type, !!prop.many, 'present', [valueFor(prop, rng, idx)]));
-        continue;
+      for (let i = 0; i < SC01_MATCH_SUBJECTS.length; i++) {
+        const subject = SC01_MATCH_SUBJECTS[i];
+        const p = this.nextPath('notes', subject);
+        this.plantedNotePaths.sc01_match.push(p);
+        this.notes.push(note({
+          path: p,
+          recordType: null,
+          extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
+          body: [
+            `# ${subject}`, '',
+            `The quenlaris programme moved a step forward this week. Ownership of quenlaris sits with the platform group until the handover is signed.`,
+            '',
+            `A second reading of the quenlaris plan is scheduled for the following month.`,
+            '',
+          ].join('\n'),
+          planted: { scenario: 'SC-01', role: 'match' },
+        }));
       }
-      const roll = rng.float();
-      if (roll < 0.66) {
-        const count = prop.many ? rng.intBetween(1, 3) : 1;
-        const vals = [];
-        for (let k = 0; k < count; k++) vals.push(valueFor(prop, rng, idx + k));
-        out.push(entry(prop.name, prop.type, !!prop.many, 'present', vals));
-      } else if (roll < 0.84) {
-        // absent — the key is simply not written
-        continue;
-      } else if (roll < 0.92) {
-        out.push(entry(prop.name, prop.type, !!prop.many, prop.many ? 'empty_list' : 'empty_scalar', []));
-      } else {
-        out.push(entry(prop.name, prop.type, !!prop.many, 'empty_scalar', []));
+
+      for (let i = 0; i < 3; i++) {
+        const subject = `Deployment snippet ${i + 1}`;
+        const p = this.nextPath('notes', subject);
+        this.plantedNotePaths.sc01_codefence.push(p);
+        this.notes.push(note({
+          path: p,
+          recordType: null,
+          extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
+          body: [
+            `# ${subject}`, '',
+            'The command below is copied verbatim from an operator transcript. Nothing in this note is about the subject the identifier names; it is a shell invocation.',
+            '',
+            '```sh',
+            'export SERVICE_NAME=quenlaris',
+            'omnipus deploy --service "$SERVICE_NAME" --wait',
+            '```',
+            '',
+            'The surrounding prose deliberately avoids the identifier so that a match here can only have come from inside the fence.',
+            '',
+          ].join('\n'),
+          planted: { scenario: 'SC-01', role: 'distractor', kind: 'code_fence' },
+        }));
       }
-    }
-    return out;
-  }
 
-  function emitFillerRecords(schema, bucket, count, nameFn) {
-    for (let i = 0; i < count; i++) {
-      const label = nameFn(i);
-      const p = nextPath(bucket, label);
-      const entries = fillerEntriesFor(schema, rng, i);
-      // Force the required property to the pool name so relations resolve to
-      // something a reader can follow.
-      const requiredProp = schema.properties.find((x) => x.required);
-      if (requiredProp) {
-        const e = entries.find((x) => x.key === requiredProp.name);
-        if (e) e.values = [label];
+      for (let i = 0; i < 3; i++) {
+        const subject = `Quenlarium supply note ${i + 1}`;
+        const p = this.nextPath('notes', subject);
+        this.plantedNotePaths.sc01_neartoken.push(p);
+        this.notes.push(note({
+          path: p,
+          recordType: null,
+          extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
+          body: [
+            `# ${subject}`, '',
+            'Quenlarium is a mineral, not a programme. It shares a prefix with the identifier in the neighbouring notes and means something entirely different.',
+            '',
+            'A search that stems or prefix-matches will return this note. An exact-term search must not.',
+            '',
+          ].join('\n'),
+          planted: { scenario: 'SC-01', role: 'distractor', kind: 'near_token' },
+        }));
       }
-      const idField = `id: ${schema.prefix}-${String(seq[bucket]).padStart(4, '0')}`;
-      notes.push(note({
-        path: p,
-        recordType: schema.type,
-        extraFrontmatter: [`type: ${schema.type}`, idField],
-        entries,
-        body: fillerBody(rng, label),
-      }));
-    }
+
+      // -- SC-02: a phrase whose two words also occur apart --------------------
+      for (let i = 0; i < 5; i++) {
+        const subject = `Orbital cache design ${i + 1}`;
+        const p = this.nextPath('notes', subject);
+        this.plantedNotePaths.sc02_match.push(p);
+        this.notes.push(note({
+          path: p,
+          recordType: null,
+          extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
+          body: [
+            `# ${subject}`, '',
+            'The orbital cache is a named subsystem. This note discusses the orbital cache and its eviction policy in that sense and no other.',
+            '',
+            'Every occurrence of the phrase here is the subsystem.',
+            '',
+          ].join('\n'),
+          planted: { scenario: 'SC-02', role: 'match' },
+        }));
+      }
+
+      const SC02_BAG = [
+        ['Orbital mechanics reading list', 'The orbital period of the smaller body was recalculated. Separately, a cache of spare parts was found in the eastern store.'],
+        ['Spare parts inventory', 'A cache of manuals turned up during the audit. The orbital diagram on the wall was unrelated and is being returned.'],
+        ['Two unrelated paragraphs', 'Orbital insertion is discussed in the first half of the report.\n\nA cache of correspondence is discussed in the second half. The two halves share no subject.'],
+        ['Glossary fragment', 'Orbital: relating to an orbit. Cache: a hidden store. The two entries are adjacent alphabetically and mean nothing together.'],
+        ['Meeting overflow', 'The orbital telemetry item ran long. The cache invalidation item was pushed to the following week.'],
+        ['Procurement note', 'One line mentions an orbital survey. A later line mentions a cache of batteries. Nothing links them.'],
+      ];
+
+      for (const [subject, prose] of SC02_BAG) {
+        const p = this.nextPath('notes', subject);
+        this.plantedNotePaths.sc02_bagofwords.push(p);
+        this.notes.push(note({
+          path: p,
+          recordType: null,
+          extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
+          body: [`# ${subject}`, '', prose, ''].join('\n'),
+          planted: { scenario: 'SC-02', role: 'distractor', kind: 'bag_of_words' },
+        }));
+      }
+
+      // -- SC-03: a term that exists ONLY inside fences ------------------------
+      for (let i = 0; i < 5; i++) {
+        const subject = `Configuration sample ${i + 1}`;
+        const p = this.nextPath('notes', subject);
+        this.plantedNotePaths.sc03_codefence.push(p);
+        this.notes.push(note({
+          path: p,
+          recordType: null,
+          extraFrontmatter: ['title: ' + yamlQuote(subject), 'tags:', '  - "planted"'],
+          body: [
+            `# ${subject}`, '',
+            'A configuration sample follows. The identifier inside it appears nowhere else in this corpus outside a fence.',
+            '',
+            '```yaml',
+            'service: parathon',
+            'replicas: 3',
+            '```',
+            '',
+          ].join('\n'),
+          planted: { scenario: 'SC-03', role: 'distractor', kind: 'code_fence' },
+        }));
+      }
   }
 
-  emitFillerRecords(companySchema, 'companies', fillerCompanyCount, (i) => fillerCompanyNames[i]);
-  emitFillerRecords(SCHEMA_BY_TYPE.get('project'), 'projects', fillerProjectCount, (i) => fillerProjectNames[i]);
-  emitFillerRecords(SCHEMA_BY_TYPE.get('person'), 'people', fillerPersonCount, (i) => fillerPersonNames[i]);
-  emitFillerRecords(SCHEMA_BY_TYPE.get('meeting'), 'meetings', fillerMeetingCount, (i) => `${FILLER_ADJS[i % FILLER_ADJS.length]} ${FILLER_NOUNS[(i * 3) % FILLER_NOUNS.length]} review ${i + 1}`);
+  // -- 2. PLANTED COMPANY NOTES ------------------------------------------
+  buildPlantedCompanyNotes() {
+      // -------------------------------------------------------------------------
+      // 2. PLANTED COMPANY NOTES — property-scoped scenarios.
+      // -------------------------------------------------------------------------
 
-  // Ordinary notes — no `type:` at all for most, an UNDECLARED type for some.
-  // FR-005 says both are plain notes and neither is an error; a corpus with
-  // only records would never test that.
-  for (let i = 0; i < fillerOrdinaryCount; i++) {
-    const label = `${FILLER_ADJS[i % FILLER_ADJS.length]} ${FILLER_NOUNS[(i * 11) % FILLER_NOUNS.length]} ${i + 1}`;
-    const p = nextPath('notes', label);
-    const undeclared = rng.chance(0.3);
-    const fm = undeclared
-      ? ['type: journal', 'title: ' + yamlQuote(label)]
-      : ['title: ' + yamlQuote(label)];
-    notes.push(note({
-      path: p,
-      recordType: null,
-      extraFrontmatter: fm,
-      entries: [],
-      body: fillerBody(rng, label),
-    }));
+      this.companySchema = SCHEMA_BY_TYPE.get('company');
+
+      const companyNote = (opts) => {
+        const p = this.nextPath('companies', opts.name);
+        this.companyNames.push(opts.name);
+        const entries = [];
+        entries.push(entry('name', 'text', false, 'present', [opts.name]));
+        if (opts.aliases) entries.push(entry('aliases', 'text', true, 'present', opts.aliases));
+        if (opts.summary) entries.push(entry('summary', 'text', false, 'present', [opts.summary]));
+        if (opts.status) entries.push(entry('status', 'enum', false, 'present', [opts.status]));
+        if (opts.industry) entries.push(entry('industry', 'enum', true, 'present', opts.industry));
+        if (opts.headcount !== undefined) entries.push(entry('headcount', 'integer', false, 'present', [String(opts.headcount)]));
+        if (opts.arr !== undefined) entries.push(entry('arr', 'decimal', false, 'present', [opts.arr]));
+        if (opts.isCustomer !== undefined) entries.push(entry('is_customer', 'checkbox', false, 'present', [String(opts.isCustomer)]));
+        const n = note({
+          path: p,
+          recordType: 'company',
+          extraFrontmatter: ['type: company', `id: CO-${String(this.seq.companies).padStart(4, '0')}`],
+          entries,
+          body: opts.body,
+          planted: opts.planted,
+        });
+        this.notes.push(n);
+        return n;
+      }
+
+      // SC-04 matches: "Vorlex" in `name`.
+      const SC04_NAMES = ['Vorlex Orbital', 'Vorlex Freight', 'Northern Vorlex', 'Vorlex Analytics'];
+
+      for (const nm of SC04_NAMES) {
+        const n = companyNote({
+          name: nm,
+          status: 'active',
+          industry: ['saas'],
+          headcount: 240,
+          arr: '820000.00',
+          isCustomer: true,
+          body: ['# ' + nm, '', 'A supplier record. The distinguishing token is in the name property, not in this prose.', ''].join('\n'),
+          planted: { scenario: 'SC-04', role: 'match' },
+        });
+        this.plantedNotePaths.sc04_name.push(n.path);
+      }
+
+      // SC-04 distractors: "Vorlex" in `aliases` only.
+      for (let i = 0; i < 3; i++) {
+        const nm = `Halbern Freight ${i + 1}`;
+        const n = companyNote({
+          name: nm,
+          aliases: ['Vorlex', `Halbern ${i + 1}`],
+          status: 'prospect',
+          headcount: 90,
+          body: ['# ' + nm, '', 'The token appears in an alias, which is a different property from the one the query names.', ''].join('\n'),
+          planted: { scenario: 'SC-04', role: 'distractor', kind: 'other_property' },
+        });
+        this.plantedNotePaths.sc04_alias.push(n.path);
+      }
+
+      // SC-04 distractors: "Vorlex" in the BODY only.
+      for (let i = 0; i < 3; i++) {
+        const nm = `Merridew Holdings ${i + 1}`;
+        const n = companyNote({
+          name: nm,
+          status: 'prospect',
+          headcount: 130,
+          body: ['# ' + nm, '', 'This account was once a Vorlex reseller. The token is in the body, not in any property.', ''].join('\n'),
+          planted: { scenario: 'SC-04', role: 'distractor', kind: 'body_only' },
+        });
+        this.plantedNotePaths.sc04_body.push(n.path);
+      }
+
+      // SC-05 distractors: the WORD "churned" in the body, while `status: active`.
+      for (let i = 0; i < 3; i++) {
+        const nm = `Cottrell Systems ${i + 1}`;
+        const n = companyNote({
+          name: nm,
+          status: 'active',
+          headcount: 410,
+          arr: '1500000.00',
+          isCustomer: true,
+          body: ['# ' + nm, '', 'Two of their smaller subsidiaries churned last year; this account itself did not. The status property is the authority, not this sentence.', ''].join('\n'),
+          planted: { scenario: 'SC-05', role: 'distractor', kind: 'text_not_property' },
+        });
+        this.plantedNotePaths.sc05_bodyword.push(n.path);
+      }
   }
 
-  return { notes, scenarios, plantedNotePaths, invalidRecords, rng, sizes };
+  // -- 3. DELIBERATELY INVALID NOTES --------------------------------------
+  buildInvalidNotes() {
+      // -------------------------------------------------------------------------
+      // 3. DELIBERATELY INVALID NOTES — fixed set, one recorded defect each.
+      //
+      // Fixed rather than scaled so the small and large tiers are comparable: the
+      // plan's Z-03 wants per-type counts to match the key, and a tier-dependent
+      // invalid count makes "the corpus loaded" and "the corpus is the same corpus"
+      // two different questions.
+      //
+      // `expected_finding_code` is the records.FindingCode this defect should
+      // raise. It is the generator's stated expectation, not a measurement — the
+      // grader compares a real run against it, which is the whole point.
+      // -------------------------------------------------------------------------
+
+      const INVALID_SPECS = [
+        { bucket: 'companies', recordType: 'company', label: 'Ashgrove Trading',
+          base: ['type: company', 'name: "Ashgrove Trading"'],
+          bad: ['founded: last spring'],
+          property: 'founded', declaredType: 'date', writtenValue: 'last spring',
+          why: 'prose written into a date property', code: 'not_a_date' },
+        { bucket: 'companies', recordType: 'company', label: 'Pendleton Group',
+          base: ['type: company', 'name: "Pendleton Group"'],
+          bad: ['status: liquidated'],
+          property: 'status', declaredType: 'enum', writtenValue: 'liquidated',
+          why: 'a value outside the declared enum set [prospect, active, churned]', code: 'enum_value_not_permitted' },
+        { bucket: 'companies', recordType: 'company', label: 'Quillane Labs',
+          base: ['type: company', 'name: "Quillane Labs"'],
+          bad: ['headcount: several hundred'],
+          property: 'headcount', declaredType: 'integer', writtenValue: 'several hundred',
+          why: 'prose written into an integer property', code: 'not_a_number' },
+        { bucket: 'companies', recordType: 'company', label: 'Rothsey Works',
+          base: ['type: company', 'name: "Rothsey Works"'],
+          bad: ['headcount: 99999999999999999999999'],
+          property: 'headcount', declaredType: 'integer', writtenValue: '99999999999999999999999',
+          why: 'a whole number outside int64, which FR-013 refuses rather than saturating', code: 'integer_out_of_range' },
+        { bucket: 'companies', recordType: 'company', label: 'Skelmore Partners',
+          base: ['type: company', 'name: "Skelmore Partners"'],
+          bad: ['headcount: 12.5'],
+          property: 'headcount', declaredType: 'integer', writtenValue: '12.5',
+          why: 'a fractional value in an integer property — a distinct fault from "not a number"', code: 'integer_not_whole' },
+        { bucket: 'companies', recordType: 'company', label: 'Trenholme Foundry',
+          base: ['type: company'],
+          bad: [],
+          property: 'name', declaredType: 'text', writtenValue: '(absent)',
+          // This one defect is ABSENCE rather than a non-conforming value, and the
+          // two are different states in pkg/records (StateAbsent vs
+          // StateNonConforming) with different filter behaviour. Recording it as
+          // "nonconforming" would have put a note in the wrong bucket of every
+          // negation scenario.
+          modelState: 'absent',
+          why: 'a required property is missing entirely', code: 'missing_required_property' },
+        { bucket: 'projects', recordType: 'project', label: 'Silverpine Rebuild',
+          base: ['type: project', 'title: "Silverpine Rebuild"'],
+          bad: ['company: Acme Limited'],
+          property: 'company', declaredType: 'relation', writtenValue: 'Acme Limited',
+          why: 'a relation written as bare text instead of a quoted wikilink (D5.1)', code: 'not_a_wikilink' },
+        { bucket: 'projects', recordType: 'project', label: 'Blackthorn Audit',
+          base: ['type: project', 'title: "Blackthorn Audit"'],
+          bad: ['company: |', '  [[Acme]]'],
+          property: 'company', declaredType: 'relation', writtenValue: 'a block scalar whose folded text reads [[Acme]]',
+          why: 'FR-030a — a block scalar is a multi-line string, not a wikilink, however its folded text reads', code: 'not_a_wikilink' },
+        { bucket: 'projects', recordType: 'project', label: 'Whitecliff Pilot',
+          base: ['type: project', 'title: "Whitecliff Pilot"'],
+          bad: ['start:', '  - 2026-01-05', '  - 2026-02-05'],
+          property: 'start', declaredType: 'date', writtenValue: 'a list of two dates',
+          why: 'a list written where the schema declares a scalar (FR-006 arity)', code: 'arity_violation' },
+        { bucket: 'projects', recordType: 'project', label: 'Redgate Handover',
+          base: ['type: project', 'title: "Redgate Handover"'],
+          bad: ['milestones: 2026-04-01'],
+          property: 'milestones', declaredType: 'date', writtenValue: '2026-04-01',
+          why: 'a scalar written where the schema declares a list (FR-006 arity, the other direction)', code: 'arity_violation' },
+        { bucket: 'people', recordType: 'person', label: 'Dara Carrow',
+          base: ['type: person', 'full_name: "Dara Carrow"'],
+          bad: ['active: maybe'],
+          property: 'active', declaredType: 'checkbox', writtenValue: 'maybe',
+          why: 'a checkbox holding a third spelling; the third state is ABSENCE, not a word', code: 'not_a_boolean' },
+        { bucket: 'people', recordType: 'person', label: 'Emrys Denholm',
+          base: ['type: person', 'full_name: "Emrys Denholm"'],
+          bad: ['manager: Fenna Eastwick'],
+          property: 'manager', declaredType: 'person', writtenValue: 'Fenna Eastwick',
+          why: 'a person written as bare text instead of a quoted wikilink', code: 'not_a_wikilink' },
+        { bucket: 'meetings', recordType: 'meeting', label: 'Quarterly Costing',
+          base: ['type: meeting', 'subject: "Quarterly Costing"'],
+          bad: ['cost: about twelve hundred'],
+          property: 'cost', declaredType: 'decimal', writtenValue: 'about twelve hundred',
+          why: 'prose written into a decimal property', code: 'not_a_number' },
+        { bucket: 'meetings', recordType: 'meeting', label: 'Interview Debrief',
+          base: ['type: meeting', 'subject: "Interview Debrief"'],
+          bad: ['kind:', '  note: retro'],
+          property: 'kind', declaredType: 'enum', writtenValue: 'a nested mapping',
+          why: 'a mapping where a scalar was declared — no property type accepts one', code: 'wrong_shape' },
+      ];
+
+      this.invalidRecords = [];
+
+      for (const spec of INVALID_SPECS) {
+        const p = this.nextPath(spec.bucket, spec.label);
+        const fmLines = spec.base.concat(spec.bad);
+        const n = note({
+          path: p,
+          recordType: spec.recordType,
+          extraFrontmatter: fmLines,
+          // The defective property is recorded in the MODEL as well as in the
+          // rendered YAML, with modelOnly so renderNote does not write it twice.
+          // Without it the classifier saw no entry at all and filed the record
+          // under ABSENT — which put the `status: liquidated` note into SC-08's
+          // must_match and its own must_not_match at the same time. The generator's
+          // disjointness self-check is what surfaced that.
+          entries: [{
+            key: spec.property,
+            type: spec.declaredType,
+            many: false,
+            state: spec.modelState || 'nonconforming',
+            values: [],
+            modelOnly: true,
+          }],
+          // SC-17's term lives ONLY here, so "search over a partly-invalid corpus"
+          // has a query whose entire answer set is the invalid notes.
+          body: [
+            `# ${spec.label}`, '',
+            `This note is deliberately invalid. The thessaly review flagged it: ${spec.why}.`,
+            '',
+          ].join('\n'),
+          invalid: {
+            property: spec.property,
+            declared_type: spec.declaredType,
+            written_value: spec.writtenValue,
+            why: spec.why,
+            expected_finding_code: spec.code,
+          },
+        });
+        this.notes.push(n);
+        this.invalidRecords.push(n);
+        if (spec.recordType === 'company') this.companyNames.push(spec.label);
+        if (spec.recordType === 'project') this.projectNames.push(spec.label);
+        if (spec.recordType === 'person') this.personNames.push(spec.label);
+      }
+  }
+
+  // -- 4. PROBE NOTES -------------------------------------------------------
+  buildProbeNotes() {
+      // -------------------------------------------------------------------------
+      // 4. PROBE NOTES — the type-coverage guarantee.
+      //
+      // Twelve notes: four with every property present, four with every property
+      // explicitly EMPTY (`key:` for scalars, `key: []` for lists), four with every
+      // optional property ABSENT. Together they give, for all eight property types,
+      // a scalar case, a list case, an empty-scalar case, an empty-list case and an
+      // absent case — which is the plan's bullet, made checkable.
+      // -------------------------------------------------------------------------
+
+      const probeSchema = SCHEMA_BY_TYPE.get('probe');
+
+      const PROBE_ENUMS = ['alpha', 'beta', 'gamma'];
+
+      function probeFilledEntries(i) {
+        const out = [entry('title', 'text', false, 'present', [`Probe filled ${i + 1}`])];
+        out.push(entry('probe_text', 'text', false, 'present', [`filled ${FILLER_NOUNS[i % FILLER_NOUNS.length]}`]));
+        out.push(entry('probe_text_many', 'text', true, 'present', [FILLER_NOUNS[i % FILLER_NOUNS.length], FILLER_NOUNS[(i + 3) % FILLER_NOUNS.length]]));
+        out.push(entry('probe_enum', 'enum', false, 'present', [PROBE_ENUMS[i % 3]]));
+        out.push(entry('probe_enum_many', 'enum', true, 'present', [PROBE_ENUMS[i % 3], PROBE_ENUMS[(i + 1) % 3]]));
+        // Probe link targets are DEDICATED names, never the planted SC-04 token.
+        // An earlier draft pointed these at [[Vorlex Orbital]] and the generator's
+        // own reserved-vocabulary check caught it: the probe notes had quietly
+        // become nine extra SC-04 distractors nobody had accounted for.
+        out.push(entry('probe_relation', 'relation', false, 'present', [`[[${PROBE_ANCHOR}]]`]));
+        out.push(entry('probe_relation_many', 'relation', true, 'present', ['[[Probe Anchor Beta]]', '[[Probe Anchor Gamma]]']));
+        // One probe carries an RFC-3339 INSTANT rather than a bare day, because
+        // records.DateValue treats both as the same declared type and a corpus that
+        // only ever writes days never exercises the other layout.
+        out.push(entry('probe_date', 'date', false, 'present', [i === 0 ? '2026-03-04T09:30:00Z' : `2026-0${(i % 9) + 1}-1${i % 9}`]));
+        out.push(entry('probe_date_many', 'date', true, 'present', ['2026-01-15', '2026-06-15']));
+        out.push(entry('probe_integer', 'integer', false, 'present', [String(1000 + i)]));
+        out.push(entry('probe_integer_many', 'integer', true, 'present', [String(i), String(i + 10)]));
+        out.push(entry('probe_decimal', 'decimal', false, 'present', [decimalFromCents(BigInt(100000 + i * 137))]));
+        out.push(entry('probe_decimal_many', 'decimal', true, 'present', ['1.05', '2.50']));
+        out.push(entry('probe_person', 'person', false, 'present', ['[[Probe Person One]]']));
+        // Only the even-indexed probes carry the SC-15 target, so the membership
+        // scenario has a real non-empty answer AND a real non-empty complement
+        // among notes that all DO write the property. A scenario whose complement
+        // is only "notes that left it out" cannot distinguish a working membership
+        // test from one that matches every record with any value at all.
+        out.push(entry('probe_person_many', 'person', true, 'present',
+          i % 2 === 0 ? [`[[${PROBE_PERSON_TARGET}]]`, '[[Probe Person Three]]'] : ['[[Probe Person Three]]', '[[Probe Person Four]]']));
+        out.push(entry('probe_checkbox', 'checkbox', false, 'present', [i % 2 === 0 ? 'true' : 'false']));
+        out.push(entry('probe_checkbox_many', 'checkbox', true, 'present', ['true', 'false']));
+        return out;
+      }
+
+      function probeEmptyEntries(i) {
+        const out = [entry('title', 'text', false, 'present', [`Probe empty ${i + 1}`])];
+        for (const p of probeSchema.properties) {
+          if (p.name === 'title') continue;
+          out.push(entry(p.name, p.type, !!p.many, p.many ? 'empty_list' : 'empty_scalar', []));
+        }
+        return out;
+      }
+
+      for (let i = 0; i < 4; i++) {
+        const label = `Probe filled ${i + 1}`;
+        const p = this.nextPath('probes', label);
+        this.notes.push(note({
+          path: p, recordType: 'probe',
+          extraFrontmatter: ['type: probe', `id: PB-${String(this.seq.probes).padStart(4, '0')}`],
+          entries: probeFilledEntries(i),
+          body: [`# ${label}`, '', 'Every declared property of the probe type carries a conforming value.', ''].join('\n'),
+        }));
+      }
+
+      for (let i = 0; i < 4; i++) {
+        const label = `Probe empty ${i + 1}`;
+        const p = this.nextPath('probes', label);
+        this.notes.push(note({
+          path: p, recordType: 'probe',
+          extraFrontmatter: ['type: probe', `id: PB-${String(this.seq.probes).padStart(4, '0')}`],
+          entries: probeEmptyEntries(i),
+          body: [`# ${label}`, '', 'Every optional property is written but EMPTY — `key:` for a scalar, `key: []` for a list. FR-007 keeps these distinct from absence.', ''].join('\n'),
+        }));
+      }
+
+      for (let i = 0; i < 4; i++) {
+        const label = `Probe absent ${i + 1}`;
+        const p = this.nextPath('probes', label);
+        this.notes.push(note({
+          path: p, recordType: 'probe',
+          extraFrontmatter: ['type: probe', `id: PB-${String(this.seq.probes).padStart(4, '0')}`],
+          entries: [entry('title', 'text', false, 'present', [label])],
+          body: [`# ${label}`, '', 'Only the required property is written. Every other declared property is absent — the third state.', ''].join('\n'),
+        }));
+      }
+  }
+
+  // -- 5. FILLER NOTES, then finalize --------------------------------------
+  buildFillerNotesAndFinalize() {
+      // -------------------------------------------------------------------------
+      // 5. FILLER NOTES — seeded, and where the tiers differ.
+      // -------------------------------------------------------------------------
+
+      // Name pools first, so relations can point at them.
+      const fillerCompanyCount = this.sizes.companies - this.seq.companies;
+
+      const fillerProjectCount = this.sizes.projects - this.seq.projects;
+
+      const fillerPersonCount = this.sizes.people - this.seq.people;
+
+      const fillerMeetingCount = this.sizes.meetings - this.seq.meetings;
+
+      const fillerOrdinaryCount = this.sizes.notes - this.seq.notes;
+
+      for (const [what, n] of [['companies', fillerCompanyCount], ['projects', fillerProjectCount], ['people', fillerPersonCount], ['meetings', fillerMeetingCount], ['notes', fillerOrdinaryCount]]) {
+        if (n < 0) throw new Error(`tier ${tier}: bucket ${what} target is smaller than its fixed planted/invalid content (short by ${-n})`);
+      }
+
+      for (let i = 0; i < fillerCompanyCount; i++) {
+        const nm = `${FILLER_COMPANY_STEMS[i % FILLER_COMPANY_STEMS.length]} ${FILLER_COMPANY_SUFFIXES[i % FILLER_COMPANY_SUFFIXES.length]} ${i + 1}`;
+        this.companyNames.push(nm); this.fillerCompanyNames.push(nm);
+      }
+
+      for (let i = 0; i < fillerPersonCount; i++) {
+        const nm = `${FILLER_GIVEN[i % FILLER_GIVEN.length]} ${FILLER_FAMILY[(i * 7) % FILLER_FAMILY.length]}`;
+        this.personNames.push(nm); this.fillerPersonNames.push(nm);
+      }
+
+      for (let i = 0; i < fillerProjectCount; i++) {
+        const nm = `${FILLER_PROJECT_STEMS[i % FILLER_PROJECT_STEMS.length]} ${FILLER_NOUNS[(i * 5) % FILLER_NOUNS.length]} ${i + 1}`;
+        this.projectNames.push(nm); this.fillerProjectNames.push(nm);
+      }
+
+      // Emits the target's FILE STEM — the only form Omnipus resolves. A label
+      // with no known stem falls back to the label and therefore dangles; that is
+      // what the 'Unknown' case has always meant, and it must not be the norm.
+      const linkTo = (pool, i) => {
+        const label = pool.length ? pool[i % pool.length] : 'Unknown';
+        return `[[${this.stemByLabel.get(label) ?? label}]]`;
+      };
+
+      // valueFor produces ONE conforming value for a declared property.
+      const valueFor = (prop, rng, idx) => {
+        switch (prop.type) {
+          case 'text': return `${rng.pick(FILLER_ADJS)} ${rng.pick(FILLER_NOUNS)}`;
+          case 'enum': return rng.pick(prop.values);
+          case 'relation': return linkTo(prop.to === 'company' ? this.fillerCompanyNames : this.fillerProjectNames, rng.int(1024) + idx);
+          case 'person': return linkTo(this.fillerPersonNames, rng.int(1024) + idx);
+          case 'date': return isoDate(rng, 2023, 2026);
+          case 'integer': return String(rng.intBetween(1, 4000));
+          case 'decimal': return decimalFromCents(BigInt(rng.intBetween(1, 400000000)));
+          case 'checkbox': return rng.chance(0.5) ? 'true' : 'false';
+          default: throw new Error(`no value generator for property type ${prop.type}`);
+        }
+      }
+
+      // fillerEntriesFor walks a schema's properties IN DECLARATION ORDER and picks
+      // a state for each. Required properties are always present, because a corpus
+      // whose fillers are half-invalid stops being a control group.
+      function fillerEntriesFor(schema, rng, idx) {
+        const out = [];
+        for (const prop of schema.properties) {
+          if (prop.required) {
+            out.push(entry(prop.name, prop.type, !!prop.many, 'present', [valueFor(prop, rng, idx)]));
+            continue;
+          }
+          const roll = rng.float();
+          if (roll < 0.66) {
+            const count = prop.many ? rng.intBetween(1, 3) : 1;
+            const vals = [];
+            for (let k = 0; k < count; k++) vals.push(valueFor(prop, rng, idx + k));
+            out.push(entry(prop.name, prop.type, !!prop.many, 'present', vals));
+          } else if (roll < 0.84) {
+            // absent — the key is simply not written
+            continue;
+          } else if (roll < 0.92) {
+            out.push(entry(prop.name, prop.type, !!prop.many, prop.many ? 'empty_list' : 'empty_scalar', []));
+          } else {
+            out.push(entry(prop.name, prop.type, !!prop.many, 'empty_scalar', []));
+          }
+        }
+        return out;
+      }
+
+      const emitFillerRecords = (schema, bucket, count, nameFn) => {
+        for (let i = 0; i < count; i++) {
+          const label = nameFn(i);
+          const p = this.nextPath(bucket, label);
+          const entries = fillerEntriesFor(schema, this.rng, i);
+          // Force the required property to the pool name so relations resolve to
+          // something a reader can follow.
+          const requiredProp = schema.properties.find((x) => x.required);
+          if (requiredProp) {
+            const e = entries.find((x) => x.key === requiredProp.name);
+            if (e) e.values = [label];
+          }
+          const idField = `id: ${schema.prefix}-${String(this.seq[bucket]).padStart(4, '0')}`;
+          this.notes.push(note({
+            path: p,
+            recordType: schema.type,
+            extraFrontmatter: [`type: ${schema.type}`, idField],
+            entries,
+            body: fillerBody(this.rng, label),
+          }));
+        }
+      }
+
+      emitFillerRecords(this.companySchema, 'companies', fillerCompanyCount, (i) => this.fillerCompanyNames[i]);
+
+      emitFillerRecords(SCHEMA_BY_TYPE.get('project'), 'projects', fillerProjectCount, (i) => this.fillerProjectNames[i]);
+
+      emitFillerRecords(SCHEMA_BY_TYPE.get('person'), 'people', fillerPersonCount, (i) => this.fillerPersonNames[i]);
+
+      emitFillerRecords(SCHEMA_BY_TYPE.get('meeting'), 'meetings', fillerMeetingCount, (i) => `${FILLER_ADJS[i % FILLER_ADJS.length]} ${FILLER_NOUNS[(i * 3) % FILLER_NOUNS.length]} review ${i + 1}`);
+
+      // Ordinary notes — no `type:` at all for most, an UNDECLARED type for some.
+      // FR-005 says both are plain notes and neither is an error; a corpus with
+      // only records would never test that.
+      for (let i = 0; i < fillerOrdinaryCount; i++) {
+        const label = `${FILLER_ADJS[i % FILLER_ADJS.length]} ${FILLER_NOUNS[(i * 11) % FILLER_NOUNS.length]} ${i + 1}`;
+        const p = this.nextPath('notes', label);
+        const undeclared = this.rng.chance(0.3);
+        const fm = undeclared
+          ? ['type: journal', 'title: ' + yamlQuote(label)]
+          : ['title: ' + yamlQuote(label)];
+        this.notes.push(note({
+          path: p,
+          recordType: null,
+          extraFrontmatter: fm,
+          entries: [],
+          body: fillerBody(this.rng, label),
+        }));
+      }
+
+      return { notes: this.notes, scenarios: this.scenarios, plantedNotePaths: this.plantedNotePaths, invalidRecords: this.invalidRecords, rng: this.rng, sizes: this.sizes };
+  }
 }
 
-// ---------------------------------------------------------------------------
-// Answer-key computation
-//
-// Everything below reads the in-memory model, never the filesystem.
-// ---------------------------------------------------------------------------
+function buildCorpus(tier, seed) {
+  const builder = new CorpusBuilder(tier, seed)
+  builder.buildPlantedSearchNotes()
+  builder.buildPlantedCompanyNotes()
+  builder.buildInvalidNotes()
+  builder.buildProbeNotes()
+  return builder.buildFillerNotesAndFinalize()
+}
 
 function propOf(n, key) {
   return n.entries.find((e) => e.key === key) || null;
@@ -1159,384 +1214,450 @@ function sortPaths(arr) {
   return Array.from(new Set(arr)).sort();
 }
 
-function buildScenarios(corpus) {
-  const { notes, plantedNotePaths, invalidRecords } = corpus;
-  const byType = (t) => notes.filter((n) => n.recordType === t);
-  const invalidPaths = sortPaths(invalidRecords.map((n) => n.path));
-  const invalidByType = (t) => sortPaths(invalidRecords.filter((n) => n.recordType === t).map((n) => n.path));
-  const invalidSet = new Set(invalidPaths);
+// ScenarioBuilder bundles buildScenarios's shared locals (byType, S, the
+// invalid-note filters, and `companies` -- computed partway through part1
+// and read again by part2-4) as instance fields, same technique as
+// CorpusBuilder above. Each part groups a run of SC-xx blocks purely to
+// fit the function-size budget; there is no semantic grouping intent
+// beyond "keep each method under the limit."
+class ScenarioBuilder {
+  constructor(corpus) {
+      const { notes, plantedNotePaths, invalidRecords } = corpus;
 
-  // dropInvalid removes the deliberately-invalid notes from an expected MATCH
-  // set. Whether a partly-invalid record is returned by a query at all is the
-  // open contract question SC-17 exists to settle; until it is settled, a
-  // must_match set containing one is a demand this key is not entitled to make.
-  // They are still named on each affected scenario, under invalid_in_scope, so
-  // nothing is hidden.
-  const dropInvalid = (paths) => sortPaths(paths.filter((p) => !invalidSet.has(p)));
+    this.plantedNotePaths = plantedNotePaths;
+    this.invalidRecords = invalidRecords;
 
-  const INVALID_SCOPE_NOTE =
-    'These records of the queried type each carry one deliberate schema violation. This key makes NO claim about whether a query returns them — that is the contract SC-17 is written to settle. They are excluded from must_match so a grader is never asked to assert an unsettled rule, and they are listed here so their handling is still reviewed rather than overlooked.';
+      this.byType = (t) => notes.filter((n) => n.recordType === t);
 
-  const S = [];
+      this.invalidPaths = sortPaths(this.invalidRecords.map((n) => n.path));
 
-  S.push({
-    id: 'SC-01',
-    plan_ref: 'A-01',
-    title: 'Exact-term search for a planted term in prose',
-    query: { kind: 'search', text: 'quenlaris' },
-    rule: 'A note matches iff the token "quenlaris" appears in its Markdown BODY as prose. Frontmatter is not searched by this scenario and no note carries the token there.',
-    policy_dependent: true,
-    policy_note: 'The code-fence distractors encode the plan §3 rule that text inside a fenced code block is not prose and must not match. If the product decides otherwise, this scenario is the place that decision becomes visible; it must not be graded as a pass either way by default.',
-    must_match: sortPaths(plantedNotePaths.sc01_match),
-    must_not_match: [
-      { kind: 'code_fence', reason: 'the token appears only inside a fenced code block', paths: sortPaths(plantedNotePaths.sc01_codefence) },
-      { kind: 'near_token', reason: '"quenlarium" shares a prefix and is a different word with a different meaning; an exact-term search must not return it', paths: sortPaths(plantedNotePaths.sc01_neartoken) },
-    ],
-  });
+      this.invalidByType = (t) => sortPaths(this.invalidRecords.filter((n) => n.recordType === t).map((n) => n.path));
 
-  S.push({
-    id: 'SC-02',
-    plan_ref: 'A-02',
-    title: 'Phrase search where distractors share the vocabulary but not the meaning',
-    query: { kind: 'search', text: '"orbital cache"', phrase: true },
-    rule: 'A note matches iff the two-word phrase "orbital cache" occurs contiguously in its body. Distractors contain both words, never adjacent, in unrelated senses.',
-    policy_dependent: false,
-    must_match: sortPaths(plantedNotePaths.sc02_match),
-    must_not_match: [
-      { kind: 'bag_of_words', reason: 'both query words occur, separately and in unrelated senses; returning these is the precision failure the plan calls out', paths: sortPaths(plantedNotePaths.sc02_bagofwords) },
-    ],
-  });
+      const invalidSet = new Set(this.invalidPaths);
 
-  S.push({
-    id: 'SC-03',
-    plan_ref: 'A-01 / A-02',
-    title: 'A term that exists ONLY inside fenced code blocks',
-    query: { kind: 'search', text: 'parathon' },
-    rule: 'The correct answer is the EMPTY SET: every occurrence of "parathon" in the corpus is inside a fenced code block.',
-    policy_dependent: true,
-    policy_note: 'This scenario is a direct test of the plan §3 code-fence rule and nothing else. A non-empty result is not automatically a defect — it is a product decision that must be stated. What IS a defect is the decision being unstated.',
-    must_match: [],
-    must_not_match: [
-      { kind: 'code_fence', reason: 'the only occurrences are inside a fence', paths: sortPaths(plantedNotePaths.sc03_codefence) },
-    ],
-  });
+      // dropInvalid removes the deliberately-invalid notes from an expected MATCH
+      // set. Whether a partly-invalid record is returned by a query at all is the
+      // open contract question SC-17 exists to settle; until it is settled, a
+      // must_match set containing one is a demand this key is not entitled to make.
+      // They are still named on each affected scenario, under invalid_in_scope, so
+      // nothing is hidden.
+      this.dropInvalid = (paths) => sortPaths(paths.filter((p) => !invalidSet.has(p)));
 
-  S.push({
-    id: 'SC-04',
-    plan_ref: 'A-03',
-    title: 'Property-scoped find on a text property (the term also occurs elsewhere)',
-    query: { kind: 'find', record_type: 'company', property: 'name', op: 'LIKE', value: '%Vorlex%' },
-    rule: 'A record matches iff its `name` property contains "Vorlex". The token also occurs in `aliases` on three records and in the body of three others; neither is the `name` property.',
-    policy_dependent: false,
-    must_match: dropInvalid(plantedNotePaths.sc04_name),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'other_property', reason: 'the token is in `aliases`, a different property from the one queried', paths: sortPaths(plantedNotePaths.sc04_alias) },
-      { kind: 'body_only', reason: 'the token is in the Markdown body, not in any property', paths: sortPaths(plantedNotePaths.sc04_body) },
-    ],
-  });
+      this.INVALID_SCOPE_NOTE =
+        'These records of the queried type each carry one deliberate schema violation. This key makes NO claim about whether a query returns them — that is the contract SC-17 is written to settle. They are excluded from must_match so a grader is never asked to assert an unsettled rule, and they are listed here so their handling is still reviewed rather than overlooked.';
 
-  // SC-05 / SC-07 / SC-08 all read `company.status`, so classify once.
-  const companies = byType('company');
-  const statusActive = [];
-  const statusOther = [];
-  const statusAbsent = [];
-  const statusChurned = [];
-  for (const n of companies) {
-    const st = stateOf(n, 'status');
-    if (st === 'present') {
-      const v = valuesOf(n, 'status')[0];
-      if (v === 'active') statusActive.push(n.path);
-      else statusOther.push(n.path);
-      if (v === 'churned') statusChurned.push(n.path);
-    } else if (st === 'absent' || st === 'empty_list') {
-      statusAbsent.push(n.path);
-    }
+      this.S = [];
   }
-  // The invalid company whose status is `liquidated` is NON-CONFORMING, not
-  // absent, and §8 R-4 excludes it from every operator and never re-includes it
-  // by negation. It is therefore in none of the three lists above and is named
-  // separately in each scenario that touches `status`.
-  const statusNonconforming = sortPaths(
-    invalidRecords.filter((n) => n.recordType === 'company' && n.invalid.property === 'status').map((n) => n.path)
-  );
-  // A company that is missing `name` still has no `status` written; it belongs
-  // in the absent bucket, and it is there because stateOf saw no entry.
 
-  S.push({
-    id: 'SC-05',
-    plan_ref: 'A-04',
-    title: 'Filter on an enum value that EXISTS',
-    query: { kind: 'find', record_type: 'company', property: 'status', op: '=', value: 'churned' },
-    rule: 'A record matches iff its `status` property resolves to the declared enum value `churned`. Matching is case-insensitive over the folded value (FR-011a); this corpus writes the declared spelling only.',
-    policy_dependent: false,
-    must_match: dropInvalid(statusChurned),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'text_not_property', reason: 'the word "churned" appears in the body while `status` is `active`; a body hit is not a property match', paths: sortPaths(plantedNotePaths.sc05_bodyword) },
-      { kind: 'nonconforming', reason: 'the value written is outside the declared enum, so §8 R-4 excludes the record from every operator', paths: statusNonconforming },
-    ],
-  });
+  part1() {
+      this.S.push({
+        id: 'SC-01',
+        plan_ref: 'A-01',
+        title: 'Exact-term search for a planted term in prose',
+        query: { kind: 'search', text: 'quenlaris' },
+        rule: 'A note matches iff the token "quenlaris" appears in its Markdown BODY as prose. Frontmatter is not searched by this scenario and no note carries the token there.',
+        policy_dependent: true,
+        policy_note: 'The code-fence distractors encode the plan §3 rule that text inside a fenced code block is not prose and must not match. If the product decides otherwise, this scenario is the place that decision becomes visible; it must not be graded as a pass either way by default.',
+        must_match: sortPaths(this.plantedNotePaths.sc01_match),
+        must_not_match: [
+          { kind: 'code_fence', reason: 'the token appears only inside a fenced code block', paths: sortPaths(this.plantedNotePaths.sc01_codefence) },
+          { kind: 'near_token', reason: '"quenlarium" shares a prefix and is a different word with a different meaning; an exact-term search must not return it', paths: sortPaths(this.plantedNotePaths.sc01_neartoken) },
+        ],
+      });
 
-  S.push({
-    id: 'SC-06',
-    plan_ref: 'A-05',
-    title: 'Filter on an enum value that does NOT exist',
-    query: { kind: 'find', record_type: 'company', property: 'status', op: '=', value: 'liquidated' },
-    rule: 'REFUSAL EXPECTED. `liquidated` is not a declared value of company.status, so the request must be refused with the legal values named. Silently returning zero rows is the failure the plan calls the worst outcome, because it is indistinguishable from "no matches".',
-    policy_dependent: false,
-    expect_refusal: true,
-    refusal_must_name_values: SCHEMA_BY_TYPE.get('company').properties.find((p) => p.name === 'status').values,
-    must_match: [],
-    must_not_match: [],
-  });
+      this.S.push({
+        id: 'SC-02',
+        plan_ref: 'A-02',
+        title: 'Phrase search where distractors share the vocabulary but not the meaning',
+        query: { kind: 'search', text: '"orbital cache"', phrase: true },
+        rule: 'A note matches iff the two-word phrase "orbital cache" occurs contiguously in its body. Distractors contain both words, never adjacent, in unrelated senses.',
+        policy_dependent: false,
+        must_match: sortPaths(this.plantedNotePaths.sc02_match),
+        must_not_match: [
+          { kind: 'bag_of_words', reason: 'both query words occur, separately and in unrelated senses; returning these is the precision failure the plan calls out', paths: sortPaths(this.plantedNotePaths.sc02_bagofwords) },
+        ],
+      });
 
-  S.push({
-    id: 'SC-07',
-    plan_ref: 'A-06',
-    title: 'Negation via the <> operator (absence EXCLUDED)',
-    query: { kind: 'find', record_type: 'company', property: 'status', op: '<>', value: 'active' },
-    rule: 'pkg/records/filter.go §8 R-2: a comparison where either side is absent is FALSE for every operator except IS NULL. So `status <> "active"` does NOT return records with no status. R-4 excludes the non-conforming record and negation never re-includes it.',
-    policy_dependent: false,
-    must_match: dropInvalid(statusOther),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'absent', reason: 'no `status` is written (missing key or explicit null); R-2 makes the comparison false', paths: sortPaths(statusAbsent) },
-      { kind: 'nonconforming', reason: 'R-4: excluded and reported, never re-included by negation', paths: statusNonconforming },
-      { kind: 'positive_complement', reason: 'these are the records that DO hold `active`', paths: sortPaths(statusActive) },
-    ],
-  });
+      this.S.push({
+        id: 'SC-03',
+        plan_ref: 'A-01 / A-02',
+        title: 'A term that exists ONLY inside fenced code blocks',
+        query: { kind: 'search', text: 'parathon' },
+        rule: 'The correct answer is the EMPTY SET: every occurrence of "parathon" in the corpus is inside a fenced code block.',
+        policy_dependent: true,
+        policy_note: 'This scenario is a direct test of the plan §3 code-fence rule and nothing else. A non-empty result is not automatically a defect — it is a product decision that must be stated. What IS a defect is the decision being unstated.',
+        must_match: [],
+        must_not_match: [
+          { kind: 'code_fence', reason: 'the only occurrences are inside a fence', paths: sortPaths(this.plantedNotePaths.sc03_codefence) },
+        ],
+      });
 
-  S.push({
-    id: 'SC-08',
-    plan_ref: 'A-06',
-    title: 'Negation via a NOT wrapper (absence INCLUDED)',
-    query: { kind: 'find', record_type: 'company', negate: true, property: 'status', op: '=', value: 'active' },
-    rule: 'FR-008: a NEGATIVE FILTER includes records where the property is absent — the opposite of SC-07 by design. The pair exists because the two spellings of "not active" have different answers, and a build that gives them the same answer has one of them wrong.',
-    policy_dependent: false,
-    must_match: dropInvalid(statusOther.concat(statusAbsent)),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'nonconforming', reason: 'R-4 again: still excluded, even under negation', paths: statusNonconforming },
-      { kind: 'positive_complement', reason: 'these hold `active`', paths: sortPaths(statusActive) },
-    ],
-    paired_with: 'SC-07',
-    pair_note: 'SC-07 and SC-08 must return DIFFERENT sets whenever any record has an absent status. Identical results mean one of the two absence rules is not implemented.',
-  });
+      this.S.push({
+        id: 'SC-04',
+        plan_ref: 'A-03',
+        title: 'Property-scoped find on a text property (the term also occurs elsewhere)',
+        query: { kind: 'find', record_type: 'company', property: 'name', op: 'LIKE', value: '%Vorlex%' },
+        rule: 'A record matches iff its `name` property contains "Vorlex". The token also occurs in `aliases` on three records and in the body of three others; neither is the `name` property.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(this.plantedNotePaths.sc04_name),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'other_property', reason: 'the token is in `aliases`, a different property from the one queried', paths: sortPaths(this.plantedNotePaths.sc04_alias) },
+          { kind: 'body_only', reason: 'the token is in the Markdown body, not in any property', paths: sortPaths(this.plantedNotePaths.sc04_body) },
+        ],
+      });
 
-  // SC-09 — IS NULL on a person-typed property.
-  const projects = byType('project');
-  const ownerAbsent = [];
-  const ownerPresent = [];
-  for (const n of projects) {
-    const st = stateOf(n, 'owner');
-    if (st === 'present') ownerPresent.push(n.path);
-    else if (st === 'absent') ownerAbsent.push(n.path);
+      // SC-05 / SC-07 / SC-08 all read `company.status`, so classify once.
+      this.companies = this.byType('company');
+
+      const statusActive = [];
+
+      const statusOther = [];
+
+      const statusAbsent = [];
+
+      const statusChurned = [];
+
+      for (const n of this.companies) {
+        const st = stateOf(n, 'status');
+        if (st === 'present') {
+          const v = valuesOf(n, 'status')[0];
+          if (v === 'active') statusActive.push(n.path);
+          else statusOther.push(n.path);
+          if (v === 'churned') statusChurned.push(n.path);
+        } else if (st === 'absent' || st === 'empty_list') {
+          statusAbsent.push(n.path);
+        }
+      }
+
+      // The invalid company whose status is `liquidated` is NON-CONFORMING, not
+      // absent, and §8 R-4 excludes it from every operator and never re-includes it
+      // by negation. It is therefore in none of the three lists above and is named
+      // separately in each scenario that touches `status`.
+      const statusNonconforming = sortPaths(
+        this.invalidRecords.filter((n) => n.recordType === 'company' && n.invalid.property === 'status').map((n) => n.path)
+      );
+
+      // A company that is missing `name` still has no `status` written; it belongs
+      // in the absent bucket, and it is there because stateOf saw no entry.
+
+      this.S.push({
+        id: 'SC-05',
+        plan_ref: 'A-04',
+        title: 'Filter on an enum value that EXISTS',
+        query: { kind: 'find', record_type: 'company', property: 'status', op: '=', value: 'churned' },
+        rule: 'A record matches iff its `status` property resolves to the declared enum value `churned`. Matching is case-insensitive over the folded value (FR-011a); this corpus writes the declared spelling only.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(statusChurned),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'text_not_property', reason: 'the word "churned" appears in the body while `status` is `active`; a body hit is not a property match', paths: sortPaths(this.plantedNotePaths.sc05_bodyword) },
+          { kind: 'nonconforming', reason: 'the value written is outside the declared enum, so §8 R-4 excludes the record from every operator', paths: statusNonconforming },
+        ],
+      });
+
+      this.S.push({
+        id: 'SC-06',
+        plan_ref: 'A-05',
+        title: 'Filter on an enum value that does NOT exist',
+        query: { kind: 'find', record_type: 'company', property: 'status', op: '=', value: 'liquidated' },
+        rule: 'REFUSAL EXPECTED. `liquidated` is not a declared value of company.status, so the request must be refused with the legal values named. Silently returning zero rows is the failure the plan calls the worst outcome, because it is indistinguishable from "no matches".',
+        policy_dependent: false,
+        expect_refusal: true,
+        refusal_must_name_values: SCHEMA_BY_TYPE.get('company').properties.find((p) => p.name === 'status').values,
+        must_match: [],
+        must_not_match: [],
+      });
+
+      this.S.push({
+        id: 'SC-07',
+        plan_ref: 'A-06',
+        title: 'Negation via the <> operator (absence EXCLUDED)',
+        query: { kind: 'find', record_type: 'company', property: 'status', op: '<>', value: 'active' },
+        rule: 'pkg/records/filter.go §8 R-2: a comparison where either side is absent is FALSE for every operator except IS NULL. So `status <> "active"` does NOT return records with no status. R-4 excludes the non-conforming record and negation never re-includes it.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(statusOther),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'absent', reason: 'no `status` is written (missing key or explicit null); R-2 makes the comparison false', paths: sortPaths(statusAbsent) },
+          { kind: 'nonconforming', reason: 'R-4: excluded and reported, never re-included by negation', paths: statusNonconforming },
+          { kind: 'positive_complement', reason: 'these are the records that DO hold `active`', paths: sortPaths(statusActive) },
+        ],
+      });
+
+      this.S.push({
+        id: 'SC-08',
+        plan_ref: 'A-06',
+        title: 'Negation via a NOT wrapper (absence INCLUDED)',
+        query: { kind: 'find', record_type: 'company', negate: true, property: 'status', op: '=', value: 'active' },
+        rule: 'FR-008: a NEGATIVE FILTER includes records where the property is absent — the opposite of SC-07 by design. The pair exists because the two spellings of "not active" have different answers, and a build that gives them the same answer has one of them wrong.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(statusOther.concat(statusAbsent)),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'nonconforming', reason: 'R-4 again: still excluded, even under negation', paths: statusNonconforming },
+          { kind: 'positive_complement', reason: 'these hold `active`', paths: sortPaths(statusActive) },
+        ],
+        paired_with: 'SC-07',
+        pair_note: 'SC-07 and SC-08 must return DIFFERENT sets whenever any record has an absent status. Identical results mean one of the two absence rules is not implemented.',
+      });
   }
-  S.push({
-    id: 'SC-09',
-    plan_ref: 'A-03 (person) / A-06',
-    title: 'IS NULL over a person property',
-    query: { kind: 'find', record_type: 'project', property: 'owner', op: 'IS NULL' },
-    rule: 'FR-007 / R-3: a missing key and an explicit `owner:` null are the SAME state — absent — and IS NULL is the one operator absence answers directly. A note whose `owner` holds a non-wikilink is non-conforming, not absent, and is excluded.',
-    policy_dependent: false,
-    must_match: dropInvalid(ownerAbsent),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('project') },
-    must_not_match: [
-      { kind: 'present', reason: 'a conforming owner is written', paths: sortPaths(ownerPresent) },
-    ],
-  });
 
-  // SC-10 — date range over meetings.
-  const meetings = byType('meeting');
-  // The cutoff sits mid-range on purpose. Filler meeting dates are spread over
-  // 2023-2026, so a late cutoff would leave a handful of matches out of
-  // hundreds — and a scenario whose expected answer is "almost nothing" cannot
-  // tell a working range filter apart from one that returns almost nothing
-  // whatever it is asked. A roughly even split makes both failure directions
-  // visible.
-  const DATE_CUTOFF = '2025-01-01';
-  const occurredOnOrAfter = [];
-  const occurredBefore = [];
-  const occurredAbsent = [];
-  for (const n of meetings) {
-    const st = stateOf(n, 'occurred');
-    if (st !== 'present') { occurredAbsent.push(n.path); continue; }
-    const v = valuesOf(n, 'occurred')[0];
-    if (String(v) >= DATE_CUTOFF) occurredOnOrAfter.push(n.path); else occurredBefore.push(n.path);
+  part2() {
+      // SC-09 — IS NULL on a person-typed property.
+      const projects = this.byType('project');
+
+      const ownerAbsent = [];
+
+      const ownerPresent = [];
+
+      for (const n of projects) {
+        const st = stateOf(n, 'owner');
+        if (st === 'present') ownerPresent.push(n.path);
+        else if (st === 'absent') ownerAbsent.push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-09',
+        plan_ref: 'A-03 (person) / A-06',
+        title: 'IS NULL over a person property',
+        query: { kind: 'find', record_type: 'project', property: 'owner', op: 'IS NULL' },
+        rule: 'FR-007 / R-3: a missing key and an explicit `owner:` null are the SAME state — absent — and IS NULL is the one operator absence answers directly. A note whose `owner` holds a non-wikilink is non-conforming, not absent, and is excluded.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(ownerAbsent),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('project') },
+        must_not_match: [
+          { kind: 'present', reason: 'a conforming owner is written', paths: sortPaths(ownerPresent) },
+        ],
+      });
+
+      // SC-10 — date range over meetings.
+      const meetings = this.byType('meeting');
+
+      // The cutoff sits mid-range on purpose. Filler meeting dates are spread over
+      // 2023-2026, so a late cutoff would leave a handful of matches out of
+      // hundreds — and a scenario whose expected answer is "almost nothing" cannot
+      // tell a working range filter apart from one that returns almost nothing
+      // whatever it is asked. A roughly even split makes both failure directions
+      // visible.
+      const DATE_CUTOFF = '2025-01-01';
+
+      const occurredOnOrAfter = [];
+
+      const occurredBefore = [];
+
+      const occurredAbsent = [];
+
+      for (const n of meetings) {
+        const st = stateOf(n, 'occurred');
+        if (st !== 'present') { occurredAbsent.push(n.path); continue; }
+        const v = valuesOf(n, 'occurred')[0];
+        if (String(v) >= DATE_CUTOFF) occurredOnOrAfter.push(n.path); else occurredBefore.push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-10',
+        plan_ref: 'A-03 (date)',
+        title: 'Range filter over a date property',
+        query: { kind: 'find', record_type: 'meeting', property: 'occurred', op: '>=', value: DATE_CUTOFF },
+        rule: `A record matches iff its \`occurred\` day is on or after ${DATE_CUTOFF}. Every meeting date in this corpus is a bare YYYY-MM-DD day, so lexical and chronological order coincide and the expected set needs no timezone reasoning.`,
+        policy_dependent: false,
+        must_match: this.dropInvalid(occurredOnOrAfter),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('meeting') },
+        must_not_match: [
+          { kind: 'out_of_range', reason: 'earlier than the cutoff', paths: sortPaths(occurredBefore) },
+          { kind: 'absent', reason: 'no date written; R-2 makes an ordering comparison over absence false', paths: sortPaths(occurredAbsent) },
+        ],
+      });
+
+      // SC-11 — integer range over companies.
+      const HEADCOUNT_CUTOFF = 500n;
+
+      const hcOver = [], hcUnder = [], hcAbsent = [];
+
+      for (const n of this.companies) {
+        const st = stateOf(n, 'headcount');
+        if (st !== 'present') { hcAbsent.push(n.path); continue; }
+        const raw = valuesOf(n, 'headcount')[0];
+        let v;
+        try { v = BigInt(raw); } catch { hcAbsent.push(n.path); continue; }
+        if (v > HEADCOUNT_CUTOFF) hcOver.push(n.path); else hcUnder.push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-11',
+        plan_ref: 'A-03 (integer)',
+        title: 'Range filter over an integer property',
+        query: { kind: 'find', record_type: 'company', property: 'headcount', op: '>', value: '500' },
+        rule: 'A record matches iff its `headcount` is strictly greater than 500. The expected set is computed with arbitrary-precision integers, never a float, so the out-of-range invalid note cannot be silently saturated into it.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(hcOver),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'out_of_range', reason: '<= 500', paths: sortPaths(hcUnder) },
+          { kind: 'absent_or_nonconforming', reason: 'no conforming headcount is written; this includes the FR-013 out-of-int64 note, which is refused rather than saturated', paths: sortPaths(hcAbsent.concat(this.invalidByType('company'))) },
+        ],
+      });
   }
-  S.push({
-    id: 'SC-10',
-    plan_ref: 'A-03 (date)',
-    title: 'Range filter over a date property',
-    query: { kind: 'find', record_type: 'meeting', property: 'occurred', op: '>=', value: DATE_CUTOFF },
-    rule: `A record matches iff its \`occurred\` day is on or after ${DATE_CUTOFF}. Every meeting date in this corpus is a bare YYYY-MM-DD day, so lexical and chronological order coincide and the expected set needs no timezone reasoning.`,
-    policy_dependent: false,
-    must_match: dropInvalid(occurredOnOrAfter),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('meeting') },
-    must_not_match: [
-      { kind: 'out_of_range', reason: 'earlier than the cutoff', paths: sortPaths(occurredBefore) },
-      { kind: 'absent', reason: 'no date written; R-2 makes an ordering comparison over absence false', paths: sortPaths(occurredAbsent) },
-    ],
-  });
 
-  // SC-11 — integer range over companies.
-  const HEADCOUNT_CUTOFF = 500n;
-  const hcOver = [], hcUnder = [], hcAbsent = [];
-  for (const n of companies) {
-    const st = stateOf(n, 'headcount');
-    if (st !== 'present') { hcAbsent.push(n.path); continue; }
-    const raw = valuesOf(n, 'headcount')[0];
-    let v;
-    try { v = BigInt(raw); } catch { hcAbsent.push(n.path); continue; }
-    if (v > HEADCOUNT_CUTOFF) hcOver.push(n.path); else hcUnder.push(n.path);
+  part3() {
+      // SC-12 — decimal comparison over companies.
+      const ARR_CUTOFF = '1000000.50';
+
+      const arrOver = [], arrUnder = [], arrAbsent = [];
+
+      const arrCutoffCents = centsOf(ARR_CUTOFF);
+
+      for (const n of this.companies) {
+        const st = stateOf(n, 'arr');
+        if (st !== 'present') { arrAbsent.push(n.path); continue; }
+        const c = centsOf(valuesOf(n, 'arr')[0]);
+        if (c >= arrCutoffCents) arrOver.push(n.path); else arrUnder.push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-12',
+        plan_ref: 'A-03 (decimal)',
+        title: 'Comparison over an exact decimal property',
+        query: { kind: 'find', record_type: 'company', property: 'arr', op: '>=', value: ARR_CUTOFF },
+        rule: `A record matches iff its \`arr\` is >= ${ARR_CUTOFF}. Every decimal in this corpus has exactly two fractional digits and the expected set was computed over integer cents, so a float-based implementation that rounds will disagree with this key on a boundary value.`,
+        policy_dependent: false,
+        must_match: this.dropInvalid(arrOver),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'below_cutoff', reason: 'strictly less than the cutoff', paths: sortPaths(arrUnder) },
+          { kind: 'absent', reason: 'no arr written', paths: sortPaths(arrAbsent) },
+        ],
+      });
+
+      // SC-13 — checkbox.
+      const cbTrue = [], cbFalse = [], cbAbsent = [];
+
+      for (const n of this.companies) {
+        const st = stateOf(n, 'is_customer');
+        if (st !== 'present') { cbAbsent.push(n.path); continue; }
+        (valuesOf(n, 'is_customer')[0] === 'true' ? cbTrue : cbFalse).push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-13',
+        plan_ref: 'A-03 (checkbox)',
+        title: 'Equality over a checkbox property, with absence as the third state',
+        query: { kind: 'find', record_type: 'company', property: 'is_customer', op: '=', value: true },
+        rule: 'FR-004c: a checkbox has exactly two values and ABSENCE is the third state. `= true` returns neither the `false` records nor the absent ones.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(cbTrue),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'false_value', reason: 'written false', paths: sortPaths(cbFalse) },
+          { kind: 'absent', reason: 'the third state — unset — which is not false', paths: sortPaths(cbAbsent) },
+        ],
+      });
+
+      // SC-14 — relation target.
+      const REL_TARGET = PROBE_ANCHOR;
+
+      const relHit = [], relMiss = [];
+
+      for (const n of this.byType('probe')) {
+        const st = stateOf(n, 'probe_relation');
+        if (st === 'present' && valuesOf(n, 'probe_relation')[0] === `[[${REL_TARGET}]]`) relHit.push(n.path);
+        else relMiss.push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-14',
+        plan_ref: 'A-03 (relation)',
+        title: 'Equality over a relation property, compared by target',
+        query: { kind: 'find', record_type: 'probe', property: 'probe_relation', op: '=', value: `[[${REL_TARGET}]]` },
+        rule: '§8 R-8: a relation compares by TARGET, never by display text. Every matching note writes the link as a quoted wikilink, which is D5.1s on-disk form.',
+        policy_dependent: false,
+        must_match: sortPaths(relHit),
+        must_not_match: [
+          { kind: 'other_or_absent', reason: 'a different target, an empty list, or no value at all', paths: sortPaths(relMiss) },
+        ],
+      });
+
+      // SC-15 — person list membership.
+      const PERSON_TARGET = PROBE_PERSON_TARGET;
+
+      const personHit = [], personMiss = [];
+
+      for (const n of this.byType('probe')) {
+        const st = stateOf(n, 'probe_person_many');
+        if (st === 'present' && valuesOf(n, 'probe_person_many').includes(`[[${PERSON_TARGET}]]`)) personHit.push(n.path);
+        else personMiss.push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-15',
+        plan_ref: 'A-03 (person, list-valued)',
+        title: 'Membership over a LIST-valued person property',
+        query: { kind: 'find', record_type: 'probe', property: 'probe_person_many', op: 'IN', value: [`[[${PERSON_TARGET}]]`] },
+        rule: 'A record matches iff the named person appears anywhere in the list. R-13 refuses the ORDERING operators over a list; membership and equality are the operators this scenario uses.',
+        policy_dependent: false,
+        must_match: sortPaths(personHit),
+        must_not_match: [
+          { kind: 'other_or_absent', reason: 'the target is not in the list, the list is empty, or the property is absent', paths: sortPaths(personMiss) },
+        ],
+      });
   }
-  S.push({
-    id: 'SC-11',
-    plan_ref: 'A-03 (integer)',
-    title: 'Range filter over an integer property',
-    query: { kind: 'find', record_type: 'company', property: 'headcount', op: '>', value: '500' },
-    rule: 'A record matches iff its `headcount` is strictly greater than 500. The expected set is computed with arbitrary-precision integers, never a float, so the out-of-range invalid note cannot be silently saturated into it.',
-    policy_dependent: false,
-    must_match: dropInvalid(hcOver),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'out_of_range', reason: '<= 500', paths: sortPaths(hcUnder) },
-      { kind: 'absent_or_nonconforming', reason: 'no conforming headcount is written; this includes the FR-013 out-of-int64 note, which is refused rather than saturated', paths: sortPaths(hcAbsent.concat(invalidByType('company'))) },
-    ],
-  });
 
-  // SC-12 — decimal comparison over companies.
-  const ARR_CUTOFF = '1000000.50';
-  const arrOver = [], arrUnder = [], arrAbsent = [];
-  const arrCutoffCents = centsOf(ARR_CUTOFF);
-  for (const n of companies) {
-    const st = stateOf(n, 'arr');
-    if (st !== 'present') { arrAbsent.push(n.path); continue; }
-    const c = centsOf(valuesOf(n, 'arr')[0]);
-    if (c >= arrCutoffCents) arrOver.push(n.path); else arrUnder.push(n.path);
+  part4() {
+      // SC-16 — list-valued text.
+      const aliasHit = [], aliasMiss = [];
+
+      for (const n of this.companies) {
+        const st = stateOf(n, 'aliases');
+        if (st === 'present' && valuesOf(n, 'aliases').some((v) => String(v).toLowerCase().includes('vorlex'))) aliasHit.push(n.path);
+        else aliasMiss.push(n.path);
+      }
+
+      this.S.push({
+        id: 'SC-16',
+        plan_ref: 'A-03 (text, list-valued)',
+        title: 'Substring match over a LIST-valued text property',
+        query: { kind: 'find', record_type: 'company', property: 'aliases', op: 'LIKE', value: '%Vorlex%' },
+        rule: 'A record matches iff ANY element of `aliases` contains "Vorlex". This is the mirror image of SC-04: the same token, the other property, and the two answer sets must be disjoint.',
+        policy_dependent: false,
+        must_match: this.dropInvalid(aliasHit),
+        invalid_in_scope: { note: this.INVALID_SCOPE_NOTE, paths: this.invalidByType('company') },
+        must_not_match: [
+          { kind: 'other_property', reason: 'the token is in `name` or the body, not in `aliases`', paths: sortPaths(this.plantedNotePaths.sc04_name.concat(this.plantedNotePaths.sc04_body)) },
+        ],
+        paired_with: 'SC-04',
+        pair_note: 'SC-04 and SC-16 must return disjoint sets. An implementation that searches all properties for a property-scoped query returns the union for both, which looks like a pass on recall and is a total failure on precision.',
+      });
+
+      // SC-17 — search over the invalid part of the corpus.
+      this.S.push({
+        id: 'SC-17',
+        plan_ref: 'A-07',
+        title: 'Search whose entire answer set is deliberately invalid notes',
+        query: { kind: 'search', text: 'thessaly' },
+        rule: 'The term "thessaly" is planted in the body of every deliberately-invalid note and nowhere else. Whatever the tool does here must be STATED: returning them, or skipping them with a named reason, are both defensible; refusing the whole request because one note is bad is the failure A-07 names.',
+        policy_dependent: true,
+        policy_note: 'Two gradings are legitimate and the run must declare which contract it is asserting. What is NOT legitimate: an empty result with no explanation, or a hard error for the whole query.',
+        must_match: this.invalidPaths,
+        must_not_match: [],
+        unacceptable_outcomes: [
+          'the request fails outright because the corpus contains invalid notes',
+          'an empty result set with no statement that invalid notes were skipped',
+        ],
+      });
+
+      return this.S;
   }
-  S.push({
-    id: 'SC-12',
-    plan_ref: 'A-03 (decimal)',
-    title: 'Comparison over an exact decimal property',
-    query: { kind: 'find', record_type: 'company', property: 'arr', op: '>=', value: ARR_CUTOFF },
-    rule: `A record matches iff its \`arr\` is >= ${ARR_CUTOFF}. Every decimal in this corpus has exactly two fractional digits and the expected set was computed over integer cents, so a float-based implementation that rounds will disagree with this key on a boundary value.`,
-    policy_dependent: false,
-    must_match: dropInvalid(arrOver),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'below_cutoff', reason: 'strictly less than the cutoff', paths: sortPaths(arrUnder) },
-      { kind: 'absent', reason: 'no arr written', paths: sortPaths(arrAbsent) },
-    ],
-  });
-
-  // SC-13 — checkbox.
-  const cbTrue = [], cbFalse = [], cbAbsent = [];
-  for (const n of companies) {
-    const st = stateOf(n, 'is_customer');
-    if (st !== 'present') { cbAbsent.push(n.path); continue; }
-    (valuesOf(n, 'is_customer')[0] === 'true' ? cbTrue : cbFalse).push(n.path);
-  }
-  S.push({
-    id: 'SC-13',
-    plan_ref: 'A-03 (checkbox)',
-    title: 'Equality over a checkbox property, with absence as the third state',
-    query: { kind: 'find', record_type: 'company', property: 'is_customer', op: '=', value: true },
-    rule: 'FR-004c: a checkbox has exactly two values and ABSENCE is the third state. `= true` returns neither the `false` records nor the absent ones.',
-    policy_dependent: false,
-    must_match: dropInvalid(cbTrue),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'false_value', reason: 'written false', paths: sortPaths(cbFalse) },
-      { kind: 'absent', reason: 'the third state — unset — which is not false', paths: sortPaths(cbAbsent) },
-    ],
-  });
-
-  // SC-14 — relation target.
-  const REL_TARGET = PROBE_ANCHOR;
-  const relHit = [], relMiss = [];
-  for (const n of byType('probe')) {
-    const st = stateOf(n, 'probe_relation');
-    if (st === 'present' && valuesOf(n, 'probe_relation')[0] === `[[${REL_TARGET}]]`) relHit.push(n.path);
-    else relMiss.push(n.path);
-  }
-  S.push({
-    id: 'SC-14',
-    plan_ref: 'A-03 (relation)',
-    title: 'Equality over a relation property, compared by target',
-    query: { kind: 'find', record_type: 'probe', property: 'probe_relation', op: '=', value: `[[${REL_TARGET}]]` },
-    rule: '§8 R-8: a relation compares by TARGET, never by display text. Every matching note writes the link as a quoted wikilink, which is D5.1s on-disk form.',
-    policy_dependent: false,
-    must_match: sortPaths(relHit),
-    must_not_match: [
-      { kind: 'other_or_absent', reason: 'a different target, an empty list, or no value at all', paths: sortPaths(relMiss) },
-    ],
-  });
-
-  // SC-15 — person list membership.
-  const PERSON_TARGET = PROBE_PERSON_TARGET;
-  const personHit = [], personMiss = [];
-  for (const n of byType('probe')) {
-    const st = stateOf(n, 'probe_person_many');
-    if (st === 'present' && valuesOf(n, 'probe_person_many').includes(`[[${PERSON_TARGET}]]`)) personHit.push(n.path);
-    else personMiss.push(n.path);
-  }
-  S.push({
-    id: 'SC-15',
-    plan_ref: 'A-03 (person, list-valued)',
-    title: 'Membership over a LIST-valued person property',
-    query: { kind: 'find', record_type: 'probe', property: 'probe_person_many', op: 'IN', value: [`[[${PERSON_TARGET}]]`] },
-    rule: 'A record matches iff the named person appears anywhere in the list. R-13 refuses the ORDERING operators over a list; membership and equality are the operators this scenario uses.',
-    policy_dependent: false,
-    must_match: sortPaths(personHit),
-    must_not_match: [
-      { kind: 'other_or_absent', reason: 'the target is not in the list, the list is empty, or the property is absent', paths: sortPaths(personMiss) },
-    ],
-  });
-
-  // SC-16 — list-valued text.
-  const aliasHit = [], aliasMiss = [];
-  for (const n of companies) {
-    const st = stateOf(n, 'aliases');
-    if (st === 'present' && valuesOf(n, 'aliases').some((v) => String(v).toLowerCase().includes('vorlex'))) aliasHit.push(n.path);
-    else aliasMiss.push(n.path);
-  }
-  S.push({
-    id: 'SC-16',
-    plan_ref: 'A-03 (text, list-valued)',
-    title: 'Substring match over a LIST-valued text property',
-    query: { kind: 'find', record_type: 'company', property: 'aliases', op: 'LIKE', value: '%Vorlex%' },
-    rule: 'A record matches iff ANY element of `aliases` contains "Vorlex". This is the mirror image of SC-04: the same token, the other property, and the two answer sets must be disjoint.',
-    policy_dependent: false,
-    must_match: dropInvalid(aliasHit),
-    invalid_in_scope: { note: INVALID_SCOPE_NOTE, paths: invalidByType('company') },
-    must_not_match: [
-      { kind: 'other_property', reason: 'the token is in `name` or the body, not in `aliases`', paths: sortPaths(plantedNotePaths.sc04_name.concat(plantedNotePaths.sc04_body)) },
-    ],
-    paired_with: 'SC-04',
-    pair_note: 'SC-04 and SC-16 must return disjoint sets. An implementation that searches all properties for a property-scoped query returns the union for both, which looks like a pass on recall and is a total failure on precision.',
-  });
-
-  // SC-17 — search over the invalid part of the corpus.
-  S.push({
-    id: 'SC-17',
-    plan_ref: 'A-07',
-    title: 'Search whose entire answer set is deliberately invalid notes',
-    query: { kind: 'search', text: 'thessaly' },
-    rule: 'The term "thessaly" is planted in the body of every deliberately-invalid note and nowhere else. Whatever the tool does here must be STATED: returning them, or skipping them with a named reason, are both defensible; refusing the whole request because one note is bad is the failure A-07 names.',
-    policy_dependent: true,
-    policy_note: 'Two gradings are legitimate and the run must declare which contract it is asserting. What is NOT legitimate: an empty result with no explanation, or a hard error for the whole query.',
-    must_match: invalidPaths,
-    must_not_match: [],
-    unacceptable_outcomes: [
-      'the request fails outright because the corpus contains invalid notes',
-      'an empty result set with no statement that invalid notes were skipped',
-    ],
-  });
-
-  return S;
 }
+
+function buildScenarios(corpus) {
+  const builder = new ScenarioBuilder(corpus)
+  builder.part1()
+  builder.part2()
+  builder.part3()
+  return builder.part4()
+}
+
 
 // ---------------------------------------------------------------------------
 // Metadata: counts, per record type and per property type.

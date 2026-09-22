@@ -34,6 +34,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -340,18 +341,34 @@ func TestReadImage_CountingReaderStopsAtLimitPlusOne(t *testing.T) {
 // TestReadImage_CancellationBetweenBoundedReads cancels the context after the
 // first tail read and asserts the interrupted outcome: a context error, no
 // image content, and acquisition still bounded by M+1 (spec dataset B16).
+//
+// The reader's countingTailFile never blocks on real I/O (it synthesizes
+// bytes in a tight loop), so a buffered, non-blocking "first read started"
+// signal is not enough to guarantee the test's cancel() actually runs before
+// the read goroutine finishes: under GOMAXPROCS=1 in particular, a goroutine
+// that never yields can run io.ReadAll to completion — including the final,
+// in-limit chunk that ends in a clean io.EOF — before the scheduler ever
+// gives the main goroutine a turn to call cancel(). That raced the assertion
+// non-deterministically. To make "between bounded reads" a real happens-
+// before relationship instead of a scheduling gamble, onRead blocks on
+// resumeRead after signaling firstRead, and the test only closes
+// resumeRead after cancel() has returned — so the context is guaranteed
+// canceled before the read (and thus the rest of the bounded-read loop) is
+// allowed to proceed.
 func TestReadImage_CancellationBetweenBoundedReads(t *testing.T) {
 	const maxBytes = int64(1 << 20)
 	const sniffN = 512
-	firstRead := make(chan struct{}, 1)
+	firstRead := make(chan struct{})
+	resumeRead := make(chan struct{})
+	var signaled sync.Once
 	file := &countingTailFile{
 		data:     nil,
 		statSize: 4096,
 		onRead: func() {
-			select {
-			case firstRead <- struct{}{}:
-			default:
-			}
+			signaled.Do(func() {
+				close(firstRead)
+				<-resumeRead
+			})
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -365,8 +382,9 @@ func TestReadImage_CancellationBetweenBoundedReads(t *testing.T) {
 		}
 		done <- result
 	}()
-	<-firstRead // at least one tail read has begun; cancel between bounded reads
-	cancel()
+	<-firstRead // the first tail read has begun and is blocked in onRead
+	cancel()    // guaranteed to complete before the read is allowed to resume
+	close(resumeRead)
 	result := <-done
 	if result == nil {
 		t.Fatal("image branch did not handle a canceled regular-file read")

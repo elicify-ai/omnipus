@@ -854,7 +854,9 @@ jobs:
           if-no-files-found: ignore
       - run: npm run verify:design-system
       # Enforcement audit (design-system/enforcement/contract.json): complete
-      # six-scanner audit at checkpoint C1 with the live token policy, canonical
+      # six-scanner audit at the checkpoint recorded in contract.json's
+      # currentCheckpoint (read by scripts/design-system-locks/current-checkpoint.mjs
+      # -- never hardcoded here) with the live token policy, canonical
       # baseline/ledger (composed ONLY from lead-approved fragments), and composed
       # public export→manifest→story→executed-check coverage. Intentionally a hard,
       # blocking step with NO continue-on-error: unapproved existing debt and

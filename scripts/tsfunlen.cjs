@@ -1,7 +1,18 @@
 #!/usr/bin/env node
-// tsfunlen: list every TS/TSX function-like node under src/ whose line span
+// tsfunlen: list every TS/TSX function-like node under src/, and every
+// MJS/JS/CJS function-like node under scripts/ and tests/, whose line span
 // exceeds a threshold, for the function-size budget gate
 // (scripts/check-function-budget.sh). Companion to scripts/funlen (Go).
+//
+// The scripts/ and tests/ roots (not docs/ or spikes/) mirror
+// check-file-budget.sh's own scope decision for hand-written .mjs/.js/.cjs
+// tooling — see that script's header. The TypeScript compiler API parses
+// plain JS/MJS/CJS the same way it parses TS: ts.createSourceFile infers
+// ts.ScriptKind.JS from the .mjs/.cjs/.js extension with no extra flag, so
+// the same walk, the same function-like node kinds, and the same anonymous-
+// callback/component rules below apply to both — a .tsx-only check keeps
+// every .mjs/.js/.cjs function classified as "function", never "component",
+// which is correct: none of them render JSX.
 //
 // Counted node kinds: FunctionDeclaration, MethodDeclaration,
 // FunctionExpression, ArrowFunction, ConstructorDeclaration, GetAccessor,
@@ -73,32 +84,45 @@ function isSkippedFile(rel) {
 function isTestPath(rel) {
   const norm = rel.split(path.sep).join('/');
   return (
-    /\.(test|spec)\.(ts|tsx)$/.test(norm) ||
+    /\.(test|spec)\.(ts|tsx|mjs|js|cjs)$/.test(norm) ||
     norm.includes('/__tests__/') ||
     norm.startsWith('e2e/') ||
     norm.startsWith('tests/')
   );
 }
 
-// walkSourceFiles collects every .ts/.tsx file under <root>/src, skipping
-// SKIP_DIRS and isSkippedFile() paths. A missing src/ (a fixture tree with
-// no TS at all) is not an error — it just yields no files.
+// SOURCE_ROOTS: each { dir, extensions } pair is walked independently and
+// unioned. src/ scans TS/TSX only; scripts/ and tests/ scan MJS/JS/CJS
+// only (never TS/TSX there — tests/e2e's TS/TSX, if any, stays out of
+// scope). The three dirs never overlap, so no file is ever walked twice.
+const SOURCE_ROOTS = [
+  { dir: 'src', extensions: ['.ts', '.tsx'] },
+  { dir: 'scripts', extensions: ['.mjs', '.js', '.cjs'] },
+  { dir: 'tests', extensions: ['.mjs', '.js', '.cjs'] },
+];
+
+// walkSourceFiles collects every file matching SOURCE_ROOTS under <root>,
+// skipping SKIP_DIRS and isSkippedFile() paths. A missing root dir (a
+// fixture tree with no TS/JS at all) is not an error — it just yields no
+// files from that root.
 function walkSourceFiles(root) {
   const out = [];
-  const start = path.join(root, 'src');
-  if (!fs.existsSync(start)) return out;
-  const stack = [start];
-  while (stack.length > 0) {
-    const dir = stack.pop();
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) stack.push(p);
-        continue;
+  for (const { dir, extensions } of SOURCE_ROOTS) {
+    const start = path.join(root, dir);
+    if (!fs.existsSync(start)) continue;
+    const stack = [start];
+    while (stack.length > 0) {
+      const cur = stack.pop();
+      for (const entry of fs.readdirSync(cur, { withFileTypes: true })) {
+        const p = path.join(cur, entry.name);
+        if (entry.isDirectory()) {
+          if (!SKIP_DIRS.has(entry.name)) stack.push(p);
+          continue;
+        }
+        if (!extensions.includes(path.extname(entry.name))) continue;
+        const rel = path.relative(root, p);
+        if (!isSkippedFile(rel)) out.push({ abs: p, rel });
       }
-      if (!/\.(ts|tsx)$/.test(entry.name)) continue;
-      const rel = path.relative(root, p);
-      if (!isSkippedFile(rel)) out.push({ abs: p, rel });
     }
   }
   return out;

@@ -1162,25 +1162,29 @@ describe('LibraryExplorer — list/preview split and inline media', () => {
 // assert an absence (nothing selected locally, no remount, no stale entry)
 // rather than a presence, because a component keeping its own copy would pass
 // the presence assertions just as well.
-describe('LibraryExplorer — deep-linking (addressed mode)', () => {
-
-  function renderAddressed(address: { workspaceId?: string; path?: string }) {
-    const client = makeClient()
-    const onAddressChange = vi.fn()
-    const tree = (a: { workspaceId?: string; path?: string }) => (
-      <QueryClientProvider client={client}>
-        <LibraryExplorer address={a} onAddressChange={onAddressChange} />
-      </QueryClientProvider>
-    )
-    const utils = render(tree(address))
-    return {
-      ...utils,
-      onAddressChange,
-      /** Simulates the URL changing under the component — back button, a
-       *  pasted link, or a link a later wave hands it. */
-      navigateTo: (next: { workspaceId?: string; path?: string }) => utils.rerender(tree(next)),
-    }
+// Shared by both deep-linking describe blocks below — a function-size
+// budget requirement (scripts/check-function-budget.sh; see
+// scripts/budgets/functions.txt's grandfathered entry for this file).
+function renderAddressedLibraryExplorer(address: { workspaceId?: string; path?: string }) {
+  const client = makeClient()
+  const onAddressChange = vi.fn()
+  const tree = (a: { workspaceId?: string; path?: string }) => (
+    <QueryClientProvider client={client}>
+      <LibraryExplorer address={a} onAddressChange={onAddressChange} />
+    </QueryClientProvider>
+  )
+  const utils = render(tree(address))
+  return {
+    ...utils,
+    onAddressChange,
+    /** Simulates the URL changing under the component — back button, a
+     *  pasted link, or a link a later wave hands it. */
+    navigateTo: (next: { workspaceId?: string; path?: string }) => utils.rerender(tree(next)),
   }
+}
+
+describe('LibraryExplorer — deep-linking (addressed mode)', () => {
+  const renderAddressed = renderAddressedLibraryExplorer
 
   it('opens the addressed file selected, listing the folder that contains it (US-3 AS-3)', async () => {
     mockedFetchWorkspaces.mockResolvedValue([makeWorkspaceNode({ id: 'ws-1' })])
@@ -1292,6 +1296,13 @@ describe('LibraryExplorer — deep-linking (addressed mode)', () => {
     expect(mockedFetchEntries).toHaveBeenCalledWith('ws-1', 'a/b', false)
     expect(screen.getByTestId('library-row-a/b/deep.md')).toBeInTheDocument()
   })
+})
+
+// A function-size budget split from the describe block above — same
+// "addressed mode" contract, same shared `renderAddressed` helper; no
+// behavioural boundary between the two blocks.
+describe('LibraryExplorer — deep-linking (addressed mode): missing path and edge cases', () => {
+  const renderAddressed = renderAddressedLibraryExplorer
 
   it('opens the containing folder with a message naming the missing path, not an error state (US-3 AS-5)', async () => {
     mockedFetchWorkspaces.mockResolvedValue([])

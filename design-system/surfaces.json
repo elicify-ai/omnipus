@@ -70,6 +70,40 @@
       }
     },
     {
+      "id": "_app/admin.chat",
+      "kind": "route",
+      "source": "src/routes/_app/admin.chat.tsx",
+      "symbol": "Route",
+      "lane": 3,
+      "verification": [
+        {
+          "checkId": "surface:app-admin-chat:unit",
+          "file": "tests/design-system/surfaces/app-admin-chat.test.tsx",
+          "test": "_app/admin.chat surface contract",
+          "status": "planned",
+          "kind": "unit"
+        },
+        {
+          "checkId": "surface:app-admin-chat:browser",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/admin.chat surface browser contract",
+          "status": "planned",
+          "kind": "browser"
+        },
+        {
+          "checkId": "surface:app-admin-chat:reflow",
+          "kind": "reflow",
+          "file": "tests/design-system/surface-inventory.spec.ts",
+          "test": "_app/admin.chat surface reflow contract",
+          "status": "planned"
+        }
+      ],
+      "entry": {
+        "type": "route",
+        "path": "/admin/chat"
+      }
+    },
+    {
       "id": "_app/agents",
       "kind": "route",
       "source": "src/routes/_app/agents.tsx",
@@ -6108,7 +6142,15 @@
       "lane": 5
     },
     {
+      "source": "src/components/agents/agentDraft.ts",
+      "lane": 5
+    },
+    {
       "source": "src/components/agents/approvalPreviews/BashApprovalPreview.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/agents/approvalPreviews/EnvironmentSetupApprovalPreview.tsx",
       "lane": 8
     },
     {
@@ -6152,7 +6194,23 @@
       "lane": 5
     },
     {
+      "source": "src/components/browser/BrowserLiveAnnotatePopover.tsx",
+      "lane": 8
+    },
+    {
       "source": "src/components/browser/BrowserLivePanel.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/browser/BrowserLiveRetryStatus.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/browser/BrowserLiveTabStrip.tsx",
+      "lane": 8
+    },
+    {
+      "source": "src/components/browser/BrowserLiveToolbar.tsx",
       "lane": 8
     },
     {
@@ -6161,6 +6219,14 @@
     },
     {
       "source": "src/components/browser/browserFrameTestUtils.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/browser/browserLiveViewAnnotate.ts",
+      "lane": 8
+    },
+    {
+      "source": "src/components/browser/browserLiveViewModel.ts",
       "lane": 8
     },
     {
@@ -6604,6 +6670,10 @@
       "lane": 4
     },
     {
+      "source": "src/components/library/preview/LibraryPdfPreview.loadEffect.ts",
+      "lane": 4
+    },
+    {
       "source": "src/components/library/preview/LibrarySignaturePad.tsx",
       "lane": 4
     },
@@ -6972,6 +7042,10 @@
       "lane": 6
     },
     {
+      "source": "src/components/settings/useStepUp.tsx",
+      "lane": 6
+    },
+    {
       "source": "src/components/shared/AdvancedDisclosure.tsx",
       "lane": 7
     },
@@ -7252,12 +7326,20 @@
       "lane": 7
     },
     {
+      "source": "src/routes/-login-local.tsx",
+      "lane": 7
+    },
+    {
       "source": "src/routes/__root.tsx",
       "lane": 7
     },
     {
       "source": "src/routes/_app.tsx",
       "lane": 7
+    },
+    {
+      "source": "src/routes/_app/admin.chat.tsx",
+      "lane": 3
     },
     {
       "source": "src/routes/_app/agents.$agentId.tsx",

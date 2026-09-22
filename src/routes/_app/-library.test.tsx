@@ -339,55 +339,58 @@ describe('/library pop-out route', () => {
       )
     })
   })
+})
 
-  // The explorer's own handlers guard in-app clicks; they cannot see the
-  // browser's back button, which is a new way to lose an unsaved edit that
-  // deep-linking itself introduces. The route blocks it.
-  describe('unsaved-edit guard on browser navigation', () => {
-    // shouldBlockFn is now async — it awaits confirmDiscardLibraryEdits(),
-    // which opens the catalogued ConfirmDialog in place of window.confirm
-    // (see unsavedGuard.ts). Driving it means resolving the SAME real
-    // dialog MockLibraryExplorer hosts above, not spying on window.confirm.
-    function shouldBlock(): Promise<boolean> {
-      const [[opts]] = mockUseBlocker.mock.calls as [[{ shouldBlockFn: () => Promise<boolean> }]]
-      return opts.shouldBlockFn()
-    }
+// A function-size budget split (scripts/check-function-budget.sh) from the
+// describe block above — same route, same mocks; no behavioural boundary
+// between the two blocks.
+// The explorer's own handlers guard in-app clicks; they cannot see the
+// browser's back button, which is a new way to lose an unsaved edit that
+// deep-linking itself introduces. The route blocks it.
+describe('unsaved-edit guard on browser navigation', () => {
+  // shouldBlockFn is now async — it awaits confirmDiscardLibraryEdits(),
+  // which opens the catalogued ConfirmDialog in place of window.confirm
+  // (see unsavedGuard.ts). Driving it means resolving the SAME real
+  // dialog MockLibraryExplorer hosts above, not spying on window.confirm.
+  function shouldBlock(): Promise<boolean> {
+    const [[opts]] = mockUseBlocker.mock.calls as [[{ shouldBlockFn: () => Promise<boolean> }]]
+    return opts.shouldBlockFn()
+  }
 
-    it('does not block, and does not prompt, when nothing is unsaved', async () => {
-      render(<LibraryRoute />)
+  it('does not block, and does not prompt, when nothing is unsaved', async () => {
+    render(<LibraryRoute />)
 
-      await expect(shouldBlock()).resolves.toBe(false)
-      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    })
+    await expect(shouldBlock()).resolves.toBe(false)
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+  })
 
-    it('blocks the navigation when the Library editor has unsaved edits and the operator chooses to stay', async () => {
-      render(<LibraryRoute />)
-      setLibraryEditorDirty(true)
+  it('blocks the navigation when the Library editor has unsaved edits and the operator chooses to stay', async () => {
+    render(<LibraryRoute />)
+    setLibraryEditorDirty(true)
 
-      const blockPromise = shouldBlock()
-      const dialog = await screen.findByRole('alertdialog')
-      expect(dialog).toHaveTextContent('Discard unsaved changes?')
-      fireEvent.click(within(dialog).getByText('Cancel'))
+    const blockPromise = shouldBlock()
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog).toHaveTextContent('Discard unsaved changes?')
+    fireEvent.click(within(dialog).getByText('Cancel'))
 
-      await expect(blockPromise).resolves.toBe(true)
-    })
+    await expect(blockPromise).resolves.toBe(true)
+  })
 
-    it('lets the navigation through once the operator agrees to discard', async () => {
-      render(<LibraryRoute />)
-      setLibraryEditorDirty(true)
+  it('lets the navigation through once the operator agrees to discard', async () => {
+    render(<LibraryRoute />)
+    setLibraryEditorDirty(true)
 
-      const blockPromise = shouldBlock()
-      const dialog = await screen.findByRole('alertdialog')
-      fireEvent.click(within(dialog).getByText('Discard'))
+    const blockPromise = shouldBlock()
+    const dialog = await screen.findByRole('alertdialog')
+    fireEvent.click(within(dialog).getByText('Discard'))
 
-      await expect(blockPromise).resolves.toBe(false)
-    })
+    await expect(blockPromise).resolves.toBe(false)
+  })
 
-    it('leaves beforeunload to unsavedGuard.ts, so a reload prompts once and not twice', () => {
-      render(<LibraryRoute />)
+  it('leaves beforeunload to unsavedGuard.ts, so a reload prompts once and not twice', () => {
+    render(<LibraryRoute />)
 
-      const [[opts]] = mockUseBlocker.mock.calls as [[{ enableBeforeUnload?: boolean }]]
-      expect(opts.enableBeforeUnload).toBe(false)
-    })
+    const [[opts]] = mockUseBlocker.mock.calls as [[{ enableBeforeUnload?: boolean }]]
+    expect(opts.enableBeforeUnload).toBe(false)
   })
 })

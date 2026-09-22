@@ -23,10 +23,11 @@ import { catalogEntryById, catalogLabel } from '@/lib/catalogDisplay'
  * this carries the catalog rows themselves, which is what ordering by release
  * date and awarding a "Recommended for chat" chip need — neither is derivable
  * from a string. Owned here (the code that builds it from real provider/
- * catalog data) and re-exported by `@/components/ui/model-selector`, which
- * renders it, so existing consumers keep importing it from the selector.
+ * catalog data). `@/components/ui/model-selector` does not re-export this
+ * type — it imports `ModelCatalogGroup` directly from this module, as does
+ * every other consumer (e.g. `src/routes/onboarding.tsx`).
  */
-export interface ModelCatalogGroup {
+export interface ModelCatalogGroup { // not-wire-format: client-side derived grouping built from configured providers plus the catalog, never serialised over any wire boundary
   /** Provider routing key — the configured provider's `id`. */
   providerId: string
   /** Display name, used as the vendor heading fallback for bare model ids. */

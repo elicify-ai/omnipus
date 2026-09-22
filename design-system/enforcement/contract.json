@@ -24,6 +24,8 @@
   "failClosed": "Parser failures and unsupported governed syntax must become explicit findings or errors, never empty success. Orchestrator treats scanner exceptions as blocking; no baseline for infrastructure/parser errors.",
   "baseline": "Every existing-debt fingerprint references an owned temporary ledger entry with replacement, expiryCheckpoint and exact rule/path/fingerprint boundary. No total-count-only baseline; no auto-rebaseline command in CI.",
   "exceptions": "Permanent exceptions registered with exact path/rule boundary and reason; temporary entries expire by ordered checkpoints A,B,C1,C2,C3,C4,C5,C6. Reject missing owners/replacements/expiry, duplicate/unknown entries and expired entries.",
+  "currentCheckpoint": "C1",
+  "currentCheckpointGovernance": "Single source of truth for which checkpoint the audit enforces. scripts/design-system-locks/current-checkpoint.mjs reads exactly this field (never a literal in package.json, CI YAML, or any other file) and audit.mjs's isExpired() compares every ledger entry's expiryCheckpoint against it. Checkpoints are an ordered stage sequence (design-system-migration-plan.md), not calendar dates: 'not a date any batch is due' (stage-b-closure-summary.md). Advancing this value is the lead's decision (see ownership) and requires the closing checkpoint's own exit criteria to be met first (e.g. C1's: docs/internal/design/evidence/c1-execution-record.md '## Batch close') — a reviewed, versioned edit here, never a silent default. Moving this value forward past a checkpoint that still has owned ledger entries at or before it is exactly what is supposed to make the audit fail on that debt (expired-ledger); that is not a regression to work around by re-dating the entries.",
   "sourceScope": "Complete applicable src tree plus packages/ui/src when present, including CSS/JS/JSX/TS/TSX/SVG. Canonical src remains required. Tests, stories, generated token definitions and third-party/adaptor boundaries must be enumerated centrally as reviewed boundaries, not implicit scanner skip logic. Governed extension matching is case-insensitive.",
   "ownership": {
     "css-colors.mjs": "GLM CSS colors",
@@ -34,7 +36,8 @@
     "status.mjs": "Grok D4 status palette",
     "coverage.mjs": "GLM public executed coverage",
     "audit.mjs": "Grok orchestration/ledger",
-    "policy.mjs": "lead: canonical policy loading and integration"
+    "policy.mjs": "lead: canonical policy loading and integration",
+    "current-checkpoint.mjs": "lead: reads currentCheckpoint above; the only legal source of the --checkpoint value any caller passes to audit.mjs"
   },
   "integrationFreeze": "Workers modify only new scripts/design-system-locks, tests/design-system-locks and assigned enforcement files. No existing Stage A files, package/lock/config/CI, application files, or generated outputs. Lead integrates after A gate.",
   "coverageApi": "coverage.mjs exports checkCoverage({root,indexPath,evidencePaths}) returning {errors: string[]}; compose existing Stage A validators read-only, no scanner API required.",

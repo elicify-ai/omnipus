@@ -1,6 +1,6 @@
 # Function-size recommendation: Go and TypeScript
 
-> **Status note (added on import, 2026-09-15):** this is the sizing study as delivered. Its numeric proposal (fail at 120 lines or 40 statements) was **superseded the same day by the founder's ruling**: files warn at 2,000 and fail at 4,000 lines; functions warn at 120 and fail at 240 lines. The ruling and the resulting test design live in `draft-module-map.md`, sections "Size budgets" and "How we enforce it". Kept here for the statement-count and nesting data, the norms table with sources, and the first-ten ordering, which the plan reuses.
+> **Status note (added on import, 2026-09-15):** this is the sizing study as delivered. Its numeric proposal (fail at 120 lines or 40 statements) was **superseded the same day by the founder's ruling**: files warn at 2,000 and fail at 3,000 lines (fail limit set 2026-09-22); functions warn at 120 and fail at 240 lines. The ruling and the resulting test design live in `draft-module-map.md`, sections "Size budgets" and "How we enforce it". Kept here for the statement-count and nesting data, the norms table with sources, and the first-ten ordering, which the plan reuses.
 
 **Tree measured:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release`, branch `release/v0.1.1`, tip `d9a0c6941eb0d02d470a60e3d89916ea648689dc` (read-only). All Go numbers in this report were regenerated against that exact commit with the tools described below; TS numbers reuse the pre-existing full-distribution scan at the same commit (`results/funlen-ts-all-d9a0c6941.txt`).
 

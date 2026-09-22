@@ -520,7 +520,6 @@
         "ProviderStatus",
         "ModelGroup",
         "ModelPair",
-        "ModelCatalogGroup",
         "ModelSelectorProviderFilter",
         "ModelSelector"
       ],

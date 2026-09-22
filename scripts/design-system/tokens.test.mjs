@@ -203,6 +203,8 @@ const D3_PRIMITIVES = [
   ['primitive.color.blue', '--primitive-color-blue', '#3B82F6'], // info — next / information
   ['primitive.color.orange', '--primitive-color-orange', '#F97316'], // blocked / orange — blocked
   ['primitive.color.mount', '--primitive-color-mount', '#8EA3BD'], // mount — library mount icon
+  ['primitive.color.red-label', '--primitive-color-red-label', '#F87171'], // red-label — higher-contrast red label text (Badge error foreground; Failed status, §D4)
+  ['primitive.color.blue-label', '--primitive-color-blue-label', '#60A5FA'], // blue-label — higher-contrast blue label text (Next status, §D4)
 ]
 
 // The 14 status tint/hover primitives are the §D3 base hex with a one-byte
@@ -250,11 +252,11 @@ const D3_SEMANTICS = [
 // explicitly approved normalization; do not "fix" it back to orange.
 const D4_STATUS = [
   ['color.status.inbox', '--color-status-inbox', '#9CA3AF'], // Grey — quiet circle
-  ['color.status.next', '--color-status-next', '#3B82F6'], // Blue — ready / info
+  ['color.status.next', '--color-status-next', '#60A5FA'], // Blue (blue-label) — ready / info, 7.78:1 contrast on #0A0A0B chip text
   ['color.status.in-progress', '--color-status-in-progress', '#D4AF37'], // Forge Gold — live work
   ['color.status.blocked', '--color-status-blocked', '#F97316'], // Orange — prohibit
   ['color.status.done', '--color-status-done', '#10B981'], // Green — check
-  ['color.status.failed', '--color-status-failed', '#EF4444'], // Red — X
+  ['color.status.failed', '--color-status-failed', '#F87171'], // Red (red-label) — X, 7.15:1 contrast on #0A0A0B chip text
   ['color.status.cancelled', '--color-status-cancelled', '#EAB308'], // Amber — stopped by user
 ]
 
@@ -374,7 +376,7 @@ describe('D3/D4 palette lock on the committed colour source', () => {
         mutate: (colors) => {
           colors.tokens.find((token) => token.id === 'component.status.done.foreground').ref = 'color.status.failed'
         },
-        message: 'D3 palette violation: token "component.status.done.foreground" must resolve to "#10B981" but resolves to "#EF4444" (docs/internal/design/design-system-definition.md §D4 status map)',
+        message: 'D3 palette violation: token "component.status.done.foreground" must resolve to "#10B981" but resolves to "#F87171" (docs/internal/design/design-system-definition.md §D4 status map)',
       },
     ]
 

@@ -254,14 +254,50 @@ describe('SearchModal — delete flow', () => {
     await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
 
     const deleteBtn = screen.getByRole('button', { name: 'Delete Session One' })
-    expect(deleteBtn).toBeDisabled()
+    // aria-disabled, NOT the native `disabled` attribute — see the
+    // hover-tooltip test below for why. `toBeDisabled()` only recognises the
+    // native attribute (jest-dom's `isElementOrAncestorDisabled`), so the
+    // logical disabled state is asserted directly via aria-disabled instead.
+    expect(deleteBtn).not.toBeDisabled()
+    expect(deleteBtn).toHaveAttribute('aria-disabled', 'true')
     expect(deleteBtn).toHaveAttribute('title', 'Protected (heartbeat)')
 
-    // A disabled button ignores clicks — the destructive confirm step must
-    // never appear, and no delete request must be made.
+    // Still not natively disabled, so a click reaches the handler — which
+    // must no-op on its own: the destructive confirm step never appears, and
+    // no delete request is made.
     await user.click(deleteBtn)
     expect(screen.queryByText('Delete "Session One"?')).not.toBeInTheDocument()
     expect(deleteSession).not.toHaveBeenCalled()
+  })
+
+  it('B7: a protected session keeps its delete button hoverable so the explanatory tooltip is reachable', async () => {
+    // Regression guard: `disabled:pointer-events-none` (button.tsx's base
+    // variant) blocks hover entirely on a natively `disabled` button, which
+    // silently drops the `title` tooltip explaining WHY delete is greyed
+    // out. This asserts the actual mechanism that keeps hover reachable —
+    // no native `disabled` attribute at all — not just that a title string
+    // exists (a `title` attribute can be present on an element hover can
+    // never reach).
+    vi.mocked(fetchSessions).mockResolvedValue([
+      makeSession({ id: 's-1', title: 'Session One', protected: true }),
+    ])
+    renderModal()
+
+    await waitFor(() => expect(screen.getByText('Session One')).toBeInTheDocument())
+
+    const deleteBtn = screen.getByRole('button', { name: 'Delete Session One' })
+    // No native `disabled` attribute — button.tsx's base variant only applies
+    // its `disabled:pointer-events-none` CSS rule (which would block hover)
+    // when this attribute is actually present, regardless of the static
+    // Tailwind modifier string always being part of the component's class list.
+    expect(deleteBtn).not.toHaveAttribute('disabled')
+    expect(deleteBtn).toHaveAttribute('title', 'Protected (heartbeat)')
+    // Non-disabled elements stay in the tab order and are focusable, which is
+    // what keeps the title tooltip (and a screen reader's read of aria-disabled)
+    // reachable for keyboard users too — a truly `disabled` button drops out
+    // of the tab order entirely.
+    deleteBtn.focus()
+    expect(deleteBtn).toHaveFocus()
   })
 })
 

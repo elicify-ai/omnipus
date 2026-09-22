@@ -6,6 +6,12 @@ The workspace file-explorer surface over the workspace `work/` tree
 (UUID-keyed binary media storage, ADR-051): different packages solving
 different problems (module-map decision D1); do not conflate them.
 
+## Design system
+
+Read `.claude/skills/omnipus-design-system/SKILL.md` before adding or changing any
+control, color, spacing, or type value here — it states the CI-enforced rules and cites
+the script or test for each.
+
 ## Preview is framed inside the Library panel
 
 - `LibraryExplorer.tsx` mounts `LibraryPreviewPane.tsx` into its

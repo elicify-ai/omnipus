@@ -114,6 +114,39 @@ describe('LibraryVideoPreview — fullscreen button', () => {
       configurable: true,
     })
   })
+
+  // The full-screen button stays visible on an inline embed too, anchored to
+  // the video's own rendered box rather than the outer container: the outer
+  // container spans the note's full text-column width and would float the
+  // button away from a portrait or small video's actual corner.
+  it('renders on the inline variant too, anchored to the video\'s own wrapper — not the outer preview container', () => {
+    render(<LibraryVideoPreview workspaceId="ws-1" entry={ENTRY} variant="inline" />)
+
+    const button = screen.getByRole('button', { name: /open full screen/i })
+    const video = screen.getByTestId('library-video-element')
+    const outer = screen.getByTestId('library-video-preview')
+
+    // Same positioned ancestor as the video itself (the frame this file
+    // wraps them both in for `inline`), so the button's `absolute`
+    // positioning resolves against the VIDEO's box.
+    expect(button.parentElement).toBe(video.parentElement)
+    // That ancestor is a dedicated frame around just the video — not the
+    // outer container, which is sized to the whole note/pane, not the
+    // video's own rendered box.
+    expect(video.parentElement).not.toBe(outer)
+    expect(video.parentElement).toHaveClass('relative')
+  })
+
+  it('keeps the pane variant\'s button positioned directly on the outer container, unchanged', () => {
+    render(<LibraryVideoPreview workspaceId="ws-1" entry={ENTRY} variant="pane" />)
+
+    const button = screen.getByRole('button', { name: /open full screen/i })
+    const video = screen.getByTestId('library-video-element')
+    const outer = screen.getByTestId('library-video-preview')
+
+    expect(button.parentElement).toBe(outer)
+    expect(video.parentElement).toBe(outer)
+  })
 })
 
 // ── An undecodable source is stated, not rendered as a dead player (M6) ─────

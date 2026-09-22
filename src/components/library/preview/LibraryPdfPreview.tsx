@@ -129,9 +129,9 @@ import { LibrarySignaturePad, SIGNATURE_PAD_WIDTH, SIGNATURE_PAD_HEIGHT } from '
 import { buildInkAnnotationEntry } from './pdfInkAnnotation'
 import type { SignatureStroke } from './pdfInkAnnotation'
 import { uint8ArrayToBase64 } from './pdfBinaryEncoding'
-import { pdfWorkerPool, PDF_WORKER_POOL_CEILING } from './pdfWorkerPool'
-import type { PdfWorkerLease } from './pdfWorkerPool'
+import { PDF_WORKER_POOL_CEILING } from './pdfWorkerPool'
 import type { LibraryPreviewVariant } from './libraryPreviewVariant'
+import { usePdfLoadEffect } from './LibraryPdfPreview.loadEffect'
 
 // Type-only: erased at build time, so it does not pull pdfjs-dist into the
 // eager module graph.
@@ -142,7 +142,7 @@ import type { PDFDocumentProxy, PDFPageProxy, PageViewport } from 'pdfjs-dist'
  *  MUST return a real 404 under this prefix rather than its index.html
  *  fallback (FR-018b) — otherwise a missing character map arrives as HTTP 200
  *  HTML, the page renders blank, and nothing names the cause. */
-const ASSET_BASE = `${import.meta.env.BASE_URL}pdfjs/`
+export const ASSET_BASE = `${import.meta.env.BASE_URL}pdfjs/`
 
 /** Human name per asset directory, used in the error a missing one produces.
  *  Each failure mode below is the SILENT one this naming exists to end. */
@@ -155,8 +155,8 @@ const ASSET_DIR_MEANING: Record<string, string> = {
 
 /** Rendering scale bounds. Below 0.25 text is unreadable; above 4 a large page
  *  exceeds browsers' canvas area limits and renders as a blank bitmap. */
-const MIN_SCALE = 0.25
-const MAX_SCALE = 4
+export const MIN_SCALE = 0.25
+export const MAX_SCALE = 4
 
 /** The reader's own magnification (UAT D-37), applied to the pages container
  *  as a CSS `zoom` on top of the automatic fit-to-width render scale
@@ -219,7 +219,7 @@ export function firstVisiblePdfPage(container: HTMLElement): number {
  *  display. The reader's own zoom (`PDF_READER_ZOOM_DEFAULT` below) is layered
  *  on top of this, separately capped by `MAX_CANVAS_DIMENSION_PX`/
  *  `MAX_CANVAS_PIXELS`. */
-const MAX_PIXEL_RATIO = 2
+export const MAX_PIXEL_RATIO = 2
 
 /** Ceilings on a single page canvas's backing-store resolution once the
  *  reader's zoom (not just device pixel ratio) is included. Two independent
@@ -339,7 +339,7 @@ let downloadTimeoutOverrideMs: number | null = null
 export function __setPdfDownloadTimeoutForTests(ms: number | null): void {
   downloadTimeoutOverrideMs = ms
 }
-function downloadTimeoutMs(): number {
+export function downloadTimeoutMs(): number {
   return downloadTimeoutOverrideMs ?? PDF_DOWNLOAD_TIMEOUT_MS
 }
 
@@ -368,7 +368,7 @@ function assetFetchTimeoutMs(): number {
  *  (`WorkerTransport.destroy` in build/pdf.mjs 6.2.108), so a worker that has
  *  stopped replying makes that promise never settle — the grace timeout is
  *  what stops "tear down politely" from meaning "never tear down". */
-const WORKER_TERMINATE_GRACE_MS = 2000
+export const WORKER_TERMINATE_GRACE_MS = 2000
 
 /** The width a page should be rendered at, and whether that number was
  *  MEASURED or guessed.
@@ -379,7 +379,7 @@ const WORKER_TERMINATE_GRACE_MS = 2000
  *  element — so measuring it returns 0 on every first load and the fallback
  *  silently becomes the ONLY width this component ever renders at. The root is
  *  never hidden, so it is the real box. */
-function measureRenderWidth(container: HTMLElement): { width: number; fallback: boolean } {
+export function measureRenderWidth(container: HTMLElement): { width: number; fallback: boolean } {
   const width = container.parentElement?.clientWidth ?? 0
   if (width > 0) return { width, fallback: false }
   return { width: FALLBACK_RENDER_WIDTH, fallback: true }
@@ -393,7 +393,7 @@ let firstPageTimeoutOverrideMs: number | null = null
 export function __setPdfFirstPageTimeoutForTests(ms: number | null): void {
   firstPageTimeoutOverrideMs = ms
 }
-function firstPageTimeoutMs(): number {
+export function firstPageTimeoutMs(): number {
   return firstPageTimeoutOverrideMs ?? PDF_FIRST_PAGE_TIMEOUT_MS
 }
 
@@ -401,7 +401,7 @@ function firstPageTimeoutMs(): number {
  *  class it arrives as: `fetch` rejects with a `DOMException`, but a helper
  *  that wraps or re-creates one may not. Matching on the NAME is what the
  *  platform itself documents as the discriminator. */
-function isAbortError(err: unknown): boolean {
+export function isAbortError(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { name?: string }).name === 'AbortError'
 }
 
@@ -506,7 +506,7 @@ async function probeRuntimeAssets(): Promise<void> {
   )
 }
 
-function ensureRuntimeAssets(): Promise<void> {
+export function ensureRuntimeAssets(): Promise<void> {
   if (!assetProbe) {
     assetProbe = probeRuntimeAssets().catch((err: unknown) => {
       assetProbe = null
@@ -532,7 +532,7 @@ interface PdfBytesRead {
   version: string | null
 }
 
-async function fetchPdfBytes(workspaceId: string, path: string, signal: AbortSignal): Promise<PdfBytesRead> {
+export async function fetchPdfBytes(workspaceId: string, path: string, signal: AbortSignal): Promise<PdfBytesRead> {
   // ADR-083 EMB-007/EMB-007c — this download IS the only read on this
   // component's save path (there is no JSON `GET .../content` call here at
   // all), so it is the sole source of the version token `handleSave` below
@@ -933,631 +933,50 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
     }
   }, [])
 
-  useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
-
-    let cancelled = false
-    // Set by `failLoad` below — the "this load has already reported a
-    // failure" latch that makes reporting one idempotent no matter how many
-    // discoverers race to it (the async chain, the worker error listener, the
-    // first-page watchdog).
-    let loadFailed = false
-    const abort = new AbortController()
-    let doc: PDFDocumentProxy | null = null
-    let loadingTask: { destroy: () => Promise<void> } | null = null
-    const cancelRender: Array<() => void> = []
-    // Hoisted out of the async chain below so this effect's CLEANUP can reach
-    // it. This component constructs the Worker thread, so this component is
-    // the only thing that can end it — see the cleanup for the three measured
-    // reasons `loadingTask.destroy()` does not.
-    let port: Worker | null = null
-
-    // Where this load has got to, in words a reader can act on. Used by the
-    // first-page watchdog to name what it was waiting for instead of saying
-    // "something went wrong".
-    let stage = 'waiting for a PDF worker slot'
-
-    // EMB-032 — the bounded worker pool. `lease` is null until the pool
-    // grants a slot; `releaseLease` is idempotent so it is safe to call from
-    // the worker's own error handler AND again from this effect's cleanup.
-    let lease: PdfWorkerLease | null = null
-    let leaseReleased = false
-    const releaseLease = () => {
-      if (leaseReleased || !lease) return
-      leaseReleased = true
-      lease.release()
-    }
-
-    // SILENT-FAILURES-pdf-pool.md findings 1 & 9 — ends the Worker THREAD
-    // before releasing the pool SLOT, no matter which path this load ends
-    // through (a worker crash, any other failure via `failLoad`, or
-    // unmount). Releasing a slot grants it to the next queued document
-    // SYNCHRONOUSLY (pdfWorkerPool.ts's `grantNext`), so releasing while
-    // THIS document's thread is still alive briefly puts a real THIRD
-    // `Worker` on the page even though the pool still reports a tidy two —
-    // finding 1's confirmed-in-browser defect, and finding 9's "3 workers
-    // for up to 2s" on ordinary unmount. Every failure path used to call
-    // bare `releaseLease()` and leave the thread running for something
-    // else (usually never) to terminate; this makes ending the thread part
-    // of ending the load, always, and holds the slot for exactly as long
-    // as the thread is alive — never less.
-    let endingWorker = false
-    let workerTerminated = false
-    const terminateWorkerThread = () => {
-      if (workerTerminated) return
-      workerTerminated = true
-      try {
-        port?.terminate()
-      } catch {
-        // Already gone; nothing to do.
-      }
-    }
-    const endWorkerThreadThenReleaseLease = () => {
-      if (endingWorker) return
-      endingWorker = true
-      // Already terminated (the worker's own `error` listener got there
-      // first) or never constructed at all (failed before the worker
-      // existed) — nothing to wait on, release now.
-      if (workerTerminated || !loadingTask) {
-        terminateWorkerThread()
-        releaseLease()
-        return
-      }
-      // Same polite-then-forced shutdown the cleanup below has always used
-      // (see its own comment for the three measured reasons
-      // `loadingTask.destroy()` alone does not end a caller-supplied
-      // worker) — just reachable from every path that ends this load, not
-      // only unmount, and gating the release on it completing.
-      const grace = setTimeout(terminateWorkerThread, WORKER_TERMINATE_GRACE_MS)
-      void loadingTask
-        .destroy()
-        .catch(() => {})
-        .finally(() => {
-          clearTimeout(grace)
-          terminateWorkerThread()
-          releaseLease()
-        })
-    }
-
-    let firstPageWatchdog: ReturnType<typeof setTimeout> | null = null
-    const clearFirstPageWatchdog = () => {
-      if (firstPageWatchdog === null) return
-      clearTimeout(firstPageWatchdog)
-      firstPageWatchdog = null
-    }
-
-    // THE one way this load reports a failure.
-    //
-    // It exists because the failure that is hardest to see is the one
-    // discovered by something that is not the async chain. The worker `error`
-    // listener below stays attached for this component's whole life
-    // (`{ once: true }` means fire-once, not load-only); when it fires AFTER
-    // `Promise.race([task.promise, workerFailed])` has already settled, its
-    // `reject` lands on a promise nobody is listening to — no throw, no
-    // unhandledrejection, no state change. The pane is left `ready` with an
-    // empty container, no spinner and no error, indefinitely. So every
-    // discoverer of a failure calls THIS, which is reachable at any time and
-    // is idempotent, rather than relying on a rejection reaching the catch.
-    const failLoad = (err: unknown) => {
-      if (loadFailed) return
-      loadFailed = true
-      clearFirstPageWatchdog()
-      endWorkerThreadThenReleaseLease()
-      if (!cancelled) {
-        setError(err instanceof Error ? err.message : String(err))
-        setStatus('error')
-        if (savingRef.current) {
-          // `doc.saveDocument()` round-trips through the worker. If that
-          // worker is what just died, this promise never settles — so the
-          // "Saving…" indicator has to be told here or it never stops.
-          savingRef.current = false
-          setSaveStatus('error')
-          setSaveError(err instanceof Error ? err.message : String(err))
-        }
-      }
-      // Nothing further from THIS load may paint, and any in-flight network
-      // work for it is now pointless.
-      cancelled = true
-      abort.abort()
-    }
-
-    setStatus('loading')
-    setError(null)
-    setPageCount(0)
-    setAllPagesRendered(false)
-    setMode('view')
-    setHasFormFields(null)
-    setFieldProbeError(null)
-    setEditLayerError(null)
-    setDirty(false)
-    setSaveStatus('idle')
-    setSaveError(undefined)
-    setLastSavedAt(undefined)
-    setSignaturePadOpen(false)
-    setPlacedSignatures([])
-    pagesRef.current.clear()
-    pageViewportsRef.current.clear()
-    pageElsRef.current.clear()
-    pageAnnotationsRef.current.clear()
-    annotationLayerDivsRef.current.clear()
-    signaturePreviewElsRef.current.clear()
-    docRef.current = null
-    pdfjsRef.current = null
-    // A fresh load means every previously-mounted canvas is gone with
-    // `container.replaceChildren()` below — carrying a stale "painted at
-    // scale X" entry forward would make `rasterizePage` treat a BRAND NEW
-    // canvas as already matching a scale it has never actually drawn at,
-    // and skip painting it.
-    for (const task of pendingRasterTasksRef.current.values()) task.cancel()
-    pendingRasterTasksRef.current.clear()
-    pageRenderGenerationRef.current.clear()
-    paintedScaleRef.current.clear()
-    pageCanvasElsRef.current.clear()
-    container.replaceChildren()
-
-    void (async () => {
-      try {
-        // EMB-032 — wait for a worker-pool slot BEFORE doing any of the work
-        // that slot exists to bound (asset probing, the byte fetch, and the
-        // Worker construction itself). `onQueued` only fires when the
-        // ceiling was actually the reason this document is waiting, so the
-        // common, under-ceiling case never flashes the waiting state.
-        lease = await pdfWorkerPool.acquire(abort.signal, () => {
-          if (!cancelled) setStatus('queued')
-        })
-        if (cancelled) {
-          releaseLease()
-          return
-        }
-        setStatus('loading')
-
-        // Assets first: a missing directory must fail with a name, not with a
-        // blank page (FR-018b). Deliberately NOT covered by the first-page
-        // watchdog below — see its own comment for why.
-        stage = 'checking the PDF.js runtime assets'
-        await ensureRuntimeAssets()
-        if (cancelled) return
-
-        // The one and only reference to pdfjs-dist. Keep it dynamic.
-        stage = 'loading the PDF.js runtime'
-        const pdfjs = await import('pdfjs-dist')
-        if (cancelled) return
-
-        // A just-completed Save already has the new bytes in memory — reuse
-        // them instead of re-fetching what we just uploaded. Consumed once.
-        let data: ArrayBuffer | Uint8Array
-        if (pendingSaveBytesRef.current) {
-          data = pendingSaveBytesRef.current
-          pendingSaveBytesRef.current = null
-          // versionRef already holds the fresh token handleSave's own
-          // response returned for these exact bytes (EMB-007) — no read
-          // happened on this path, so nothing to update it from.
-        } else {
-          // SILENT-FAILURES-pdf-pool.md finding 3 — the byte download gets
-          // its OWN deadline and its OWN honest message, separate from the
-          // parsing watchdog below. A large PDF on a slow connection used to
-          // be cut off by the SAME 45s the parser gets, and the resulting
-          // error blamed "the parsing worker" for a stage the worker had not
-          // even reached yet. Every "Try again" then repeated the identical
-          // doomed download.
-          stage = `downloading ${entry.name}`
-          let downloadTimedOut = false
-          const downloadTimer = setTimeout(() => {
-            downloadTimedOut = true
-            abort.abort()
-          }, downloadTimeoutMs())
-          try {
-            const read = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
-            data = read.bytes
-            versionRef.current = read.version
-          } catch (err) {
-            if (downloadTimedOut) {
-              throw new Error(
-                `This PDF did not finish downloading within ${Math.round(downloadTimeoutMs() / 1000)} seconds. ` +
-                  `That is the network connection, not the PDF parser — check the connection and try again.`,
-                { cause: err },
-              )
-            }
-            throw err
-          } finally {
-            clearTimeout(downloadTimer)
-          }
-        }
-        if (cancelled) return
-
-        // The first-page deadline starts HERE — once the bytes are in hand —
-        // not at mount and not while they were still downloading (finding 3
-        // above). Time spent queued behind the pool's ceiling, checking
-        // assets, or downloading is a legitimate, separately-explained wait;
-        // counting it against the PARSER's deadline is what let a slow
-        // network masquerade as a wedged worker.
-        firstPageWatchdog = setTimeout(() => {
-          failLoad(
-            new Error(
-              `This PDF did not put a page on screen within ${Math.round(firstPageTimeoutMs() / 1000)} seconds. ` +
-                `It stopped at: ${stage}. The parsing worker may have run out of memory or stopped responding — ` +
-                `try again, and if it keeps happening this document may be too large or too damaged to render here.`,
-            ),
-          )
-        }, firstPageTimeoutMs())
-
-        // FR-019c — our own worker, handed to PDF.js as a port, so there is no
-        // fake-worker fallback branch to fall into.
-        stage = 'starting the PDF parsing worker'
-        let workerPort: Worker
-        try {
-          workerPort = new Worker(`${ASSET_BASE}pdf.worker.min.mjs`, { type: 'module' })
-        } catch (err) {
-          throw new Error(
-            `The PDF parsing worker could not start, so this PDF was not opened. ` +
-              `Parsing never runs on the main thread. Cause: ${String(err)}`,
-            { cause: err },
-          )
-        }
-        port = workerPort
-        // `PDFWorker.create` rather than `new PDFWorker`: same object, but the
-        // published .d.ts types the constructor's `port` as `null | undefined`
-        // (a JSDoc default-value artefact) while `create`'s PDFWorkerParameters
-        // types it as `Worker`.
-        const pdfWorker = pdfjs.PDFWorker.create({ name: 'omnipus-library-pdf', port: workerPort })
-
-        // A missing worker file (or the SPA fallback serving index.html with a
-        // 200) makes `new Worker` succeed synchronously but fail asynchronously
-        // with an `error` event; the worker then never replies and
-        // `task.promise` hangs on "Opening…" forever. Race the load against that
-        // error so the catch below surfaces a visible error instead — the exact
-        // silent-degrade this component's header says it prevents (FR-018b).
-        //
-        // ⚠️ This listener outlives the race. `{ once: true }` means fire-ONCE,
-        // not fire-only-during-load: a worker that dies AFTER the document
-        // opened still fires it, and by then `reject` is shouting into a
-        // promise the already-settled `Promise.race` discarded. That is why
-        // the body below reports through `failLoad` — reachable at any time —
-        // and treats `reject` as the merely-useful-if-anyone-is-still-
-        // listening extra, not the mechanism.
-        const workerFailed = new Promise<never>((_, reject) => {
-          workerPort.addEventListener(
-            'error',
-            (ev: ErrorEvent) => {
-              // EMB-032 — poisoned-worker eviction. This worker is done for
-              // THIS document only (a worker error rejects only the leases
-              // held on that worker — there is one lease and one worker per
-              // document, never shared); terminate it immediately so nothing
-              // keeps talking to a dead transport (the shared
-              // `terminateWorkerThread` below, not a separate call, so
-              // `failLoad`'s own `endWorkerThreadThenReleaseLease` sees it is
-              // already done and releases the slot right away rather than
-              // waiting out a `destroy()` grace period against a worker that
-              // is already gone).
-              terminateWorkerThread()
-              const cause = ev.message ? ` Cause: ${ev.message}` : ''
-              // Two genuinely different failures, said differently, because
-              // "was not opened" is a lie once it HAS been opened and the
-              // reader is looking at its pages.
-              const err = doc
-                ? new Error(
-                    `The PDF parsing worker stopped after this document was opened, so it can no longer be ` +
-                      `rendered or saved. Any unsaved entries are still in this tab but cannot be written ` +
-                      `until it is reopened.${cause}`,
-                  )
-                : new Error(
-                    `The PDF parsing worker at ${ASSET_BASE}pdf.worker.min.mjs failed to load, ` +
-                      `so this PDF was not opened. It may be missing or served as an HTML fallback.${cause}`,
-                  )
-              failLoad(err)
-              reject(err)
-            },
-            { once: true },
-          )
-        })
-        // The race below is what normally consumes this rejection. If the
-        // chain throws BEFORE the race is constructed, nothing would —
-        // attaching an inert handler keeps a real, already-reported failure
-        // from also surfacing as an unhandled rejection.
-        workerFailed.catch(() => {})
-
-        const task = pdfjs.getDocument({
-          data,
-          worker: pdfWorker,
-          // D15.7 — XFA is a scripting surface and is unsupported anyway.
-          enableXfa: false,
-          // FR-018a — fetched per document, not bundled. See the header of
-          // vite.config.ts for what each one being absent does.
-          cMapUrl: `${ASSET_BASE}cmaps/`,
-          cMapPacked: true,
-          standardFontDataUrl: `${ASSET_BASE}standard_fonts/`,
-          wasmUrl: `${ASSET_BASE}wasm/`,
-          useWasm: true,
-          iccUrl: `${ASSET_BASE}iccs/`,
-        })
-        loadingTask = task
-        stage = 'opening the document'
-        doc = await Promise.race([task.promise, workerFailed])
-        if (cancelled) return
-        docRef.current = doc
-        pdfjsRef.current = pdfjs
-        // Any AcroForm fill or placed signature mutates this SAME object —
-        // this is the one hook point for "is there an unsaved edit" that
-        // covers both mechanisms without this component having to intercept
-        // every widget's own change listener. `onSetModified`/`onResetModified`
-        // are typed as bare `null` in annotation_storage.d.ts (a JSDoc
-        // initial-value artefact — the class assigns and calls them as
-        // callback slots at runtime; verified against build/pdf.mjs's
-        // `#setModified`/`resetModified`), so a documented cast is needed to
-        // assign a real function.
-        const annotationStorage = doc.annotationStorage as unknown as {
-          onSetModified: (() => void) | null
-          onResetModified: (() => void) | null
-        }
-        annotationStorage.onSetModified = () => {
-          if (!cancelled) setDirty(true)
-        }
-        annotationStorage.onResetModified = () => {
-          if (!cancelled) setDirty(false)
-        }
-        void doc
-          .getFieldObjects()
-          .then((fields) => {
-            if (!cancelled) setHasFormFields(!!fields && Object.keys(fields).length > 0)
-          })
-          .catch((err: unknown) => {
-            // A field-object read failure costs the "has fields" banner only —
-            // the AnnotationLayer render below still tries per-page
-            // annotations regardless, so filling still works if the fields
-            // ARE there; this just can't promise it up front. It is NOT a
-            // reason to fail the whole load.
-            //
-            // But it is also not nothing: swallowing the error left
-            // `hasFormFields === null`, which is the same value as "not asked
-            // yet" — so a probe that failed and a probe that never ran looked
-            // identical to every reader of that state. The reason is kept and
-            // shown in Edit mode instead.
-            if (cancelled) return
-            setHasFormFields(null)
-            setFieldProbeError(err instanceof Error ? err.message : String(err))
-          })
-        setPageCount(doc.numPages)
-
-        // EMB-105 / US-12 AS-4 — a page-fragment embed renders ONE page, not
-        // the whole document. Validated against the REAL page count this
-        // document just reported (not against any earlier guess), so a
-        // fragment naming a page beyond the document's end is a genuine,
-        // honest failure — never a silently empty page.
-        let pagesToRender: number[]
-        if (pageFragment !== undefined) {
-          if (!Number.isInteger(pageFragment) || pageFragment < 1 || pageFragment > doc.numPages) {
-            throw new Error(
-              `Page ${pageFragment} does not exist in this ${doc.numPages}-page PDF.`,
-            )
-          }
-          pagesToRender = [pageFragment]
-        } else {
-          pagesToRender = Array.from({ length: doc.numPages }, (_, i) => i + 1)
-        }
-        if (pagesToRender.length === 0) {
-          // A zero-page document would otherwise fall straight through the
-          // loop below with nothing appended and nothing thrown — the
-          // silently empty pane, arrived at by a different road.
-          throw new Error('This PDF reports no pages, so there is nothing to display.')
-        }
-
-        // `status` deliberately does NOT flip to 'ready' here. It used to,
-        // one statement before the first `getPage()` — from that instant the
-        // spinner was gone and the (empty) container was visible, so a worker
-        // that wedged without erroring showed a white box indistinguishable
-        // from a blank first page. Ready now means "a page is actually on
-        // screen"; until then this stays `loading` and the watchdog above is
-        // what bounds it.
-        const { width, fallback: widthIsFallback } = measureRenderWidth(container)
-        if (widthIsFallback) {
-          // Make the guess VISIBLE. Rendering every PDF at a plausible
-          // hardcoded width is precisely the failure nobody can see, so the
-          // state is written where a developer and a test can both read it.
-          container.setAttribute('data-width-source', 'fallback')
-        } else {
-          container.removeAttribute('data-width-source')
-        }
-        const ratio = Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO)
-        deviceRatioRef.current = ratio
-        let firstPageOnScreen = false
-
-        for (const n of pagesToRender) {
-          stage = `rendering page ${n}`
-          const page: PDFPageProxy = await doc.getPage(n)
-          if (cancelled) return
-
-          const unscaled = page.getViewport({ scale: 1 })
-          const fit = (width - 32) / unscaled.width
-          const scale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, fit))
-          const viewport = page.getViewport({ scale })
-          // The reader may already be zoomed in before this load finishes —
-          // a Save re-opens the SAME document at whatever zoom was active
-          // (`reloadNonce`, not a fresh mount). `zoomRef` (not the `zoom`
-          // state) because this effect does not depend on zoom and must
-          // read whatever is current when it actually runs, not whatever it
-          // captured at closure-creation time.
-          const renderScale = targetRasterScale(viewport.width, viewport.height, zoomRef.current, ratio)
-
-          const pageEl = document.createElement('div')
-          pageEl.className = 'relative mx-auto my-4 shadow-lg'
-          pageEl.style.width = `${viewport.width}px`
-          pageEl.style.height = `${viewport.height}px`
-          // The text layer sizes its spans from these; they must match the
-          // scale the canvas was rendered at or selection lands off the glyphs.
-          pageEl.style.setProperty('--scale-factor', String(scale))
-          pageEl.style.setProperty('--total-scale-factor', String(scale))
-          pageEl.setAttribute('data-testid', 'library-pdf-page')
-          pageEl.setAttribute('data-page-number', String(n))
-
-          const canvas = document.createElement('canvas')
-          canvas.width = Math.floor(viewport.width * renderScale)
-          canvas.height = Math.floor(viewport.height * renderScale)
-          canvas.style.width = `${viewport.width}px`
-          canvas.style.height = `${viewport.height}px`
-          canvas.className = 'block h-full w-full bg-white'
-          pageEl.appendChild(canvas)
-
-          const textLayerEl = document.createElement('div')
-          textLayerEl.className = 'omnipus-pdf-text-layer'
-          pageEl.appendChild(textLayerEl)
-
-          container.appendChild(pageEl)
-
-          pagesRef.current.set(n, page)
-          pageViewportsRef.current.set(n, viewport)
-          pageElsRef.current.set(n, pageEl)
-          pageCanvasElsRef.current.set(n, canvas)
-          paintedScaleRef.current.set(n, renderScale)
-
-          const ctx = canvas.getContext('2d')
-          if (!ctx) throw new Error('This browser did not provide a 2D canvas context.')
-
-          const renderTask = page.render({
-            canvas,
-            canvasContext: ctx,
-            viewport,
-            transform: renderScale === 1 ? undefined : [renderScale, 0, 0, renderScale, 0, 0],
-            // NB-17 — the BASE canvas stays read-only. ENABLE draws annotation
-            // appearance streams (including already-filled form values) as
-            // static graphics. ENABLE_FORMS and ENABLE_STORAGE are the modes
-            // that make the CANVAS ITSELF paint live widgets, which this file
-            // still never uses — Edit mode's interactivity comes entirely
-            // from the separate AnnotationLayer overlaid on top (below).
-            annotationMode: pdfjs.AnnotationMode.ENABLE,
-            isEditing: false,
-          })
-          cancelRender.push(() => renderTask.cancel())
-
-          const textLayer = new pdfjs.TextLayer({
-            textContentSource: page.streamTextContent(),
-            container: textLayerEl,
-            viewport,
-          })
-          cancelRender.push(() => textLayer.cancel())
-
-          await Promise.all([renderTask.promise, textLayer.render()])
-          if (cancelled) return
-
-          if (!firstPageOnScreen) {
-            // The first page is drawn and in the DOM — the one moment at
-            // which showing the container is honest. The watchdog's job is
-            // done at exactly the same instant, and not before: clearing it
-            // merely on `appendChild` would leave a render that never
-            // finishes covered by nothing at all.
-            firstPageOnScreen = true
-            clearFirstPageWatchdog()
-            setStatus('ready')
-          }
-
-          const annotations = await page.getAnnotations({ intent: 'display' })
-          if (cancelled) return
-          pageAnnotationsRef.current.set(n, annotations)
-        }
-
-        // EMB-032 — deliberately NO releaseLease() here, and that is not an
-        // oversight. Reaching this point means the document is open and its
-        // first pass over every page is done, but its `PDFWorker` is not
-        // finished being used: entering Edit mode below mounts a real
-        // `AnnotationLayer` against this SAME `doc`, and `handleSave` calls
-        // `doc.saveDocument()` — both keep talking to this worker for as
-        // long as the component stays mounted. The lease (and the worker
-        // instance it stands for) is held for the component's WHOLE mounted
-        // lifetime, released only on failure, abandonment before its turn,
-        // or unmount (see the effect's cleanup below, and pdfWorkerPool.ts's
-        // own header for why releasing on render success would break
-        // EMB-032's "at most two worker instances" ceiling rather than
-        // honour it).
-        if (!cancelled) {
-          setAllPagesRendered(true)
-          if (variant === 'inline') {
-            // SILENT-FAILURES-pdf-pool.md finding 2 — "a waiting PDF never
-            // opens on a short note". An inline embed has no header to reach
-            // Edit mode from at all (see this file's own note on
-            // `pageFragment` above — the SAME asymmetry, applied generally:
-            // every inline mount, fragment or not, is view-only because
-            // `PreviewHeaderSlotProvider` does not exist outside the pane).
-            // So nothing past this point — a static canvas already drawn,
-            // and the D-37 zoom control, which is CSS `zoom` only, never a
-            // re-render — ever talks to this worker again. Holding its pool
-            // slot for the rest of this component's mounted lifetime is
-            // correct for the PANE (Edit/Save keep using it, see
-            // pdfWorkerPool.ts's header), but on an inline embed it only
-            // starves a queued sibling on a note too short to ever unmount
-            // anything via LazyEmbedMount's 1800px margin. Ending the
-            // thread and freeing the slot HERE is what makes "will open
-            // automatically once another PDF finishes loading" true on a
-            // short page, not only a long one.
-            endWorkerThreadThenReleaseLease()
-          }
-        }
-      } catch (err) {
-        if (cancelled) {
-          clearFirstPageWatchdog()
-          endWorkerThreadThenReleaseLease()
-          return
-        }
-        // SILENT-FAILURES-pdf-pool.md finding 8 — every abort THIS load
-        // starts sets `cancelled` first (see `failLoad` and this effect's
-        // cleanup), so reaching here with `cancelled` still false means
-        // something else cancelled work this load never asked to end —
-        // latent today, but a real, reportable failure if it ever happens,
-        // not a silent, watchdog-disarmed return.
-        if (isAbortError(err) || (err && typeof err === 'object' && (err as { name?: string }).name === 'RenderingCancelledException')) {
-          failLoad(err instanceof Error ? err : new Error(String(err)))
-          return
-        }
-        // Every OTHER failure ends this load attempt for good. `failLoad`
-        // ends the worker thread and releases the pool slot (so a queued
-        // document is not held behind one that is never going to finish),
-        // stops the watchdog, and renders the reason. The `workerFailed`
-        // path above already went through the same function before this
-        // catch was reached; its `loadFailed` latch is what makes calling it
-        // twice safe.
-        failLoad(err)
-      }
-    })()
-
-    return () => {
-      cancelled = true
-      abort.abort()
-      clearFirstPageWatchdog()
-      for (const cancel of cancelRender) {
-        try {
-          cancel()
-        } catch {
-          // A task that already settled throws on cancel; nothing to do.
-        }
-      }
-      // A zoom/scroll-triggered redraw in flight when this load ends (unmount,
-      // or a retry/reload starting a fresh load) is pointless work against a
-      // page about to be torn down or replaced.
-      for (const task of pendingRasterTasksRef.current.values()) {
-        try {
-          task.cancel()
-        } catch {
-          // Already settled; nothing to do.
-        }
-      }
-      pendingRasterTasksRef.current.clear()
-
-      // ── Ending the Worker THREAD. This is ours to do. ───────────────────
-      // `endWorkerThreadThenReleaseLease` (defined above, shared with
-      // `failLoad`) is what actually ends it — see its own comment for the
-      // three measured reasons a bare `loadingTask.destroy()` does not end a
-      // CALLER-SUPPLIED worker, and for why the slot is held until the
-      // thread is confirmed gone rather than freed first: freeing it first
-      // let a queued sibling construct a genuinely fresh THIRD `Worker`
-      // while this one was still shutting down (finding 9 — up to 2s of 3
-      // live workers on every unmount, `LazyEmbedMount`'s scroll-past-and-
-      // back included), even though `pdfWorkerPool` — which counts LEASES,
-      // not threads — kept reporting a tidy "at most two". Idempotent with
-      // whatever the async chain above already did (a worker crash or any
-      // other in-flight failure), so calling it again here on a load that
-      // already ended is a safe no-op, not a second teardown.
-      endWorkerThreadThenReleaseLease()
-    }
-  }, [workspaceId, entry.path, reloadNonce, pageFragment, variant])
+  usePdfLoadEffect({
+    containerRef,
+    workspaceId,
+    entryName: entry.name,
+    entryPath: entry.path,
+    reloadNonce,
+    pageFragment,
+    variant,
+    refs: {
+      pagesRef,
+      pageViewportsRef,
+      pageElsRef,
+      pageCanvasElsRef,
+      paintedScaleRef,
+      pageAnnotationsRef,
+      annotationLayerDivsRef,
+      signaturePreviewElsRef,
+      docRef,
+      pdfjsRef,
+      pendingRasterTasksRef,
+      pageRenderGenerationRef,
+      pendingSaveBytesRef,
+      versionRef,
+      savingRef,
+      zoomRef,
+      deviceRatioRef,
+    },
+    setters: {
+      setStatus,
+      setError,
+      setPageCount,
+      setAllPagesRendered,
+      setMode,
+      setHasFormFields,
+      setFieldProbeError,
+      setEditLayerError,
+      setDirty,
+      setSaveStatus,
+      setSaveError,
+      setLastSavedAt,
+      setSignaturePadOpen,
+      setPlacedSignatures,
+    },
+  })
 
   // Edit-mode AnnotationLayer mount/unmount. Runs only once every page has
   // finished its base render (see `allPagesRendered` above) — entering Edit

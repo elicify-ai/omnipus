@@ -34,7 +34,7 @@ Use the catalogued component instead — `Button`, `IconButton`, `SegmentedContr
 `RadioGroup`, `ConfirmDialog`, `Switch`, … (see `src/components/ui/` and
 `design-system/catalog.json`).
 
-**Enforced by** `scripts/design-system-locks/controls.mjs` (1,319 lines), which fires one
+**Enforced by** `scripts/design-system-locks/controls.mjs`, which fires one
 of eight rules: `controls/raw-button`, `controls/raw-dialog`, `controls/global-confirm`,
 `controls/checkbox-as-switch`, `controls/radix-import`,
 `controls/shadcn-low-level-import`, `controls/ui-layering`, and `controls/parse-error`
@@ -298,14 +298,21 @@ depend on files earlier steps produce:
 7. `npm run test:storybook`
 8. `npm run test:design-system:browser` — runs the manifest-generated Playwright checks
    (rule 10).
-9. `npm run verify:design-system` — reads `dist/storybook/index.json`.
-10. `npm run audit:design-system` — the Stage B audit; hard-blocking.
-11. `npm run test:design-system:package`
-12. Baseline checkout/build/measure, then `npm run build` and
+9. `npm run test:design-system:screenshot` — the appearance gate (issue #753): pixel
+   screenshots of the static Storybook build, diffed against the committed darwin and
+   linux baselines under `tests/design-system/screenshot.spec.ts-snapshots/`
+   (`maxDiffPixels: 50`). Blocking, same as every other step in this job.
+10. `npm run verify:design-system` — reads `dist/storybook/index.json`.
+11. `npm run audit:design-system` — enforces the checkpoint recorded in
+    `design-system/enforcement/contract.json`'s `currentCheckpoint` (read by
+    `scripts/design-system-locks/current-checkpoint.mjs`, never a hardcoded literal);
+    hard-blocking.
+12. `npm run test:design-system:package`
+13. Baseline checkout/build/measure, then `npm run build` and
     `npm run measure:design-system-bundle` / the bundle audit — production bundle
     budget and Storybook-exclusion check.
 
-Steps 9–10 must run after 6–8 — they read the static build's index and the evidence
+Steps 9–11 must run after 6–8 — they read the static build's index and the evidence
 files the executed checks produce.
 
 **Typecheck trap:** `tsconfig.json` is a project-references root with `"files": []` — a

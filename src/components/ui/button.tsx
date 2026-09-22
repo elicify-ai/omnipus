@@ -53,10 +53,15 @@ function ActionAnnouncement({ description }: { description?: string }) {
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, actionState = 'idle', type, disabled, onClickCapture, onAuxClickCapture, children, 'aria-busy': ariaBusy, 'aria-disabled': ariaDisabled, 'aria-description': ariaDescription, ...props }, ref) => {
+  ({ className, variant, size, asChild = false, actionState = 'idle', type, disabled, onClickCapture, onAuxClickCapture, children, 'aria-busy': ariaBusy, 'aria-disabled': ariaDisabled, 'aria-description': ariaDescription, 'aria-label': ariaLabelProp, 'aria-labelledby': ariaLabelledByProp, ...props }, ref) => {
     const Comp = asChild ? Slot : 'button'
     const pending = actionState === 'pending'
     const loadingVisible = useLoadingVisibility(pending)
+    // The announcement region nests inside this element instead of beside
+    // it (fixes aria-required-children in a radiogroup/tablist/toolbar
+    // parent). `contentId` labels the visible content only, so the region's
+    // own text never leaks into the accessible name.
+    const contentId = React.useId()
     const presentedState = loadingVisible ? 'pending' : actionState === 'pending' ? 'idle' : actionState
     const announcedState = pending && !loadingVisible ? 'idle' : actionState
     const feedbackDescription = announcedState === 'pending'
@@ -64,6 +69,18 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       : announcedState === 'success'
         ? 'Action succeeded'
         : announcedState === 'error' ? 'Action failed' : undefined
+    // Only shield the name while there is announcement text that could
+    // otherwise leak into it — an idle Button (the common case, e.g. an
+    // icon-only Button named by `title`, not by its content) must compute
+    // its name exactly as it did before this change, with NO aria-labelledby
+    // of this component's own making.
+    const needsLabelShield = ariaLabelProp === undefined && ariaLabelledByProp === undefined && feedbackDescription !== undefined
+    // An icon-only Button named by `title` has no accessible text of its
+    // own for `contentId` to reference — aria-labelledby pointing at empty
+    // content falls through to the (un-hidden, for live-region purposes)
+    // announcement text instead. Borrow `title` as an explicit aria-label
+    // while shielding, so the name never depends on content being non-empty.
+    const shieldWithTitle = needsLabelShield && props.title !== undefined
     const reservesFeedback = actionState !== 'idle' || loadingVisible
     const feedback = reservesFeedback ? (
       <span data-action-indicator="" className="inline-flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
@@ -113,10 +130,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
             childCapture?.(event)
             onAuxClickCapture?.(event)
           },
-        }, <>{feedback}{(children.props as { children?: React.ReactNode }).children}</>)
+        }, <>{feedback}<span id={contentId} className="contents">{(children.props as { children?: React.ReactNode }).children}</span><ActionAnnouncement description={feedbackDescription} /></>)
       : children
     return (
-      <>
       <Comp
         // Explicit tabindex: WebKit's default Tab policy skips native buttons
         // without one (repo convention — see tabindex-convention.test.ts).
@@ -129,13 +145,19 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-disabled={asChild && (disabled || pending) ? true : ariaDisabled}
         aria-busy={pending ? true : ariaBusy}
         aria-description={feedbackDescription ?? ariaDescription}
+        aria-label={ariaLabelProp ?? (shieldWithTitle ? props.title : undefined)}
+        aria-labelledby={needsLabelShield && !shieldWithTitle ? contentId : ariaLabelledByProp}
         data-action-state={actionState}
         data-ds-action=""
         onClickCapture={asChild ? undefined : preventPendingActivation}
         onAuxClickCapture={asChild ? undefined : preventPendingAuxiliaryActivation}
-      >{asChild ? guardedChild : <>{feedback}{guardedChild}</>}</Comp>
-      <ActionAnnouncement description={feedbackDescription} />
-      </>
+      >{asChild ? guardedChild : (
+        <>
+          {feedback}
+          <span id={contentId} className="contents">{children}</span>
+          <ActionAnnouncement description={feedbackDescription} />
+        </>
+      )}</Comp>
     )
   }
 )

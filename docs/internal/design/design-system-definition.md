@@ -140,6 +140,10 @@ Primitive colour values for this program are today’s rendered hexes. Extra ram
 | info | `#3B82F6` | Next / information |
 | blocked / orange | `#F97316` | Blocked |
 | mount | `#8EA3BD` | Library mount icon |
+| red-label | `#F87171` | Higher-contrast red label text (Badge error foreground; Failed status, §D4) |
+| blue-label | `#60A5FA` | Higher-contrast blue label text (Next status, §D4) |
+
+**Amendment, founder-approved 2026-09-22 — Next and Failed status labels move onto `red-label`/`blue-label`.** The base `error`/`info` hues stay `#EF4444`/`#3B82F6` everywhere else (Button destructive, `color.error`); only the Next and Failed rows of the §D4 status map repoint to the brighter `blue-label`/`red-label` primitives, which reach ≥7:1 contrast against the `#0A0A0B` chip text where the base hues fall short.
 
 **Visual delta: Invisible.** The graph must reproduce these computed values exactly. Repairing an undefined or invalid token that changes rendering is a separate declared delta, not part of token extraction.
 
@@ -156,11 +160,11 @@ There is one map. The task palette is the winner. Calendar chips, list cells, gr
 | State | Colour | Hex | Non-colour cue |
 |---|---|---|---|
 | Inbox | Grey | `#9CA3AF` | Quiet circle |
-| Next | Blue | `#3B82F6` | Ready / info |
+| Next | Blue (`blue-label`) | `#60A5FA` | Ready / info — 7.78:1 contrast on the `#0A0A0B` chip text |
 | In progress | Forge Gold | `#D4AF37` | Live work (the one gold status) |
 | Blocked | Orange | `#F97316` | Prohibit |
 | Done | Green | `#10B981` | Check |
-| Failed | Red | `#EF4444` | X |
+| Failed | Red (`red-label`) | `#F87171` | X — 7.15:1 contrast on the `#0A0A0B` chip text |
 | Cancelled (stopped by user) | Amber | `#EAB308` | Distinct from Failed; not a separate board column |
 
 Forge Gold is reserved for live work and primary actions. It is not the colour for Next, Blocked, Done, or Failed.

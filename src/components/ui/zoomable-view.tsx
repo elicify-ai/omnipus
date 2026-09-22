@@ -169,17 +169,45 @@ export interface ZoomableViewKeyboardHandlers {
   onZoomTo100: () => void
 }
 
+/** True when `target` is a form control or text-entry surface that owns its
+ *  own keystrokes — an editable form field living inside the same view
+ *  frame (e.g. a fillable PDF form field inside `LibraryPdfPreview`) must
+ *  receive `+ − 0 1` as ordinary typed characters, never as zoom shortcuts. */
+function isEditableEventTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  if (target.getAttribute('role') === 'textbox') return true
+  switch (target.tagName) {
+    case 'INPUT':
+    case 'TEXTAREA':
+    case 'SELECT':
+      return true
+    default:
+      return false
+  }
+}
+
 /** Binds `+`/`−`/`0`/`1` to the pill's own actions. Attached as `onKeyDown`
  *  on the frame that owns the view (the canvas wrapper, or the media
  *  viewer surface) — shortcuts fire "while the view is focused" (D18), not
  *  globally, so they never shadow the same keys typed into an unrelated
- *  focused input elsewhere on the page. */
+ *  focused input elsewhere on the page. Two escape hatches on top of that:
+ *  an editable target inside the same frame (`isEditableEventTarget`) keeps
+ *  its own keystrokes, and a Ctrl/Cmd/Alt modifier combo is left to
+ *  whatever the browser (or OS) already owns it for — e.g. Ctrl/Cmd+= is
+ *  the browser's OWN page-zoom shortcut, and D18 already forbids the
+ *  page's own zoom changing from inside this view (the wheel handler below
+ *  enforces the identical rule for a trackpad pinch). Shift is never
+ *  treated as an owned modifier: it is how a US keyboard types `+` and `_`
+ *  in the first place. */
 export function useZoomableViewKeyboard(
   handlers: ZoomableViewKeyboardHandlers,
 ): (event: React.KeyboardEvent) => void {
   const { onZoomIn, onZoomOut, onFit, onZoomTo100 } = handlers
   return React.useCallback(
     (event: React.KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return
+      if (isEditableEventTarget(event.target)) return
       switch (event.key) {
         case '+':
         case '=':
@@ -464,16 +492,38 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
     openedRef.current = true
   }, [frameSize, contentSize, fitScale])
 
+  // The ONE place `scale` gets clamped and `onScaleChange` fires. A caller
+  // that also needs to move `translate` in lockstep with the clamp — wheel
+  // zoom and pinch zoom both re-centre on a pointer, exactly like a
+  // pinch-to-zoom map — passes `onClamped`, invoked synchronously from
+  // inside the same state update with the guaranteed-consistent
+  // (next, previous) pair, so neither caller re-derives the clamp itself.
   const setScale = React.useCallback(
-    (next: number | ((prev: number) => number)) => {
+    (next: number | ((prev: number) => number), onClamped?: (next: number, prev: number) => void) => {
       setScaleState((prev) => {
         const raw = typeof next === 'function' ? (next as (p: number) => number)(prev) : next
         const clamped = clampZoomScale(raw, effectiveMin, max)
+        onClamped?.(clamped, prev)
         onScaleChange?.(clamped)
         return clamped
       })
     },
     [effectiveMin, max, onScaleChange],
+  )
+
+  // Shared by wheel zoom and pinch zoom: re-centre `translate` so the point
+  // under `anchor` (frame-relative, origin at the frame's own centre —
+  // matching `transformOrigin: 'center center'` below) stays visually
+  // fixed across the scale change.
+  const recentreOnAnchor = React.useCallback(
+    (anchor: PointerPoint, nextScale: number, prevScale: number) => {
+      const delta = nextScale / prevScale
+      setTranslate((t) => ({
+        x: anchor.x - (anchor.x - t.x) * delta,
+        y: anchor.y - (anchor.y - t.y) * delta,
+      }))
+    },
+    [],
   )
 
   const zoomIn = React.useCallback(() => setScale((s) => s * 1.25), [setScale])
@@ -503,23 +553,13 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
       event.preventDefault()
       if (disabled) return
       const rect = frame.getBoundingClientRect()
-      const pointerX = event.clientX - rect.left - rect.width / 2
-      const pointerY = event.clientY - rect.top - rect.height / 2
+      const anchor = { x: event.clientX - rect.left - rect.width / 2, y: event.clientY - rect.top - rect.height / 2 }
       const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
-      setScaleState((prev) => {
-        const nextScale = clampZoomScale(prev * factor, effectiveMin, max)
-        const delta = nextScale / prev
-        setTranslate((t) => ({
-          x: pointerX - (pointerX - t.x) * delta,
-          y: pointerY - (pointerY - t.y) * delta,
-        }))
-        onScaleChange?.(nextScale)
-        return nextScale
-      })
+      setScale((prev) => prev * factor, (nextScale, prevScale) => recentreOnAnchor(anchor, nextScale, prevScale))
     }
     frame.addEventListener('wheel', onWheel, { passive: false })
     return () => frame.removeEventListener('wheel', onWheel)
-  }, [disabled, effectiveMin, max, onScaleChange])
+  }, [disabled, setScale, recentreOnAnchor])
 
   const handlePointerDown = React.useCallback(
     (event: React.PointerEvent<HTMLDivElement>) => {
@@ -544,14 +584,27 @@ export function useZoomableMedia(options: UseZoomableMediaOptions) {
       if (pointersRef.current.size === 2 && pinchRef.current) {
         const [a, b] = Array.from(pointersRef.current.values())
         const ratio = pointerDistance(a, b) / pinchRef.current.startDistance
-        setScale(pinchRef.current.startScale * ratio)
+        const frame = frameRef.current
+        if (!frame) {
+          setScale(pinchRef.current.startScale * ratio)
+          return
+        }
+        // Pointer-centred, exactly like wheel zoom above: the anchor is the
+        // pinch's current midpoint, frame-relative with the origin at the
+        // frame's own centre (matching `transformOrigin: 'center center'`).
+        const rect = frame.getBoundingClientRect()
+        const anchor = {
+          x: (a.x + b.x) / 2 - rect.left - rect.width / 2,
+          y: (a.y + b.y) / 2 - rect.top - rect.height / 2,
+        }
+        setScale(pinchRef.current.startScale * ratio, (nextScale, prevScale) => recentreOnAnchor(anchor, nextScale, prevScale))
         return
       }
       const drag = dragRef.current
       if (!drag) return
       setTranslate({ x: drag.startTx + (event.clientX - drag.startX), y: drag.startTy + (event.clientY - drag.startY) })
     },
-    [disabled, setScale],
+    [disabled, setScale, recentreOnAnchor],
   )
 
   const endPointer = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
