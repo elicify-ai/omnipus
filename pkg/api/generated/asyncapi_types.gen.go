@@ -16,12 +16,10 @@ var _ = time.Time{}
 
 // AgentSwitchedFrame — Server → client active agent changed. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
 type AgentSwitchedFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	Message *string `json:"message,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	AgentId   *string `json:"agent_id,omitempty"`
+	Message   *string `json:"message,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // AskUserAnswerFrame — Client → server (askuserquestion-tool-spec v3 §3). The card's submission: either a full answer set (every question answered exactly once — server-validated by askuser.Registry.Submit, first-valid-wins) or cancel:true (the Cancel affordance — selections discarded, submission-free cancelled resume). Canonical copy — keep in sync by hand with components/schemas/AskUserAnswerFrame.yaml.
@@ -417,8 +415,6 @@ type CancelFrame struct {
 type CancelStageFrame struct {
 	// ADR-091 I-6. True when `unreachable` is non-empty.
 	Partial *bool `json:"partial,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	// ADR-091 I-6. Present on the `detached` stage of a Stop: every session the cascade stamped with a Stop marker (the stopped session and each reachable non-terminal descendant).
 	Reached   []string `json:"reached,omitempty"`
 	SessionId string   `json:"session_id"`
@@ -468,11 +464,9 @@ type DevicePairingResponseFrame struct {
 
 // DoneFrame — Server → client turn complete. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type DoneFrame struct {
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
-	ProducingSessionId *string    `json:"producing_session_id,omitempty"`
-	SessionId          string     `json:"session_id"`
-	Stats              *DoneStats `json:"stats,omitempty"`
-	Type               string     `json:"type"`
+	SessionId string     `json:"session_id"`
+	Stats     *DoneStats `json:"stats,omitempty"`
+	Type      string     `json:"type"`
 }
 
 // DoneStats — Per-turn statistics in a done frame. additionalProperties are allowed for replay extras (frames_emitted, orphan_count, etc.).
@@ -600,8 +594,6 @@ type GoalStatusFrame struct {
 	GoalId       *string `json:"goal_id,omitempty"`
 	LatestReason string  `json:"latest_reason"`
 	MaxRounds    int     `json:"max_rounds"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	// Adjudications consumed so far (ADR-053 R§8.9 — one round = one adjudication, claim-triggered OR idle-settled).
 	Round     int    `json:"round"`
 	SessionId string `json:"session_id"`
@@ -697,10 +689,8 @@ type LoopStatusFrame struct {
 	Mode    string `json:"mode"`
 	// Milliseconds until the next scheduled run. Present for `interval` mode and once a `self_paced` run has scheduled its next one-shot fire.
 	NextDelay *int64 `json:"next_delay,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	Run                int     `json:"run"`
-	SessionId          string  `json:"session_id"`
+	Run       int    `json:"run"`
+	SessionId string `json:"session_id"`
 	// Current state of this loop. Runtime vocabulary owned by the loop engine (ADR-049 Part B); kept a plain string in this contract wave rather than a closed enum (unlike GoalStatusFrame.state) so naming it does not require a breaking change once Part B's implementation lands.
 	State string `json:"state"`
 	Type  string `json:"type"`
@@ -713,11 +703,9 @@ type MarshalErrorResult struct {
 
 // MediaFrame — Server → client media attachments. parts MUST be a non-empty array (never null) — nil-safety contract to prevent parts.map() crash. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type MediaFrame struct {
-	Parts []MediaPart `json:"parts"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	Parts     []MediaPart `json:"parts"`
+	SessionId string      `json:"session_id"`
+	Type      string      `json:"type"`
 }
 
 // MediaPart — One media attachment.
@@ -832,12 +820,10 @@ type ReplayMessageFrame struct {
 	Content string  `json:"content"`
 	Id      *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model *string `json:"model,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — emitted by the gateway replay path, not by a turn.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	Role               string  `json:"role"`
-	SessionId          string  `json:"session_id"`
-	Timestamp          *string `json:"timestamp,omitempty"`
+	Model     *string `json:"model,omitempty"`
+	Role      string  `json:"role"`
+	SessionId string  `json:"session_id"`
+	Timestamp *string `json:"timestamp,omitempty"`
 	// ADR-087 D2. Populated from TranscriptEntry.Truncated when replaying an incomplete assistant entry — see truncation_reason for why. Only present when true. Replay emits this even when content is empty (an entry with Truncated && Content == "" still passes through, so the SPA can render a suffix with no body).
 	Truncated *bool `json:"truncated,omitempty"`
 	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means "cancelled" — every entry written before this field existed predates it and was always a cancel.
@@ -862,11 +848,9 @@ type ReplayWarningStats struct {
 
 // SessionCloseAckFrame — Server → client session close acknowledged. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output, so producing_session_id is absent (FR-013).
 type SessionCloseAckFrame struct {
-	Id *string `json:"id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	Id        *string `json:"id,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // SessionCloseFrame — Client → server explicit session close request.
@@ -877,11 +861,9 @@ type SessionCloseFrame struct {
 
 // SessionStartedFrame — Server → client new session minted. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — a chat-lifecycle frame, not turn output — so producing_session_id is absent (FR-013).
 type SessionStartedFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	AgentId   *string `json:"agent_id,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // SessionStateActiveTurn — ADR-082 D4 — the in-flight foreground turn of the session a connection has just bound to. Keep in sync by hand with components/schemas/SessionStateActiveTurn.yaml.
@@ -924,13 +906,11 @@ type SubagentEndFrame struct {
 	FinalResult  *string `json:"final_result,omitempty"`
 	Message      *string `json:"message,omitempty"`
 	ParentCallId *string `json:"parent_call_id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — producing == routing by construction (FR-017).
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	Reason             *string `json:"reason,omitempty"`
-	SessionId          string  `json:"session_id"`
-	SpanId             string  `json:"span_id"`
-	Status             string  `json:"status"`
-	Type               string  `json:"type"`
+	Reason       *string `json:"reason,omitempty"`
+	SessionId    string  `json:"session_id"`
+	SpanId       string  `json:"span_id"`
+	Status       string  `json:"status"`
+	Type         string  `json:"type"`
 }
 
 // SubagentMessageFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat, UI-facing PROJECTION of the underlying SessionMessage riding between subagent_start/subagent_end — see components/schemas/SubagentMessageFrame.yaml for the full shape- decision rationale (why this is not a full embedded SessionMessage oneOf). Canonical copy — keep in sync by hand.
@@ -955,12 +935,10 @@ type SubagentStartFrame struct {
 	ChildSessionId *string `json:"child_session_id,omitempty"`
 	// The originating delegate or create_task tool-call id. For delegate-origin children, this is the delegate tool-call id. For create_task-origin children (task sessions), this is the create_task tool-call id (the span key for I-4). This is the span identifier used for both fronts.
 	ParentCallId string `json:"parent_call_id"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — producing == routing by construction (FR-017).
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	SpanId             string  `json:"span_id"`
-	TaskLabel          string  `json:"task_label"`
-	Type               string  `json:"type"`
+	SessionId    string `json:"session_id"`
+	SpanId       string `json:"span_id"`
+	TaskLabel    string `json:"task_label"`
+	Type         string `json:"type"`
 }
 
 // SubagentStateFrame — Server → client (ADR-053 §Contract Surface — "Mid-span subagent frames"). A flat projection of SessionLifecycleRecord.state riding between subagent_start/subagent_end, plus an optional steering- receipt. Canonical copy — keep in sync by hand.
@@ -978,11 +956,9 @@ type SubagentStateFrame struct {
 
 // SystemOverloadFrame — Server → client system at capacity (FR-016, MAJ-009). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
 type SystemOverloadFrame struct {
-	Message *string `json:"message,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see this frame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	Message   *string `json:"message,omitempty"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // TaskRunStatusFrame — Server → client task RUN status updated (open or close). Additive alongside TaskStatusChangedFrame (ADR-050 / task-run-history-spec §3.8) — emitted at run open and close so the calendar's per-occurrence chip can update live without a full refetch.
@@ -997,23 +973,19 @@ type TaskRunStatusFrame struct {
 
 // TaskStatusChangedFrame — Server → client task status updated. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id for this type until the audit classifies it.
 type TaskStatusChangedFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	// ADR-057 FR-012/FR-013. Class not yet assigned by the W5 audit (FR-089) — see TaskStatusChangedFrame's description.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Status             string  `json:"status"`
-	TaskId             string  `json:"task_id"`
-	Type               string  `json:"type"`
+	AgentId   *string `json:"agent_id,omitempty"`
+	SessionId string  `json:"session_id"`
+	Status    string  `json:"status"`
+	TaskId    string  `json:"task_id"`
+	Type      string  `json:"type"`
 }
 
 // TokenFrame — Server → client partial LLM response token. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
 type TokenFrame struct {
-	AgentId *string `json:"agent_id,omitempty"`
-	Content string  `json:"content"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Type               string  `json:"type"`
+	AgentId   *string `json:"agent_id,omitempty"`
+	Content   string  `json:"content"`
+	SessionId string  `json:"session_id"`
+	Type      string  `json:"type"`
 }
 
 // ToolApprovalRequiredFrame — Server → client tool approval needed (FR-011, FR-082). CRITICAL: args MUST be object (never null). Backend coerces nil → {}. SPA calls Object.keys(args) — null crashes at render time (Ava-chat bug). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (a) per the ADR-057 W5 audit (FR-089) — genuinely child-turn-produced.
@@ -1023,13 +995,11 @@ type ToolApprovalRequiredFrame struct {
 	// Tool invocation arguments. Always object, never null. Required + object type so the Phase 4 contract test catches any nil regression.
 	Args        map[string]any `json:"args"`
 	ExpiresInMs int            `json:"expires_in_ms"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	ToolCallId         string  `json:"tool_call_id"`
-	ToolName           string  `json:"tool_name"`
-	TurnId             string  `json:"turn_id"`
-	Type               string  `json:"type"`
+	SessionId   string         `json:"session_id"`
+	ToolCallId  string         `json:"tool_call_id"`
+	ToolName    string         `json:"tool_name"`
+	TurnId      string         `json:"turn_id"`
+	Type        string         `json:"type"`
 	// Workspace the requesting session belongs to (resolved server-side from session meta, walking up to the delegating parent). The SPA shows the approval only while that workspace is active. Omitted when the session belongs to no workspace (shown everywhere).
 	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
@@ -1071,8 +1041,6 @@ type ToolCallResultFrame struct {
 	DurationMs   *int    `json:"duration_ms,omitempty"`
 	Error        *string `json:"error,omitempty"`
 	ParentCallId *string `json:"parent_call_id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
 	// Tool return value. Any JSON type or null (null is the contract for error frames). Sentinels TruncatedResult, MarshalErrorResult, and ToolResultRef are alternative shapes. Real oneOf (round-2 hardening, ADR-060 finding F1). The previous revision switched this to `anyOf` reasoning that branch 1's permissive `type: [object, array, ...]` already matched every object, so a genuine oneOf would double-match every $ref sentinel/family member against its own union. That diagnosis was correct but `anyOf` was the wrong fix: under `anyOf` nothing is ever rejected, including a malformed PermissionDenied missing `permanent` — the seven $refs below became unreachable as constraints, which nullifies ADR-060 §7 item 2's own rationale for admitting new members ("when the union is ever made executable, a member missing from it would be the silent-drop failure ADR-058 §7 item 4 warned about" — an anyOf over a universal branch can never be made executable). Fixed here with a real `oneOf`: the single permissive branch is split into (a) an unconditional non-object catch-all (array/string/number/boolean/null — the JSON Schema `required` keyword is inapplicable to non-object instances, so no exclusion is needed there) and (b) an object catch-all that excludes every reserved discriminator key the nine $refs below use (seven at ADR-060 time; ADR-066 T066-01 added ToolArgumentRefusal and ToolResultRecallMark) — `_truncated`, `_marshal_error`, `_ref`, `error` — via `not: {anyOf: [{required: [...]}, ...]}`. With that split, exactly one branch matches a plain scalar/array/object and exactly one matches a valid named shape; a payload carrying a reserved key but failing its own $ref (e.g. PermissionDenied missing `permanent`) matches none and is correctly rejected, rather than silently passing through branch (b). ADR-034's external-file-$ref constraint does not block this — these are internal `#/components/schemas/...` refs (D4). Verified by compiling this exact file with santhosh-tekuri/jsonschema/v6: pkg/api/generated/contract_test.go wraps one fixture per family member in a real ToolCallResultFrame and validates it end-to-end; pkg/gateway/structured_failure_discriminator_coverage_test.go validates each producer's output standalone and asserts a malformed member is rejected. F13 follow-up hardening: the object catch-all's `error` exclusion below now keys on `error` being a STRING, not merely present — see that branch's own description for why (settleAskToolCallTranscript / spawnSubTurn persist a boolean `error` flag on an ordinary object, which is not an attempt at any of the four `error`-keyed $refs and must still match the catch-all). Regression fixture: pkg/api/generated/tool_call_result_error_key_contract_test.go. Still documentary in the generated artifacts (ADR-060 D6): the asyncapi->Go converter (scripts/gen-asyncapi-go) and the TS/Zod generator both key off "is this schema a oneOf/anyOf with no top-level type", which is unchanged by this edit — TS still emits `result: z.unknown()`, Go still emits `Result any`. So this is a spec-correctness fix (the union now actually constrains what a conformant producer may emit) with no generated-code behavior change; the hand-written detectors (isPermissionDenied and friends) remain the real enforcement at the SPA read boundary.
 	Result    any    `json:"result"`
 	SessionId string `json:"session_id"`
@@ -1088,11 +1056,9 @@ type ToolCallStartFrame struct {
 	// Tool arguments. Always object, never null.
 	Params       map[string]any `json:"params"`
 	ParentCallId *string        `json:"parent_call_id,omitempty"`
-	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (a) (FR-089): the child turn's own session id when this frame crosses the wire from a delegated child.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
-	Tool               string  `json:"tool"`
-	Type               string  `json:"type"`
+	SessionId    string         `json:"session_id"`
+	Tool         string         `json:"tool"`
+	Type         string         `json:"type"`
 }
 
 // ToolResultProjectionFrame — Server → client (ADR-066 D5): a tool result already delivered to this session was capped or emptied in place in the model's window. The archive keeps the full content; the SPA updates its rendering of the matching tool call (recall mark shown only under Verbose chat) and, on reload, learns the same state from ToolCall.content_state on the transcript. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/ToolResultProjectionFrame.yaml.
@@ -1102,10 +1068,8 @@ type ToolResultProjectionFrame struct {
 	// The new projection state. "full" is never pushed — it is the default state and is only ever read from the transcript.
 	ContentState string `json:"content_state"`
 	// The recall mark left in the window (names the tool, the id and the recall_conversation call that restores it). Rendered only under Verbose chat.
-	Mark *string `json:"mark,omitempty"`
-	// ADR-057 FR-012/FR-013 — present iff the projection was produced by a delegated child session different from session_id.
-	ProducingSessionId *string `json:"producing_session_id,omitempty"`
-	SessionId          string  `json:"session_id"`
+	Mark      *string `json:"mark,omitempty"`
+	SessionId string  `json:"session_id"`
 	// The projected tool call. Provider-generated ids are not unique across an archive — pair with archive_line.
 	ToolCallId string `json:"tool_call_id"`
 	Type       string `json:"type"`
