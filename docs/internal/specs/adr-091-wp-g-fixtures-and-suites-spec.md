@@ -146,7 +146,52 @@ Feature: Shared fixtures and cross-package suites
 | `pkg/agent/subturn_target_identity_test.go` | retain | ADR-032 — child never inherits agent settings | — |
 | `pkg/agent/system_turn_tool_output_test.go` | retain, unmodified | #766 containment | — |
 | `pkg/agent/async_child_publication_test.go` | **update (setup only)** | #783 containment — assertions and controls unchanged; `spawnPublicationTestChild` constructs `&ephemeralSessionStore{}`, which D1/D10 delete, so WP-A moves the setup to the persisted-store fixture | — |
-| *(remaining 46 rows — 47 glob files plus these two containment tests make 49 — filled by this package at CP-0)* | | | |
+| `pkg/agent/subturn_adr057_test.go` | retain | tests parent-child edge creation (ParentSessionID, ChildCount), D2 keeps edges as canonical | — |
+| `pkg/agent/subturn_ask_deny_test.go` | retain | tests ask policy and tool-level denial; tool policies retained | — |
+| `pkg/agent/subturn_awaited_cancel_test.go` | **delete** | TestSpawnSubTurn_AwaitedSyncCancel_CascadesAndRecordsDescendants tests async=false (await/sync delegation), D4 deletes this | — |
+| `pkg/agent/subturn_cancel_browser_test.go` | retain | tests cancel cascade behavior through browser; D8 enhances cancel with durable edges | — |
+| `pkg/agent/subturn_cancel_status_test.go` | retain | tests hard abort and explicit cancel recording; D8 cancel logic retained | — |
+| `pkg/agent/subturn_delegate_nesting_test.go` | retain, delete (split) | TestNestedDelegate_Background tests nested delegation (D5 keeps), TestNestedDelegate_Await tests async=false (D4 deletes); TestNestedDelegate_TrustGraphDenialDoesNotPoisonSubsequentCalls retained | — |
+| `pkg/agent/subturn_external_cancel_test.go` | retain, delete (split) | TestExternalCLISubTurn_CancelPropagates_Async retained, TestExternalCLISubTurn_CancelPropagates_Sync tests async=false (D4 deletes), TestExternalCLISubTurn_CancelDuringWorkspaceLockWait retained | — |
+| `pkg/agent/subturn_followup_resume_test.go` | retain | tests follow-up resume behavior; D2 keeps resumption from edge | — |
+| `pkg/agent/subturn_identity_test.go` | retain | tests identity resolution for skills/souls; D2 keeps identity logic | — |
+| `pkg/agent/subturn_key_reuse_race_test.go` | retain | tests cancel/generation handling; D8 keeps generation-based cancel | — |
+| `pkg/agent/subturn_liveness_test.go` | retain | tests IsSubTurnActiveForSpawnCall liveness tracking; liveness retained | — |
+| `pkg/agent/subturn_rc5b_legacy_store_test.go` | retain | tests delegation task persistence to child transcript; D1 keeps real store | — |
+| `pkg/agent/subturn_rc5b_transcript_task_test.go` | retain | tests delegation task/context persisted to child; D1 keeps real store | — |
+| `pkg/agent/subturn_rc8_dead_override_test.go` | retain | TestSpawnSubTurn_NativeDispatch_SystemPromptComesFromTargetContextBuilder tests system prompt sourcing; D2 keeps target identity resolution | — |
+| `pkg/agent/subturn_recall_limitation_test.go` | retain | TestSubTurn_RecallReadsParentStore_KnownLimitation tests memory access; known limitation retained | — |
+| `pkg/agent/subturn_requested_skill_test.go` | retain | tests skill loading in delegates; skill/delegation logic retained | — |
+| `pkg/agent/subturn_result_test.go` | retain, delete (split) | TestUpdateToolCallStatusWithRetry_AsyncWaitsForDelayedPlaceholder retained, TestUpdateToolCallStatusWithRetry_SyncDoesNotWaitForDelayedRecord tests async=false (D4 deletes), TestUpdateToolCallStatusWithRetry_FoundOnFirstAttemptSkipsRetry retained | — |
+| `pkg/agent/subturn_soul_test.go` | retain | tests native and external-CLI soul composition; D5 keeps delegation with soul logic | — |
+| `pkg/agent/subturn_sources_test.go` | retain | tests skill/soul sourcing; sourcing logic retained | — |
+| `pkg/agent/subturn_test.go` | retain, delete (split) | TestSpawnSubTurn, EphemeralSessionIsolation, ResultDelivery (async) retained; TestSpawnSubTurn_ResultDeliverySync, TestSyncSubTurn_NoChannelDelivery test async=false (D4 deletes); others retained | — |
+| `pkg/agent/subturn_timeout_stops_child_test.go` | retain | tests delegation lifecycle timeout and identified notices; D9 timeout logic retained | — |
+| `pkg/agent/subturn_toolcall_hardabort_status_test.go` | retain | tests hard abort status recording; D8 cancel recording retained | — |
+| `pkg/agent/subturn_transcript_nesting_test.go` | retain | tests multi-step child transcript and parent spawn call ID; transcript/sourcing retained | — |
+| `pkg/tools/delegate_adr053_test.go` | retain | tests delegation grant access (ADR-053); delegation logic retained | — |
+| `pkg/tools/delegate_adr057_fix_test.go` | retain | tests #769 fix for grant race; delegation logic retained | — |
+| `pkg/tools/delegate_adr057_test.go` | retain | tests ADR-057 framing; D7 removes producing_session_id so contract changes but behavior retained | — |
+| `pkg/tools/delegate_adr057_unix_test.go` | retain | tests timeout with unix clock (platform-specific); timeout logic retained | — |
+| `pkg/tools/delegate_completion_identity_test.go` | retain | tests identity source for completion; D3 wakes use steering session identity | — |
+| `pkg/tools/delegate_detached_timeout_test.go` | retain | tests timeout handling; D9 timeout logic retained | — |
+| `pkg/tools/delegate_fixwave_test.go` | retain | tests fixwave delegation pattern; delegation logic retained | — |
+| `pkg/tools/delegate_followup_resume_test.go` | retain | tests follow-up and resume; D5 keeps steering actions | — |
+| `pkg/tools/delegate_grandchild_test.go` | retain | tests grandchild delegation; D5 keeps nested delegation | — |
+| `pkg/tools/delegate_inbox_ack_ancestor_test.go` | retain | tests ancestor acknowledgement of child inbox; D3 upward delivery retained | — |
+| `pkg/tools/delegate_m1_m3_wiring_test.go` | retain | tests wiring for multiple scenarios; delegation wiring retained | — |
+| `pkg/tools/delegate_parent_agent_test.go` | retain | tests parent agent identity; D2 edge carries parent identity | — |
+| `pkg/tools/delegate_park_lifecycle_test.go` | retain | tests parked state lifecycle; D6 parked states retained | — |
+| `pkg/tools/delegate_require_parent_test.go` | retain | tests parent requirement check; steering scope validation retained | — |
+| `pkg/tools/delegate_signoff14_test.go` | retain | tests delegation signoff behavior; delegation logic retained | — |
+| `pkg/tools/delegate_status_reconnect_test.go` | retain | tests status with reconnection; D5 status action retained | — |
+| `pkg/tools/delegate_status_snapshot_test.go` | retain | tests status snapshot behavior; D5 status action retained | — |
+| `pkg/tools/delegate_status_test.go` | retain | tests delegate status reporting; D5 status action retained | — |
+| `pkg/tools/delegate_test.go` | retain | tests basic delegation wiring and schema; delegation logic retained | — |
+| `pkg/tools/delegate_timeout_force_cancel_unix_test.go` | retain | tests timeout force-cancel on unix; D9 timeout logic retained | — |
+| `pkg/tools/delegate_toolcall_progress_test.go` | retain | tests progress reporting; D3 upward delivery retained | — |
+| `pkg/tools/message_parent_adr057_test.go` | retain | tests message_parent ADR-057 behavior; D3 upward delivery retained | — |
+| `pkg/tools/message_parent_test.go` | retain | tests message_parent surface; D3 upward delivery retained | — |
 
 ## Definition of done
 
